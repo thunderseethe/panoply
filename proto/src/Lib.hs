@@ -129,7 +129,7 @@ solve a ty (Ctx vars tys) = Ctx vars (Map.insert a ty tys)
 
 withScope :: (Has (State Ctx) sig m) => m a -> m a
 withScope action = do
-  ctx <- get
+  ctx <- get 
   res <- action
   put ctx
   return res
@@ -141,7 +141,7 @@ emptySubst = Subst Map.empty
 
 applySubst :: Subst -> Ty TVar -> Maybe (Ty TVar)
 applySubst (Subst subst) ty = 
-  let varsOverlap = Prelude.all (\var -> not $ Map.member var subst) (universeOn typeVars ty)
+  let varsOverlap = Prelude.all (\var -> not $ Map.member var subst) (cosmosOn typeVars ty)
    in if varsOverlap
      then Nothing
      else Just $ transform 
@@ -181,7 +181,7 @@ unify a b = go [(a, b)] emptySubst
     (_, _) -> return Nothing -}
 
 infer :: 
-      (Has (State Ctx) sig m, Has (Fresh TVar) sig m) 
+      (Has (State Ctx) sig m, Has (Fresh TVar) sig m, MonadFail m) 
       => Term Var TVar -> m (Ty TVar, Subst)
 infer term =
   case term of
@@ -213,5 +213,14 @@ infer term =
       undefined
     Ann term expect_ty -> do
       (infer_ty, sub) <- infer term
-      unify (applySubst sub infer_ty) expect_ty
+      maybe_subst <- unify infer_ty expect_ty
+      let out = do 
+              subst <- maybe_subst
+              ty <- applySubst subst expect_ty
+              return (ty, subst)
+      case out of
+        Just out -> return out
+        Nothing -> error "do something better here: couldn't unify annotated type"
+
+
     
