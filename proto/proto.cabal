@@ -22,9 +22,10 @@ maintainer:         thunderseethe.dev@gmail.com
 extra-source-files: CHANGELOG.md
 
 library
-    exposed-modules:  Lib
+    exposed-modules:  Unity
 
     other-modules:
+      --Lib
       Fresh
     -- Modules included in this library but not exported.
     -- other-modules:
