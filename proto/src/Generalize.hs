@@ -2,7 +2,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 
-module Unity where
+module Generalize where
 
 import Fresh
 
@@ -10,15 +10,12 @@ import Data.Set (Set)
 import qualified Data.Set as Set
 
 import Data.Map (Map)
-import qualified Data.Map.Merge.Strict
 import qualified Data.Map.Strict as Map
 
 import qualified Data.List as List
 
 import Control.Algebra
 import Control.Lens
-import Control.Lens.Plated
-import Data.Foldable (foldrM)
 import qualified Data.Map.Merge.Strict as Map
 import Data.Maybe
 import Debug.Trace
@@ -52,7 +49,7 @@ data Type
   deriving (Eq, Ord)
 
 instance Show Type where
-  showsPrec p IntTy = (++) "Int"
+  showsPrec _ IntTy = (++) "Int"
   showsPrec p (VarTy (TV tv)) = ("VarTy " ++) . showsPrec p tv
   showsPrec p (FunTy arg ret) = showsPrec p arg . (" -> " ++) . showsPrec p ret
 
@@ -68,7 +65,7 @@ typeVars f =
     VarTy var -> VarTy <$> f var
     ty -> pure ty
 
-{- The unbound variables that appear in a type 
+{- The unbound variables that appear in a type
    Since we only bind type variables in a scheme this will be all variables in the type. -}
 freeVars :: Type -> Set TVar
 freeVars = Set.fromList . toListOf (plate . typeVars)
@@ -78,15 +75,15 @@ data Scheme = Scheme [TVar] Type
 
 {- Constraints generated during type inference that must hold for the program to typecheck -}
 data Constraint
-  -- Two types must be equal (aka unifiable)
-  = Type :== Type
-  -- Type must be a concrete instance of the scheme for some substitution of bound type variable
-  | Type :<= Scheme
-  -- Implict instantiation constraint
-  -- The first type must be an instance of the second type once it is generalized to a scheme.
-  -- When the second type is generalized to a scheme it does not bind any of the variables in Set TVar.
-  -- This set represents the set of variables that were in scope (already bound) when the constraint was generated.
-  | Generalize Type (Set TVar) Type
+  = -- Two types must be equal (aka unifiable)
+    Type :== Type
+  | -- Type must be a concrete instance of the scheme for some substitution of bound type variable
+    Type :<= Scheme
+  | -- Implict instantiation constraint
+    -- The first type must be an instance of the second type once it is generalized to a scheme.
+    -- When the second type is generalized to a scheme it does not bind any of the variables in Set TVar.
+    -- This set represents the set of variables that were in scope (already bound) when the constraint was generated.
+    Generalize Type (Set TVar) Type
   deriving (Eq)
 
 {- We use an explicit Ord instance on constraint to order how constraints are solved explictly. -}
@@ -136,7 +133,7 @@ instance Semigroup Assumptions where
       Map.merge
         Map.preserveMissing
         Map.preserveMissing
-        (Map.zipWithMatched (\k x y -> x <> y))
+        (Map.zipWithMatched (\_ x y -> x <> y))
         left
         right
 
@@ -149,11 +146,13 @@ generateConstraints term = over _2 Set.fromList <$> go Set.empty term
  where
   -- mono_tvars is the set of type variables in scope (from Abs) tracked top down as we recurse.
   go mono_tvars = \case
-
     -- For a variable we assign it a fresh type variable and assume it has that type
     Var x -> do
       beta <- VarTy <$> fresh
       return (beta, [], singleton x beta)
+
+    -- Int literal is IntTy
+    Int _ -> return (IntTy, [], mempty)
 
     -- Application generates a fresh type variable for the return of the application.
     -- We then infer function type and argument type and constrain the function type to return our fresh type variable
@@ -191,16 +190,15 @@ instance Semigroup Subst where
      When we merge in a new substitution (on the right) we have to apply
      all prior substitutions (on the left) to the right types. Otherwise our substitution
      won't be the fixpoint and we'd have to apply it repeatedly. -}
-  l@(Subst left) <> r@(Subst right) =
-    trace (show l ++ " <> " ++ show r) $
-      Subst $
-        Map.merge
-          Map.preserveMissing -- for left types use as is
-          -- for any right's that aren't ovewritten apply the substitution till now to them
-          (Map.mapMissing (\tvar -> apply l))
-          (Map.zipWithMatched (\k l r -> r))
-          left
-          right
+  l@(Subst left) <> Subst right =
+    Subst $
+      Map.merge
+        Map.preserveMissing -- for left types use as is
+        -- for any right's that aren't ovewritten apply the substitution till now to them
+        (Map.mapMissing (\_ -> apply l))
+        (Map.zipWithMatched (\_ _ r -> r))
+        left
+        right
 
 instance Monoid Subst where
   mempty = Subst Map.empty
@@ -309,6 +307,9 @@ mgu (FunTy left_arg left_ret) (FunTy right_arg right_ret) =
    in if isEmpty arg_mgu || isEmpty ret_mgu
         then error "Failed to unify function types"
         else arg_mgu <> ret_mgu
+mgu IntTy IntTy = mempty
+mgu IntTy (FunTy _ _) = error "Can't unify int and function type"
+mgu (FunTy _ _) IntTy = error "Can't unify int and function type"
 
 example :: Term
 example =
@@ -333,6 +334,8 @@ testSet =
 
 infer :: Term -> (Type, Subst)
 infer t = snd . runIdentity . runFresh (TV 0) $ do
-  (ty, constr, assume) <- generateConstraints t
+  (ty, constr, _) <- generateConstraints t
+  -- TODO: create instance constraints for assumptions <= top level decls
+  -- Or throw an undefined error if an assumption isn't at top level
   subst <- solveConstraints constr
   return (apply subst ty, subst)
