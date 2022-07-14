@@ -33,6 +33,7 @@ data Term
   | Abs Var Term
   | Term :@ Term
   | Let {_var :: Var, _defn :: Term, _body :: Term}
+  deriving (Show)
 
 instance Plated Term where
   plate f =
@@ -339,3 +340,5 @@ infer t = snd . runIdentity . runFresh (TV 0) $ do
   -- Or throw an undefined error if an assumption isn't at top level
   subst <- solveConstraints constr
   return (apply subst ty, subst)
+
+

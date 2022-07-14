@@ -22,11 +22,12 @@ maintainer:         thunderseethe.dev@gmail.com
 extra-source-files: CHANGELOG.md
 
 library
-    exposed-modules:  Generalize
+    exposed-modules: OutsideIn
 
     other-modules:
-      --Lib
       Fresh
+      Generalize
+    -- OutsideIn
     -- Modules included in this library but not exported.
     -- other-modules:
 
