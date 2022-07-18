@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+
 use crate::{
     loc::{Loc, Locator},
     span::{Span, WithSpan},
@@ -8,7 +10,11 @@ use regex::{Captures, Regex, RegexSet};
 /// A function that produces a token from a regex match.
 type TokenFactory = Box<dyn Fn(Captures) -> Token>;
 
-/// A `Lexer` turns input text into a sequence of `Token`s.
+/// A `Lexer` turns input text into a sequence of `Token`s based on input regexes.
+///
+/// When multiple regexes match a given piece of text, the regex with the longest match takes
+/// precedence. In the case of a tie in length, regexes earlier in the list provided at construction
+/// take precedence over later ones.
 pub struct Lexer {
     union: RegexSet, // The set of all regexes in `tokens`.
     tokens: Vec<(Regex, Option<TokenFactory>)>,
@@ -22,9 +28,8 @@ pub struct NotATokenError {
 
 impl Lexer {
     /// Returns a new lexer which maps each of the given regexes to the corresponding token factory
-    /// function. Earlier token patterns take precedence over later ones. Regexes paired with `None`
-    /// indicate text that should be ignored.
-    pub fn new(tokens: Vec<(&'static str, Option<TokenFactory>)>) -> Result<Lexer, regex::Error> {
+    /// function. Regexes paired with `None` indicate text that should be ignored.
+    pub fn new(tokens: Vec<(String, Option<TokenFactory>)>) -> Result<Lexer, regex::Error> {
         let anchored = tokens
             .into_iter()
             .map(|(p, f)| (format!("^{}", p), f))
@@ -47,10 +52,14 @@ impl Lexer {
         while idx < text.len() {
             let curr = &text[idx..];
 
-            // Just take the first match, since earlier regexes take precedence over later ones.
-            if let Some(i) = self.union.matches(curr).into_iter().next() {
-                let (ref re, ref f) = self.tokens[i];
-                let caps = re.captures(curr).unwrap();
+            // Use `min_by_key()` with `Reverse` to select the first element from a tie.
+            if let Some((caps, f)) = self
+                .union
+                .matches(curr)
+                .into_iter()
+                .map(|i| (self.tokens[i].0.captures(curr).unwrap(), &self.tokens[i].1))
+                .min_by_key(|(caps, ..)| Reverse(caps[0].len()))
+            {
                 let len = caps[0].len();
                 if let Some(f) = f {
                     tokens.push((
@@ -73,9 +82,9 @@ impl Lexer {
     }
 }
 
-// Returns `t` for all matches.
-fn lit(t: Token<'static>) -> Option<TokenFactory> {
-    Some(Box::new(move |_| t.clone()))
+// Maps the literal text to the given token.
+fn literal(text: &'static str, t: Token<'static>) -> (String, Option<TokenFactory>) {
+    (regex::escape(text), Some(Box::new(move |_| t.clone())))
 }
 
 // Calls `f` on the entire match. Use this if you don't care about capture groups.
@@ -87,16 +96,19 @@ fn whole<F: 'static + Fn(&str) -> Token>(f: F) -> Option<TokenFactory> {
 pub fn aiahr_lexer() -> Lexer {
     // TODO: Do something with comments, or at least doc comments.
     Lexer::new(vec![
-        (r"[a-zA-Z][a-zA-Z0-9_]*", whole(|s| Token::Identifier(s))),
+        (
+            r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),
+            whole(|s| Token::Identifier(s)),
+        ),
         // Delimiters
-        (r"\|", lit(Token::VerticalBar)),
-        (r"\(", lit(Token::LParen)),
-        (r"\)", lit(Token::RParen)),
+        literal("|", Token::VerticalBar),
+        literal("(", Token::LParen),
+        literal(")", Token::RParen),
         // Comments
-        (r"//.*", None),
-        (r"(?s)/\*.*\*/", None),
+        (r"//.*".to_string(), None),
+        (r"(?s)/\*.*\*/".to_string(), None),
         // Whitespace
-        (r"\s+", None),
+        (r"\s+".to_string(), None),
     ])
     .unwrap()
 }
