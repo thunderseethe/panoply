@@ -32,28 +32,40 @@ pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErr
     // Each level of precedence should have its own `Recursive` instance declared here in reverse
     // precedence order. `term` is reserved for the top-level instance.
     let mut term = Recursive::declare();
-    let mut abs = Recursive::declare();
+    let mut prefixed = Recursive::declare();
     let mut app = Recursive::declare();
     let mut atom = Recursive::declare();
 
     // Define parsers here in the order declared above.
-    term.define(abs.clone());
-    abs.define(
-        lit(Token::VerticalBar)
-            .then(ident())
-            .then(lit(Token::VerticalBar))
+    term.define(prefixed.clone());
+    prefixed.define(
+        ident()
+            .then(lit(Token::Equal))
+            .then(term.clone())
+            .then(lit(Token::Semicolon))
+            .map(|(((var, eq), val), semi)| {
+                Box::new(move |t| Term::Binding {
+                    var,
+                    eq,
+                    value: Box::new(val),
+                    semi,
+                    expr: Box::new(t),
+                }) as Box<dyn FnOnce(Term<'i>) -> Term<'i>>
+            })
+            .or(lit(Token::VerticalBar)
+                .then(ident())
+                .then(lit(Token::VerticalBar))
+                .map(|((lbar, var), rbar)| {
+                    Box::new(move |t| Term::Abstraction {
+                        lbar,
+                        arg: var,
+                        rbar,
+                        body: Box::new(t),
+                    }) as Box<dyn FnOnce(Term<'i>) -> Term<'i>>
+                }))
             .repeated()
             .then(app.clone())
-            .map(|(binds, body)| {
-                binds
-                    .into_iter()
-                    .rfold(body, |t, ((l, var), r)| Term::Abstraction {
-                        lbar: l,
-                        arg: var,
-                        rbar: r,
-                        body: Box::new(t),
-                    })
-            }),
+            .map(|(binds, expr)| binds.into_iter().rfold(expr, |t, f| f(t))),
     );
     app.define(
         atom.clone()
@@ -65,11 +77,11 @@ pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErr
             )
             .map(|(func, args)| {
                 args.into_iter()
-                    .rfold(func, |t, ((l, arg), r)| Term::Application {
+                    .rfold(func, |t, ((lpar, arg), rpar)| Term::Application {
                         func: Box::new(t),
-                        lpar: l,
+                        lpar,
                         arg: Box::new(arg),
-                        rpar: r,
+                        rpar,
                     })
             }),
     );
@@ -77,10 +89,10 @@ pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErr
         ident().map(Term::VariableRef).or(lit(Token::LParen)
             .then(term.clone())
             .then(lit(Token::RParen))
-            .map(|((l, t), r)| Term::Parenthesized {
-                lpar: l,
+            .map(|((lpar, t), rpar)| Term::Parenthesized {
+                lpar,
                 term: Box::new(t),
-                rpar: r,
+                rpar,
             })),
     );
     term.then_ignore(end())
@@ -116,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_basic_lambdas() {
-        const PROGRAM: &'static str = "|x| |y| x(y)";
+        const PROGRAM: &'static str = "|x| |y| z = x(y); z";
 
         let lexer = aiahr_lexer();
         let parser = aiahr_parser();
@@ -136,15 +148,25 @@ mod tests {
                 ..
             } = &**b
             {
-                if let Term::Application {
-                    func: ref f,
-                    arg: ref a,
+                if let Term::Binding {
+                    var: ("z", ..),
+                    value: ref v,
+                    expr: ref e,
                     ..
                 } = &**c
                 {
-                    if let Term::VariableRef(("x", ..)) = &**f {
-                        if let Term::VariableRef(("y", ..)) = &**a {
-                            return;
+                    if let Term::Application {
+                        func: ref f,
+                        arg: ref a,
+                        ..
+                    } = &**v
+                    {
+                        if let Term::VariableRef(("x", ..)) = &**f {
+                            if let Term::VariableRef(("y", ..)) = &**a {
+                                if let Term::VariableRef(("z", ..)) = &**e {
+                                    return;
+                                }
+                            }
                         }
                     }
                 }

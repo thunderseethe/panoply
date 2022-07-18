@@ -101,9 +101,11 @@ pub fn aiahr_lexer() -> Lexer {
             whole(|s| Token::Identifier(s)),
         ),
         // Delimiters
+        literal("=", Token::Equal),
         literal("|", Token::VerticalBar),
         literal("(", Token::LParen),
         literal(")", Token::RParen),
+        literal(";", Token::Semicolon),
         // Comments
         (r"//.*".to_string(), None),
         (r"(?s)/\*.*\*/".to_string(), None),

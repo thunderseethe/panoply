@@ -6,6 +6,13 @@ use std::fmt::Debug;
 
 #[derive(Debug)]
 pub enum Term<'i> {
+    Binding {
+        var: WithSpan<&'i str>,
+        eq: Span,
+        value: Box<Term<'i>>,
+        semi: Span,
+        expr: Box<Term<'i>>,
+    },
     Abstraction {
         lbar: Span,
         arg: WithSpan<&'i str>,
@@ -29,6 +36,7 @@ pub enum Term<'i> {
 impl<'i> Spanned for Term<'i> {
     fn start(&self) -> Loc {
         match self {
+            Term::Binding { var, .. } => var.start(),
             Term::Abstraction { lbar, .. } => lbar.start(),
             Term::Application { func, .. } => func.start(),
             Term::VariableRef(v) => v.start(),
@@ -38,6 +46,7 @@ impl<'i> Spanned for Term<'i> {
 
     fn end(&self) -> Loc {
         match self {
+            Term::Binding { expr, .. } => expr.end(),
             Term::Abstraction { body, .. } => body.end(),
             Term::Application { rpar, .. } => rpar.end(),
             Term::VariableRef(v) => v.end(),
