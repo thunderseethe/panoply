@@ -1,6 +1,6 @@
 use crate::{
     loc::{Loc, Locator},
-    span::Span,
+    span::{Span, WithSpan},
     token::Token,
 };
 use regex::{Captures, Regex, RegexSet};
@@ -39,7 +39,7 @@ impl Lexer {
     }
 
     /// Splits `text` into a sequence of tokens.
-    pub fn lex<'i>(&self, text: &'i str) -> Result<Vec<Span<Token<'i>>>, NotATokenError> {
+    pub fn lex<'i>(&self, text: &'i str) -> Result<Vec<WithSpan<Token<'i>>>, NotATokenError> {
         let locator = Locator::new(text);
         let mut idx = 0;
         let mut tokens = Vec::new();
@@ -53,11 +53,13 @@ impl Lexer {
                 let caps = re.captures(curr).unwrap();
                 let len = caps[0].len();
                 if let Some(f) = f {
-                    tokens.push(Span {
-                        start: locator.locate(idx),
-                        val: f(caps),
-                        end: locator.locate(idx + len),
-                    });
+                    tokens.push((
+                        f(caps),
+                        Span {
+                            start: locator.locate(idx),
+                            end: locator.locate(idx + len),
+                        },
+                    ));
                 }
                 idx += len
             } else {
@@ -81,7 +83,7 @@ fn whole<F: 'static + Fn(&str) -> Token>(f: F) -> Option<TokenFactory> {
     Some(Box::new(move |c| f(c.get(0).unwrap().as_str())))
 }
 
-/// Returns a lexer for the AIAHR language.
+/// Returns a lexer for the Aiahr language.
 pub fn aiahr_lexer() -> Lexer {
     // TODO: Do something with comments, or at least doc comments.
     Lexer::new(vec![

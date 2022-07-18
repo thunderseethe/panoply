@@ -8,7 +8,7 @@ pub struct Loc {
     pub col: usize,
 }
 
-/// Converts byte indices in a particular source file to `Loc`s.
+/// Converts byte indices in a particular source text to `Loc`s.
 #[derive(Debug)]
 pub struct Locator<'i> {
     line_starts: Vec<usize>,
@@ -16,7 +16,7 @@ pub struct Locator<'i> {
 }
 
 impl<'i> Locator<'i> {
-    /// Returns a new `Locator` for the given source code.
+    /// Returns a new `Locator` for the given source text.
     pub fn new(text: &'i str) -> Locator<'i> {
         let mut line_starts = [0usize]
             .into_iter()
@@ -31,9 +31,11 @@ impl<'i> Locator<'i> {
         }
     }
 
-    /// Converts a byte offset in the original source code to a `Loc`.
+    /// Converts a byte offset in the original source text to a `Loc`.
     ///
     /// NOTE: `locate()` does not check that `byte` falls within the range of the original text.
+    /// Instead, it will convert byte offsets from outside the original source text as if the last
+    /// line extended indefinitely.
     pub fn locate(&self, byte: usize) -> Loc {
         match self.line_starts.binary_search(&byte) {
             Ok(i) => Loc {

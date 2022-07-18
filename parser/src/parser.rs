@@ -1,32 +1,34 @@
 use chumsky::{
-    prelude::{end, filter, Recursive},
-    select, Parser,
+    prelude::{end, just, Recursive},
+    select, Parser, Stream,
 };
 
-use crate::{cst::Term, error::ParseError, span::Span, token::Token};
+use crate::{
+    cst::Term,
+    error::ParseErrors,
+    loc::Loc,
+    span::{Span, WithSpan},
+    token::Token,
+};
 
 // Returns a spanned parser that matches just the given token and returns ().
-fn lit<'i>(
-    token: Token<'i>,
-) -> impl Parser<Span<Token<'i>>, Span<()>, Error = Vec<ParseError<'i>>> {
-    filter(move |s: &Span<Token<'i>>| s.val == token).map(|s| s.unit())
+fn lit<'i>(token: Token<'i>) -> impl Parser<Token<'i>, Span, Error = ParseErrors<'i>> {
+    just(token).map_with_span(|_, span| span)
 }
 
 // Returns a spanned parser that matches any `Token::Identifier` and unwraps it to the contained
 // `&str`.
-fn ident<'i>() -> impl Clone + Parser<Span<Token<'i>>, Span<&'i str>, Error = Vec<ParseError<'i>>> {
+fn ident<'i>() -> impl Clone + Parser<Token<'i>, WithSpan<&'i str>, Error = ParseErrors<'i>> {
     select! {
-        ref s @ Span {
-            val: Token::Identifier(id),
-            ..
-         } => s.unit().wrap(id),
+        Token::Identifier(id) => id,
     }
+    .map_with_span(|s, span| (s, span))
 }
 
 type Output<'i> = Term<'i>;
 
-/// Returns a parser for the AIAHR language.
-pub fn aiahr_parser<'i>() -> impl Parser<Span<Token<'i>>, Output<'i>, Error = Vec<ParseError<'i>>> {
+/// Returns a parser for the Aiahr language.
+pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErrors<'i>> {
     // Each level of precedence should have its own `Recursive` instance declared here in reverse
     // precedence order. `term` is reserved for the top-level instance.
     let mut term = Recursive::declare();
@@ -84,13 +86,33 @@ pub fn aiahr_parser<'i>() -> impl Parser<Span<Token<'i>>, Output<'i>, Error = Ve
     term.then_ignore(end())
 }
 
+/// Converts lexer output to a stream readable by a Chumsky parser.
+pub fn to_stream<'i, I: IntoIterator<Item = WithSpan<Token<'i>>>>(
+    tokens: I,
+) -> Stream<'i, Token<'i>, Span, I::IntoIter> {
+    const EOI: Loc = Loc {
+        byte: !0usize,
+        line: !0usize,
+        col: !0usize,
+    };
+
+    // TODO: figure out what the `eoi` parameter is actually used for.
+    Stream::from_iter(
+        Span {
+            start: EOI,
+            end: EOI,
+        },
+        tokens.into_iter(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use chumsky::Parser;
 
-    use crate::{cst::Term, lexer::aiahr_lexer, span::Span};
+    use crate::{cst::Term, lexer::aiahr_lexer};
 
-    use super::aiahr_parser;
+    use super::{aiahr_parser, to_stream};
 
     #[test]
     fn test_basic_lambdas() {
@@ -100,16 +122,16 @@ mod tests {
         let parser = aiahr_parser();
 
         let tokens = lexer.lex(PROGRAM).unwrap();
-        let cst = parser.parse(tokens).unwrap();
+        let cst = parser.parse(to_stream(tokens)).unwrap();
 
         if let Term::Abstraction {
-            arg: Span { val: "x", .. },
+            arg: ("x", ..),
             body: ref b,
             ..
         } = cst
         {
             if let Term::Abstraction {
-                arg: Span { val: "y", .. },
+                arg: ("y", ..),
                 body: ref c,
                 ..
             } = &**b
@@ -120,8 +142,8 @@ mod tests {
                     ..
                 } = &**c
                 {
-                    if let Term::VariableRef(Span { val: "x", .. }) = &**f {
-                        if let Term::VariableRef(Span { val: "y", .. }) = &**a {
+                    if let Term::VariableRef(("x", ..)) = &**f {
+                        if let Term::VariableRef(("y", ..)) = &**a {
                             return;
                         }
                     }

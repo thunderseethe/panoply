@@ -1,56 +1,56 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Range};
 
 use crate::loc::Loc;
 
-/// An item that can be located in an interval of source code.
+/// An item that can be located in an interval of a source text.
 pub trait Spanned {
     fn start(&self) -> Loc;
     fn end(&self) -> Loc;
+    fn span(&self) -> Span {
+        Span {
+            start: self.start(),
+            end: self.end(),
+        }
+    }
 }
 
-/// Wraps `T` in a `start` and `end` `Loc`.
-#[derive(Debug)]
-pub struct Span<T: Debug> {
+/// A span of a source text.
+#[derive(Clone, Copy, Debug)]
+pub struct Span {
     pub start: Loc,
-    pub val: T,
     pub end: Loc,
 }
 
-impl Span<()> {
+pub type WithSpan<T> = (T, Span);
+
+impl Span {
     /// Returns `self` but with the given value.
-    pub fn wrap<T: Debug>(&self, val: T) -> Span<T> {
-        Span {
-            start: self.start,
-            val: val,
-            end: self.end,
-        }
+    pub fn wrap<T>(&self, val: T) -> WithSpan<T> {
+        (val, *self)
     }
 }
 
-impl<T: Debug> Span<T> {
-    /// Returns `self` with the value removed.
-    pub fn unit(&self) -> Span<()> {
-        Span {
-            start: self.start,
-            val: (),
-            end: self.end,
+impl chumsky::Span for Span {
+    type Context = ();
+    type Offset = Loc;
+
+    fn new(_: Self::Context, range: Range<Self::Offset>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
         }
+    }
+
+    fn context(&self) -> Self::Context {}
+    fn start(&self) -> Self::Offset {
+        self.start
+    }
+    fn end(&self) -> Self::Offset {
+        self.end
     }
 }
 
-impl<T: Clone + Debug> Clone for Span<T> {
-    fn clone(&self) -> Self {
-        Span {
-            start: self.start,
-            val: self.val.clone(),
-            end: self.end,
-        }
-    }
-}
-
-impl<T: Copy + Debug> Copy for Span<T> {}
-
-impl<T: Debug> Spanned for Span<T> {
+impl Spanned for Span {
     fn start(&self) -> Loc {
         self.start
     }
@@ -60,25 +60,12 @@ impl<T: Debug> Spanned for Span<T> {
     }
 }
 
-impl chumsky::Span for Span<()> {
-    type Context = ();
-    type Offset = Loc;
-
-    fn new(_: Self::Context, range: std::ops::Range<Self::Offset>) -> Self {
-        Span {
-            start: range.start,
-            val: (),
-            end: range.end,
-        }
+impl<T> Spanned for WithSpan<T> {
+    fn start(&self) -> Loc {
+        self.1.start
     }
 
-    fn context(&self) -> Self::Context {}
-
-    fn start(&self) -> Self::Offset {
-        self.start
-    }
-
-    fn end(&self) -> Self::Offset {
-        self.end
+    fn end(&self) -> Loc {
+        self.1.end
     }
 }

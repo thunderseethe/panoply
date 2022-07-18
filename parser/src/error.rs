@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use crate::{loc::Loc, span::Span, token::Token};
 
 // TODO: design a better error type
@@ -12,27 +10,23 @@ pub enum ParseError<'i> {
     },
 }
 
-impl<'i> chumsky::Error<Span<Token<'i>>> for Vec<ParseError<'i>> {
-    type Span = Range<usize>;
+#[derive(Debug)]
+pub struct ParseErrors<'i>(Vec<ParseError<'i>>);
+
+impl<'i> chumsky::Error<Token<'i>> for ParseErrors<'i> {
+    type Span = Span;
     type Label = ();
 
-    fn expected_input_found<Iter: IntoIterator<Item = Option<Span<Token<'i>>>>>(
-        _: Self::Span,
+    fn expected_input_found<Iter: IntoIterator<Item = Option<Token<'i>>>>(
+        span: Self::Span,
         expected: Iter,
-        found: Option<Span<Token<'i>>>,
+        found: Option<Token<'i>>,
     ) -> Self {
-        vec![ParseError::WrongToken {
-            loc: found.as_ref().map_or(
-                Loc {
-                    byte: 0,
-                    line: 0,
-                    col: 0,
-                },
-                |s| s.start,
-            ),
-            got: found.map(|s| s.val),
-            want_any: expected.into_iter().map(|o| o.map(|s| s.val)).collect(),
-        }]
+        ParseErrors(vec![ParseError::WrongToken {
+            loc: span.start,
+            got: found.map(|s| s),
+            want_any: expected.into_iter().collect(),
+        }])
     }
 
     fn with_label(self, _: Self::Label) -> Self {
@@ -40,9 +34,9 @@ impl<'i> chumsky::Error<Span<Token<'i>>> for Vec<ParseError<'i>> {
     }
 
     fn merge(self, other: Self) -> Self {
-        let mut errors = self;
-        let mut other = other;
+        let ParseErrors(mut errors) = self;
+        let ParseErrors(mut other) = other;
         errors.append(&mut other);
-        errors
+        ParseErrors(errors)
     }
 }

@@ -1,26 +1,49 @@
-use crate::span::Span;
+use crate::{
+    loc::Loc,
+    span::{Span, Spanned, WithSpan},
+};
 use std::fmt::Debug;
 
 #[derive(Debug)]
 pub enum Term<'i> {
     Abstraction {
-        lbar: Span<()>,
-        arg: Span<&'i str>,
-        rbar: Span<()>,
+        lbar: Span,
+        arg: WithSpan<&'i str>,
+        rbar: Span,
         body: Box<Term<'i>>,
     },
     Application {
         func: Box<Term<'i>>,
-        lpar: Span<()>,
+        lpar: Span,
         arg: Box<Term<'i>>,
-        rpar: Span<()>,
+        rpar: Span,
     },
-    VariableRef(Span<&'i str>),
+    VariableRef(WithSpan<&'i str>),
     Parenthesized {
-        lpar: Span<()>,
+        lpar: Span,
         term: Box<Term<'i>>,
-        rpar: Span<()>,
+        rpar: Span,
     },
+}
+
+impl<'i> Spanned for Term<'i> {
+    fn start(&self) -> Loc {
+        match self {
+            Term::Abstraction { lbar, .. } => lbar.start(),
+            Term::Application { func, .. } => func.start(),
+            Term::VariableRef(v) => v.start(),
+            Term::Parenthesized { lpar, .. } => lpar.start(),
+        }
+    }
+
+    fn end(&self) -> Loc {
+        match self {
+            Term::Abstraction { body, .. } => body.end(),
+            Term::Application { rpar, .. } => rpar.end(),
+            Term::VariableRef(v) => v.end(),
+            Term::Parenthesized { rpar, .. } => rpar.end(),
+        }
+    }
 }
 
 // #[derive(Debug)]
