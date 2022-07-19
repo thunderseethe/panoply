@@ -38,6 +38,7 @@ library
         containers ^>= 0.6,
         fused-effects ^>= 1.1,
         lens ^>= 5.1,
+        pretty-show ^>= 1.10,
         text >= 2.0,
         transformers ^>= 0.5
     ghc-options: -W
