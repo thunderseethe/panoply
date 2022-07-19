@@ -1,5 +1,5 @@
 use chumsky::{
-    prelude::{choice, end, just, recursive, Recursive},
+    prelude::{choice, end, just, recursive},
     select, Parser, Stream,
 };
 
