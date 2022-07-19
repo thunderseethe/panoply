@@ -1,7 +1,7 @@
 use crate::{loc::Loc, span::Span, token::Token};
 
 // TODO: design a better error type
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParseError<'i> {
     WrongToken {
         loc: Loc,

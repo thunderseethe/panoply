@@ -1,11 +1,21 @@
 use std::{fmt::Debug, marker::PhantomData};
 
 /// A location in a source file. Contains redundant data to avoid extra computation.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Loc {
     pub byte: usize,
     pub line: usize,
     pub col: usize,
+}
+impl Loc {
+    // The next location after this one, on the same line
+    pub fn next(self) -> Self {
+        Self {
+            byte: self.byte + 1,
+            col: self.col + 1,
+            ..self
+        }
+    }
 }
 
 /// Converts byte indices in a particular source text to `Loc`s.

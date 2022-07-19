@@ -44,8 +44,9 @@ impl Lexer {
     }
 
     /// Splits `text` into a sequence of tokens.
-    pub fn lex<'i>(&self, text: &'i str) -> Result<Vec<WithSpan<Token<'i>>>, NotATokenError> {
+    pub fn lex<'i>(&self, text: &'i str) -> Result<(Vec<WithSpan<Token<'i>>>, Loc), NotATokenError> {
         let locator = Locator::new(text);
+        let mut end_of_input = Loc::default();
         let mut idx = 0;
         let mut tokens = Vec::new();
 
@@ -62,13 +63,15 @@ impl Lexer {
             {
                 let len = caps[0].len();
                 if let Some(f) = f {
+                    let end = locator.locate(idx + len);
                     tokens.push((
                         f(caps),
                         Span {
                             start: locator.locate(idx),
-                            end: locator.locate(idx + len),
+                            end,
                         },
                     ));
+                    end_of_input = end;
                 }
                 idx += len
             } else {
@@ -78,7 +81,11 @@ impl Lexer {
             }
         }
 
-        Ok(tokens)
+        // End of input is 1 byte past whereever our final token is
+        end_of_input.byte += 1;
+        end_of_input.col += 1;
+        
+        Ok((tokens, end_of_input))
     }
 }
 
