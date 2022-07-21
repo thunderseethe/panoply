@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
@@ -174,22 +175,46 @@ rowToType :: InternalRow -> Type
 rowToType (Closed row) = RowTy row
 rowToType (Open tvar) = VarTy tvar
 
-infix 6 :~
+
+data Ct
+  = T Type
+  | InternalRow :⊙ InternalRow
+  deriving (Show, Eq, Ord)
+
+ctOccurs :: TVar -> Ct -> Bool
+ctOccurs tvar = anyOf (ctTys . typeVars) (== tvar)
+
+ctTys :: Traversal' Ct Type
+ctTys f =
+  \case
+    T ty -> T <$> f ty
+    left :⊙ right -> (:⊙) <$> internalRowTys f left <*> internalRowTys f right
 
 -- Need a better name for this
 data Q
   = -- Two types must be equal (aka unifiable)
-    Type :~ Type
-  | -- _left and _right combine to equal _eq
-    CombineEquals {_left :: InternalRow, _right :: InternalRow, _eq :: InternalRow}
-  deriving (Show, Eq, Ord)
+    Ct :<~> Ct
+  deriving (Eq, Ord)
+
+instance Show Q where
+  showsPrec p (T t1 :<~> T t2) = showsPrec p t1 . (" :~ " ++) . showsPrec p t2
+  showsPrec p (T t1 :<~> ct) = showsPrec p t1 . (" :~> " ++) . showsPrec p ct
+  showsPrec p (ct :<~> T t2) = showsPrec p ct . (" :<~ " ++) . showsPrec p t2
+  showsPrec p (ct1 :<~> ct2) = showsPrec p ct1 . (" :<~> " ++) . showsPrec p ct2
+
+infixl 9 :⊙
+infixl 8 :<~
+infixl 8 :~>
+
+pattern t1 :~ t2 = T t1 :<~> T t2
+pattern ct :<~ t2 = ct :<~> T t2
+pattern t1 :~> ct = T t1 :<~> ct
 
 qTys :: Traversal' Q Type
 qTys f q =
   case q of
     -- Is doing builtin recursion like this bad?
-    t1 :~ t2 -> (:~) <$> f t1 <*> f t2
-    CombineEquals left right eq -> CombineEquals <$> internalRowTys f left <*> internalRowTys f right <*> internalRowTys f eq
+    t1 :<~> t2 -> (:<~>) <$> ctTys f t1 <*> ctTys f t2
 
 data Implication = Imp {_exists :: [TVar], _prop :: [Q], _implies :: [Constraint]}
   deriving (Eq, Show)
@@ -310,17 +335,23 @@ generateConstraints term =
       (left_ty, left_constr) <- generateConstraints left
       (right_ty, right_constr) <- generateConstraints right
       -- We don't want product types to show up in CombineEquals, so we unwrap them into Rows before constructing our Constraint
-      return (ProdTy $ VarTy out, Simp (left_ty :~ ProdTy (VarTy left_var)) : Simp (right_ty :~ ProdTy (VarTy right_var)) : Simp (CombineEquals (Open left_var) (Open right_var) (Open out)) : left_constr <> right_constr)
+      return
+        ( ProdTy $ VarTy out
+        , Simp (left_ty :~ ProdTy (VarTy left_var)) :
+          Simp (right_ty :~ ProdTy (VarTy right_var)) :
+          Simp (VarTy out :~> Open left_var :⊙ Open right_var) :
+          left_constr <> right_constr
+        )
     Prj dir term -> do
-      rest <- Open <$> fresh
+      rest <- fresh
       out <- fresh
       input <- fresh
       (term_ty, term_constr) <- generateConstraints term
       -- We want to unwrap a product into it's underlying row for it's constraint
       let constr =
             case dir of
-              L -> CombineEquals (Open out) rest (Open input)
-              R -> CombineEquals rest (Open out) (Open input)
+              L ->  VarTy input :~> Open out :⊙ Open rest
+              R -> VarTy input :~> Open rest :⊙ Open out
       return (ProdTy $ VarTy out, Simp (term_ty :~ ProdTy (VarTy input)) : Simp constr : term_constr)
     -- Functions
     fn :@ arg -> do
@@ -334,7 +365,7 @@ generateConstraints term =
       return (FunTy (VarTy alpha) ret_ty, constr)
 
 data TyErr
-  = OccursCheckFailed TVar Type
+  = OccursCheckFailed TVar Ct
   | TypeMismatch Type Type
 
 instance Show TyErr where
@@ -354,151 +385,64 @@ data CanonResult
     Residual Q
   | -- Sub-constraints to process
     Work [Q]
-
-{- canonicalize a wanted constraint -}
-canonw ::
-  ( Has (Fresh TVar) sig m
-  , Has (State ([TVar], Subst)) sig m
-  , Has (Throw TyErr) sig m
-  ) =>
-  Q ->
-  m CanonResult
-canonw c@(VarTy tvar :~ FunTy arg ret) =
-  case (isVar arg, isVar ret) of
-    -- This is a canoical funciton type so we delegate to generic canon
-    (True, True) -> canon c
-    (False, True) -> do
-      beta <- fresh
-      modify (addUnifier beta)
-      return $ Work [VarTy tvar :~ FunTy (VarTy beta) ret, arg :~ VarTy beta]
-    (True, False) -> do
-      beta <- fresh
-      modify (addUnifier beta)
-      return $ Work [VarTy tvar :~ FunTy arg (VarTy beta), ret :~ VarTy beta]
-    (False, False) -> do
-      alpha <- fresh
-      beta <- fresh
-      modify (addUnifier beta . addUnifier alpha)
-      return $ Work [VarTy tvar :~ FunTy (VarTy alpha) (VarTy beta), VarTy alpha :~ arg, VarTy beta :~ ret]
-canonw c@(VarTy tvar :~ RowTy row) =
-  let (canon_row, noncanon_row) = Map.partition isVar row
-   in if null noncanon_row
-        then canon c
-        else do
-          (fresh_eqs, fresh_row) <-
-            runState [] $
-              traverse
-                ( \ty -> do
-                    beta <- fresh
-                    modify ((VarTy beta :~ ty) :)
-                    return (VarTy beta)
-                )
-                noncanon_row
-          return $ Work (VarTy tvar :~ RowTy (canon_row <> fresh_row) : fresh_eqs)
--- If not a wanted specific case delegate to generic canon
-canonw c = canon c
-
-{- canonicalize a given constraint -}
-canong :: (Has (Fresh TVar) sig m, Has (State ([TVar], Subst)) sig m, Has (Throw TyErr) sig m) => Q -> m CanonResult
-canong c@(VarTy tvar :~ FunTy arg ret) =
-  case (isVar arg, isVar ret) of
-    (True, True) -> canon c
-    (True, False) -> do
-      beta <- fresh
-      modify (mergeSubst (beta |-> ret))
-      return $ Work [VarTy tvar :~ FunTy arg (VarTy beta), VarTy beta :~ ret]
-    (False, True) -> do
-      beta <- fresh
-      modify (mergeSubst (beta |-> arg))
-      return $ Work [VarTy tvar :~ FunTy (VarTy beta) ret, VarTy beta :~ arg]
-    (False, False) -> do
-      alpha <- fresh
-      beta <- fresh
-      modify (mergeSubst (beta |-> ret) . mergeSubst (alpha |-> arg))
-      return $ Work [VarTy tvar :~ FunTy (VarTy alpha) (VarTy beta), VarTy alpha :~ arg, VarTy beta :~ ret]
-canong c@(VarTy tvar :~ RowTy row) =
-  let (canon_row, noncanon_row) = Map.partition isVar row
-   in if null noncanon_row
-        then canon c
-        else do
-          (fresh_eqs, fresh_row) <-
-            runState [] $
-              traverse
-                ( \ty -> do
-                    beta <- fresh
-                    modify (mergeSubst (beta |-> ty))
-                    modify ((VarTy beta :~ ty) :)
-                    return (VarTy beta)
-                )
-                noncanon_row
-          return $ Work (VarTy tvar :~ RowTy (canon_row <> fresh_row) : fresh_eqs)
--- If not a given specific case delegate to generic canon
-canong c = canon c
+  deriving (Show)
 
 {- canonicalize a generic constraint. this function preforms rewrites that are the same for wanted and given constraints -}
 canon :: (Has (Throw TyErr) sig m) => Q -> m CanonResult
--- Deconstruct types into composite equalities
-canon (FunTy a_arg a_ret :~ FunTy b_arg b_ret) = return $ Work [a_arg :~ b_arg, a_ret :~ b_ret]
-canon (ProdTy a_ty :~ ProdTy b_ty) = return $ Work [a_ty :~ b_ty]
-canon (a@(RowTy a_row) :~ b@(RowTy b_row)) = do
-  row_eqs <-
-    Map.mergeA
-      (Map.traverseMissing (\_ _ -> throwError (TypeMismatch a b)))
-      (Map.traverseMissing (\_ _ -> throwError (TypeMismatch a b)))
-      (Map.zipWithAMatched (\_ a b -> return (a :~ b)))
-      a_row
-      b_row
-  return $ Work (Map.elems row_eqs)
-canon (a :~ b)
-  | a == b = return $ Work []
--- If we fail an occurs check throw to break out of cannon
-canon (VarTy a_tv :~ VarTy b_tv)
-  | b_tv < a_tv = return $ Done (Ct b_tv (VarTy a_tv))
-canon (VarTy tvar :~ ty)
-  | occurs tvar ty = throwError (OccursCheckFailed tvar ty)
-  -- We know this is canon because if not it would have hit the b < a case above
-  | otherwise = return . Done $ Ct tvar ty
-canon (ProdTy ty :~ VarTy tvar) = return $ Work [VarTy tvar :~ ProdTy ty]
-canon (RowTy row :~ VarTy tvar) = return $ Work [VarTy tvar :~ RowTy row]
-canon (FunTy arg ret :~ VarTy tvar) = return $ Work [VarTy tvar :~ FunTy arg ret]
-canon (IntTy :~ VarTy tvar) = return $ Work [VarTy tvar :~ IntTy]
--- Coerce rows into products as needed
--- Actually don't do this
-canon (ProdTy ty :~ RowTy row) = return $ Work [ty :~ RowTy row]
-canon (RowTy row :~ ProdTy ty) = return $ Work [ty :~ RowTy row]
--- Expectation is these are un-unifiable types
--- Bubble them up as residual inert constraints to be handled
-canon (a :~ b) = trace ("residual : " ++ ppShow (a :~ b)) $ return $ Residual (a :~ b)
--- Row constraints
--- Trivial case where all types are known. Reduces to an equality of rows
-canon (CombineEquals (Closed a_row) (Closed b_row) (Closed goal)) = return $ Work [RowTy goal :~ RowTy (a_row <> b_row)]
-canon (CombineEquals (Closed a_row) (Open b_tv) (Closed goal))
-  | rowOccurs b_tv (Closed goal) = throwError (OccursCheckFailed b_tv (RowTy goal))
-  | otherwise =
-    let (a_goal, b_goal) = Map.partitionWithKey (\k _ -> Map.member k a_row) goal
-     in return $ Work [RowTy a_goal :~ RowTy a_row, VarTy b_tv :~ RowTy b_goal]
-canon (CombineEquals (Open a_tv) (Closed b_row) (Closed goal))
-  | rowOccurs a_tv (Closed goal) = throwError (OccursCheckFailed a_tv (RowTy goal))
-  | otherwise =
-    let (b_goal, a_goal) = Map.partitionWithKey (\k _ -> Map.member k b_row) goal
-     in return $ Work [VarTy a_tv :~ RowTy a_goal, RowTy b_row :~ RowTy b_goal]
--- In this trivial case we can reduce to an equality
-canon (CombineEquals (Closed a_row) (Closed b_row) (Open goal)) = return $ Work [VarTy goal :~ RowTy (a_row <> b_row)]
-canon (CombineEquals a_ty b_ty (Open goal)) =
-  return . Done $ CombineCt goal a_ty b_ty
-canon c@(CombineEquals _ _ (Closed _)) =
-  return $ Residual c
+canon q =
+  case q of
+    -- Deconstruct types into composite equalities
+    FunTy a_arg a_ret :~ FunTy b_arg b_ret -> return $ Work [a_arg :~ b_arg, a_ret :~ b_ret]
+    ProdTy a_ty :~ ProdTy b_ty -> return $ Work [a_ty :~ b_ty]
+    a@(RowTy a_row) :~ b@(RowTy b_row) -> do
+      row_eqs <-
+        Map.mergeA
+          (Map.traverseMissing (\_ _ -> throwError (TypeMismatch a b)))
+          (Map.traverseMissing (\_ _ -> throwError (TypeMismatch a b)))
+          (Map.zipWithAMatched (\_ a b -> return (a :~ b)))
+          a_row
+          b_row
+      return $ Work (Map.elems row_eqs)
+    a :~ b | a == b -> return $ Work []
+    VarTy a_tv :~ VarTy b_tv | b_tv < a_tv -> return $ Done (Ct b_tv (T $ VarTy a_tv))
+    ProdTy ty :~ VarTy tvar -> return $ Work [VarTy tvar :~ ProdTy ty]
+    RowTy row :~ VarTy tvar -> return $ Work [VarTy tvar :~ RowTy row]
+    FunTy arg ret :~ VarTy tvar -> return $ Work [VarTy tvar :~ FunTy arg ret]
+    IntTy :~ VarTy tvar -> return $ Work [VarTy tvar :~ IntTy]
+    -- Coerce products into rows when they appear in constraints
+    ProdTy ty :~ RowTy row -> return $ Work [ty :~ RowTy row]
+    RowTy row :~ ProdTy ty -> return $ Work [ty :~ RowTy row]
+    -- Row constraints
+    -- Trivial case where all rows are known. Reduces to an equality
+    ty :~> Closed a_row :⊙ Closed b_row -> return $ Work [ty :~ RowTy (a_row <> b_row)]
+    RowTy goal :~> Closed a_row :⊙ Open b_tv
+      | rowOccurs b_tv (Closed goal) -> throwError (OccursCheckFailed b_tv (T $ RowTy goal))
+      | otherwise ->
+        let (a_goal, b_goal) = Map.partitionWithKey (\k _ -> Map.member k a_row) goal
+         in return $ Work [RowTy a_goal :~ RowTy a_row, VarTy b_tv :~ RowTy b_goal]
+    RowTy goal :~> Open a_tv :⊙ Closed b_row
+      | rowOccurs a_tv (Closed goal) -> throwError (OccursCheckFailed a_tv (T $ RowTy goal))
+      | otherwise ->
+        let (b_goal, a_goal) = Map.partitionWithKey (\k _ -> Map.member k b_row) goal
+         in return $ Work [VarTy a_tv :~ RowTy a_goal, RowTy b_row :~ RowTy b_goal]
+    a_row :⊙ b_row :<~ ty -> return $ Work [ty :~> (a_row :⊙ b_row)]
+    VarTy tvar :~> ct -> 
+       -- If we fail an occurs check throw to break out of cannon
+       if ctOccurs tvar ct
+          then throwError (OccursCheckFailed tvar ct)
+          else return . Done $ Ct tvar ct
+    -- Expectation is these are un-unifiable types
+    -- Bubble them up as residual inert constraints to be handled
+    a :~ b -> return $ Residual (a :~ b)
 
 {- A canonical constraint.
    This is a tvar lhs equal to a type that does not contain tvar -}
 data CanonCt
-  = Ct TVar Type
-  | CombineCt TVar InternalRow InternalRow
+  = Ct TVar Ct
   deriving (Eq)
 
 instance Show CanonCt where
   showsPrec p (Ct tv ty) = showsPrec p tv . (" ~= " ++) . showsPrec p ty
-  showsPrec p (CombineCt tv left right) = showsPrec p tv . (" ~= " ++) . showsPrec p left . (" ⊙ " ++) . showsPrec p right
 
 {- binary interaction between two constraints from the same set (wanted or given) -}
 interact :: Interaction -> [Q]
@@ -510,9 +454,9 @@ interact i =
     -- EQDIFF
     InteractOccurs a_tv a_ty b_tv b_ty -> [VarTy a_tv :~ a_ty, VarTy b_tv :~ apply (a_tv |-> a_ty) b_ty]
     -- Row stuff
-    InteractRowEq a_tv a_row _ b_left b_right -> [VarTy a_tv :~ rowToType a_row, CombineEquals b_left b_right a_row]
-    InteractRowOccurLeft a_tv a_ty b_goal b_left b_right -> [VarTy a_tv :~ a_ty, CombineEquals (applyRow (a_tv |-> a_ty) b_left) b_right (Open b_goal)]
-    InteractRowOccurRight a_tv a_ty b_goal b_left b_right -> [VarTy a_tv :~ a_ty, CombineEquals b_left (applyRow (a_tv |-> a_ty) b_right) (Open b_goal)]
+    InteractRowEq a_tv a_row _ b_left b_right -> [VarTy a_tv :~ rowToType a_row, rowToType a_row :~> b_left :⊙ b_right]
+    InteractRowOccurLeft a_tv a_ty b_goal b_left b_right -> [VarTy a_tv :~ a_ty, VarTy b_goal :~> applyRow (a_tv |-> a_ty) b_left :⊙ b_right]
+    InteractRowOccurRight a_tv a_ty b_goal b_left b_right -> [VarTy a_tv :~ a_ty, VarTy b_goal :~> b_left :⊙ applyRow (a_tv |-> a_ty) b_right]
     InteractRowSolve a_goal a_left a_right b_goal b_left b_right ->
       case (a_left, a_right, b_left, b_right) of
         -- All closed, reduces to an equality on RowTys
@@ -520,20 +464,20 @@ interact i =
         -- Each row is partially open and partially closed
         -- These are the trickiest cases as we have to handle all permutations of possible equalities
         -- a_row and b_row could be disjoint, total overlap, or in a subset relationship
-        (Closed a_row, Open a_tv, Closed b_row, Open b_tv) -> CombineEquals a_left a_right (Open a_goal) : equatePartiallyOpenRows a_row a_tv b_row b_tv
-        (Open a_tv, Closed a_row, Closed b_row, Open b_tv) -> CombineEquals a_left a_right (Open a_goal) : equatePartiallyOpenRows a_row a_tv b_row b_tv
-        (Open a_tv, Closed a_row, Open b_tv, Closed b_row) -> CombineEquals a_left a_right (Open a_goal) : equatePartiallyOpenRows a_row a_tv b_row b_tv
-        (Closed a_row, Open a_tv, Open b_tv, Closed b_row) -> CombineEquals a_left a_right (Open a_goal) : equatePartiallyOpenRows a_row a_tv b_row b_tv
+        (Closed a_row, Open a_tv, Closed b_row, Open b_tv) -> (VarTy a_goal :~> a_left :⊙ a_right ) : equatePartiallyOpenRows a_row a_tv b_row b_tv
+        (Open a_tv, Closed a_row, Closed b_row, Open b_tv) -> (VarTy a_goal :~> a_left :⊙ a_right) : equatePartiallyOpenRows a_row a_tv b_row b_tv
+        (Open a_tv, Closed a_row, Open b_tv, Closed b_row) -> (VarTy a_goal :~> a_left :⊙ a_right ) : equatePartiallyOpenRows a_row a_tv b_row b_tv
+        (Closed a_row, Open a_tv, Open b_tv, Closed b_row) -> (VarTy a_goal :~> a_left :⊙ a_right ) : equatePartiallyOpenRows a_row a_tv b_row b_tv
         -- Only one variable present
         (Open tv, Closed row, Closed sub_left, Closed sub_right) -> equateOneOpenVariable sub_left sub_right row tv a_goal
         (Closed row, Open tv, Closed sub_left, Closed sub_right) -> equateOneOpenVariable sub_left sub_right row tv a_goal
         (Closed sub_left, Closed sub_right, Open tv, Closed row) -> equateOneOpenVariable sub_left sub_right row tv b_goal
         (Closed sub_left, Closed sub_right, Closed row, Open tv) -> equateOneOpenVariable sub_left sub_right row tv b_goal
         -- The rest of cases are straightforward equalities between lefts and rights
-        (a_left, a_right, b_left, b_right) -> [CombineEquals a_left a_right (Open a_goal), rowToType a_left :~ rowToType b_left, rowToType a_right :~ rowToType b_right]
+        (a_left, a_right, b_left, b_right) -> [VarTy a_goal :~> a_left :⊙ a_right, rowToType a_left :~ rowToType b_left, rowToType a_right :~ rowToType b_right]
  where
   equateOneOpenVariable sub_left sub_right row tv goal =
-    CombineEquals (Closed row) (Open tv) (Open goal) :
+    VarTy goal :~> Closed row :⊙ Open tv :
     if
         | Map.keys row == Map.keys sub_left -> [RowTy row :~ RowTy sub_left, VarTy tv :~ RowTy sub_right]
         | Map.keys row == Map.keys sub_right -> [RowTy row :~ RowTy sub_right, VarTy tv :~ RowTy sub_left]
@@ -565,9 +509,9 @@ simplify i =
     -- SEQDIFF
     InteractOccurs given_tv given_ty wanted_tv wanted_ty -> VarTy wanted_tv :~ apply (given_tv |-> given_ty) wanted_ty
     -- Row stuff
-    InteractRowEq _ given_ty _ wanted_left wanted_right -> CombineEquals wanted_left wanted_right given_ty
-    InteractRowOccurLeft given_tv given_ty wanted_goal wanted_left wanted_right -> CombineEquals (applyRow (given_tv |-> given_ty) wanted_left) wanted_right (Open wanted_goal)
-    InteractRowOccurRight given_tv given_ty wanted_goal wanted_left wanted_right -> CombineEquals wanted_left (applyRow (given_tv |-> given_ty) wanted_right) (Open wanted_goal)
+    InteractRowEq _ given_ty _ wanted_left wanted_right -> rowToType given_ty :~> wanted_left :⊙ wanted_right
+    InteractRowOccurLeft given_tv given_ty wanted_goal wanted_left wanted_right -> VarTy wanted_goal :~> applyRow (given_tv |-> given_ty) wanted_left :⊙ wanted_right
+    InteractRowOccurRight given_tv given_ty wanted_goal wanted_left wanted_right -> VarTy wanted_goal :~> wanted_left :⊙ applyRow (given_tv |-> given_ty) wanted_right
     InteractRowSolve{} -> error "todo!"
 
 data Interaction
@@ -602,31 +546,31 @@ interactions canons = selectInteractions canons
   mkInteraction canons (a, b) =
     let filteredCanons int = (filter (\c -> c /= a && c /= b) canons, Just int)
      in case (a, b) of
-          (Ct a_tv a_ty, Ct b_tv b_ty)
+          (Ct a_tv (T a_ty), Ct b_tv (T b_ty))
             | a_tv == b_tv -> filteredCanons $ InteractEq a_tv a_ty b_tv b_ty
             | occurs a_tv b_ty -> filteredCanons $ InteractOccurs a_tv a_ty b_tv b_ty
             | occurs b_tv a_ty -> filteredCanons $ InteractOccurs b_tv b_ty a_tv a_ty
           -- Handle entailment cases
-          (Ct a_tv (RowTy a_row), CombineCt b_tv b_left b_right)
+          (Ct a_tv (T (RowTy a_row)), Ct b_tv (b_left :⊙ b_right))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq a_tv (Closed a_row) b_tv b_left b_right
-          (Ct a_tv (VarTy a_row), CombineCt b_tv b_left b_right)
+          (Ct a_tv (T (VarTy a_row)), Ct b_tv (b_left :⊙ b_right))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq a_tv (Open a_row) b_tv b_left b_right
-          (Ct a_tv a_ty, CombineCt b_goal b_left b_right)
+          (Ct a_tv (T a_ty), Ct b_goal (b_left :⊙ b_right))
             | rowOccurs a_tv b_left -> filteredCanons $ InteractRowOccurLeft a_tv a_ty b_goal b_left b_right
             | rowOccurs a_tv b_right -> filteredCanons $ InteractRowOccurRight a_tv a_ty b_goal b_left b_right
           -- Symmetrical cases
-          (CombineCt a_tv a_left a_right, Ct b_tv (RowTy b_row))
+          (Ct a_tv (a_left :⊙ a_right), Ct b_tv (T (RowTy b_row)))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq b_tv (Closed b_row) a_tv a_left a_right
-          (CombineCt a_tv a_left a_right, Ct b_tv (VarTy b_row))
+          (Ct a_tv (a_left :⊙ a_right), Ct b_tv (T (VarTy b_row)))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq b_tv (Open b_row) a_tv a_left a_right
-          (CombineCt a_goal a_left a_right, Ct b_tv b_ty)
+          (Ct a_goal (a_left :⊙ a_right), Ct b_tv (T b_ty))
             | rowOccurs b_tv a_left -> filteredCanons $ InteractRowOccurLeft b_tv b_ty a_goal a_left a_right
             | rowOccurs b_tv a_right -> filteredCanons $ InteractRowOccurRight b_tv b_ty a_goal a_left a_right
-          (CombineCt a_goal a_left a_right, CombineCt b_goal b_left b_right)
+          (Ct a_goal (a_left :⊙ a_right), Ct b_goal (b_left :⊙ b_right))
             | a_goal == b_goal -> filteredCanons $ InteractRowSolve a_goal a_left a_right b_goal b_left b_right
           (_, _) -> (canons, Nothing)
 
-simplifications :: [CanonCt] -> [CanonCt] -> ([Interaction], [CanonCt])
+{-simplifications :: [CanonCt] -> [CanonCt] -> ([Interaction], [CanonCt])
 simplifications given wanted = second nub . partitionEithers $ mkInteraction <$> candidates
  where
   candidates = [(given_ct, wanted_ct) | given_ct <- given, wanted_ct <- wanted]
@@ -642,7 +586,7 @@ simplifications given wanted = second nub . partitionEithers $ mkInteraction <$>
     | rowOccurs given_tv wanted_right = Left $ InteractRowOccurRight given_tv given_ty wanted_goal wanted_left wanted_right
   -- Order is important here as our input is (given, wanted). Which asks does it even make sense for this case to occur?
   mkInteraction (CombineCt{}, Ct{}) = error "does this even make sense as a possible case?"
-  mkInteraction (_, wanted) = Right wanted
+  mkInteraction (_, wanted) = Right wanted-}
 
 -- The final set of rewrites topreact are missing in our impl
 -- They deal explicitly with top level type class axioms which we don't have.
@@ -679,11 +623,11 @@ solve unifiers phi given wanted
     ((fresh_unifiers, subst), (canon, remainder)) <- runState ([], mempty) (canonicalize canon is)
     modify (remainder ++)
     return $ Just (unifiers <> fresh_unifiers, subst <> phi, given, canon <> inert_canon)
-  | (i : interacts, inert_wanted) <- simplifications given wanted = do
+  {-| (i : interacts, inert_wanted) <- simplifications given wanted = do
     let is = simplify <$> i : interacts
     ((fresh_unifiers, subst), (canon, remainder)) <- runState ([], mempty) (canonicalize canon is)
     modify (remainder ++)
-    return $ Just (unifiers <> fresh_unifiers, subst <> phi, given, canon <> inert_wanted)
+    return $ Just (unifiers <> fresh_unifiers, subst <> phi, given, canon <> inert_wanted)-}
 solve _ _ _ _ = return Nothing
 
 simples :: (Has (Fresh TVar) sig m, Has (Throw TyErr) sig m) => [TVar] -> [Q] -> [Q] -> m ([TVar], Subst, [CanonCt], ([CanonCt], [Q]))
@@ -713,12 +657,12 @@ solveSimplConstraints ctx_unifiers given wanted = do
  where
   q_to_pairs subst q =
     case q of
-      Ct tv ty -> [(tv, apply subst ty)]
-      CombineCt{} -> [] --error ("Unexpected CombineCt in q_wanted " ++ ppShow c)
+      Ct tv (T ty) -> [(tv, apply subst ty)]
+      Ct _ (_ :⊙ _) -> []
   flatten_q subst q =
     case q of
-      Ct tv ty -> Ct tv (apply subst ty)
-      CombineCt tv left right -> CombineCt tv (applyRow subst left) (applyRow subst right)
+      Ct tv (T ty) -> Ct tv (T (apply subst ty))
+      Ct tv (left :⊙ right) -> Ct tv (applyRow subst left :⊙ applyRow subst right)
 
 solveConstraints :: (Has (Reader [Q]) sig m, Has (Throw TyErr) sig m, Has (Fresh TVar) sig m) => [TVar] -> [Q] -> [Constraint] -> m (Subst, [Q])
 solveConstraints unifiers given constrs = do
@@ -785,7 +729,7 @@ infer :: Term -> Type
 infer term =
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
-    Right (_, (subst, [])) -> apply subst ty
+    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") $ apply subst ty
     Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow (apply subst ty))
  where
   (tvar, (ty, constrs)) = runIdentity $ runReader emptyCtx $ runFresh (TV 0) $ generateConstraints term
