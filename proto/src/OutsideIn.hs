@@ -452,11 +452,9 @@ interact i =
     -- EQSAME
     InteractEq a_tv a_ty _ b_ty -> [VarTy a_tv :~ a_ty, a_ty :~ b_ty]
     -- EQDIFF
-    InteractOccurs a_tv a_ty b_tv b_ty -> [VarTy a_tv :~ a_ty, VarTy b_tv :~ apply (a_tv |-> a_ty) b_ty]
+    InteractOccurs a_tv a_ty b_occurence -> [VarTy a_tv :~ a_ty, applyOccurs (a_tv |-> a_ty) b_occurence]
     -- Row stuff
     InteractRowEq a_tv a_row _ b_left b_right -> [VarTy a_tv :~ rowToType a_row, rowToType a_row :~> b_left :⊙ b_right]
-    InteractRowOccurLeft a_tv a_ty b_goal b_left b_right -> [VarTy a_tv :~ a_ty, VarTy b_goal :~> applyRow (a_tv |-> a_ty) b_left :⊙ b_right]
-    InteractRowOccurRight a_tv a_ty b_goal b_left b_right -> [VarTy a_tv :~ a_ty, VarTy b_goal :~> b_left :⊙ applyRow (a_tv |-> a_ty) b_right]
     InteractRowSolve a_goal a_left a_right b_goal b_left b_right ->
       case (a_left, a_right, b_left, b_right) of
         -- All closed, reduces to an equality on RowTys
@@ -507,24 +505,33 @@ simplify i =
     -- SEQSAME
     InteractEq _ given_ty _ wanted_ty -> given_ty :~ wanted_ty
     -- SEQDIFF
-    InteractOccurs given_tv given_ty wanted_tv wanted_ty -> VarTy wanted_tv :~ apply (given_tv |-> given_ty) wanted_ty
+    InteractOccurs given_tv given_ty wanted_occurence -> applyOccurs (given_tv |-> given_ty) wanted_occurence
     -- Row stuff
     InteractRowEq _ given_ty _ wanted_left wanted_right -> rowToType given_ty :~> wanted_left :⊙ wanted_right
-    InteractRowOccurLeft given_tv given_ty wanted_goal wanted_left wanted_right -> VarTy wanted_goal :~> applyRow (given_tv |-> given_ty) wanted_left :⊙ wanted_right
-    InteractRowOccurRight given_tv given_ty wanted_goal wanted_left wanted_right -> VarTy wanted_goal :~> wanted_left :⊙ applyRow (given_tv |-> given_ty) wanted_right
     InteractRowSolve{} -> error "todo!"
+
+data Occurs
+  = Within TVar Type
+  | RowLeft TVar InternalRow InternalRow
+  | RowRight TVar InternalRow InternalRow
+  deriving (Eq, Show)
+
+applyOccurs :: Subst -> Occurs -> Q
+applyOccurs subst =
+  \case 
+    Within tv ty -> VarTy tv :~ apply subst ty
+    RowLeft ty left right -> VarTy ty :~> applyRow subst left :⊙ right
+    RowRight tv left right -> VarTy tv :~> left :⊙ applyRow subst right
 
 data Interaction
   = -- The canonical constraints are for the same tvar
     InteractEq TVar Type TVar Type
   | -- The tvar of the first canonical constraint occurs in the type of the second
-    InteractOccurs TVar Type TVar Type
+    InteractOccurs TVar Type Occurs
   | -- TODO: Name these, this is spaghetti
     -- And in general alot of these row interactions are eerily similar to Eq and Occurs
     -- Try to find a way to express them in terms of normal Eq and Occurs plus some kind of Combine primitive
-    InteractRowOccurLeft TVar Type TVar InternalRow InternalRow
-  | InteractRowOccurRight TVar Type TVar InternalRow InternalRow
-  | InteractRowEq TVar InternalRow TVar InternalRow InternalRow
+   InteractRowEq TVar InternalRow TVar InternalRow InternalRow
   | InteractRowSolve TVar InternalRow InternalRow TVar InternalRow InternalRow
   deriving (Eq, Show)
 
@@ -548,24 +555,24 @@ interactions canons = selectInteractions canons
      in case (a, b) of
           (Ct a_tv (T a_ty), Ct b_tv (T b_ty))
             | a_tv == b_tv -> filteredCanons $ InteractEq a_tv a_ty b_tv b_ty
-            | occurs a_tv b_ty -> filteredCanons $ InteractOccurs a_tv a_ty b_tv b_ty
-            | occurs b_tv a_ty -> filteredCanons $ InteractOccurs b_tv b_ty a_tv a_ty
+            | occurs a_tv b_ty -> filteredCanons $ InteractOccurs a_tv a_ty (Within b_tv b_ty)
+            | occurs b_tv a_ty -> filteredCanons $ InteractOccurs b_tv b_ty (Within a_tv a_ty)
           -- Handle entailment cases
           (Ct a_tv (T (RowTy a_row)), Ct b_tv (b_left :⊙ b_right))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq a_tv (Closed a_row) b_tv b_left b_right
           (Ct a_tv (T (VarTy a_row)), Ct b_tv (b_left :⊙ b_right))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq a_tv (Open a_row) b_tv b_left b_right
           (Ct a_tv (T a_ty), Ct b_goal (b_left :⊙ b_right))
-            | rowOccurs a_tv b_left -> filteredCanons $ InteractRowOccurLeft a_tv a_ty b_goal b_left b_right
-            | rowOccurs a_tv b_right -> filteredCanons $ InteractRowOccurRight a_tv a_ty b_goal b_left b_right
+            | rowOccurs a_tv b_left -> filteredCanons $ InteractOccurs a_tv a_ty (RowLeft b_goal b_left b_right)
+            | rowOccurs a_tv b_right -> filteredCanons $ InteractOccurs a_tv a_ty (RowRight b_goal b_left b_right)
           -- Symmetrical cases
           (Ct a_tv (a_left :⊙ a_right), Ct b_tv (T (RowTy b_row)))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq b_tv (Closed b_row) a_tv a_left a_right
           (Ct a_tv (a_left :⊙ a_right), Ct b_tv (T (VarTy b_row)))
             | a_tv == b_tv -> filteredCanons $ InteractRowEq b_tv (Open b_row) a_tv a_left a_right
           (Ct a_goal (a_left :⊙ a_right), Ct b_tv (T b_ty))
-            | rowOccurs b_tv a_left -> filteredCanons $ InteractRowOccurLeft b_tv b_ty a_goal a_left a_right
-            | rowOccurs b_tv a_right -> filteredCanons $ InteractRowOccurRight b_tv b_ty a_goal a_left a_right
+            | rowOccurs b_tv a_left -> filteredCanons $ InteractOccurs b_tv b_ty (RowLeft a_goal a_left a_right)
+            | rowOccurs b_tv a_right -> filteredCanons $ InteractOccurs b_tv b_ty (RowRight a_goal a_left a_right)
           (Ct a_goal (a_left :⊙ a_right), Ct b_goal (b_left :⊙ b_right))
             | a_goal == b_goal -> filteredCanons $ InteractRowSolve a_goal a_left a_right b_goal b_left b_right
           (_, _) -> (canons, Nothing)
