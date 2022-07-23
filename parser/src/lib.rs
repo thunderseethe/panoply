@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[macro_use]
+extern crate assert_matches;
+
 pub mod cst;
 pub mod error;
 pub mod lexer;

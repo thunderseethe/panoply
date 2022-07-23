@@ -4,36 +4,36 @@ use crate::{
 };
 use std::fmt::Debug;
 
-#[derive(Debug)]
-pub enum Term<'i> {
+#[derive(Clone, Copy, Debug)]
+pub enum Term<'a, 'i> {
     Binding {
         var: WithSpan<&'i str>,
         eq: Span,
-        value: Box<Term<'i>>,
+        value: &'a Term<'a, 'i>,
         semi: Span,
-        expr: Box<Term<'i>>,
+        expr: &'a Term<'a, 'i>,
     },
     Abstraction {
         lbar: Span,
         arg: WithSpan<&'i str>,
         rbar: Span,
-        body: Box<Term<'i>>,
+        body: &'a Term<'a, 'i>,
     },
     Application {
-        func: Box<Term<'i>>,
+        func: &'a Term<'a, 'i>,
         lpar: Span,
-        arg: Box<Term<'i>>,
+        arg: &'a Term<'a, 'i>,
         rpar: Span,
     },
     VariableRef(WithSpan<&'i str>),
     Parenthesized {
         lpar: Span,
-        term: Box<Term<'i>>,
+        term: &'a Term<'a, 'i>,
         rpar: Span,
     },
 }
 
-impl<'i> Spanned for Term<'i> {
+impl<'a, 'i> Spanned for Term<'a, 'i> {
     fn start(&self) -> Loc {
         match self {
             Term::Binding { var, .. } => var.start(),

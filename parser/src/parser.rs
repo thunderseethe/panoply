@@ -1,3 +1,4 @@
+use bumpalo::Bump;
 use chumsky::{
     prelude::{choice, end, just, recursive},
     select, Parser, Stream,
@@ -25,10 +26,51 @@ fn ident<'i>() -> impl Clone + Parser<Token<'i>, WithSpan<&'i str>, Error = Pars
     .map_with_span(|s, span| (s, span))
 }
 
-type Output<'i> = Term<'i>;
+enum TermPrefix<'a, 'i> {
+    Binding {
+        var: WithSpan<&'i str>,
+        eq: Span,
+        value: &'a Term<'a, 'i>,
+        semi: Span,
+    },
+    Abstraction {
+        lbar: Span,
+        arg: WithSpan<&'i str>,
+        rbar: Span,
+    },
+}
 
-/// Returns a parser for the Aiahr language.
-pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErrors<'i>> {
+impl<'a, 'i> TermPrefix<'a, 'i> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i>) -> &'a Term<'a, 'i> {
+        match self {
+            TermPrefix::Binding {
+                var,
+                eq,
+                value,
+                semi,
+            } => arena.alloc(Term::Binding {
+                var,
+                eq,
+                value,
+                semi,
+                expr: t,
+            }),
+            TermPrefix::Abstraction { lbar, arg, rbar } => arena.alloc(Term::Abstraction {
+                lbar,
+                arg,
+                rbar,
+                body: t,
+            }),
+        }
+    }
+}
+
+type Output<'a, 'i> = &'a Term<'a, 'i>;
+
+/// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
+pub fn aiahr_parser<'a, 'i: 'a>(
+    arena: &'a Bump,
+) -> impl Parser<Token<'i>, Output<'a, 'i>, Error = ParseErrors<'i>> {
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -37,15 +79,15 @@ pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErr
 
         let atom = choice((
             // variable
-            ident().map(Term::VariableRef),
+            ident().map(|s| arena.alloc(Term::VariableRef(s)) as &Term),
             // explicit term precedence
-            paren_term
-                .clone()
-                .map(|((lpar, t), rpar)| Term::Parenthesized {
+            paren_term.clone().map(|((lpar, t), rpar)| {
+                arena.alloc(Term::Parenthesized {
                     lpar,
-                    term: Box::new(t),
+                    term: t,
                     rpar,
-                }),
+                }) as &Term
+            }),
         ));
 
         // Function application
@@ -53,13 +95,14 @@ pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErr
             .clone()
             .then(paren_term.repeated())
             .map(|(func, args)| {
-                args.into_iter()
-                    .fold(func, |t, ((lpar, arg), rpar)| Term::Application {
-                        func: Box::new(t),
+                args.into_iter().fold(func, |t, ((lpar, arg), rpar)| {
+                    arena.alloc(Term::Application {
+                        func: t,
                         lpar,
-                        arg: Box::new(arg),
+                        arg,
                         rpar,
                     })
+                })
             });
 
         // Local variable binding
@@ -67,27 +110,21 @@ pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErr
             .then(lit(Token::Equal))
             .then(term)
             .then(lit(Token::Semicolon))
-            .map(|(((var, eq), val), semi)| {
-                Box::new(move |t| Term::Binding {
-                    var,
-                    eq,
-                    value: Box::new(val),
-                    semi,
-                    expr: Box::new(t),
-                }) as Box<dyn FnOnce(Term<'i>) -> Term<'i>>
+            .map(|(((var, eq), val), semi)| TermPrefix::Binding {
+                var,
+                eq,
+                value: val,
+                semi,
             });
 
         // Lambda abstraction
         let closure = lit(Token::VerticalBar)
             .then(ident())
             .then(lit(Token::VerticalBar))
-            .map(|((lbar, var), rbar)| {
-                Box::new(move |t| Term::Abstraction {
-                    lbar,
-                    arg: var,
-                    rbar,
-                    body: Box::new(t),
-                }) as Box<dyn FnOnce(Term<'i>) -> Term<'i>>
+            .map(|((lbar, var), rbar)| TermPrefix::Abstraction {
+                lbar,
+                arg: var,
+                rbar,
             });
 
         // Term parser
@@ -98,7 +135,11 @@ pub fn aiahr_parser<'i>() -> impl Parser<Token<'i>, Output<'i>, Error = ParseErr
         choice((local_bind, closure))
             .repeated()
             .then(app)
-            .map(|(binds, expr)| binds.into_iter().rfold(expr, |t, f| f(t)))
+            .map(|(binds, expr)| {
+                binds
+                    .into_iter()
+                    .rfold(expr, |t, prefix| prefix.apply(arena, t))
+            })
     })
     .then_ignore(end())
 }
@@ -120,145 +161,99 @@ pub fn to_stream<'i, I: IntoIterator<Item = WithSpan<Token<'i>>>>(
 
 #[cfg(test)]
 mod tests {
+    use bumpalo::Bump;
     use chumsky::Parser;
 
     use crate::{cst::Term, lexer::aiahr_lexer};
 
     use super::{aiahr_parser, to_stream};
 
-    pub enum CstMatcher {
-        Binding(String, Box<CstMatcher>, Box<CstMatcher>),
-        Abstraction(String, Box<CstMatcher>),
-        Application(Box<CstMatcher>, Box<CstMatcher>),
-        Variable(String),
-        Parenthesized(Box<CstMatcher>),
-    }
-    impl CstMatcher {
-        fn term_name(&self) -> &'static str {
-            match self {
-                CstMatcher::Binding(_, _, _) => "local binding",
-                CstMatcher::Abstraction(_, _) => "lambda abstraction",
-                CstMatcher::Application(_, _) => "function application",
-                CstMatcher::Variable(_) => "variable",
-                CstMatcher::Parenthesized(_) => "parenthesized term",
+    // CST pattern macros. Used to construct patterns that ignore spans.
+    macro_rules! local {
+        ($var:pat, $value:pat, $expr:pat) => {
+            &Term::Binding {
+                var: ($var, ..),
+                value: $value,
+                expr: $expr,
+                ..
             }
-        }
-
-        fn matches<'i>(&self, term: &Term<'i>) -> Result<(), String> {
-            use CstMatcher::*;
-            match (self, term) {
-                (
-                    Binding(exp_var, exp_val, exp_expr),
-                    Term::Binding {
-                        var, value, expr, ..
-                    },
-                ) => {
-                    if var.0 != exp_var {
-                        return Err(format!(
-                            "Local binding expected variable name {} but found {}",
-                            exp_var, var.0
-                        ));
-                    }
-                    exp_val.matches(value)?;
-                    exp_expr.matches(expr)
-                }
-                (Abstraction(exp_arg, exp_body), Term::Abstraction { arg, body, .. }) => {
-                    if arg.0 != exp_arg {
-                        return Err(format!(
-                            "Lambda abstraction expected argument name {} but found {}",
-                            exp_arg, arg.0
-                        ));
-                    }
-                    exp_body.matches(body)
-                }
-                (Application(exp_func, exp_arg), Term::Application { func, arg, .. }) => {
-                    exp_arg.matches(arg)?;
-                    exp_func.matches(func)
-                }
-                (Variable(exp_var), Term::VariableRef(act_var)) => {
-                    if exp_var == act_var.0 {
-                        Ok(())
-                    } else {
-                        Err(format!(
-                            "Expected variable {} but found {}",
-                            exp_var, act_var.0
-                        ))
-                    }
-                }
-                (Parenthesized(exp_term), Term::Parenthesized { term, .. }) => {
-                    exp_term.matches(term)
-                }
-                (matcher, term) => Err(format!(
-                    "Expected a {} but found {:?}",
-                    matcher.term_name(),
-                    term
-                )),
+        };
+    }
+    macro_rules! abs {
+        ($arg:pat, $body:pat) => {
+            &Term::Abstraction {
+                arg: ($arg, ..),
+                body: $body,
+                ..
             }
-        }
+        };
     }
-    // These have to be top level functions so we can write them without the `CstMatcher::` prefix
-    fn local(var: impl ToString, value: CstMatcher, expr: CstMatcher) -> CstMatcher {
-        CstMatcher::Binding(var.to_string(), Box::new(value), Box::new(expr))
+    macro_rules! app {
+        ($func:pat, $arg:pat) => {
+            &Term::Application {
+                func: $func,
+                arg: $arg,
+                ..
+            }
+        };
     }
-    fn abs(var: impl ToString, body: CstMatcher) -> CstMatcher {
-        CstMatcher::Abstraction(var.to_string(), Box::new(body))
+    macro_rules! var {
+        ($var:pat) => {
+            &Term::VariableRef(($var, ..))
+        };
     }
-    // Terrible pluralization, but we want terseness. Perhaps funs is betters?
-    fn abss(vars: impl IntoIterator<IntoIter = impl DoubleEndedIterator<Item = impl ToString>>, body: CstMatcher) -> CstMatcher {
-        vars.into_iter().rfold(body, |body, var| abs(var, body))
-    }
-    fn app(func: CstMatcher, arg: CstMatcher) -> CstMatcher {
-        CstMatcher::Application(Box::new(func), Box::new(arg))
-    }
-    fn var(var: impl ToString) -> CstMatcher {
-        CstMatcher::Variable(var.to_string())
-    }
-    fn paren(term: CstMatcher) -> CstMatcher {
-        CstMatcher::Parenthesized(Box::new(term))
+    macro_rules! paren {
+        ($term:pat) => {
+            &Term::Parenthesized { term: $term, .. }
+        };
     }
 
-    fn parse_unwrap(input: &str) -> Term<'_> {
+    fn parse_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a Term<'a, 'i> {
         let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
-        aiahr_parser().parse(to_stream(tokens, eoi)).unwrap()
+        aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
 
     #[test]
     fn test_undelimted_closure_fails() {
-        let program = "|x whoops(x)";
-
-        let (tokens, eoi) = aiahr_lexer().lex(program).unwrap();
-        let cst = aiahr_parser().parse(to_stream(tokens, eoi));
-
-        assert!(cst.is_err()) 
+        let arena = Bump::new();
+        let (tokens, eoi) = aiahr_lexer().lex("|x whoops(x)").unwrap();
+        assert_matches!(aiahr_parser(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 
     #[test]
     fn test_app_precedence() {
-        let cst = parse_unwrap("(|x| |w| w)(y)(z)");
-
-        let expected = app(app(paren(abss(["x", "w"], var("w"))), var("y")), var("z"));
-        assert_eq!(expected.matches(&cst), Ok(()));
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "(|x| |w| w)(y)(z)"),
+            app!(
+                app!(paren!(abs!("x", abs!("w", var!("w")))), var!("y")),
+                var!("z")
+            )
+        );
     }
 
     #[test]
     fn test_mixing_prefixes() {
-        let cst = parse_unwrap("|x| y = |z| y(z); w = x(y); w");
-        let expected = abs("x", local("y", abs("z", app(var("y"), var("z"))), local("w", app(var("x"), var("y")), var("w"))));
-
-        assert_eq!(expected.matches(&cst), Ok(()));
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "|x| y = |z| y(z); w = x(y); w"),
+            abs!(
+                "x",
+                local!(
+                    "y",
+                    abs!("z", app!(var!("y"), var!("z"))),
+                    local!("w", app!(var!("x"), var!("y")), var!("w"))
+                )
+            )
+        );
     }
 
     #[test]
     fn test_basic_lambdas() {
-        const PROGRAM: &'static str = "|x| |y| z = x(y); z";
-
-        let lexer = aiahr_lexer();
-        let parser = aiahr_parser();
-
-        let (tokens, eoi) = lexer.lex(PROGRAM).unwrap();
-        let cst = parser.parse(to_stream(tokens, eoi)).unwrap();
-
-        let expected = abs("x", abs("y", local("z", app(var("x"), var("y")), var("z"))));
-        assert_eq!(expected.matches(&cst), Ok(()));
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "|x| |y| z = x(y); z"),
+            abs!(
+                "x",
+                abs!("y", local!("z", app!(var!("x"), var!("y")), var!("z")))
+            )
+        );
     }
 }
