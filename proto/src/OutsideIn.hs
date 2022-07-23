@@ -13,12 +13,12 @@ module OutsideIn where
 
 import Fresh (Fresh, fresh, runFresh)
 
-import Data.Set (Set)
-import qualified Data.Set as Set
-
 import qualified Data.Map.Lazy as LazyMap
 import Data.Map.Strict (Map, (!?))
 import qualified Data.Map.Strict as Map
+
+import Data.Set (Set)
+import qualified Data.Set as Set
 
 import Control.Algebra (Has)
 import Control.Effect.Reader (Reader, ask, local)
@@ -35,6 +35,7 @@ import Control.Lens (
   transform,
   view,
  )
+import Control.Lens.Plated (cosmos, (...))
 import qualified Data.Map.Merge.Strict as Map
 import Data.Maybe (fromMaybe)
 
@@ -92,8 +93,17 @@ data Type
   | IntTy
   | RowTy Row
   | ProdTy Type
-  | FunTy Type Type
+  | FunTy Type InternalRow Type
   deriving (Eq, Ord)
+
+unitTy :: Type
+unitTy = RowTy Map.empty
+
+typeEffs :: Traversal' Type InternalRow
+typeEffs f = 
+  \case
+    FunTy arg eff ret -> FunTy arg <$> f eff <*> pure ret
+    ty -> pure ty
 
 isVar :: Type -> Bool
 isVar (VarTy _) = True
@@ -111,7 +121,7 @@ instance Show Type where
   showsPrec _ IntTy = ("Int" ++)
   showsPrec p (RowTy row) = showsRow p row
   showsPrec p (ProdTy ty) = ('{' :) . showsPrec p ty . ('}' :)
-  showsPrec p (FunTy arg ret) = parens (showsPrec 11 arg . (" -> " ++) . showsPrec 9 ret)
+  showsPrec p (FunTy arg eff ret) = parens (showsPrec 11 arg . (" ->{" ++) . showsPrec p eff . ("} " ++) . showsPrec 9 ret)
    where
     parens =
       if p >= 10
@@ -121,7 +131,9 @@ instance Show Type where
 instance Plated Type where
   plate f ty =
     case ty of
-      FunTy arg ret -> FunTy <$> f arg <*> f ret
+      -- We do not want to traverse eff looking for types.
+      -- While it is a row, it doesn't actually contain types. Only the label is used.
+      FunTy arg eff ret -> FunTy <$> f arg <*> pure eff <*> f ret
       RowTy row -> RowTy <$> traverse f row
       ProdTy ty -> ProdTy <$> f ty
       ty -> pure ty
@@ -215,7 +227,7 @@ ty ~> ct = T ty :<~> ct
 
 (<~) :: Ct -> Type -> Q
 ct <~ ty = ct :<~> T ty
- 
+
 {-pattern (:~) :: Type -> Type -> Q
 pattern t1 :~ t2 = T t1 :<~> T t2
 
@@ -224,7 +236,6 @@ pattern ct :<~ t2 = ct :<~> T t2
 
 pattern (:~>) :: Type -> Ct -> Q
 pattern t1 :~> ct = T t1 :<~> ct-}
-
 
 qTys :: Traversal' Q Type
 qTys f q =
@@ -321,7 +332,7 @@ applyRow (Subst map) (Open tvar) =
     -- If we can't substitute our open row for another row don't apply at all
     _ -> Open tvar
 
-generateConstraints :: (Has (Reader Ctx) sig m, Has (Fresh TVar) sig m) => Term -> m (Type, [Constraint])
+generateConstraints :: (Has (Reader Ctx) sig m, Has (Fresh TVar) sig m) => Term -> m (Type, InternalRow, [Constraint])
 generateConstraints term =
   case term of
     -- Literals
@@ -330,55 +341,64 @@ generateConstraints term =
       case ctx !? x of
         Nothing -> error ("Undefined variable " ++ show x)
         Just (Scheme bound constr ty) -> do
+          eff <- fresh
           freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
           let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-          return (apply subst ty, Simp <$> over (traverse . qTys) (apply subst) constr)
+          return (apply subst ty, Open eff, Simp <$> over (traverse . qTys) (apply subst) constr)
     Int _ -> do
-      return (IntTy, [])
+      return (IntTy, Closed Map.empty, [])
     -- Labelled Types
     lbl :|> term -> do
-      (term_ty, term_constr) <- generateConstraints term
-      return (RowTy $ lbl |> term_ty, term_constr)
+      (term_ty, term_eff, term_constr) <- generateConstraints term
+      return (RowTy $ lbl |> term_ty, term_eff, term_constr)
     term :/ lbl -> do
       alpha <- fresh
-      (term_ty, term_constr) <- generateConstraints term
-      return (VarTy alpha, Simp (term_ty ~ RowTy (lbl |> VarTy alpha)) : term_constr)
+      (term_ty, term_eff, term_constr) <- generateConstraints term
+      return (VarTy alpha, term_eff, Simp (term_ty ~ RowTy (lbl |> VarTy alpha)) : term_constr)
     -- Records
     left :* right -> do
       out <- fresh
       left_var <- fresh
       right_var <- fresh
-      (left_ty, left_constr) <- generateConstraints left
-      (right_ty, right_constr) <- generateConstraints right
+      out_eff <- fresh
+      (left_ty, left_eff, left_constr) <- generateConstraints left
+      (right_ty, right_eff, right_constr) <- generateConstraints right
       -- We don't want product types to show up in CombineEquals, so we unwrap them into Rows before constructing our Constraint
       return
         ( ProdTy $ VarTy out
+        , Open out_eff
         , Simp (left_ty ~ ProdTy (VarTy left_var)) :
           Simp (right_ty ~ ProdTy (VarTy right_var)) :
           Simp (VarTy out ~> Open left_var :⊙ Open right_var) :
+          Simp (VarTy out_eff ~> left_eff :⊙ right_eff) :
           left_constr <> right_constr
         )
+    -- Todo figure out what to do with this, I think in theory we shouldn't be able to store effects in records at all?
     Prj dir term -> do
       rest <- fresh
       out <- fresh
       input <- fresh
-      (term_ty, term_constr) <- generateConstraints term
+      (term_ty, term_eff, term_constr) <- generateConstraints term
       -- We want to unwrap a product into it's underlying row for it's constraint
       let constr =
             case dir of
               L -> VarTy input ~> Open out :⊙ Open rest
               R -> VarTy input ~> Open rest :⊙ Open out
-      return (ProdTy $ VarTy out, Simp (term_ty ~ ProdTy (VarTy input)) : Simp constr : term_constr)
+      return (ProdTy $ VarTy out, term_eff, Simp (term_ty ~ ProdTy (VarTy input)) : Simp constr : term_constr)
     -- Functions
     fn :@ arg -> do
       alpha <- fresh
-      (fn_ty, fn_constr) <- generateConstraints fn
-      (arg_ty, arg_constr) <- generateConstraints arg
-      return (VarTy alpha, Simp (fn_ty ~ FunTy arg_ty (VarTy alpha)) : fn_constr ++ arg_constr)
+      eff <- fresh
+      fn_eff_open <- fresh
+      arg_eff_open <- fresh
+      (fn_ty, fn_eff, fn_constr) <- generateConstraints fn
+      (arg_ty, arg_eff, arg_constr) <- generateConstraints arg
+      return (VarTy alpha, Open eff, Simp (VarTy eff ~> fn_eff :⊙ Open fn_eff_open) : Simp (VarTy eff ~> arg_eff :⊙ Open arg_eff_open) : Simp (fn_ty ~ FunTy arg_ty fn_eff (VarTy alpha)) : fn_constr ++ arg_constr)
     Abs x body -> do
       alpha <- fresh
-      (ret_ty, constr) <- local (Map.insert x (monoScheme $ VarTy alpha)) (generateConstraints body)
-      return (FunTy (VarTy alpha) ret_ty, constr)
+      eff <- fresh
+      (ret_ty, body_eff, constr) <- local (Map.insert x (monoScheme $ VarTy alpha)) (generateConstraints body)
+      return (FunTy (VarTy alpha) body_eff ret_ty, Open eff, constr)
 
 data TyErr
   = OccursCheckFailed TVar Ct
@@ -412,20 +432,20 @@ canon q =
     T a :<~> T b ->
       case (a, b) of
         -- Decompose function type into arg and ret constraints
-        (FunTy a_arg a_ret , FunTy b_arg b_ret) -> return $ Work [a_arg ~ b_arg, a_ret ~ b_ret]
+        (FunTy a_arg a_eff a_ret, FunTy b_arg b_eff b_ret) -> return $ Work [a_arg ~ b_arg, rowToType a_eff ~ rowToType b_eff, a_ret ~ b_ret]
         -- Order constraint
-        (FunTy arg ret , VarTy tvar) -> return $ Work [VarTy tvar ~ FunTy arg ret]
-        (a@(FunTy _ _), b) -> return . Residual $ a ~ b
+        (FunTy arg eff ret, VarTy tvar) -> return $ Work [VarTy tvar ~ FunTy arg eff ret]
+        (a@(FunTy{}), b) -> return . Residual $ a ~ b
         -- Decompose product
-        (ProdTy a_ty , ProdTy b_ty) -> return $ Work [a_ty ~ b_ty]
+        (ProdTy a_ty, ProdTy b_ty) -> return $ Work [a_ty ~ b_ty]
         -- A product equals a row type if it's underyling type equals the row
-        (ProdTy ty , RowTy row) -> return $ Work [ty ~ RowTy row]
+        (ProdTy ty, RowTy row) -> return $ Work [ty ~ RowTy row]
         -- Order constraint
-        (ProdTy ty , VarTy tvar) -> return $ Work [VarTy tvar ~ ProdTy ty]
+        (ProdTy ty, VarTy tvar) -> return $ Work [VarTy tvar ~ ProdTy ty]
         (a@(ProdTy _), b) -> return . Residual $ a ~ b
         -- Decompose row types into an equality for each matching keys
         -- If the row keys don't match up it's a type error
-        (a@(RowTy a_row) , b@(RowTy b_row)) ->
+        (a@(RowTy a_row), b@(RowTy b_row)) ->
           let row_eqs =
                 Map.mergeA
                   (Map.traverseMissing (\_ _ -> Left (Residual (a ~ b))))
@@ -437,22 +457,22 @@ canon q =
                 Left res -> return res
                 Right work -> return . Work . Map.elems $ work
         -- A product equals a row type if it's underyling type equals the row
-        (RowTy row , ProdTy ty) -> return $ Work [ty ~ RowTy row]
+        (RowTy row, ProdTy ty) -> return $ Work [ty ~ RowTy row]
         -- Order constraint
-        (RowTy row , VarTy tvar) -> return $ Work [VarTy tvar ~ RowTy row]
+        (RowTy row, VarTy tvar) -> return $ Work [VarTy tvar ~ RowTy row]
         (a@(RowTy _), b) -> return . Residual $ a ~ b
         -- Order constraint
-        (VarTy a_tv , VarTy b_tv) | b_tv < a_tv -> return $ Done (Ct b_tv (T $ VarTy a_tv))
+        (VarTy a_tv, VarTy b_tv) | b_tv < a_tv -> return $ Done (Ct b_tv (T $ VarTy a_tv))
         (VarTy tvar, ty) ->
           -- If we fail an occurs check throw to break out of cannon
           if occurs tvar ty
             then throwError (OccursCheckFailed tvar (T ty))
             else return . Done $ Ct tvar (T ty)
         -- Order constraint
-        (IntTy , VarTy tvar) -> return $ Work [VarTy tvar ~ IntTy]
-        (IntTy , IntTy) -> return $ Work []
+        (IntTy, VarTy tvar) -> return $ Work [VarTy tvar ~ IntTy]
+        (IntTy, IntTy) -> return $ Work []
         (IntTy, ty) -> return . Residual $ IntTy ~ ty
-        --(a, b) -> return $ Residual (a ~ b)
+    --(a, b) -> return $ Residual (a ~ b)
     -- Trivial case where all rows are known. Reduces to an equality
     T ty :<~> Closed a_row :⊙ Closed b_row -> return $ Work [ty ~ RowTy (a_row <> b_row)]
     T (RowTy goal) :<~> Closed a_row :⊙ Open b_tv
@@ -468,7 +488,7 @@ canon q =
     T (RowTy _) :<~> Open _ :⊙ Open _ -> error "Should this be allowed?"
     T IntTy :<~> ct@(_ :⊙ _) -> return $ Residual (IntTy ~> ct)
     T (ProdTy ty) :<~> ct@(_ :⊙ _) -> return $ Residual (ProdTy ty ~> ct)
-    T (FunTy arg ret) :<~> ct@(_ :⊙ _) -> return $ Residual (FunTy arg ret ~> ct)
+    T (FunTy arg eff ret) :<~> ct@(_ :⊙ _) -> return $ Residual (FunTy arg eff ret ~> ct)
     T (VarTy tvar) :<~> ct ->
       -- If we fail an occurs check throw to break out of cannon
       if ctOccurs tvar ct
@@ -476,9 +496,10 @@ canon q =
         else return . Done $ Ct tvar ct
     a_row :⊙ b_row :<~> T ty -> return $ Work [ty ~> (a_row :⊙ b_row)]
     _ :⊙ _ :<~> _ :⊙ _ -> error "Should this be canonicalized? I think this shouldn't even be possible"
-    -- Expectation is these are un-unifiable types
-    -- Bubble them up as residual inert constraints to be handled
-    --_  -> return $ Residual (a :<~> b)
+
+-- Expectation is these are un-unifiable types
+-- Bubble them up as residual inert constraints to be handled
+--_  -> return $ Residual (a :<~> b)
 
 {- A canonical constraint.
    This is a tvar lhs equal to a type that does not contain tvar -}
@@ -760,22 +781,23 @@ showSimpl unifiers given wanted =
  where
   nextTV = foldr max (TV (-1)) unifiers
 
-testSet :: [Q]
-testSet =
-  [ VarTy (TV 4) ~ FunTy (VarTy (TV 5)) (VarTy (TV 3))
-  , VarTy (TV 0) ~ FunTy (VarTy (TV 2)) (VarTy (TV 4))
-  , VarTy (TV 1) ~ FunTy (VarTy (TV 2)) (VarTy (TV 5))
-  ]
-
-infer :: Term -> Type
+infer :: Term -> (Type, InternalRow)
 infer term =
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
-    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") $ apply subst ty
+    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") (closeEffects $ apply subst ty, applyRow subst eff)
     Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow (apply subst ty))
  where
-  (tvar, (ty, constrs)) = runIdentity $ runReader emptyCtx $ runFresh (TV 0) $ generateConstraints term
+  (tvar, (ty, eff, constrs)) = runIdentity $ runReader emptyCtx $ runFresh (TV 0) $ generateConstraints term
   res = runIdentity . runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
+
+  closeEffects = transform (over typeEffs
+    (\case
+        Open _ -> Closed Map.empty
+        Closed row -> Closed row))
+
+fn :: Type
+fn = FunTy (VarTy 4) (Open 5) (FunTy (VarTy 16) (Open 11) (VarTy 6))
 
 run m =
   let res = runIdentity . runThrow . runState ([] :: [TVar], mempty :: Subst) . runFresh (TV 0) $ m
@@ -783,5 +805,5 @@ run m =
         Left (err :: TyErr) -> error (show err)
         Right a -> a
 
-runGen :: Term -> (Type, [Constraint])
+runGen :: Term -> (Type, InternalRow, [Constraint])
 runGen term = snd . runIdentity $ runReader emptyCtx $ runFresh (TV 0) $ generateConstraints term
