@@ -26,6 +26,7 @@ library
 
     other-modules:
       Fresh
+      Term
       Generalize
     -- OutsideIn
     -- Modules included in this library but not exported.
