@@ -13,10 +13,10 @@ module OutsideIn where
 
 import Fresh (Fresh, fresh, runFresh)
 
+import qualified Data.IntSet as IntSet
 import qualified Data.Map.Lazy as LazyMap
 import Data.Map.Strict (Map, (!?))
 import qualified Data.Map.Strict as Map
-import qualified Data.IntSet as IntSet
 
 import Control.Algebra (Has)
 import Control.Effect.Reader (Reader, ask, local)
@@ -44,30 +44,15 @@ import Control.Monad (forM)
 import Data.Bifunctor (Bifunctor (first, second))
 import Data.Either (partitionEithers)
 import Data.Foldable (foldrM)
-import Data.List (intersperse, nub, (\\), sortBy)
+import Data.List (nub, sortBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import qualified Data.List.NonEmpty as NonEmpty
-import Data.Text (unpack)
 import Debug.Trace
 import Text.Show.Pretty
-import Prelude hiding (interact)
+import Prelude hiding (abs, interact)
 
 import Term
-
-newtype TVar = TV Int
-  deriving (Ord, Eq, Num, Enum, Bounded)
-
-typeVarNames :: [String]
-typeVarNames = go 1 base
-  where
-    base = pure <$> ['a'..'z']
-
-    go n [] = go (n + 1) ((++ replicate n '\'') <$> base)
-    go n (name:tail) = name : go n tail
-    
-
-instance Show TVar where
-  showsPrec _ (TV tv) = (++) (typeVarNames !! tv)
+import Type
 
 data Eff = Eff {name :: Label, ops :: Map Label Scheme}
 
@@ -85,106 +70,11 @@ mkEffCtx = foldr go (EffCtx Map.empty Map.empty)
   go eff@(Eff name ops) (EffCtx effs sigs) =
     EffCtx (Map.insert name ops effs) (Map.foldrWithKey (\op sig sigs -> Map.insert op (eff, sig) sigs) sigs ops)
 
-type Row = Map Label Type
-
-data Type
-  = VarTy TVar
-  | IntTy
-  | RowTy Row
-  | ProdTy Type
-  | FunTy Type InternalRow Type
-  deriving (Eq, Ord)
-
-unitTy :: Type
-unitTy = ProdTy $ RowTy Map.empty
-
-typeEffs :: Traversal' Type InternalRow
-typeEffs f =
-  \case
-    FunTy arg eff ret -> FunTy arg <$> f eff <*> pure ret
-    ty -> pure ty
-
-isVar :: Type -> Bool
-isVar (VarTy _) = True
-isVar _ = False
-
-infix 7 |>
-(|>) :: Label -> Type -> Row
-lbl |> ty = Map.singleton lbl ty
-
-showsRow :: Int -> Row -> ShowS
-showsRow p row s = foldr (\f s -> f s) s $ intersperse (", " ++) $ (\(lbl, ty) -> showsPrec p lbl . (" |> " ++) . showsPrec p ty) <$> Map.toList row
-
-instance Show Type where
-  showsPrec p (VarTy tv) = showsPrec p tv
-  showsPrec _ IntTy = ("IntTy" ++)
-  showsPrec _ (RowTy row) | Map.null row = ("() " ++)
-  showsPrec p (RowTy row) = showsRow p row
-  showsPrec _ (ProdTy (RowTy row)) | Map.null row = ("{}" ++)
-  showsPrec p (ProdTy ty) = ('{' :) . showsPrec p ty . ('}' :)
-  showsPrec p (FunTy arg (Open eff) ret) = parens p (showsPrec 11 arg . (" ->{" ++) . showsPrec p eff . ("} " ++) . showsPrec 9 ret)
-  showsPrec p (FunTy arg (Closed eff) ret) = parens p (showsPrec 11 arg . (" ->{" ++) . foldr (\lbl fn -> (unpack lbl ++) . (' ' :) . fn) id (Map.keys eff) . ("} " ++) . showsPrec 9 ret)
-
-parens p =
-  if p >= 10
-    then \f -> ('(' :) . f . (')' :)
-    else id
-
-instance Plated Type where
-  plate f ty =
-    case ty of
-      -- We do not want to traverse eff looking for types.
-      -- While it is a row, it doesn't actually contain types. Only the label is used.
-      FunTy arg eff ret -> FunTy <$> f arg <*> pure eff <*> f ret
-      RowTy row -> RowTy <$> traverse f row
-      ProdTy ty -> ProdTy <$> f ty
-      ty -> pure ty
-
-typeVars :: Traversal' Type TVar
-typeVars f ty =
-  case ty of
-    VarTy var -> VarTy <$> f var
-    ty -> pure ty
-
-{- Returns true if tvar appears in type, false otherwise -}
-occurs :: TVar -> Type -> Bool
-occurs tvar = anyOf (plate . typeVars) (== tvar)
-
 data Scheme = Scheme [TVar] [Q] Type
   deriving (Show, Eq, Ord)
 
 monoScheme :: Type -> Scheme
 monoScheme = Scheme [] []
-
-data InternalRow
-  = Closed Row
-  | Open TVar
-  deriving (Eq, Ord)
-
-instance Show InternalRow where
-  showsPrec p (Closed row)
-    | Map.null row = ("Closed ()" ++)
-    | otherwise = showsRow p row
-  showsPrec p (Open tv) = ("Open " ++) . showsPrec p tv
-
-internalRowTys :: Traversal' InternalRow Type
-internalRowTys f =
-  \case
-    Closed row -> Closed <$> traverse f row
-    Open tvar -> pure (Open tvar)
-
-internalRowTVars :: Traversal' InternalRow TVar
-internalRowTVars f =
-  \case
-    Closed row -> Closed <$> traverse (typeVars f) row
-    Open tvar -> Open <$> f tvar
-
-rowOccurs :: TVar -> InternalRow -> Bool
-rowOccurs tvar = anyOf internalRowTVars (== tvar)
-
-rowToType :: InternalRow -> Type
-rowToType (Closed row) = RowTy row
-rowToType (Open tvar) = VarTy tvar
 
 data Ct
   = T Type
@@ -288,7 +178,7 @@ instance Show Subst where
   -- pointfree, more like... pointless
   showsPrec p (Subst map) = ('[' :) . (\s -> Map.foldrWithKey go s map) . (']' :)
    where
-    go (TV tvar) ty = showsPrec p tvar . (" := " ++) . showsPrec p ty . (", " ++)
+    go tvar ty = showsPrec p tvar . (" := " ++) . showsPrec p ty . (", " ++)
 
 tvar |-> ty = Subst (Map.singleton tvar ty)
 member tvar (Subst map) = Map.member tvar map
@@ -326,14 +216,11 @@ applyRow (Subst map) (Open tvar) =
     -- If we can't substitute our open row for another row don't apply at all
     _ -> Open tvar
 
-covers :: NonEmpty Clause -> Map Label a -> Bool
-covers clauses ops = null (Map.keys ops \\ (op <$> NonEmpty.toList clauses))
-
-generateConstraints :: (Has (Reader Ctx) sig m, Has (Reader EffCtx) sig m, Has (Fresh TVar) sig m) => Term -> m (Type, InternalRow, [Constraint])
+generateConstraints :: (Has (Reader Ctx) sig m, Has (Reader EffCtx) sig m, Has (Fresh TVar) sig m) => Term () -> m (Term Type, InternalRow, [Constraint])
 generateConstraints term =
   case term of
     -- Literals
-    Var x -> do
+    Var _ x -> do
       ctx <- ask
       case ctx !? x of
         Nothing -> error ("Undefined variable " ++ show x)
@@ -341,21 +228,21 @@ generateConstraints term =
           eff <- fresh
           freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
           let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-          return (apply subst ty, Open eff, Simp <$> over (traverse . qTys) (apply subst) constr)
-    Int _ -> do
-      return (IntTy, Closed Map.empty, [])
-    Unit -> do
-      return (unitTy, Closed Map.empty, [])
+          return (Var (apply subst ty) x, Open eff, Simp <$> over (traverse . qTys) (apply subst) constr)
+    Int _ i -> do
+      return (Int IntTy i, Closed Map.empty, [])
+    Unit _ -> do
+      return (Unit unitTy, Closed Map.empty, [])
     -- Labelled Types
-    lbl :|> term -> do
+    Label _ lbl term -> do
       (term_ty, term_eff, term_constr) <- generateConstraints term
-      return (RowTy $ lbl |> term_ty, term_eff, term_constr)
-    term :/ lbl -> do
+      return (Label (RowTy $ lbl |> meta term_ty) lbl term_ty, term_eff, term_constr)
+    Unlabel _ term lbl -> do
       alpha <- fresh
       (term_ty, term_eff, term_constr) <- generateConstraints term
-      return (VarTy alpha, term_eff, Simp (term_ty ~ RowTy (lbl |> VarTy alpha)) : term_constr)
+      return (Unlabel (VarTy alpha) term_ty lbl, term_eff, Simp (meta term_ty ~ RowTy (lbl |> VarTy alpha)) : term_constr)
     -- Records
-    left :* right -> do
+    Concat _ left right -> do
       out <- fresh
       left_var <- fresh
       right_var <- fresh
@@ -364,16 +251,16 @@ generateConstraints term =
       (right_ty, right_eff, right_constr) <- generateConstraints right
       -- We don't want product types to show up in CombineEquals, so we unwrap them into Rows before constructing our Constraint
       return
-        ( ProdTy $ VarTy out
+        ( Concat (ProdTy $ VarTy out) left_ty right_ty
         , Open out_eff
-        , Simp (left_ty ~ ProdTy (VarTy left_var)) :
-          Simp (right_ty ~ ProdTy (VarTy right_var)) :
+        , Simp (meta left_ty ~ ProdTy (VarTy left_var)) :
+          Simp (meta right_ty ~ ProdTy (VarTy right_var)) :
           Simp (VarTy out ~> Open left_var :⊙ Open right_var) :
           Simp (VarTy out_eff ~> left_eff :⊙ right_eff) :
           left_constr <> right_constr
         )
     -- Todo figure out what to do with this, I think in theory we shouldn't be able to store effects in records at all?
-    Prj dir term -> do
+    Prj _ dir term -> do
       rest <- fresh
       out <- fresh
       input <- fresh
@@ -383,9 +270,9 @@ generateConstraints term =
             case dir of
               L -> VarTy input ~> Open out :⊙ Open rest
               R -> VarTy input ~> Open rest :⊙ Open out
-      return (ProdTy $ VarTy out, term_eff, Simp (term_ty ~ ProdTy (VarTy input)) : Simp constr : term_constr)
+      return (Prj (ProdTy $ VarTy out) dir term_ty, term_eff, Simp (meta term_ty ~ ProdTy (VarTy input)) : Simp constr : term_constr)
     -- Functions
-    fn :@ arg -> do
+    App _ fn arg -> do
       alpha <- fresh
       eff <- fresh
       fn_eff_open <- fresh
@@ -393,19 +280,19 @@ generateConstraints term =
       (fn_ty, fn_eff, fn_constr) <- generateConstraints fn
       (arg_ty, arg_eff, arg_constr) <- generateConstraints arg
       return
-        ( VarTy alpha
+        ( App (VarTy alpha) fn_ty arg_ty
         , Open eff
         , Simp (VarTy eff ~> fn_eff :⊙ Open fn_eff_open) :
           Simp (VarTy eff ~> arg_eff :⊙ Open arg_eff_open) :
-          Simp (fn_ty ~ FunTy arg_ty fn_eff (VarTy alpha)) :
+          Simp (meta fn_ty ~ FunTy (meta arg_ty) fn_eff (VarTy alpha)) :
           fn_constr <> arg_constr
         )
-    Abs x body -> do
+    Abs _ x body -> do
       alpha <- fresh
       eff <- fresh
       (ret_ty, body_eff, constr) <- local (Map.insert x (monoScheme $ VarTy alpha)) (generateConstraints body)
-      return (FunTy (VarTy alpha) body_eff ret_ty, Open eff, constr)
-    Op op -> do
+      return (Abs (FunTy (VarTy alpha) body_eff (meta ret_ty)) x ret_ty, Open eff, constr)
+    Op _ op -> do
       EffCtx _ sigs <- ask
       let (eff_name, Scheme bound constr ty) =
             case sigs !? op of
@@ -417,46 +304,58 @@ generateConstraints term =
       rho <- fresh
       freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
       let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-      return (apply subst ty, Open eff, Simp (VarTy eff ~> Open rho :⊙ Closed (eff_name |> unitTy)) : (Simp <$> over (traverse . qTys) (apply subst) constr))
-    Handle lbl (HandleClause clauses (Clause _ ret_arg _ ret_body)) body -> do
+      return
+        ( Op (apply subst ty) op
+        , Open eff
+        , Simp (VarTy eff ~> Open rho :⊙ Closed (eff_name |> unitTy)) :
+          (Simp <$> over (traverse . qTys) (apply subst) constr)
+        )
+    Handle _ lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_body)) body -> do
       EffCtx eff _ <- ask
       let ops = fromMaybe (error $ "Undefined effect " ++ show lbl) (eff !? lbl)
       let handled_eff = Closed (lbl |> unitTy)
-      _ <- if clauses `covers` ops
-              then return ()
-              else error $ "Clauses " ++ show (NonEmpty.toList clauses) ++ " don't cover " ++ show (Map.keys ops)
+      _ <-
+        if clauses `covers` ops
+          then return ()
+          else error $ "Clauses " ++ show (NonEmpty.toList clauses) ++ " don't cover " ++ show (Map.keys ops)
       (body_ty, body_eff, body_constr) <- generateConstraints body
       eff <- fresh
       alpha <- fresh
       (ret_ty, ret_eff, ret_constr) <- local (Map.insert ret_arg (monoScheme $ VarTy alpha)) $ generateConstraints ret_body
-      op_constr <- forM clauses $ \(Clause name x resume clause_body) -> do
-        -- Signatures of ops cannot call other effects and so must be total
-        -- So we don't check any effects here
-        (op_ty, op_constr) <-
-          case ops !? name of
-            Nothing -> error $ "Undefined operator " ++ show name
-            Just (Scheme bound constr ty) -> do
-              freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
-              let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-              return (apply subst ty, Simp <$> over (traverse . qTys) (apply subst) constr)
-        (tin, tout, ret) <- (,,) <$> fresh <*> fresh <*> fresh
-        -- TODO: figure out how to have resume variable
-        (clause_ty, clause_eff, clause_constr) <-
-          local (bind resume (FunTy (VarTy tout) (Open eff) (VarTy ret)) . bind x (VarTy tout)) $ generateConstraints clause_body
-        return
-          ( Simp (VarTy ret ~ ret_ty) :
-            Simp (VarTy ret ~ clause_ty) : -- Clause type and return type must agree
-            Simp (op_ty ~ FunTy (VarTy tin) handled_eff (VarTy tout)) : -- Operation needs to be a function that handles our effect
-            Simp (VarTy eff ~ rowToType clause_eff) : -- Each clause can have pass on unhandled effects from handler body
-            op_constr <> clause_constr -- Ambient constraints from recursive calls
-          )
+      (clauses, op_constr) <-
+        NonEmpty.unzip
+          <$> forM
+            clauses
+            ( \(Clause name x resume clause_body) -> do
+                -- Signatures of ops cannot call other effects and so must be total
+                -- So we don't check any effects here
+                (op_ty, op_constr) <-
+                  case ops !? name of
+                    Nothing -> error $ "Undefined operator " ++ show name
+                    Just (Scheme bound constr ty) -> do
+                      freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
+                      let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
+                      return (apply subst ty, Simp <$> over (traverse . qTys) (apply subst) constr)
+                (tin, tout, ret) <- (,,) <$> fresh <*> fresh <*> fresh
+                -- TODO: figure out how to have resume variable
+                (clause_ty, clause_eff, clause_constr) <-
+                  local (bind resume (FunTy (VarTy tout) (Open eff) (VarTy ret)) . bind x (VarTy tout)) $ generateConstraints clause_body
+                return
+                  ( Clause name x resume clause_ty
+                  , Simp (VarTy ret ~ meta ret_ty) :
+                    Simp (VarTy ret ~ meta clause_ty) : -- Clause type and return type must agree
+                    Simp (op_ty ~ FunTy (VarTy tin) handled_eff (VarTy tout)) : -- Operation needs to be a function that handles our effect
+                    Simp (VarTy eff ~ rowToType clause_eff) : -- Each clause can have pass on unhandled effects from handler body
+                    op_constr <> clause_constr -- Ambient constraints from recursive calls
+                  )
+            )
 
       return
-        ( ret_ty -- Return type of the handler is the type of the return clause
+        ( Handle (meta ret_ty) lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_ty)) body_ty -- Return type of the handler is the type of the return clause
         , Open eff
         , Simp (rowToType body_eff ~> Open eff :⊙ handled_eff) : -- The body eff must include l, our output will be whatever effs are leftover from l
           Simp (VarTy eff ~ rowToType ret_eff) :
-          Simp (VarTy alpha ~ body_ty) : -- Input to the return clause should match the body type
+          Simp (VarTy alpha ~ meta body_ty) : -- Input to the return clause should match the body type
           body_constr <> ret_constr <> mconcat (NonEmpty.toList op_constr)
         )
 
@@ -535,6 +434,11 @@ canon q =
     --(a, b) -> return $ Residual (a ~ b)
     -- Trivial case where all rows are known. Reduces to an equality
     T ty :<~> Closed a_row :⊙ Closed b_row -> return $ Work [ty ~ RowTy (a_row <> b_row)]
+    -- An empty row combined with an open row is just that open row
+    T ty :<~> Closed a_row :⊙ Open b_tv
+      | Map.null a_row -> return $ Work [ty ~ VarTy b_tv]
+    T ty :<~> Open a_tv :⊙ Closed b_row
+      | Map.null b_row -> return $ Work [ty ~ VarTy a_tv]
     T (RowTy goal) :<~> Closed a_row :⊙ Open b_tv
       | rowOccurs b_tv (Closed goal) -> throwError (OccursCheckFailed b_tv (T $ RowTy goal))
       | otherwise ->
@@ -809,75 +713,71 @@ solveConstraints unifiers given constrs = do
  where
   (simpls, impls) = partitionEithers (view constraintEither <$> constrs)
 
-example :: Term
-example = Abs x $ Abs y $ Abs z $ Var x :@ Var z :@ (Var y :@ Var z)
+example :: Term ()
+example = abs [x, y, z] $ var x <@> var z <@> (var y <@> var z)
  where
   x = V 0
   y = V 1
   z = V 2
 
-exampleInt :: Term
-exampleInt = Abs f $ Abs g $ Var f :@ Int 0 :@ (Var g :@ Int 11)
+exampleInt :: Term ()
+exampleInt = abs [f, g] $ var f <@> int 0 <@> (var g <@> int 11)
  where
   f = V 0
   g = V 1
 
-recordLit :: (Foldable t) => t Term -> Term
-recordLit = foldr1 (:*)
-
-exampleRow :: Term
+exampleRow :: Term ()
 exampleRow =
-  Abs rho (Prj L (Var rho) :/ "x")
-    :@ recordLit ["x" :|> Int 2, "w" :|> Int 0, "y" :|> Int 4]
+  abs [rho] (unlabel (prj L (var rho)) "x")
+    <@> record [label "x" (int 2), label "w" (int 0), label "y" (int 4)]
  where
   rho = V 0
 
-exampleProdLit :: Term
-exampleProdLit = ("x" :|> f :* "w" :|> Int 0) :* ("y" :|> Int 4 :* "z" :|> Int 1)
+exampleProdLit :: Term ()
+exampleProdLit = record [label "x" f, label "w" (int 0), label "y" (int 4), label "z" (int 1)]
  where
-  f = Abs (V 0) (Var (V 0))
+  f = abs [V 0] (var (V 0))
 
-exampleUpdate :: Term
-exampleUpdate = Abs r (Abs v $ ("x" :|> Var v) :* Prj R (Var r)) :@ recordLit ["x" :|> Int 10, "w" :|> Int 0, "y" :|> Int 4, "z" :|> Int 1]
+exampleUpdate :: Term ()
+exampleUpdate = abs [r] (abs [v] $ record [label "x" $ var v, prj R (var r)]) <@> record [label "x" (int 10), label "w" (int 0), label "y" (int 4), label "z" (int 1)]
  where
   v = V 0
   r = V 1
 
-exampleSmolEff :: Term
-exampleSmolEff = Handle "State" (HandleClause clauses ret) (Op "get" :@ Unit)
+exampleSmolEff :: Term ()
+exampleSmolEff = handle "State" (HandleClause clauses ret) (op "get" <@> unit)
  where
   resume = V 1
   x = V 2
   -- All of these are in disjoint scopes so we're okay to reuse variables, although it's kinda sloppy
-  clauses = Clause { op="get", arg=x, resume=resume, body= Var resume :@ Int 4 } :| [ Clause {op = "put", arg=x, resume=resume, body= Var resume :@ Unit} ]
-  ret = Clause { op = "", arg=x, resume=resume, body = "x" :|> Var x }
+  clauses = Clause "get" x resume (var resume <@> int 4) :| [Clause "put" x resume (var resume <@> unit)]
+  ret = Clause "" x resume (label "x" $ var x)
 
-exampleEff :: Term
-exampleEff = Handle "State" (HandleClause clauses ret) $ Abs v (Op "put" :@ Var v) :@ (Op "get" :@ Unit)
+exampleEff :: Term ()
+exampleEff = handle "State" (HandleClause clauses ret) $ abs [v] (op "put" <@> var v) <@> (op "get" <@> unit)
  where
   v = V 0
   resume = V 1
   x = V 2
   -- All of these are in disjoint scopes so we're okay to reuse variables, although it's kinda sloppy
-  clauses = Clause {op="get", arg=x, resume=resume, body= Var resume :@ Int 4} :| [Clause {op = "put", arg=x, resume=resume, body= Var resume :@ Unit}]
-  ret = Clause { op = "", arg=x, resume=resume, body = "x" :|> Var x }
+  clauses = Clause "get" x resume (var resume <@> int 4) :| [Clause "put" x resume (var resume <@> unit)]
+  ret = Clause "" x resume (label "x" $ var x)
 
-exampleGet :: Term
-exampleGet = Abs v (Var v) :@ (Op "get" :@ Unit)
+exampleGet :: Term ()
+exampleGet = abs [v] $ var v <@> (op "get" <@> unit)
  where
   v = V 0
 
 -- This one should fail and it does!
-exampleHandleErr :: Term
-exampleHandleErr = Handle "State" (HandleClause whoops ret) $ Abs v (Op "put" :@ Var v) :@ (Op "get" :@ Unit)
-  where
-    v = V 0
-    resume = V 1
-    x = V 2
-    -- We forgot a clause
-    whoops = Clause { op = "get", arg = x, resume = resume, body = Int 4} :| []
-    ret = Clause { op = "", arg = x, resume = resume, body = "x" :|> Var x }
-
+exampleHandleErr :: Term ()
+exampleHandleErr = handle "State" (HandleClause whoops ret) $ abs [v] (op "put" <@> var v) <@> (op "get" <@> unit)
+ where
+  v = V 0
+  resume = V 1
+  x = V 2
+  -- We forgot a clause
+  whoops = Clause "get" x resume (int 4) :| []
+  ret = Clause "" x resume (label "x" $ var x)
 
 defaultEffCtx :: EffCtx
 defaultEffCtx =
@@ -886,17 +786,10 @@ defaultEffCtx =
     , Eff "RowEff" (Map.fromList [("add_field", Scheme [TV 0, TV 1, TV 2] [VarTy 0 ~> Closed ("x" |> IntTy) :⊙ Open 1, VarTy 2 ~> Closed ("y" |> IntTy) :⊙ Open 1] (FunTy (VarTy 0) (Closed $ "RowEff" |> unitTy) (VarTy 2)))])
     ]
 
-infer :: Term -> (Type, InternalRow)
-infer term = 
-  case res of
-    Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
-    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") (closeEffects $ apply subst ty, applyRow subst eff)
-    Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow (apply subst ty))
+fillOutTerm :: Subst -> Term Type -> Term Type
+fillOutTerm subst = go
  where
-  (_, (tvar, (ty, eff, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term
-  maxVar = maxTermVar term
-  res = runIdentity . runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
-
+  go = over meta' (closeEffects . apply subst) . over plate go
   closeEffects =
     transform
       ( over
@@ -906,3 +799,14 @@ infer term =
               Closed row -> Closed row
           )
       )
+
+infer :: Term () -> (Term Type, InternalRow)
+infer term =
+  case res of
+    Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
+    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") (fillOutTerm subst ty, applyRow subst eff)
+    Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow ty)
+ where
+  (_, (tvar, (ty, eff, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term
+  maxVar = maxTermVar term
+  res = runIdentity . runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
