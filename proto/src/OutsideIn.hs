@@ -53,6 +53,7 @@ import Prelude hiding (abs, interact)
 
 import Term
 import Type
+import Data.Text (unpack)
 
 data Eff = Eff {name :: Label, ops :: Map Label Scheme}
 
@@ -275,15 +276,15 @@ generateConstraints term =
     App _ fn arg -> do
       alpha <- fresh
       eff <- fresh
-      fn_eff_open <- fresh
-      arg_eff_open <- fresh
+      --fn_eff_open <- fresh
+      --arg_eff_open <- fresh
       (fn_ty, fn_eff, fn_constr) <- generateConstraints fn
       (arg_ty, arg_eff, arg_constr) <- generateConstraints arg
-      return
+      return $ (\s -> trace (ppShow s) s)
         ( App (VarTy alpha) fn_ty arg_ty
         , Open eff
-        , Simp (VarTy eff ~> fn_eff :⊙ Open fn_eff_open) :
-          Simp (VarTy eff ~> arg_eff :⊙ Open arg_eff_open) :
+        , Simp (VarTy eff ~ rowToType fn_eff) :
+          Simp (VarTy eff ~ rowToType arg_eff) :
           Simp (meta fn_ty ~ FunTy (meta arg_ty) fn_eff (VarTy alpha)) :
           fn_constr <> arg_constr
         )
@@ -291,24 +292,19 @@ generateConstraints term =
       alpha <- fresh
       eff <- fresh
       (ret_ty, body_eff, constr) <- local (Map.insert x (monoScheme $ VarTy alpha)) (generateConstraints body)
-      return (Abs (FunTy (VarTy alpha) body_eff (meta ret_ty)) x ret_ty, Open eff, constr)
+      return $ (\s -> trace (ppShow s) s) (Abs (FunTy (VarTy alpha) body_eff (meta ret_ty)) x ret_ty, Open eff, constr)
     Op _ op -> do
       EffCtx _ sigs <- ask
       let (eff_name, Scheme bound constr ty) =
             case sigs !? op of
               Nothing -> error $ "Undefined operator " ++ show op
               Just (Eff name _, sig) -> (name, sig)
-      -- output effect
-      eff <- fresh
-      -- open effect row
-      rho <- fresh
       freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
       let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-      return
+      return $ --(\s -> trace (ppShow s) s)
         ( Op (apply subst ty) op
-        , Open eff
-        , Simp (VarTy eff ~> Open rho :⊙ Closed (eff_name |> unitTy)) :
-          (Simp <$> over (traverse . qTys) (apply subst) constr)
+        , Closed (eff_name |> unitTy)
+        , Simp <$> over (traverse . qTys) (apply subst) constr
         )
     Handle _ lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_body)) body -> do
       EffCtx eff _ <- ask
@@ -340,7 +336,7 @@ generateConstraints term =
                 -- TODO: figure out how to have resume variable
                 (clause_ty, clause_eff, clause_constr) <-
                   local (bind resume (FunTy (VarTy tout) (Open eff) (VarTy ret)) . bind x (VarTy tout)) $ generateConstraints clause_body
-                return
+                return $ --trace (unpack name ++ "\n" ++ ppShowList op_constr ++ "\n" ++ ppShowList clause_constr)
                   ( Clause name x resume clause_ty
                   , Simp (VarTy ret ~ meta ret_ty) :
                     Simp (VarTy ret ~ meta clause_ty) : -- Clause type and return type must agree
@@ -350,7 +346,7 @@ generateConstraints term =
                   )
             )
 
-      return
+      return $ --trace (ppShowList body_constr ++ "\n" ++ ppShowList ret_constr ++ "\n")
         ( Handle (meta ret_ty) lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_ty)) body_ty -- Return type of the handler is the type of the return clause
         , Open eff
         , Simp (rowToType body_eff ~> Open eff :⊙ handled_eff) : -- The body eff must include l, our output will be whatever effs are leftover from l
@@ -449,7 +445,7 @@ canon q =
       | otherwise ->
         let (b_goal, a_goal) = Map.partitionWithKey (\k _ -> Map.member k b_row) goal
          in return $ Work [VarTy a_tv ~ RowTy a_goal, RowTy b_row ~ RowTy b_goal]
-    T (RowTy _) :<~> Open _ :⊙ Open _ -> error "Should this be allowed?"
+    T (RowTy r) :<~> Open _ :⊙ Open _ -> error ("Should this be allowed? " ++ show r)
     T IntTy :<~> ct@(_ :⊙ _) -> return $ Residual (IntTy ~> ct)
     T (ProdTy ty) :<~> ct@(_ :⊙ _) -> return $ Residual (ProdTy ty ~> ct)
     T (FunTy arg eff ret) :<~> ct@(_ :⊙ _) -> return $ Residual (FunTy arg eff ret ~> ct)
@@ -729,8 +725,9 @@ exampleInt = abs [f, g] $ var f <@> int 0 <@> (var g <@> int 11)
 exampleRow :: Term ()
 exampleRow =
   abs [rho] (unlabel (prj L (var rho)) "x")
-    <@> record [label "x" (int 2), label "w" (int 0), label "y" (int 4)]
  where
+  -- <@> record [label "x" (int 2), label "w" (int 0), label "y" (int 4)]
+
   rho = V 0
 
 exampleProdLit :: Term ()
@@ -750,7 +747,7 @@ exampleSmolEff = handle "State" (HandleClause clauses ret) (op "get" <@> unit)
   resume = V 1
   x = V 2
   -- All of these are in disjoint scopes so we're okay to reuse variables, although it's kinda sloppy
-  clauses = Clause "get" x resume (var resume <@> int 4) :| [Clause "put" x resume (var resume <@> unit)]
+  clauses = Clause "get" x resume (var resume <@> int 4) :| [Clause "put" (V 3) (V 4) (var (V 4) <@> unit)]
   ret = Clause "" x resume (label "x" $ var x)
 
 exampleEff :: Term ()
@@ -786,8 +783,8 @@ defaultEffCtx =
     , Eff "RowEff" (Map.fromList [("add_field", Scheme [TV 0, TV 1, TV 2] [VarTy 0 ~> Closed ("x" |> IntTy) :⊙ Open 1, VarTy 2 ~> Closed ("y" |> IntTy) :⊙ Open 1] (FunTy (VarTy 0) (Closed $ "RowEff" |> unitTy) (VarTy 2)))])
     ]
 
-fillOutTerm :: Subst -> Term Type -> Term Type
-fillOutTerm subst = go
+fillOutTypes :: Subst -> Term Type -> Term Type
+fillOutTypes subst = go
  where
   go = over meta' (closeEffects . apply subst) . over plate go
   closeEffects =
@@ -804,9 +801,9 @@ infer :: Term () -> (Term Type, InternalRow)
 infer term =
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
-    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") (fillOutTerm subst ty, applyRow subst eff)
-    Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow ty)
+    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") ({-fillOutTypes subst-} typed_term, applyRow subst eff)
+    Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow typed_term)
  where
-  (_, (tvar, (ty, eff, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term
+  (_, (tvar, (typed_term, eff, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term
   maxVar = maxTermVar term
   res = runIdentity . runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
