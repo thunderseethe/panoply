@@ -1,13 +1,9 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ImpredicativeTypes #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeApplications #-}
 
 module OutsideIn where
 
@@ -22,12 +18,7 @@ import Control.Algebra (Has)
 import Control.Effect.Reader (Reader, ask, local)
 import Control.Lens (
   Identity (runIdentity),
-  Iso',
   Plated (..),
-  Traversal',
-  anyOf,
-  iso,
-  makeLenses,
   over,
   transform,
   view,
@@ -53,7 +44,8 @@ import Prelude hiding (abs, interact)
 
 import Term
 import Type
-import Data.Text (unpack)
+import Constraint
+import Subst
 
 data Eff = Eff {name :: Label, ops :: Map Label Scheme}
 
@@ -77,94 +69,6 @@ data Scheme = Scheme [TVar] [Q] Type
 monoScheme :: Type -> Scheme
 monoScheme = Scheme [] []
 
-data Ct
-  = T Type
-  | InternalRow :⊙ InternalRow
-  deriving (Show, Eq, Ord)
-
-ctOccurs :: TVar -> Ct -> Bool
-ctOccurs tvar = anyOf (ctTys . typeVars) (== tvar)
-
-ctTys :: Traversal' Ct Type
-ctTys f =
-  \case
-    T ty -> T <$> f ty
-    left :⊙ right -> (:⊙) <$> internalRowTys f left <*> internalRowTys f right
-
--- Need a better name for this
-data Q
-  = -- Two types must be equal (aka unifiable)
-    Ct :<~> Ct
-  deriving (Eq, Ord)
-
-instance Show Q where
-  showsPrec p (T t1 :<~> T t2) = showsPrec p t1 . (" :~ " ++) . showsPrec p t2
-  showsPrec p (T t1 :<~> ct) = showsPrec p t1 . (" :~> " ++) . showsPrec p ct
-  showsPrec p (ct :<~> T t2) = showsPrec p ct . (" :<~ " ++) . showsPrec p t2
-  showsPrec p (ct1 :<~> ct2) = showsPrec p ct1 . (" :<~> " ++) . showsPrec p ct2
-
-infixl 9 :⊙
-infixl 8 :<~>
-infixl 8 ~
-infixl 8 ~>
-infixl 8 <~
-
-(~) :: Type -> Type -> Q
-t1 ~ t2 = T t1 :<~> T t2
-
-(~>) :: Type -> Ct -> Q
-ty ~> ct = T ty :<~> ct
-
-(<~) :: Ct -> Type -> Q
-ct <~ ty = ct :<~> T ty
-
-qTys :: Traversal' Q Type
-qTys f q =
-  case q of
-    -- Is doing builtin recursion like this bad?
-    t1 :<~> t2 -> (:<~>) <$> ctTys f t1 <*> ctTys f t2
-
-data Implication = Imp {_exists :: [TVar], _prop :: [Q], _implies :: [Constraint]}
-  deriving (Eq, Show)
-
-{- Constraints generated during type inference that must hold for the program to typecheck -}
-data Constraint
-  = Simp Q
-  | Impl Implication
-  deriving (Eq, Show)
-
--- This has to be below Constraint
-makeLenses ''Implication
-
-constraintEither :: Iso' Constraint (Either Q Implication)
-constraintEither = iso to from
- where
-  to (Simp q) = Left q
-  to (Impl i) = Right i
-
-  from (Left q) = Simp q
-  from (Right i) = Impl i
-
-constraintTypes :: Traversal' Constraint Type
-constraintTypes f constr =
-  case constr of
-    Simp q -> Simp <$> qTys f q
-    constr -> pure constr
-
-constraintQs :: Traversal' Constraint Q
-constraintQs f (Simp q) = Simp <$> f q
-constraintQs _ (Impl i) = pure (Impl i)
-
-constraintImpls :: Traversal' Constraint Implication
-constraintImpls _ (Simp q) = pure (Simp q)
-constraintImpls f (Impl i) = Impl <$> f i
-
-simple :: Traversable f => Traversal' (f Constraint) Q
-simple = traverse . constraintQs
-
-impl :: Traversable f => Traversal' (f Constraint) Implication
-impl = traverse . constraintImpls
-
 type Ctx = Map Var Scheme
 
 bind :: Var -> Type -> Ctx -> Ctx
@@ -172,50 +76,6 @@ bind var ty = Map.insert var (monoScheme ty)
 
 emptyCtx :: Ctx
 emptyCtx = Map.empty
-
-newtype Subst = Subst (Map TVar Type)
-
-instance Show Subst where
-  -- pointfree, more like... pointless
-  showsPrec p (Subst map) = ('[' :) . (\s -> Map.foldrWithKey go s map) . (']' :)
-   where
-    go tvar ty = showsPrec p tvar . (" := " ++) . showsPrec p ty . (", " ++)
-
-tvar |-> ty = Subst (Map.singleton tvar ty)
-member tvar (Subst map) = Map.member tvar map
-
-instance Semigroup Subst where
-  (Subst left) <> (Subst right) =
-    Subst $
-      Map.merge
-        Map.preserveMissing
-        Map.preserveMissing
-        (Map.zipWithMatched (\_ _ _ -> error "You fucked up, buck"))
-        left
-        right
-
-instance Monoid Subst where
-  mempty = Subst Map.empty
-
-insert :: TVar -> Type -> Subst -> Subst
-insert a ty (Subst map) = Subst $ Map.insert a ty map
-
-apply :: Subst -> Type -> Type
-apply (Subst map) =
-  transform
-    ( \case
-        VarTy var -> fromMaybe (VarTy var) (Map.lookup var map)
-        ty -> ty
-    )
-
-applyRow :: Subst -> InternalRow -> InternalRow
-applyRow subst (Closed row) = Closed $ fmap (apply subst) row
-applyRow (Subst map) (Open tvar) =
-  case map !? tvar of
-    Just (RowTy row) -> Closed row
-    Just (VarTy tv) -> Open tv
-    -- If we can't substitute our open row for another row don't apply at all
-    _ -> Open tvar
 
 generateConstraints :: (Has (Reader Ctx) sig m, Has (Reader EffCtx) sig m, Has (Fresh TVar) sig m) => Term () -> m (Term Type, InternalRow, [Constraint])
 generateConstraints term =
@@ -301,7 +161,7 @@ generateConstraints term =
               Just (Eff name _, sig) -> (name, sig)
       freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
       let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-      return $ --(\s -> trace (ppShow s) s)
+      return
         ( Op (apply subst ty) op
         , Closed (eff_name |> unitTy)
         , Simp <$> over (traverse . qTys) (apply subst) constr
@@ -336,7 +196,7 @@ generateConstraints term =
                 -- TODO: figure out how to have resume variable
                 (clause_ty, clause_eff, clause_constr) <-
                   local (bind resume (FunTy (VarTy tout) (Open eff) (VarTy ret)) . bind x (VarTy tout)) $ generateConstraints clause_body
-                return $ --trace (unpack name ++ "\n" ++ ppShowList op_constr ++ "\n" ++ ppShowList clause_constr)
+                return
                   ( Clause name x resume clause_ty
                   , Simp (VarTy ret ~ meta ret_ty) :
                     Simp (VarTy ret ~ meta clause_ty) : -- Clause type and return type must agree
@@ -346,7 +206,7 @@ generateConstraints term =
                   )
             )
 
-      return $ --trace (ppShowList body_constr ++ "\n" ++ ppShowList ret_constr ++ "\n")
+      return
         ( Handle (meta ret_ty) lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_ty)) body_ty -- Return type of the handler is the type of the return clause
         , Open eff
         , Simp (rowToType body_eff ~> Open eff :⊙ handled_eff) : -- The body eff must include l, our output will be whatever effs are leftover from l

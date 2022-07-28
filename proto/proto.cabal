@@ -25,9 +25,11 @@ library
     exposed-modules: OutsideIn
 
     other-modules:
+      Constraint
       Fresh
       Term
       Type
+      Subst
       Generalize
     -- OutsideIn
     -- Modules included in this library but not exported.
