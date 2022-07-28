@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Subst where
 
 import Data.Map.Strict (Map, (!?))
@@ -37,19 +38,24 @@ instance Monoid Subst where
 insert :: TVar -> Type -> Subst -> Subst
 insert a ty (Subst map) = Subst $ Map.insert a ty map
 
-apply :: Subst -> Type -> Type
-apply (Subst map) =
-  transform
-    ( \case
-        VarTy var -> fromMaybe (VarTy var) (Map.lookup var map)
-        ty -> ty
-    )
+class SubstApp t where
+  apply :: Subst -> t -> t
 
-applyRow :: Subst -> InternalRow -> InternalRow
-applyRow subst (Closed row) = Closed $ fmap (apply subst) row
-applyRow (Subst map) (Open tvar) =
-  case map !? tvar of
-    Just (RowTy row) -> Closed row
-    Just (VarTy tv) -> Open tv
-    -- If we can't substitute our open row for another row don't apply at all
-    _ -> Open tvar
+instance (Functor f, SubstApp t) => SubstApp (f t) where
+  apply subst = fmap (apply subst)
+
+instance SubstApp Type where
+  apply (Subst map) =
+    transform
+      ( \case
+          VarTy var -> fromMaybe (VarTy var) (Map.lookup var map)
+          ty -> ty)
+
+instance SubstApp InternalRow where
+  apply subst (Closed row) = Closed $ fmap (apply subst) row
+  apply (Subst map) (Open tvar) =
+    case map !? tvar of
+      Just (RowTy row) -> Closed row
+      Just (VarTy tv) -> Open tv
+      -- If we can't substitute our open row for another row don't apply at all
+      _ -> Open tvar

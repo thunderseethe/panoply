@@ -4,6 +4,7 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances #-}
 
 module OutsideIn where
 
@@ -402,12 +403,13 @@ data Occurs
   | RowRight TVar InternalRow InternalRow
   deriving (Eq, Show)
 
+
 applyOccurs :: Subst -> Occurs -> Q
 applyOccurs subst =
   \case
     Within tv ty -> VarTy tv ~ apply subst ty
-    RowLeft ty left right -> VarTy ty ~> applyRow subst left :⊙ right
-    RowRight tv left right -> VarTy tv ~> left :⊙ applyRow subst right
+    RowLeft ty left right -> VarTy ty ~> apply subst left :⊙ right
+    RowRight tv left right -> VarTy tv ~> left :⊙ apply subst right
 
 data Interaction
   = -- The canonical constraints are for the same tvar
@@ -555,7 +557,7 @@ solveSimplConstraints ctx_unifiers given wanted = do
   flatten_q subst q =
     case q of
       Ct tv (T ty) -> Ct tv (T (apply subst ty))
-      Ct tv (left :⊙ right) -> Ct tv (applyRow subst left :⊙ applyRow subst right)
+      Ct tv (left :⊙ right) -> Ct tv (apply subst left :⊙ apply subst right)
 
 solveConstraints :: (Has (Reader [Q]) sig m, Has (Throw TyErr) sig m, Has (Fresh TVar) sig m) => [TVar] -> [Q] -> [Constraint] -> m (Subst, [Q])
 solveConstraints unifiers given constrs = do
@@ -643,25 +645,26 @@ defaultEffCtx =
     , Eff "RowEff" (Map.fromList [("add_field", Scheme [TV 0, TV 1, TV 2] [VarTy 0 ~> Closed ("x" |> IntTy) :⊙ Open 1, VarTy 2 ~> Closed ("y" |> IntTy) :⊙ Open 1] (FunTy (VarTy 0) (Closed $ "RowEff" |> unitTy) (VarTy 2)))])
     ]
 
-fillOutTypes :: Subst -> Term Type -> Term Type
-fillOutTypes subst = go
- where
-  go = over meta' (closeEffects . apply subst) . over plate go
-  closeEffects =
-    transform
-      ( over
-          typeEffs
-          ( \case
-              Open _ -> Closed Map.empty
-              Closed row -> Closed row
+instance SubstApp (Term Type) where
+  apply subst = go
+     where
+      go = over meta' (closeEffects . apply subst) . over plate go
+      closeEffects =
+        transform
+          ( over
+              typeEffs
+              ( \case
+                  Open _ -> Closed Map.empty
+                  Closed row -> Closed row
+              )
           )
-      )
+
 
 infer :: Term () -> (Term Type, InternalRow)
 infer term =
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
-    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") ({-fillOutTypes subst-} typed_term, applyRow subst eff)
+    Right (_, (subst, [])) -> trace (ppShow subst ++ "\n") ({-apply subst-} typed_term, apply subst eff)
     Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow typed_term)
  where
   (_, (tvar, (typed_term, eff, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term

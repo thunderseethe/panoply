@@ -2,8 +2,10 @@
 module Constraint where
 
 import Control.Lens
+import qualified Data.Map.Strict as Map
 
 import Type
+import Subst
 
 data Ct
   = T Type
@@ -19,6 +21,12 @@ ctTys f =
     T ty -> T <$> f ty
     left :⊙ right -> (:⊙) <$> internalRowTys f left <*> internalRowTys f right
 
+instance SubstApp Ct where
+  apply subst =
+    \case
+      T ty -> T (apply subst ty)
+      left :⊙ right -> apply subst left :⊙ apply subst right
+
 -- Need a better name for this
 data Q
   = -- Two types must be equal (aka unifiable)
@@ -30,6 +38,9 @@ instance Show Q where
   showsPrec p (T t1 :<~> ct) = showsPrec p t1 . (" :~> " ++) . showsPrec p ct
   showsPrec p (ct :<~> T t2) = showsPrec p ct . (" :<~ " ++) . showsPrec p t2
   showsPrec p (ct1 :<~> ct2) = showsPrec p ct1 . (" :<~> " ++) . showsPrec p ct2
+
+instance SubstApp Q where
+  apply subst (ct1 :<~> ct2) = apply subst ct1 :<~> apply subst ct2
 
 infixl 9 :⊙
 infixl 8 :<~>
@@ -55,11 +66,20 @@ qTys f q =
 data Implication = Imp {_exists :: [TVar], _prop :: [Q], _implies :: [Constraint]}
   deriving (Eq, Show)
 
+instance SubstApp Implication where
+  apply (Subst map) (Imp exists prop impl) =
+    let subst = Subst $ foldr Map.delete map exists
+     in Imp exists (apply subst prop) (apply subst impl)
+
 {- Constraints generated during type inference that must hold for the program to typecheck -}
 data Constraint
   = Simp Q
   | Impl Implication
   deriving (Eq, Show)
+
+instance SubstApp Constraint where
+  apply subst (Simp q) = Simp (apply subst q)
+  apply subst (Impl imp) = Impl (apply subst imp)
 
 constraintEither :: Iso' Constraint (Either Q Implication)
 constraintEither = iso to from
