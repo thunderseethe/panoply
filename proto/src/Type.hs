@@ -61,8 +61,8 @@ instance Show Type where
   showsPrec p (RowTy row) = showsRow p row
   showsPrec _ (ProdTy (RowTy row)) | Map.null row = ("{}" ++)
   showsPrec p (ProdTy ty) = ('{' :) . showsPrec p ty . ('}' :)
-  showsPrec p (FunTy arg (Open eff) ret) = parens p (showsPrec 11 arg . (" ->{" ++) . showsPrec p eff . ("} " ++) . showsPrec 9 ret)
-  showsPrec p (FunTy arg (Closed eff) ret) = parens p (showsPrec 11 arg . (" ->{" ++) . foldr (\lbl fn -> (unpack lbl ++) . (' ' :) . fn) id (Map.keys eff) . ("} " ++) . showsPrec 9 ret)
+  showsPrec p (FunTy arg (Open eff) ret) = parens p (showsPrec 11 arg . (" -{" ++) . showsPrec p eff . ("}-> " ++) . showsPrec 9 ret)
+  showsPrec p (FunTy arg (Closed eff) ret) = parens p (showsPrec 11 arg . (" -{" ++) . foldr (\lbl fn -> (unpack lbl ++) . (' ' :) . fn) id (Map.keys eff) . ("}-> " ++) . showsPrec 9 ret)
 
 parens p =
   if p >= 10

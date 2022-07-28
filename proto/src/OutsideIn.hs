@@ -70,6 +70,13 @@ data Scheme = Scheme [TVar] [Q] Type
 monoScheme :: Type -> Scheme
 monoScheme = Scheme [] []
 
+instantiate :: (Has (Fresh TVar) sig m) => Scheme -> m ([Constraint], Type)
+instantiate (Scheme bound qs ty) = do
+    freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
+    let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
+    return (Simp <$> apply subst qs, apply subst ty)
+
+
 type Ctx = Map Var Scheme
 
 bind :: Var -> Type -> Ctx -> Ctx
@@ -86,11 +93,10 @@ generateConstraints term =
       ctx <- ask
       case ctx !? x of
         Nothing -> error ("Undefined variable " ++ show x)
-        Just (Scheme bound constr ty) -> do
+        Just scheme -> do
           eff <- fresh
-          freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
-          let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-          return (Var (apply subst ty) x, Open eff, Simp <$> over (traverse . qTys) (apply subst) constr)
+          (constrs, ty) <- instantiate scheme
+          return (Var ty x, Open eff, constrs)
     Int _ i -> do
       return (Int IntTy i, Closed Map.empty, [])
     Unit _ -> do
@@ -156,16 +162,15 @@ generateConstraints term =
       return $ (\s -> trace (ppShow s) s) (Abs (FunTy (VarTy alpha) body_eff (meta ret_ty)) x ret_ty, Open eff, constr)
     Op _ op -> do
       EffCtx _ sigs <- ask
-      let (eff_name, Scheme bound constr ty) =
+      let (eff_name, scheme) =
             case sigs !? op of
               Nothing -> error $ "Undefined operator " ++ show op
               Just (Eff name _, sig) -> (name, sig)
-      freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
-      let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
+      (constrs, ty) <- instantiate scheme
       return
-        ( Op (apply subst ty) op
+        ( Op ty op
         , Closed (eff_name |> unitTy)
-        , Simp <$> over (traverse . qTys) (apply subst) constr
+        , constrs
         )
     Handle _ lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_body)) body -> do
       EffCtx eff _ <- ask
@@ -186,15 +191,13 @@ generateConstraints term =
             ( \(Clause name x resume clause_body) -> do
                 -- Signatures of ops cannot call other effects and so must be total
                 -- So we don't check any effects here
-                (op_ty, op_constr) <-
+                (op_constr, op_ty) <-
                   case ops !? name of
                     Nothing -> error $ "Undefined operator " ++ show name
-                    Just (Scheme bound constr ty) -> do
-                      freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
-                      let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-                      return (apply subst ty, Simp <$> over (traverse . qTys) (apply subst) constr)
+                    Just scheme -> instantiate scheme
+
+                -- This is probably too cute
                 (tin, tout, ret) <- (,,) <$> fresh <*> fresh <*> fresh
-                -- TODO: figure out how to have resume variable
                 (clause_ty, clause_eff, clause_constr) <-
                   local (bind resume (FunTy (VarTy tout) (Open eff) (VarTy ret)) . bind x (VarTy tout)) $ generateConstraints clause_body
                 return
@@ -658,7 +661,6 @@ instance SubstApp (Term Type) where
                   Closed row -> Closed row
               )
           )
-
 
 infer :: Term () -> (Term Type, InternalRow)
 infer term =
