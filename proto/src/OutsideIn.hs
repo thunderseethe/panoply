@@ -150,8 +150,7 @@ generateConstraints term =
       return $ (\s -> trace (ppShow s) s)
         ( App (VarTy alpha) fn_ty arg_ty
         , Open eff
-        , Simp (VarTy eff ~ rowToType fn_eff) :
-          Simp (VarTy eff ~ rowToType arg_eff) :
+        , Simp (VarTy eff ~> fn_eff :⊙ arg_eff) :
           Simp (meta fn_ty ~ FunTy (meta arg_ty) fn_eff (VarTy alpha)) :
           fn_constr <> arg_constr
         )
@@ -543,7 +542,7 @@ solveSimplConstraints :: (Has (Fresh TVar) sig m, Has (Throw TyErr) sig m) => [T
 solveSimplConstraints ctx_unifiers given wanted = do
   (_, flatten_subst, _, (wanted_canon, residue)) <- simples ctx_unifiers given wanted
   let q_wanted = flatten_q flatten_subst <$> wanted_canon
-  let q_residue = over (traverse . qTys) (apply flatten_subst) residue
+  let q_residue = over typeOf (apply flatten_subst) residue
   let referenced_tvars = IntSet.fromList (fmap (\(Ct (TV tv) _) -> tv) q_wanted)
   -- tie the knot
   let theta =
@@ -555,7 +554,7 @@ solveSimplConstraints ctx_unifiers given wanted = do
                 Ct tvar (Open (TV tv) :⊙ Closed row) | not (IntSet.member tv referenced_tvars) -> [(tvar, RowTy row)]
                 Ct _ (_ :⊙ _) -> []
          in Subst . LazyMap.fromList . mconcat $ q_to_pairs theta <$> q_wanted
-  return (theta, over (traverse . qTys) (apply theta) q_residue)
+  return (theta, over typeOf (apply theta) q_residue)
  where
   flatten_q subst q =
     case q of

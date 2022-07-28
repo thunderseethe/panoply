@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Type where
 
 import Control.Lens
@@ -9,6 +10,12 @@ import Data.Text (Text, unpack)
 import Data.List
 
 type Label = Text
+
+class TypeOf t where
+  typeOf :: Traversal' t Type
+
+instance (Traversable t, TypeOf a) => TypeOf (t a) where
+  typeOf f = traverse (typeOf f)
 
 newtype TVar = TV Int
   deriving (Ord, Eq, Num, Enum, Bounded)
@@ -79,6 +86,9 @@ instance Plated Type where
       ProdTy ty -> ProdTy <$> f ty
       ty -> pure ty
 
+instance TypeOf Type where
+  typeOf = plate
+
 typeVars :: Traversal' Type TVar
 typeVars f ty =
   case ty of
@@ -100,11 +110,11 @@ instance Show InternalRow where
     | otherwise = showsRow p row
   showsPrec p (Open tv) = ("Open " ++) . showsPrec p tv
 
-internalRowTys :: Traversal' InternalRow Type
-internalRowTys f =
-  \case
-    Closed row -> Closed <$> traverse f row
-    Open tvar -> pure (Open tvar)
+instance TypeOf InternalRow where
+  typeOf f =
+    \case
+      Closed row -> Closed <$> traverse f row
+      Open tvar -> pure (Open tvar)
 
 internalRowTVars :: Traversal' InternalRow TVar
 internalRowTVars f =

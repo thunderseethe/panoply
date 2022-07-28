@@ -6,20 +6,24 @@ import qualified Data.Map.Strict as Map
 
 import Type
 import Subst
+import Control.Applicative (Applicative(liftA2))
 
+-- This is a helper datatype that enumerates things that might appear in an equality constraint
 data Ct
+  -- A mono type
   = T Type
+  -- Two rows that must combine to equal their neighbor constraint
   | InternalRow :⊙ InternalRow
   deriving (Show, Eq, Ord)
 
 ctOccurs :: TVar -> Ct -> Bool
-ctOccurs tvar = anyOf (ctTys . typeVars) (== tvar)
+ctOccurs tvar = anyOf (typeOf . typeVars) (== tvar)
 
-ctTys :: Traversal' Ct Type
-ctTys f =
-  \case
-    T ty -> T <$> f ty
-    left :⊙ right -> (:⊙) <$> internalRowTys f left <*> internalRowTys f right
+instance TypeOf Ct where
+  typeOf f =
+    \case
+      T ty -> T <$> f ty
+      left :⊙ right -> (:⊙) <$> typeOf f left <*> typeOf f right 
 
 instance SubstApp Ct where
   apply subst =
@@ -27,11 +31,31 @@ instance SubstApp Ct where
       T ty -> T (apply subst ty)
       left :⊙ right -> apply subst left :⊙ apply subst right
 
+infixl 9 :⊙
+infixl 8 :<~>
+infixl 8 ~
+infixl 8 ~>
+infixl 8 <~
+
 -- Need a better name for this
 data Q
-  = -- Two types must be equal (aka unifiable)
+  = -- Equality constraint
     Ct :<~> Ct
   deriving (Eq, Ord)
+
+-- NB: Convention is that < and > point towards the more complex constraint
+-- So :<~> can have a full constraint on either side.
+-- (~) can only have a type on either side.
+(~) :: Type -> Type -> Q
+t1 ~ t2 = T t1 :<~> T t2
+
+-- (~>) has a type as it's left argument and a full constraint as it's right argument
+(~>) :: Type -> Ct -> Q
+ty ~> ct = T ty :<~> ct
+
+-- (<~) has a constraint as it's left argument and a type as it's right argument
+(<~) :: Ct -> Type -> Q
+ct <~ ty = ct :<~> T ty
 
 instance Show Q where
   showsPrec p (T t1 :<~> T t2) = showsPrec p t1 . (" :~ " ++) . showsPrec p t2
@@ -42,26 +66,10 @@ instance Show Q where
 instance SubstApp Q where
   apply subst (ct1 :<~> ct2) = apply subst ct1 :<~> apply subst ct2
 
-infixl 9 :⊙
-infixl 8 :<~>
-infixl 8 ~
-infixl 8 ~>
-infixl 8 <~
-
-(~) :: Type -> Type -> Q
-t1 ~ t2 = T t1 :<~> T t2
-
-(~>) :: Type -> Ct -> Q
-ty ~> ct = T ty :<~> ct
-
-(<~) :: Ct -> Type -> Q
-ct <~ ty = ct :<~> T ty
-
-qTys :: Traversal' Q Type
-qTys f q =
-  case q of
-    -- Is doing builtin recursion like this bad?
-    t1 :<~> t2 -> (:<~>) <$> ctTys f t1 <*> ctTys f t2
+instance TypeOf Q where
+  typeOf f = 
+    \case
+      ct1 :<~> ct2 -> liftA2 (:<~>) (typeOf f ct1) (typeOf f ct2)
 
 data Implication = Imp {_exists :: [TVar], _prop :: [Q], _implies :: [Constraint]}
   deriving (Eq, Show)
@@ -90,11 +98,11 @@ constraintEither = iso to from
   from (Left q) = Simp q
   from (Right i) = Impl i
 
-constraintTypes :: Traversal' Constraint Type
-constraintTypes f constr =
-  case constr of
-    Simp q -> Simp <$> qTys f q
-    constr -> pure constr
+instance TypeOf Constraint where
+  typeOf f = 
+    \case
+      Simp q -> Simp <$> typeOf f q
+      constr -> pure constr
 
 constraintQs :: Traversal' Constraint Q
 constraintQs f (Simp q) = Simp <$> f q
