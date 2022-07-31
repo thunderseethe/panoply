@@ -4,7 +4,7 @@
 
 module Term where
 
-import Control.Lens (Plated (plate), Traversal, Traversal', cosmos, maximumOf, over)
+import Control.Lens (Lens', Plated (plate), Traversal, Traversal', cosmos, lens, maximumOf, over)
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Map.Strict (Map)
@@ -23,6 +23,12 @@ data Dir = L | R
 
 data Clause meta = Clause {_op :: Label, _arg :: Var, _resume :: Var, _body :: Term meta}
 
+instance Functor Clause where
+  fmap f (Clause op arg resume body) = Clause op arg resume (f <$> body)
+
+instance Foldable Clause where
+  foldr f seed (Clause _ _ _ body) = foldr f seed body
+
 instance Show1 Clause where
   liftShowsPrec show showList p (Clause op arg resume body) = showsPrec p op . (' ' :) . showsPrec p arg . (' ' :) . showsPrec p resume . (" = " ++) . liftShowsPrec show showList p body
 
@@ -30,6 +36,12 @@ instance (Show meta) => Show (Clause meta) where
   showsPrec = liftShowsPrec showsPrec showList
 
 data HandleClause meta = HandleClause {clauses :: NonEmpty (Clause meta), ret_clause :: Clause meta}
+
+instance Functor HandleClause where
+  fmap f (HandleClause clauses ret_clause) = HandleClause (fmap f <$> clauses) (f <$> ret_clause)
+
+instance Foldable HandleClause where
+  foldr f seed (HandleClause clauses ret) = foldr (flip (foldr f)) (foldr f seed ret) clauses
 
 instance Show1 HandleClause where
   liftShowsPrec show showList p (HandleClause clauses ret) = ("{ " ++) . foldr (\clause fn -> liftShowsPrec show showList p clause . (", " ++) . fn) (liftShowsPrec show showList p ret) clauses . (" }" ++)
@@ -63,20 +75,23 @@ data Term meta
     Op meta Label
   deriving (Show)
 
-meta :: Term meta -> meta
-meta =
-  \case
-    Var m _ -> m
-    Int m _ -> m
-    Unit m -> m
-    Label m _ _ -> m
-    Unlabel m _ _ -> m
-    Concat m _ _ -> m
-    Prj m _ _ -> m
-    Abs m _ _ -> m
-    App m _ _ -> m
-    Handle m _ _ _ -> m
-    Op m _ -> m
+meta :: Lens' (Term meta) meta
+meta = lens get set
+ where
+  set term b = fmap (const b) term
+  get =
+    \case
+      Var m _ -> m
+      Int m _ -> m
+      Unit m -> m
+      Label m _ _ -> m
+      Unlabel m _ _ -> m
+      Concat m _ _ -> m
+      Prj m _ _ -> m
+      Abs m _ _ -> m
+      App m _ _ -> m
+      Handle m _ _ _ -> m
+      Op m _ -> m
 
 meta' :: Traversal (Term a) (Term b) a b
 meta' f =
@@ -114,13 +129,50 @@ instance Show1 Term where
         Handle m eff handler term -> ("handle<" ++) . showsPrec p eff . ("> " ++) . liftShowsPrec show showList p handler . (' ' :) . go term . (' ' :) . show p m
         Op m op -> showsPrec p op . (" :: " ++) . (' ' :) . show p m
 
-{-instance Show (Term ()) where
-  showsPrec = liftShowsPrec (\_ _ s -> s) (\_ s -> s)-}
+instance Functor Term where
+  fmap f =
+    \case
+      Label m lbl term -> Label (f m) lbl (f <$> term)
+      Unlabel m term lbl -> Unlabel (f m) (f <$> term) lbl
+      Prj m dir term -> Prj (f m) dir (f <$> term)
+      Abs m v term -> Abs (f m) v (f <$> term)
+      App m fn arg -> App (f m) (f <$> fn) (f <$> arg)
+      Concat m left right -> Concat (f m) (f <$> left) (f <$> right)
+      Handle m eff handler term -> Handle (f m) eff (f <$> handler) (f <$> term)
+      Var m x -> Var (f m) x
+      Int m i -> Int (f m) i
+      Op m op -> Op (f m) op
+      Unit m -> Unit (f m)
 
-{-instance Show (Term Type) where
-  showsPrec _ = liftShowsPrec showAnn showList 11
-   where
-    showAnn p ty = (" :: " ++) . showsPrec p ty-}
+instance Foldable Term where
+  foldMap f =
+    \case
+      Label m _ term -> f m <> foldMap f term
+      Unlabel m term _ -> f m <> foldMap f term
+      Prj m _ term -> f m <> foldMap f term
+      Abs m _ term -> f m <> foldMap f term
+      App m fn arg -> f m <> foldMap f fn <> foldMap f arg
+      Concat m left right -> f m <> foldMap f left <> foldMap f right
+      Handle m _ handler term -> f m <> foldMap f handler <> foldMap f term
+      Var m _ -> f m
+      Int m _ -> f m
+      Op m _ -> f m
+      Unit m -> f m
+
+instance Traversable Term where
+  traverse f =
+    \case
+      Label m lbl term -> Label <$> f m <*> pure lbl <*> traverse f term
+      Unlabel m term lbl -> Unlabel <$> f m <*> traverse f term <*> pure lbl
+      Prj m dir term -> Prj <$> f m <*> pure dir <*> traverse f term
+      Abs m v term -> Abs <$> f m <*> pure v <*> traverse f term
+      App m fn arg -> App <$> f m <*> traverse f fn <*> traverse f arg
+      Concat m left right -> Concat <$> f m <*> traverse f left <*> traverse f right
+      Handle m eff handler term -> Handle <$> f m <*> pure eff <*> handleClauseTerms (traverse f) handler <*> traverse f term
+      Var m x -> Var <$> f m <*> pure x
+      Int m i -> Int <$> f m <*> pure i
+      Op m op -> Op <$> f m <*> pure op
+      Unit m -> Unit <$> f m
 
 instance Plated (Term meta) where
   plate f =
@@ -128,6 +180,7 @@ instance Plated (Term meta) where
       Label m lbl term -> Label m lbl <$> f term
       Unlabel m term lbl -> Unlabel m <$> f term <*> pure lbl
       Prj m dir term -> Prj m dir <$> f term
+      Concat m left right -> Concat m <$> f left <*> f right
       Abs m v term -> Abs m v <$> f term
       App m fn arg -> App m <$> f fn <*> f arg
       Handle m eff handler term -> Handle m eff <$> handleClauseTerms f handler <*> f term

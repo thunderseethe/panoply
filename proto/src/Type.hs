@@ -1,13 +1,14 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
+
 module Type where
 
 import Control.Lens
+import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text, unpack)
-import Data.List
 
 type Label = Text
 
@@ -20,13 +21,16 @@ instance (Traversable t, TypeOf a) => TypeOf (t a) where
 newtype TVar = TV Int
   deriving (Ord, Eq, Num, Enum, Bounded)
 
+unTV :: TVar -> Int
+unTV (TV i) = i
+
 typeVarNames :: [String]
 typeVarNames = go 1 base
-  where
-    base = pure <$> ['a'..'z']
+ where
+  base = pure <$> ['a' .. 'z']
 
-    go n [] = go (n + 1) ((++ replicate n '\'') <$> base)
-    go n (name:tail) = name : go n tail    
+  go n [] = go (n + 1) ((++ replicate n '\'') <$> base)
+  go n (name : tail) = name : go n tail
 
 instance Show TVar where
   showsPrec _ (TV tv) = (++) (typeVarNames !! tv)
