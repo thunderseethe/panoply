@@ -2,18 +2,6 @@ use std::{fmt::Debug, ops::Range};
 
 use crate::loc::Loc;
 
-/// An item that can be located in an interval of a source text.
-pub trait Spanned {
-    fn start(&self) -> Loc;
-    fn end(&self) -> Loc;
-    fn span(&self) -> Span {
-        Span {
-            start: self.start(),
-            end: self.end(),
-        }
-    }
-}
-
 /// A span of a source text.
 #[derive(Clone, Copy, Debug)]
 pub struct Span {
@@ -21,11 +9,11 @@ pub struct Span {
     pub end: Loc,
 }
 
-pub type WithSpan<T> = (T, Span);
+pub type SpanOf<T> = (T, Span);
 
 impl Span {
     /// Returns `self` but with the given value.
-    pub fn wrap<T>(&self, val: T) -> WithSpan<T> {
+    pub fn of<T>(&self, val: T) -> SpanOf<T> {
         (val, *self)
     }
 }
@@ -50,22 +38,25 @@ impl chumsky::Span for Span {
     }
 }
 
-impl Spanned for Span {
+/// An item that can be located in an interval of a source text.
+pub trait Spanned {
+    fn span(&self) -> Span;
     fn start(&self) -> Loc {
-        self.start
+        self.span().start
     }
-
     fn end(&self) -> Loc {
-        self.end
+        self.span().end
     }
 }
 
-impl<T> Spanned for WithSpan<T> {
-    fn start(&self) -> Loc {
-        self.1.start
+impl Spanned for Span {
+    fn span(&self) -> Span {
+        *self
     }
+}
 
-    fn end(&self) -> Loc {
-        self.1.end
+impl<T> Spanned for SpanOf<T> {
+    fn span(&self) -> Span {
+        self.1
     }
 }

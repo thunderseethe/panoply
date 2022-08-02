@@ -1,14 +1,14 @@
 use bumpalo::Bump;
 use chumsky::{
-    prelude::{choice, end, just, recursive},
+    prelude::{choice, empty, end, just, recursive},
     select, Parser, Stream,
 };
 
 use crate::{
-    cst::Term,
+    cst::{CommaSep, Field, Term},
     error::ParseErrors,
     loc::Loc,
-    span::{Span, WithSpan},
+    span::{Span, SpanOf},
     token::Token,
 };
 
@@ -19,23 +19,55 @@ fn lit<'i>(token: Token<'i>) -> impl Clone + Parser<Token<'i>, Span, Error = Par
 
 // Returns a spanned parser that matches any `Token::Identifier` and unwraps it to the contained
 // `&str`.
-fn ident<'i>() -> impl Clone + Parser<Token<'i>, WithSpan<&'i str>, Error = ParseErrors<'i>> {
+fn ident<'i>() -> impl Clone + Parser<Token<'i>, SpanOf<&'i str>, Error = ParseErrors<'i>> {
     select! {
         Token::Identifier(id) => id,
     }
     .map_with_span(|s, span| (s, span))
 }
 
+// Returns a parser for comma-separated `T` values, represented by `Option<CommaSep<T>>`. `None`
+// indicates an empty list.
+fn comma_sep<'a, 'i, T: 'a>(
+    arena: &'a Bump,
+    elem: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
+) -> impl Clone + Parser<Token<'i>, Option<CommaSep<'a, T>>, Error = ParseErrors<'i>> {
+    choice((
+        elem.clone()
+            .then(lit(Token::Comma).then(elem).repeated())
+            .then(choice((lit(Token::Comma).map(Some), empty().map(|_| None))))
+            .map(|((first, elems), comma)| {
+                Some(CommaSep {
+                    first,
+                    elems: arena.alloc_slice_fill_iter(elems.into_iter()),
+                    comma,
+                })
+            }),
+        empty().map(|_| None),
+    ))
+}
+
+// Returns a parser for a field with a label, separator, and target.
+fn field<'i, T>(
+    sep: Token<'i>,
+    target: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
+) -> impl Clone + Parser<Token<'i>, Field<'i, T>, Error = ParseErrors<'i>> {
+    ident()
+        .then(lit(sep))
+        .then(target)
+        .map(|((label, sep), target)| Field { label, sep, target })
+}
+
 enum TermPrefix<'a, 'i> {
     Binding {
-        var: WithSpan<&'i str>,
+        var: SpanOf<&'i str>,
         eq: Span,
         value: &'a Term<'a, 'i>,
         semi: Span,
     },
     Abstraction {
         lbar: Span,
-        arg: WithSpan<&'i str>,
+        arg: SpanOf<&'i str>,
         rbar: Span,
     },
 }
@@ -65,6 +97,36 @@ impl<'a, 'i> TermPrefix<'a, 'i> {
     }
 }
 
+enum TermSuffix<'a, 'i> {
+    Application {
+        lpar: Span,
+        arg: &'a Term<'a, 'i>,
+        rpar: Span,
+    },
+    FieldAccess {
+        dot: Span,
+        field: SpanOf<&'i str>,
+    },
+}
+
+impl<'a, 'i> TermSuffix<'a, 'i> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i>) -> &'a Term<'a, 'i> {
+        match self {
+            TermSuffix::Application { lpar, arg, rpar } => arena.alloc(Term::Application {
+                func: t,
+                lpar,
+                arg,
+                rpar,
+            }),
+            TermSuffix::FieldAccess { dot, field } => arena.alloc(Term::FieldAccess {
+                product: t,
+                dot,
+                field,
+            }),
+        }
+    }
+}
+
 type Output<'a, 'i> = &'a Term<'a, 'i>;
 
 /// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
@@ -77,6 +139,18 @@ pub fn aiahr_parser<'a, 'i: 'a>(
             .then(term.clone())
             .then(lit(Token::RParen));
 
+        // Product row
+        let prod = lit(Token::LBrace)
+            .then(comma_sep(arena, field(Token::Equal, term.clone())))
+            .then(lit(Token::RBrace))
+            .map(|((lbrace, fields), rbrace)| {
+                arena.alloc(Term::ProductRow {
+                    lbrace,
+                    fields,
+                    rbrace,
+                }) as &Term
+            });
+
         let atom = choice((
             // variable
             ident().map(|s| arena.alloc(Term::VariableRef(s)) as &Term),
@@ -88,22 +162,25 @@ pub fn aiahr_parser<'a, 'i: 'a>(
                     rpar,
                 }) as &Term
             }),
+            prod,
         ));
 
         // Function application
-        let app = atom
-            .clone()
-            .then(paren_term.repeated())
-            .map(|(func, args)| {
-                args.into_iter().fold(func, |t, ((lpar, arg), rpar)| {
-                    arena.alloc(Term::Application {
-                        func: t,
-                        lpar,
-                        arg,
-                        rpar,
-                    })
-                })
-            });
+        let app = paren_term.map(|((lpar, arg), rpar)| TermSuffix::Application { lpar, arg, rpar });
+
+        // Field access
+        let access = lit(Token::Dot)
+            .then(ident())
+            .map(|(dot, field)| TermSuffix::FieldAccess { dot, field });
+
+        let suffixed =
+            atom.clone()
+                .then(choice((app, access)).repeated())
+                .map(|(expr, suffixes)| {
+                    suffixes
+                        .into_iter()
+                        .fold(expr, |t, suffix| suffix.apply(arena, t))
+                });
 
         // Local variable binding
         let local_bind = ident()
@@ -130,22 +207,24 @@ pub fn aiahr_parser<'a, 'i: 'a>(
         // Term parser
         // We need to construct our parse tree here bottom to get associativity of bindings and
         // closures correct. However we're recursive descent, so we only go top-down. To remedy
-        // this we construct a series of closures top-down that are applied to the final expression
+        // this we construct a series of prefixes top-down that are applied to the final expression
         // in right associative order.
-        choice((local_bind, closure))
-            .repeated()
-            .then(app)
-            .map(|(binds, expr)| {
-                binds
-                    .into_iter()
-                    .rfold(expr, |t, prefix| prefix.apply(arena, t))
-            })
+        let prefixed =
+            choice((local_bind, closure))
+                .repeated()
+                .then(suffixed)
+                .map(|(binds, expr)| {
+                    binds
+                        .into_iter()
+                        .rfold(expr, |t, prefix| prefix.apply(arena, t))
+                });
+        prefixed
     })
     .then_ignore(end())
 }
 
 /// Converts lexer output to a stream readable by a Chumsky parser.
-pub fn to_stream<'i, I: IntoIterator<Item = WithSpan<Token<'i>>>>(
+pub fn to_stream<'i, I: IntoIterator<Item = SpanOf<Token<'i>>>>(
     tokens: I,
     end_of_input: Loc,
 ) -> Stream<'i, Token<'i>, Span, I::IntoIter> {
@@ -164,11 +243,35 @@ mod tests {
     use bumpalo::Bump;
     use chumsky::Parser;
 
-    use crate::{cst::Term, lexer::aiahr_lexer};
+    use crate::{
+        cst::{CommaSep, Field, Term},
+        lexer::aiahr_lexer,
+    };
 
     use super::{aiahr_parser, to_stream};
 
     // CST pattern macros. Used to construct patterns that ignore spans.
+    macro_rules! comma_sep {
+        ($first:pat, $($elems:pat),*) => {
+            Some(CommaSep {
+                first: $first,
+                elems: &[$((.., $elems)),*],
+                ..
+            })
+        };
+        () => {
+            None
+        };
+    }
+    macro_rules! field {
+        ($label:pat, $target:pat) => {
+            Field {
+                label: ($label, ..),
+                target: $target,
+                ..
+            }
+        };
+    }
     macro_rules! local {
         ($var:pat, $value:pat, $expr:pat) => {
             &Term::Binding {
@@ -193,6 +296,23 @@ mod tests {
             &Term::Application {
                 func: $func,
                 arg: $arg,
+                ..
+            }
+        };
+    }
+    macro_rules! prod {
+        ($fields:pat) => {
+            &Term::ProductRow {
+                fields: $fields,
+                ..
+            }
+        };
+    }
+    macro_rules! get {
+        ($product:pat, $field:pat) => {
+            &Term::FieldAccess {
+                product: $product,
+                field: ($field, ..),
                 ..
             }
         };
@@ -254,6 +374,48 @@ mod tests {
                 "x",
                 abs!("y", local!("z", app!(var!("x"), var!("y")), var!("z")))
             )
+        );
+    }
+
+    #[test]
+    fn test_product_rows() {
+        assert_matches!(parse_unwrap(&Bump::new(), "{}"), prod!(comma_sep!()));
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "{x = a, y = |t| t}"),
+            prod!(comma_sep!(
+                field!("x", var!("a")),
+                field!("y", abs!("t", var!("t")))
+            ))
+        );
+    }
+
+    #[test]
+    fn test_product_rows_precedence() {
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "{x = |t| t}({y = |t| u})"),
+            app!(
+                prod!(comma_sep!(field!("x", abs!("t", var!("t"))),)),
+                prod!(comma_sep!(field!("y", abs!("t", var!("u"))),))
+            )
+        );
+    }
+
+    #[test]
+    fn test_field_access() {
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "{x = a, y = b}.x"),
+            get!(
+                prod!(comma_sep!(field!("x", var!("a")), field!("y", var!("b")))),
+                "x"
+            )
+        );
+    }
+
+    #[test]
+    fn test_combined_suffixes() {
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "a.x(b)"),
+            app!(get!(var!("a"), "x"), var!("b"))
         );
     }
 }

@@ -1,13 +1,49 @@
-use crate::{
-    loc::Loc,
-    span::{Span, Spanned, WithSpan},
-};
+use crate::span::{Span, SpanOf, Spanned};
 use std::fmt::Debug;
+
+/// A non-empty comma-separated list. To allow an empty list, wrap in `Option`.
+#[derive(Clone, Copy, Debug)]
+pub struct CommaSep<'a, T> {
+    pub first: T,
+    pub elems: &'a [(Span, T)],
+    /// The optional final comma.
+    pub comma: Option<Span>,
+}
+
+impl<'a, T: Spanned> Spanned for CommaSep<'a, T> {
+    fn span(&self) -> Span {
+        Span {
+            start: self.first.start(),
+            end: self
+                .comma
+                .or(self.elems.last().map(|e| e.0))
+                .unwrap_or(self.first.span())
+                .end(),
+        }
+    }
+}
+
+/// A field with a label, separator, and target in `T`.
+#[derive(Clone, Copy, Debug)]
+pub struct Field<'i, T> {
+    pub label: SpanOf<&'i str>,
+    pub sep: Span,
+    pub target: T,
+}
+
+impl<'i, T: Spanned> Spanned for Field<'i, T> {
+    fn span(&self) -> Span {
+        Span {
+            start: self.label.start(),
+            end: self.target.end(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Term<'a, 'i> {
     Binding {
-        var: WithSpan<&'i str>,
+        var: SpanOf<&'i str>,
         eq: Span,
         value: &'a Term<'a, 'i>,
         semi: Span,
@@ -15,7 +51,7 @@ pub enum Term<'a, 'i> {
     },
     Abstraction {
         lbar: Span,
-        arg: WithSpan<&'i str>,
+        arg: SpanOf<&'i str>,
         rbar: Span,
         body: &'a Term<'a, 'i>,
     },
@@ -25,7 +61,17 @@ pub enum Term<'a, 'i> {
         arg: &'a Term<'a, 'i>,
         rpar: Span,
     },
-    VariableRef(WithSpan<&'i str>),
+    ProductRow {
+        lbrace: Span,
+        fields: Option<CommaSep<'a, Field<'i, &'a Term<'a, 'i>>>>,
+        rbrace: Span,
+    },
+    FieldAccess {
+        product: &'a Term<'a, 'i>,
+        dot: Span,
+        field: SpanOf<&'i str>,
+    },
+    VariableRef(SpanOf<&'i str>),
     Parenthesized {
         lpar: Span,
         term: &'a Term<'a, 'i>,
@@ -34,32 +80,33 @@ pub enum Term<'a, 'i> {
 }
 
 impl<'a, 'i> Spanned for Term<'a, 'i> {
-    fn start(&self) -> Loc {
+    fn span(&self) -> Span {
         match self {
-            Term::Binding { var, .. } => var.start(),
-            Term::Abstraction { lbar, .. } => lbar.start(),
-            Term::Application { func, .. } => func.start(),
-            Term::VariableRef(v) => v.start(),
-            Term::Parenthesized { lpar, .. } => lpar.start(),
-        }
-    }
-
-    fn end(&self) -> Loc {
-        match self {
-            Term::Binding { expr, .. } => expr.end(),
-            Term::Abstraction { body, .. } => body.end(),
-            Term::Application { rpar, .. } => rpar.end(),
-            Term::VariableRef(v) => v.end(),
-            Term::Parenthesized { rpar, .. } => rpar.end(),
+            Term::Binding { var, expr, .. } => Span {
+                start: var.start(),
+                end: expr.end(),
+            },
+            Term::Abstraction { lbar, body, .. } => Span {
+                start: lbar.start(),
+                end: body.end(),
+            },
+            Term::Application { func, rpar, .. } => Span {
+                start: func.start(),
+                end: rpar.end(),
+            },
+            Term::ProductRow { lbrace, rbrace, .. } => Span {
+                start: lbrace.start(),
+                end: rbrace.end(),
+            },
+            Term::FieldAccess { product, field, .. } => Span {
+                start: product.start(),
+                end: field.end(),
+            },
+            Term::VariableRef(v) => v.span(),
+            Term::Parenthesized { lpar, rpar, .. } => Span {
+                start: lpar.start(),
+                end: rpar.end(),
+            },
         }
     }
 }
-
-// #[derive(Debug)]
-// pub enum FunctionArg<'i> {
-//     Single(Box<Term<'i>>),
-//     // Product(Vec<(Label, Term)>),
-// }
-
-// #[derive(Debug)]
-// pub struct Label<'i>(&'i str);

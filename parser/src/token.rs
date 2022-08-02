@@ -8,5 +8,9 @@ pub enum Token<'i> {
     VerticalBar,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
     Semicolon,
+    Comma,
+    Dot,
 }

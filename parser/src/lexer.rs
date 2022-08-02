@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 
 use crate::{
     loc::{Loc, Locator},
-    span::{Span, WithSpan},
+    span::{Span, SpanOf},
     token::Token,
 };
 use regex::{Captures, Regex, RegexSet};
@@ -44,7 +44,7 @@ impl Lexer {
     }
 
     /// Splits `text` into a sequence of tokens.
-    pub fn lex<'i>(&self, text: &'i str) -> Result<(Vec<WithSpan<Token<'i>>>, Loc), NotATokenError> {
+    pub fn lex<'i>(&self, text: &'i str) -> Result<(Vec<SpanOf<Token<'i>>>, Loc), NotATokenError> {
         let locator = Locator::new(text);
         let mut end_of_input = Loc::default();
         let mut idx = 0;
@@ -84,7 +84,7 @@ impl Lexer {
         // End of input is 1 byte past whereever our final token is
         end_of_input.byte += 1;
         end_of_input.col += 1;
-        
+
         Ok((tokens, end_of_input))
     }
 }
@@ -112,7 +112,11 @@ pub fn aiahr_lexer() -> Lexer {
         literal("|", Token::VerticalBar),
         literal("(", Token::LParen),
         literal(")", Token::RParen),
+        literal("{", Token::LBrace),
+        literal("}", Token::RBrace),
         literal(";", Token::Semicolon),
+        literal(",", Token::Comma),
+        literal(".", Token::Dot),
         // Comments
         (r"//.*".to_string(), None),
         (r"(?s)/\*.*\*/".to_string(), None),
