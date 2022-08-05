@@ -7,6 +7,7 @@ use chumsky::{
 use crate::{
     cst::{CommaSep, Field, Term},
     error::ParseErrors,
+    expr::{postfix, prefix},
     loc::Loc,
     span::{Span, SpanOf},
     token::Token,
@@ -97,7 +98,7 @@ impl<'a, 'i> TermPrefix<'a, 'i> {
     }
 }
 
-enum TermSuffix<'a, 'i> {
+enum TermPostfix<'a, 'i> {
     Application {
         lpar: Span,
         arg: &'a Term<'a, 'i>,
@@ -109,16 +110,16 @@ enum TermSuffix<'a, 'i> {
     },
 }
 
-impl<'a, 'i> TermSuffix<'a, 'i> {
+impl<'a, 'i> TermPostfix<'a, 'i> {
     fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i>) -> &'a Term<'a, 'i> {
         match self {
-            TermSuffix::Application { lpar, arg, rpar } => arena.alloc(Term::Application {
+            TermPostfix::Application { lpar, arg, rpar } => arena.alloc(Term::Application {
                 func: t,
                 lpar,
                 arg,
                 rpar,
             }),
-            TermSuffix::FieldAccess { dot, field } => arena.alloc(Term::FieldAccess {
+            TermPostfix::FieldAccess { dot, field } => arena.alloc(Term::FieldAccess {
                 product: t,
                 dot,
                 field,
@@ -166,21 +167,17 @@ pub fn aiahr_parser<'a, 'i: 'a>(
         ));
 
         // Function application
-        let app = paren_term.map(|((lpar, arg), rpar)| TermSuffix::Application { lpar, arg, rpar });
+        let app =
+            paren_term.map(|((lpar, arg), rpar)| TermPostfix::Application { lpar, arg, rpar });
 
         // Field access
         let access = lit(Token::Dot)
             .then(ident())
-            .map(|(dot, field)| TermSuffix::FieldAccess { dot, field });
+            .map(|(dot, field)| TermPostfix::FieldAccess { dot, field });
 
-        let suffixed =
-            atom.clone()
-                .then(choice((app, access)).repeated())
-                .map(|(expr, suffixes)| {
-                    suffixes
-                        .into_iter()
-                        .fold(expr, |t, suffix| suffix.apply(arena, t))
-                });
+        let app_access = postfix(atom.clone(), choice((app, access)), |t, p| {
+            p.apply(arena, t)
+        });
 
         // Local variable binding
         let local_bind = ident()
@@ -209,16 +206,10 @@ pub fn aiahr_parser<'a, 'i: 'a>(
         // closures correct. However we're recursive descent, so we only go top-down. To remedy
         // this we construct a series of prefixes top-down that are applied to the final expression
         // in right associative order.
-        let prefixed =
-            choice((local_bind, closure))
-                .repeated()
-                .then(suffixed)
-                .map(|(binds, expr)| {
-                    binds
-                        .into_iter()
-                        .rfold(expr, |t, prefix| prefix.apply(arena, t))
-                });
-        prefixed
+        let bound = prefix(choice((local_bind, closure)), app_access, |p, t| {
+            p.apply(arena, t)
+        });
+        bound
     })
     .then_ignore(end())
 }
@@ -412,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn test_combined_suffixes() {
+    fn test_combined_postfixes() {
         assert_matches!(
             parse_unwrap(&Bump::new(), "a.x(b)"),
             app!(get!(var!("a"), "x"), var!("b"))

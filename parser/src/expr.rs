@@ -1,6 +1,3 @@
-// TODO: Remove when this is integrated into the parser.
-#![allow(dead_code)]
-
 use chumsky::{Error, Parser};
 
 // Folds the prefixes `lefts` into the base expression `right` using `f`.
@@ -122,6 +119,7 @@ where
 
 // Returns a parser for the production `term ::= term op term`, using `f` to fold each triple into a
 // new expression left-associatively.
+#[allow(dead_code)]
 pub(crate) fn infixl1<I, T, O, E, PT, PO, F>(
     term: PT,
     op: PO,
@@ -139,6 +137,7 @@ where
 
 // Returns a parser for the production `term ::= term op term`, using `f` to fold each triple into a
 // new expression right-associatively.
+#[allow(dead_code)]
 pub(crate) fn infixr1<I, T, O, E, PT, PO, F>(
     term: PT,
     op: PO,
