@@ -5,7 +5,7 @@ use chumsky::{
 };
 
 use crate::{
-    cst::{CommaSep, Field, Term},
+    cst::{CommaSep, Field, IdField, Pattern, ProductRow, SumRow, Term},
     error::ParseErrors,
     expr::{postfix, prefix},
     loc::Loc,
@@ -27,36 +27,92 @@ fn ident<'i>() -> impl Clone + Parser<Token<'i>, SpanOf<&'i str>, Error = ParseE
     .map_with_span(|s, span| (s, span))
 }
 
-// Returns a parser for comma-separated `T` values, represented by `Option<CommaSep<T>>`. `None`
-// indicates an empty list.
+// Returns a parser for either `parser` or the empty string.
+fn option<'i, T>(
+    parser: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
+) -> impl Clone + Parser<Token<'i>, Option<T>, Error = ParseErrors<'i>> {
+    choice((parser.map(Some), empty().map(|_| None)))
+}
+
+// Returns a parser for one or more comma-separated `T` values, represented by `CommaSep<T>`.
 fn comma_sep<'a, 'i, T: 'a>(
     arena: &'a Bump,
     elem: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, Option<CommaSep<'a, T>>, Error = ParseErrors<'i>> {
-    choice((
-        elem.clone()
-            .then(lit(Token::Comma).then(elem).repeated())
-            .then(choice((lit(Token::Comma).map(Some), empty().map(|_| None))))
-            .map(|((first, elems), comma)| {
-                Some(CommaSep {
-                    first,
-                    elems: arena.alloc_slice_fill_iter(elems.into_iter()),
-                    comma,
-                })
-            }),
-        empty().map(|_| None),
-    ))
+) -> impl Clone + Parser<Token<'i>, CommaSep<'a, T>, Error = ParseErrors<'i>> {
+    elem.clone()
+        .then(lit(Token::Comma).then(elem).repeated())
+        .then(choice((lit(Token::Comma).map(Some), empty().map(|_| None))))
+        .map(|((first, elems), comma)| CommaSep {
+            first,
+            elems: arena.alloc_slice_fill_iter(elems.into_iter()),
+            comma,
+        })
 }
 
 // Returns a parser for a field with a label, separator, and target.
-fn field<'i, T>(
+fn field<'i, L, T>(
+    label: impl Clone + Parser<Token<'i>, L, Error = ParseErrors<'i>>,
     sep: Token<'i>,
     target: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, Field<'i, T>, Error = ParseErrors<'i>> {
-    ident()
+) -> impl Clone + Parser<Token<'i>, Field<L, T>, Error = ParseErrors<'i>> {
+    label
         .then(lit(sep))
         .then(target)
         .map(|((label, sep), target)| Field { label, sep, target })
+}
+
+// Returns a parser for a field with an identifier label, separator, and target.
+fn id_field<'i, T>(
+    sep: Token<'i>,
+    target: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
+) -> impl Clone + Parser<Token<'i>, IdField<'i, T>, Error = ParseErrors<'i>> {
+    field(ident(), sep, target)
+}
+
+// Returns a parser for a product row with terms in `term`.
+fn product_row<'a, 'i: 'a, T: 'a>(
+    arena: &'a Bump,
+    term: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
+) -> impl Clone + Parser<Token<'i>, ProductRow<'a, 'i, T>, Error = ParseErrors<'i>> {
+    lit(Token::LBrace)
+        .then(option(comma_sep(
+            arena,
+            id_field(Token::Equal, term.clone()),
+        )))
+        .then(lit(Token::RBrace))
+        .map(|((lbrace, fields), rbrace)| ProductRow {
+            lbrace,
+            fields,
+            rbrace,
+        })
+}
+
+// Returns a parser for a sum row with terms in `term`.
+fn sum_row<'i, T>(
+    term: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
+) -> impl Clone + Parser<Token<'i>, SumRow<'i, T>, Error = ParseErrors<'i>> {
+    lit(Token::LAngle)
+        .then(id_field(Token::Equal, term.clone()))
+        .then(lit(Token::RAngle))
+        .map(|((langle, field), rangle)| SumRow {
+            langle,
+            field,
+            rangle,
+        })
+}
+
+// Returns a parser for a pattern.
+fn pattern<'a, 'i: 'a>(
+    arena: &'a Bump,
+) -> impl Clone + Parser<Token<'i>, &'a Pattern<'a, 'i>, Error = ParseErrors<'i>> {
+    recursive(|pattern| {
+        choice((
+            product_row(arena, pattern.clone())
+                .map(|p| arena.alloc(Pattern::ProductRow(p)) as &Pattern),
+            sum_row(pattern.clone()).map(|s| arena.alloc(Pattern::SumRow(s)) as &Pattern),
+            ident().map(|v| arena.alloc(Pattern::Whole(v)) as &Pattern),
+        ))
+    })
 }
 
 enum TermPrefix<'a, 'i> {
@@ -141,16 +197,18 @@ pub fn aiahr_parser<'a, 'i: 'a>(
             .then(lit(Token::RParen));
 
         // Product row
-        let prod = lit(Token::LBrace)
-            .then(comma_sep(arena, field(Token::Equal, term.clone())))
-            .then(lit(Token::RBrace))
-            .map(|((lbrace, fields), rbrace)| {
-                arena.alloc(Term::ProductRow {
-                    lbrace,
-                    fields,
-                    rbrace,
-                }) as &Term
-            });
+        let prod =
+            product_row(arena, term.clone()).map(|p| arena.alloc(Term::ProductRow(p)) as &Term);
+
+        let sum = sum_row(term.clone()).map(|s| arena.alloc(Term::SumRow(s)) as &Term);
+
+        let match_ = lit(Token::KwMatch)
+            .then(comma_sep(
+                arena,
+                field(pattern(arena), Token::BigArrow, term.clone()),
+            ))
+            .then(lit(Token::KwEnd))
+            .map(|((match_, cases), end)| arena.alloc(Term::Match { match_, cases, end }) as &Term);
 
         let atom = choice((
             // variable
@@ -164,6 +222,8 @@ pub fn aiahr_parser<'a, 'i: 'a>(
                 }) as &Term
             }),
             prod,
+            sum,
+            match_,
         ));
 
         // Function application
@@ -235,7 +295,7 @@ mod tests {
     use chumsky::Parser;
 
     use crate::{
-        cst::{CommaSep, Field, Term},
+        cst::{CommaSep, Field, Pattern, ProductRow, SumRow, Term},
         lexer::aiahr_lexer,
     };
 
@@ -244,26 +304,58 @@ mod tests {
     // CST pattern macros. Used to construct patterns that ignore spans.
     macro_rules! comma_sep {
         ($first:pat, $($elems:pat),*) => {
-            Some(CommaSep {
+            CommaSep {
                 first: $first,
                 elems: &[$((.., $elems)),*],
                 ..
-            })
-        };
-        () => {
-            None
+            }
         };
     }
     macro_rules! field {
         ($label:pat, $target:pat) => {
             Field {
-                label: ($label, ..),
+                label: $label,
                 target: $target,
                 ..
             }
         };
     }
-    macro_rules! local {
+    macro_rules! id_field {
+        ($label:pat, $target:pat) => {
+            field!(($label, ..), $target)
+        };
+    }
+    macro_rules! prod {
+        ($fields:pat) => {
+            ProductRow {
+                fields: $fields,
+                ..
+            }
+        };
+    }
+    macro_rules! sum {
+        ($field:pat) => {
+            SumRow { field: $field, .. }
+        };
+    }
+
+    macro_rules! pat_prod {
+        ($fields:pat) => {
+            &Pattern::ProductRow(prod!($fields))
+        };
+    }
+    macro_rules! pat_sum {
+        ($field:pat) => {
+            &Pattern::SumRow(sum!($field))
+        };
+    }
+    macro_rules! pat_var {
+        ($var:pat) => {
+            &Pattern::Whole(($var, ..))
+        };
+    }
+
+    macro_rules! term_local {
         ($var:pat, $value:pat, $expr:pat) => {
             &Term::Binding {
                 var: ($var, ..),
@@ -273,7 +365,7 @@ mod tests {
             }
         };
     }
-    macro_rules! abs {
+    macro_rules! term_abs {
         ($arg:pat, $body:pat) => {
             &Term::Abstraction {
                 arg: ($arg, ..),
@@ -282,7 +374,7 @@ mod tests {
             }
         };
     }
-    macro_rules! app {
+    macro_rules! term_app {
         ($func:pat, $arg:pat) => {
             &Term::Application {
                 func: $func,
@@ -291,15 +383,17 @@ mod tests {
             }
         };
     }
-    macro_rules! prod {
+    macro_rules! term_prod {
         ($fields:pat) => {
-            &Term::ProductRow {
-                fields: $fields,
-                ..
-            }
+            &Term::ProductRow(prod!($fields))
         };
     }
-    macro_rules! get {
+    macro_rules! term_sum {
+        ($field:pat) => {
+            &Term::SumRow(sum!($field))
+        };
+    }
+    macro_rules! term_get {
         ($product:pat, $field:pat) => {
             &Term::FieldAccess {
                 product: $product,
@@ -308,12 +402,17 @@ mod tests {
             }
         };
     }
-    macro_rules! var {
+    macro_rules! term_match {
+        ($cases:pat) => {
+            &Term::Match { cases: $cases, .. }
+        };
+    }
+    macro_rules! term_var {
         ($var:pat) => {
             &Term::VariableRef(($var, ..))
         };
     }
-    macro_rules! paren {
+    macro_rules! term_paren {
         ($term:pat) => {
             &Term::Parenthesized { term: $term, .. }
         };
@@ -335,9 +434,12 @@ mod tests {
     fn test_app_precedence() {
         assert_matches!(
             parse_unwrap(&Bump::new(), "(|x| |w| w)(y)(z)"),
-            app!(
-                app!(paren!(abs!("x", abs!("w", var!("w")))), var!("y")),
-                var!("z")
+            term_app!(
+                term_app!(
+                    term_paren!(term_abs!("x", term_abs!("w", term_var!("w")))),
+                    term_var!("y")
+                ),
+                term_var!("z")
             )
         );
     }
@@ -346,12 +448,16 @@ mod tests {
     fn test_mixing_prefixes() {
         assert_matches!(
             parse_unwrap(&Bump::new(), "|x| y = |z| y(z); w = x(y); w"),
-            abs!(
+            term_abs!(
                 "x",
-                local!(
+                term_local!(
                     "y",
-                    abs!("z", app!(var!("y"), var!("z"))),
-                    local!("w", app!(var!("x"), var!("y")), var!("w"))
+                    term_abs!("z", term_app!(term_var!("y"), term_var!("z"))),
+                    term_local!(
+                        "w",
+                        term_app!(term_var!("x"), term_var!("y")),
+                        term_var!("w")
+                    )
                 )
             )
         );
@@ -361,22 +467,29 @@ mod tests {
     fn test_basic_lambdas() {
         assert_matches!(
             parse_unwrap(&Bump::new(), "|x| |y| z = x(y); z"),
-            abs!(
+            term_abs!(
                 "x",
-                abs!("y", local!("z", app!(var!("x"), var!("y")), var!("z")))
+                term_abs!(
+                    "y",
+                    term_local!(
+                        "z",
+                        term_app!(term_var!("x"), term_var!("y")),
+                        term_var!("z")
+                    )
+                )
             )
         );
     }
 
     #[test]
     fn test_product_rows() {
-        assert_matches!(parse_unwrap(&Bump::new(), "{}"), prod!(comma_sep!()));
+        assert_matches!(parse_unwrap(&Bump::new(), "{}"), term_prod!(None));
         assert_matches!(
             parse_unwrap(&Bump::new(), "{x = a, y = |t| t}"),
-            prod!(comma_sep!(
-                field!("x", var!("a")),
-                field!("y", abs!("t", var!("t")))
-            ))
+            term_prod!(Some(comma_sep!(
+                id_field!("x", term_var!("a")),
+                id_field!("y", term_abs!("t", term_var!("t")))
+            )))
         );
     }
 
@@ -384,9 +497,15 @@ mod tests {
     fn test_product_rows_precedence() {
         assert_matches!(
             parse_unwrap(&Bump::new(), "{x = |t| t}({y = |t| u})"),
-            app!(
-                prod!(comma_sep!(field!("x", abs!("t", var!("t"))),)),
-                prod!(comma_sep!(field!("y", abs!("t", var!("u"))),))
+            term_app!(
+                term_prod!(Some(comma_sep!(id_field!(
+                    "x",
+                    term_abs!("t", term_var!("t"))
+                ),))),
+                term_prod!(Some(comma_sep!(id_field!(
+                    "y",
+                    term_abs!("t", term_var!("u"))
+                ),)))
             )
         );
     }
@@ -395,8 +514,11 @@ mod tests {
     fn test_field_access() {
         assert_matches!(
             parse_unwrap(&Bump::new(), "{x = a, y = b}.x"),
-            get!(
-                prod!(comma_sep!(field!("x", var!("a")), field!("y", var!("b")))),
+            term_get!(
+                term_prod!(Some(comma_sep!(
+                    id_field!("x", term_var!("a")),
+                    id_field!("y", term_var!("b"))
+                ))),
                 "x"
             )
         );
@@ -406,7 +528,30 @@ mod tests {
     fn test_combined_postfixes() {
         assert_matches!(
             parse_unwrap(&Bump::new(), "a.x(b)"),
-            app!(get!(var!("a"), "x"), var!("b"))
+            term_app!(term_get!(term_var!("a"), "x"), term_var!("b"))
+        );
+    }
+
+    #[test]
+    fn test_sum_rows() {
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "<x = |t| t>"),
+            term_sum!(id_field!("x", term_abs!("t", term_var!("t"))))
+        );
+    }
+
+    #[test]
+    fn test_matches() {
+        assert_matches!(
+            parse_unwrap(&Bump::new(), "match {x = a} => a, <y = b> => b, c => c end"),
+            term_match!(comma_sep!(
+                field!(
+                    pat_prod!(Some(comma_sep!(id_field!("x", pat_var!("a")),))),
+                    term_var!("a")
+                ),
+                field!(pat_sum!(id_field!("y", pat_var!("b"))), term_var!("b")),
+                field!(pat_var!("c"), term_var!("c"))
+            ))
         );
     }
 }

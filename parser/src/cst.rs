@@ -23,15 +23,15 @@ impl<'a, T: Spanned> Spanned for CommaSep<'a, T> {
     }
 }
 
-/// A field with a label, separator, and target in `T`.
+/// A field with a label in `L`, separator, and target in `T`.
 #[derive(Clone, Copy, Debug)]
-pub struct Field<'i, T> {
-    pub label: SpanOf<&'i str>,
+pub struct Field<L, T> {
+    pub label: L,
     pub sep: Span,
     pub target: T,
 }
 
-impl<'i, T: Spanned> Spanned for Field<'i, T> {
+impl<L: Spanned, T: Spanned> Spanned for Field<L, T> {
     fn span(&self) -> Span {
         Span {
             start: self.label.start(),
@@ -40,6 +40,62 @@ impl<'i, T: Spanned> Spanned for Field<'i, T> {
     }
 }
 
+/// A field with an identifier label, separator, and target in `T`.
+pub type IdField<'i, T> = Field<SpanOf<&'i str>, T>;
+
+/// A product row with values in `T`.
+#[derive(Clone, Copy, Debug)]
+pub struct ProductRow<'a, 'i, T> {
+    pub lbrace: Span,
+    pub fields: Option<CommaSep<'a, IdField<'i, T>>>,
+    pub rbrace: Span,
+}
+
+impl<'a, 'i, T> Spanned for ProductRow<'a, 'i, T> {
+    fn span(&self) -> Span {
+        Span {
+            start: self.lbrace.start(),
+            end: self.rbrace.end(),
+        }
+    }
+}
+
+/// A sum row with value in `T`.
+#[derive(Clone, Copy, Debug)]
+pub struct SumRow<'i, T> {
+    pub langle: Span,
+    pub field: IdField<'i, T>,
+    pub rangle: Span,
+}
+
+impl<'i, T> Spanned for SumRow<'i, T> {
+    fn span(&self) -> Span {
+        Span {
+            start: self.langle.start(),
+            end: self.rangle.end(),
+        }
+    }
+}
+
+/// A pattern over terms of type `T`.
+#[derive(Clone, Copy, Debug)]
+pub enum Pattern<'a, 'i> {
+    ProductRow(ProductRow<'a, 'i, &'a Pattern<'a, 'i>>),
+    SumRow(SumRow<'i, &'a Pattern<'a, 'i>>),
+    Whole(SpanOf<&'i str>),
+}
+
+impl<'a, 'i> Spanned for Pattern<'a, 'i> {
+    fn span(&self) -> Span {
+        match self {
+            Pattern::ProductRow(p) => p.span(),
+            Pattern::SumRow(s) => s.span(),
+            Pattern::Whole(v) => v.span(),
+        }
+    }
+}
+
+/// An Aiahr term.
 #[derive(Clone, Copy, Debug)]
 pub enum Term<'a, 'i> {
     Binding {
@@ -61,15 +117,17 @@ pub enum Term<'a, 'i> {
         arg: &'a Term<'a, 'i>,
         rpar: Span,
     },
-    ProductRow {
-        lbrace: Span,
-        fields: Option<CommaSep<'a, Field<'i, &'a Term<'a, 'i>>>>,
-        rbrace: Span,
-    },
+    ProductRow(ProductRow<'a, 'i, &'a Term<'a, 'i>>),
+    SumRow(SumRow<'i, &'a Term<'a, 'i>>),
     FieldAccess {
         product: &'a Term<'a, 'i>,
         dot: Span,
         field: SpanOf<&'i str>,
+    },
+    Match {
+        match_: Span,
+        cases: CommaSep<'a, Field<&'a Pattern<'a, 'i>, &'a Term<'a, 'i>>>,
+        end: Span,
     },
     VariableRef(SpanOf<&'i str>),
     Parenthesized {
@@ -94,13 +152,15 @@ impl<'a, 'i> Spanned for Term<'a, 'i> {
                 start: func.start(),
                 end: rpar.end(),
             },
-            Term::ProductRow { lbrace, rbrace, .. } => Span {
-                start: lbrace.start(),
-                end: rbrace.end(),
-            },
+            Term::ProductRow(p) => p.span(),
+            Term::SumRow(s) => s.span(),
             Term::FieldAccess { product, field, .. } => Span {
                 start: product.start(),
                 end: field.end(),
+            },
+            Term::Match { match_, end, .. } => Span {
+                start: match_.start(),
+                end: end.end(),
             },
             Term::VariableRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span {

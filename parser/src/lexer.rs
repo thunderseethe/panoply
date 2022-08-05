@@ -103,17 +103,24 @@ fn whole<F: 'static + Fn(&str) -> Token>(f: F) -> Option<TokenFactory> {
 pub fn aiahr_lexer() -> Lexer {
     // TODO: Do something with comments, or at least doc comments.
     Lexer::new(vec![
+        // Keywords
+        literal("match", Token::KwMatch),
+        literal("end", Token::KwEnd),
+        // Identifier
         (
             r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),
             whole(|s| Token::Identifier(s)),
         ),
-        // Delimiters
+        // Punctuation
         literal("=", Token::Equal),
         literal("|", Token::VerticalBar),
+        literal("=>", Token::BigArrow),
         literal("(", Token::LParen),
         literal(")", Token::RParen),
         literal("{", Token::LBrace),
         literal("}", Token::RBrace),
+        literal("<", Token::LAngle),
+        literal(">", Token::RAngle),
         literal(";", Token::Semicolon),
         literal(",", Token::Comma),
         literal(".", Token::Dot),
