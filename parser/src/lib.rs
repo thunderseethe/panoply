@@ -4,6 +4,7 @@ extern crate assert_matches;
 
 pub mod cst;
 pub mod error;
+mod expr;
 pub mod lexer;
 pub mod loc;
 pub mod parser;
