@@ -26,6 +26,7 @@ library
 
     other-modules:
       Constraint
+      Core
       Fresh
       Term
       Type

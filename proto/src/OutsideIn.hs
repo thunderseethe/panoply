@@ -3,7 +3,6 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE ImpredicativeTypes #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -54,6 +53,8 @@ import Text.Show.Pretty
 import Prelude hiding (abs, interact, lookup)
 
 import Constraint
+import Core (CoreType(..), coreRowTv, coreTyTv)
+import qualified Core
 import Subst
 import Term
 import Type
@@ -96,7 +97,7 @@ ty :: Lens' Infer Type
 ty = lens _ty (\(Infer _ eff) ty -> Infer ty eff)
 
 eff :: Lens' Infer InternalRow
-eff = lens _eff (\(Infer ty _) eff -> Infer ty eff)
+eff = lens OutsideIn._eff (\(Infer ty _) eff -> Infer ty eff)
 
 type Ctx = Map Var Scheme
 
@@ -109,7 +110,18 @@ emptyCtx = Map.empty
 askCtx :: Has (Reader Ctx) sig m => m Ctx
 askCtx = ask
 
-generateConstraints :: (Has (Reader Ctx) sig m, Has (Reader EffCtx) sig m, Has (Fresh TVar) sig m) => Term () -> m (Term Infer, [Constraint])
+data Wrapper 
+  = TyApp Wrapper Core.CoreType
+  | TyLam Core.TypeVar Wrapper
+  | EvApp Wrapper Core.Core
+  | EvLam Core.CoreVar Wrapper
+  | Hole
+
+generateConstraints :: (Has (Reader Ctx) sig m
+  , Has (Reader EffCtx) sig m
+  , Has (Fresh TVar) sig m
+  , Has (Fresh Var) sig m)
+  => Term () -> m (Term Infer, Core.Core, [Constraint])
 generateConstraints term =
   case term of
     -- Literals
@@ -120,31 +132,45 @@ generateConstraints term =
         Just scheme -> do
           eff <- fresh
           (constrs, ty) <- instantiate scheme
-          return (Var (Infer ty (Open eff)) x, constrs)
+          return (Var (Infer ty (Open eff)) x
+                 , Core.Var (Core.CoreV x (Core.fromType ty))
+                 , constrs)
     Int _ i -> do
-      return (Int (Infer IntTy (Closed Map.empty)) i, [])
+      return (Int (Infer Type.IntTy (Closed Map.empty)) i
+             , Core.Lit (Core.I i)
+             , [])
     Unit _ -> do
-      return (Unit (Infer unitTy (Closed Map.empty)), [])
+      return (Unit (Infer unitTy (Closed Map.empty))
+             , Core.Product []
+             , [])
     -- Labelled Types
     Label _ lbl term -> do
-      (term, term_constr) <- generateConstraints term
+      (term, term_core, term_constr) <- generateConstraints term
       let m = term ^. meta & ty %~ RowTy . (|>) lbl
-      return (Label m lbl term, term_constr)
+      return (Label m lbl term
+             , term_core
+             , term_constr)
     Unlabel _ term lbl -> do
       alpha <- fresh
-      (term, term_constr) <- generateConstraints term
-      return (Unlabel (Infer (VarTy alpha) (term ^. meta . eff)) term lbl, Simp (term ^. meta . ty ~ RowTy (lbl |> VarTy alpha)) : term_constr)
+      (term, term_core, term_constr) <- generateConstraints term
+      return (Unlabel (Infer (VarTy alpha) (term ^. meta . eff)) term lbl
+             , term_core
+             , Simp (term ^. meta . ty ~ RowTy (lbl |> VarTy alpha)) : term_constr)
     -- Records
     Concat _ left right -> do
       out <- fresh
+      out_ev <- fresh
       left_var <- fresh
       right_var <- fresh
       out_eff <- fresh
-      (left, left_constr) <- generateConstraints left
-      (right, right_constr) <- generateConstraints right
-      -- We don't want product types to show up in CombineEquals, so we unwrap them into Rows before constructing our Constraint
+      (left, left_core, left_constr) <- generateConstraints left
+      (right, right_core, right_constr) <- generateConstraints right
+      -- TODO: Should both functions be marked with out_eff here, or just one?
+      let core_ev_ty =
+            CoreFun (CoreVar $ coreRowTv left_var) (Closed Map.empty) (CoreFun (CoreVar $ coreRowTv right_var) (Open out_eff) (CoreVar $ coreRowTv out))
       return
         ( Concat (Infer (ProdTy $ VarTy out) (Open out_eff)) left right
+        , Core.App (Core.App (Core.Var $ Core.CoreV out_ev core_ev_ty) left_core) right_core
         , Simp (left ^. meta . ty ~ ProdTy (VarTy left_var)) :
           Simp (right ^. meta . ty ~ ProdTy (VarTy right_var)) :
           Simp (VarTy out ~> Open left_var :⊙ Open right_var) :
@@ -155,22 +181,28 @@ generateConstraints term =
     Prj _ dir term -> do
       rest <- fresh
       out <- fresh
+      out_ev <- fresh
       input <- fresh
-      (term, term_constr) <- generateConstraints term
+      (term, term_core, term_constr) <- generateConstraints term
       -- We want to unwrap a product into it's underlying row for it's constraint
       let constr =
             case dir of
               L -> VarTy input ~> Open out :⊙ Open rest
               R -> VarTy input ~> Open rest :⊙ Open out
-      return (Prj (Infer (ProdTy $ VarTy out) (term ^. meta . eff)) dir term, Simp (term ^. meta . ty ~ ProdTy (VarTy input)) : Simp constr : term_constr)
+      let core_ev_ty =
+            CoreFun (CoreVar $ coreRowTv input) (term ^. meta . eff) (CoreVar $ coreRowTv out)
+      return (Prj (Infer (ProdTy $ VarTy out) (term ^. meta . eff)) dir term
+             , Core.App (Core.Var $ Core.CoreV out_ev core_ev_ty) term_core
+             , Simp (term ^. meta . ty ~ ProdTy (VarTy input)) : Simp constr : term_constr)
     -- Functions
     App _ fn arg -> do
       alpha <- fresh
       out_eff <- fresh
-      (fn, fn_constr) <- generateConstraints fn
-      (arg, arg_constr) <- generateConstraints arg
+      (fn, fn_core, fn_constr) <- generateConstraints fn
+      (arg, arg_core, arg_constr) <- generateConstraints arg
       return
         ( App (Infer (VarTy alpha) (Open out_eff)) fn arg
+        , Core.App fn_core arg_core
         , Simp (VarTy out_eff ~> (fn ^. meta . eff) :⊙ (arg ^. meta . eff)) :
           Simp (fn ^. meta . ty ~ FunTy (arg ^. meta . ty) (fn ^. meta . eff) (VarTy alpha)) :
           fn_constr <> arg_constr
@@ -178,9 +210,11 @@ generateConstraints term =
     Abs _ x body -> do
       alpha <- fresh
       out_eff <- fresh
-      (body, constr) <- local (Map.insert x (monoScheme $ VarTy alpha)) (generateConstraints body)
+      (body, body_core, constr) <- local (Map.insert x (monoScheme $ VarTy alpha)) (generateConstraints body)
       let fn_ty = FunTy (VarTy alpha) (body ^. meta . eff) (body ^. meta . ty)
-      return (Abs (Infer fn_ty (Open out_eff)) x body, constr)
+      return (Abs (Infer fn_ty (Open out_eff)) x body
+             , Core.Lam (Core.CoreV x (CoreVar $ coreTyTv alpha)) body_core
+             , constr)
     Op _ op -> do
       EffCtx _ sigs <- ask
       let (eff_name, scheme) =
@@ -190,8 +224,8 @@ generateConstraints term =
       (constrs, ty) <- instantiate scheme
       return
         ( Op (Infer ty (Closed (eff_name |> unitTy))) op
-        , constrs
-        )
+        , error "todo!" 
+        , constrs)
     Handle _ lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_body)) body -> do
       EffCtx effs _ <- ask
       let ops = fromMaybe (error $ "Undefined effect " ++ show lbl) (effs !? lbl)
@@ -200,10 +234,10 @@ generateConstraints term =
         if clauses `covers` ops
           then return ()
           else error $ "Clauses " ++ show (NonEmpty.toList clauses) ++ " don't cover " ++ show (Map.keys ops)
-      (body, body_constr) <- generateConstraints body
+      (body, body_core, body_constr) <- generateConstraints body
       out_eff <- fresh
       alpha <- fresh
-      (ret, ret_constr) <- local (Map.insert ret_arg (monoScheme $ VarTy alpha)) $ generateConstraints ret_body
+      (ret, ret_core, ret_constr) <- local (Map.insert ret_arg (monoScheme $ VarTy alpha)) $ generateConstraints ret_body
       (clauses, op_constr) <-
         NonEmpty.unzip
           <$> forM
@@ -218,7 +252,7 @@ generateConstraints term =
 
                 -- This is probably too cute
                 (tin, tout, out) <- (,,) <$> fresh <*> fresh <*> fresh
-                (clause, clause_constr) <-
+                (clause, clause_core, clause_constr) <-
                   local (bind resume (FunTy (VarTy tout) (Open out_eff) (VarTy out)) . bind x (VarTy tout)) $ generateConstraints clause_body
                 return
                   ( Clause name x resume clause
@@ -232,6 +266,7 @@ generateConstraints term =
 
       return
         ( Handle (Infer (ret ^. meta . ty) (Open out_eff)) lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret)) body -- Return type of the handler is the type of the return clause
+        , error "todo!"
         , Simp (rowToType (body ^. meta . eff) ~> Open out_eff :⊙ handled_eff) : -- The body eff must include l, our output will be whatever effs are leftover from l
           Simp (VarTy out_eff ~ rowToType (ret ^. meta . eff)) :
           Simp (VarTy alpha ~ (body ^. meta . ty)) : -- Input to the return clause should match the body type
@@ -519,7 +554,7 @@ class Lookup t k v | t -> k, t -> v where
 instance Lookup (Map k v) k v where
   lookup = Map.lookup
 
-newtype PredMap = PM {unPM :: Map TVar (Set Ct)}
+newtype PredMap = PM { unPM :: Map TVar (Set Ct) }
 
 instance Semigroup PredMap where
   (PM left) <> (PM right) =
@@ -645,6 +680,10 @@ zonkOrGeneralizeTrying solved ty = Scheme (TV <$> IntSet.toList bound) qs (apply
         left :⊙ right -> any (\tv -> rowOccurs tv left || rowOccurs tv right) open
     open = Set.fromList (openTyVars ty)
 
+zonk :: Subst -> PredMap -> Core.Core -> Core.Core
+zonk subst (PM _) = 
+  transform (over (Core.coreVars . Core.coreVarTy) (apply subst))
+
 defaultEffCtx :: EffCtx
 defaultEffCtx =
   mkEffCtx
@@ -652,23 +691,23 @@ defaultEffCtx =
     , Eff "RowEff" (Map.fromList [("add_field", Scheme [TV 0, TV 1, TV 2] [VarTy 0 ~> Closed ("x" |> IntTy) :⊙ Open 1, VarTy 2 ~> Closed ("y" |> IntTy) :⊙ Open 1] (FunTy (VarTy 0) (Closed $ "RowEff" |> unitTy) (VarTy 2)))])
     ]
 
-infer :: Term () -> (Term Infer, Scheme)
+infer :: Term () -> (Term Infer, Core.Core, Scheme)
 infer term =
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
     Right (_, (subst, pred_map, [])) ->
       let term = closeEffects pred_map $ apply subst typed_term
-       in trace (ppShowList (toList pred_map) ++ "\n" ++ ppShow typed_term ++ "\n" ++ ppShow subst ++ "\n") (term, zonkOrGeneralizeTrying pred_map (term ^. meta . ty))
+       in trace (ppShowList (toList pred_map) ++ "\n" ++ ppShow typed_term ++ "\n" ++ ppShow subst ++ "\n") (term, zonk subst pred_map core_term, zonkOrGeneralizeTrying pred_map (term ^. meta . ty))
     Right (_, (subst, _, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow typed_term)
  where
-  (_, (tvar, (typed_term, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term
+  (_, (tvar, (typed_term, core_term, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term
   maxVar = maxTermVar term
   res = runIdentity . runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
 
 prettyInfer :: Term () -> IO ()
-prettyInfer term = putStrLn $ ppShow inferTerm ++ "\n\n" ++ ppShow scheme ++ "\n"
+prettyInfer term = putStrLn $ ppShow inferTerm ++ "\n\n" ++ ppShow core ++ "\n\n" ++ ppShow scheme ++ "\n"
  where
-  (inferTerm, scheme) = infer term
+  (inferTerm, core, scheme) = infer term
 
 example :: Term ()
 example = abs [x, y, z] $ var x <@> var z <@> (var y <@> var z)
@@ -746,3 +785,4 @@ exampleHandleErr = handle "State" (HandleClause whoops ret) $ abs [v] (op "put" 
   -- We forgot a clause
   whoops = Clause "get" x resume (int 4) :| []
   ret = Clause "" x resume (label "x" $ var x)
+  
