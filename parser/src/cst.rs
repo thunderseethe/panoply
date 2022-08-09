@@ -170,3 +170,13 @@ impl<'a, 'i> Spanned for Term<'a, 'i> {
         }
     }
 }
+
+/// A top-level item in an Aiahr source file.
+#[derive(Clone, Copy, Debug)]
+pub enum Item<'a, 'i> {
+    Term {
+        name: SpanOf<&'i str>,
+        eq: Span,
+        value: &'a Term<'a, 'i>,
+    },
+}

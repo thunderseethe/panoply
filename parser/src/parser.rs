@@ -5,7 +5,7 @@ use chumsky::{
 };
 
 use crate::{
-    cst::{CommaSep, Field, IdField, Pattern, ProductRow, SumRow, Term},
+    cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
     error::ParseErrors,
     expr::{postfix, prefix},
     loc::Loc,
@@ -184,12 +184,10 @@ impl<'a, 'i> TermPostfix<'a, 'i> {
     }
 }
 
-type Output<'a, 'i> = &'a Term<'a, 'i>;
-
-/// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
-pub fn aiahr_parser<'a, 'i: 'a>(
+/// Returns a parser for terms.
+fn term<'a, 'i: 'a>(
     arena: &'a Bump,
-) -> impl Parser<Token<'i>, Output<'a, 'i>, Error = ParseErrors<'i>> {
+) -> impl Parser<Token<'i>, &'a Term<'a, 'i>, Error = ParseErrors<'i>> {
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -271,7 +269,21 @@ pub fn aiahr_parser<'a, 'i: 'a>(
         });
         bound
     })
-    .then_ignore(end())
+}
+
+/// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
+pub fn aiahr_parser<'a, 'i: 'a>(
+    arena: &'a Bump,
+) -> impl Parser<Token<'i>, &'a [Item<'a, 'i>], Error = ParseErrors<'i>> {
+    let term = ident()
+        .then(lit(Token::Equal))
+        .then(term(arena))
+        .map(|((name, eq), value)| Item::Term { name, eq, value });
+
+    choice((term,))
+        .repeated()
+        .map(|items| arena.alloc_slice_fill_iter(items.into_iter()) as &[Item])
+        .then_ignore(end())
 }
 
 /// Converts lexer output to a stream readable by a Chumsky parser.
@@ -292,14 +304,14 @@ pub fn to_stream<'i, I: IntoIterator<Item = SpanOf<Token<'i>>>>(
 #[cfg(test)]
 mod tests {
     use bumpalo::Bump;
-    use chumsky::Parser;
+    use chumsky::{prelude::end, Parser};
 
     use crate::{
-        cst::{CommaSep, Field, Pattern, ProductRow, SumRow, Term},
+        cst::{CommaSep, Field, Item, Pattern, ProductRow, SumRow, Term},
         lexer::aiahr_lexer,
     };
 
-    use super::{aiahr_parser, to_stream};
+    use super::{aiahr_parser, term, to_stream};
 
     // CST pattern macros. Used to construct patterns that ignore spans.
     macro_rules! comma_sep {
@@ -418,7 +430,25 @@ mod tests {
         };
     }
 
-    fn parse_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a Term<'a, 'i> {
+    macro_rules! item_term {
+        ($name:pat, $value:pat) => {
+            Item::Term {
+                name: ($name, ..),
+                value: $value,
+                ..
+            }
+        };
+    }
+
+    fn parse_term_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a Term<'a, 'i> {
+        let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
+        term(arena)
+            .then_ignore(end())
+            .parse(to_stream(tokens, eoi))
+            .unwrap()
+    }
+
+    fn parse_file_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a [Item<'a, 'i>] {
         let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
         aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
@@ -427,13 +457,13 @@ mod tests {
     fn test_undelimted_closure_fails() {
         let arena = Bump::new();
         let (tokens, eoi) = aiahr_lexer().lex("|x whoops(x)").unwrap();
-        assert_matches!(aiahr_parser(&arena).parse(to_stream(tokens, eoi)), Err(..));
+        assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 
     #[test]
     fn test_app_precedence() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "(|x| |w| w)(y)(z)"),
+            parse_term_unwrap(&Bump::new(), "(|x| |w| w)(y)(z)"),
             term_app!(
                 term_app!(
                     term_paren!(term_abs!("x", term_abs!("w", term_var!("w")))),
@@ -447,7 +477,7 @@ mod tests {
     #[test]
     fn test_mixing_prefixes() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "|x| y = |z| y(z); w = x(y); w"),
+            parse_term_unwrap(&Bump::new(), "|x| y = |z| y(z); w = x(y); w"),
             term_abs!(
                 "x",
                 term_local!(
@@ -466,7 +496,7 @@ mod tests {
     #[test]
     fn test_basic_lambdas() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "|x| |y| z = x(y); z"),
+            parse_term_unwrap(&Bump::new(), "|x| |y| z = x(y); z"),
             term_abs!(
                 "x",
                 term_abs!(
@@ -483,9 +513,9 @@ mod tests {
 
     #[test]
     fn test_product_rows() {
-        assert_matches!(parse_unwrap(&Bump::new(), "{}"), term_prod!(None));
+        assert_matches!(parse_term_unwrap(&Bump::new(), "{}"), term_prod!(None));
         assert_matches!(
-            parse_unwrap(&Bump::new(), "{x = a, y = |t| t}"),
+            parse_term_unwrap(&Bump::new(), "{x = a, y = |t| t}"),
             term_prod!(Some(comma_sep!(
                 id_field!("x", term_var!("a")),
                 id_field!("y", term_abs!("t", term_var!("t")))
@@ -496,7 +526,7 @@ mod tests {
     #[test]
     fn test_product_rows_precedence() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "{x = |t| t}({y = |t| u})"),
+            parse_term_unwrap(&Bump::new(), "{x = |t| t}({y = |t| u})"),
             term_app!(
                 term_prod!(Some(comma_sep!(id_field!(
                     "x",
@@ -513,7 +543,7 @@ mod tests {
     #[test]
     fn test_field_access() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "{x = a, y = b}.x"),
+            parse_term_unwrap(&Bump::new(), "{x = a, y = b}.x"),
             term_get!(
                 term_prod!(Some(comma_sep!(
                     id_field!("x", term_var!("a")),
@@ -527,7 +557,7 @@ mod tests {
     #[test]
     fn test_combined_postfixes() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "a.x(b)"),
+            parse_term_unwrap(&Bump::new(), "a.x(b)"),
             term_app!(term_get!(term_var!("a"), "x"), term_var!("b"))
         );
     }
@@ -535,7 +565,7 @@ mod tests {
     #[test]
     fn test_sum_rows() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "<x = |t| t>"),
+            parse_term_unwrap(&Bump::new(), "<x = |t| t>"),
             term_sum!(id_field!("x", term_abs!("t", term_var!("t"))))
         );
     }
@@ -543,7 +573,7 @@ mod tests {
     #[test]
     fn test_matches() {
         assert_matches!(
-            parse_unwrap(&Bump::new(), "match {x = a} => a, <y = b> => b, c => c end"),
+            parse_term_unwrap(&Bump::new(), "match {x = a} => a, <y = b> => b, c => c end"),
             term_match!(comma_sep!(
                 field!(
                     pat_prod!(Some(comma_sep!(id_field!("x", pat_var!("a")),))),
@@ -552,6 +582,18 @@ mod tests {
                 field!(pat_sum!(id_field!("y", pat_var!("b"))), term_var!("b")),
                 field!(pat_var!("c"), term_var!("c"))
             ))
+        );
+    }
+
+    #[test]
+    fn test_term_items() {
+        assert_matches!(
+            parse_file_unwrap(&Bump::new(), "x = a\ny = |b| b\nz = t = x; t"),
+            &[
+                item_term!("x", term_var!("a")),
+                item_term!("y", term_abs!("b", term_var!("b"))),
+                item_term!("z", term_local!("t", term_var!("x"), term_var!("t"))),
+            ]
         );
     }
 }
