@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
 
 module Type where
@@ -9,6 +10,7 @@ import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Text (Text, unpack)
+import Prettyprinter
 
 type Label = Text
 
@@ -18,11 +20,8 @@ class TypeOf t where
 instance (Traversable t, TypeOf a) => TypeOf (t a) where
   typeOf f = traverse (typeOf f)
 
-newtype TVar = TV Int
+newtype TVar = TV { unTV :: Int }
   deriving (Ord, Eq, Num, Enum, Bounded)
-
-unTV :: TVar -> Int
-unTV (TV i) = i
 
 typeVarNames :: [String]
 typeVarNames = go 1 base
@@ -34,6 +33,9 @@ typeVarNames = go 1 base
 
 instance Show TVar where
   showsPrec _ (TV tv) = (++) (typeVarNames !! tv)
+
+instance Pretty TVar where
+  pretty = viaShow
 
 type Row = Map Label Type
 
@@ -72,8 +74,19 @@ instance Show Type where
   showsPrec p (RowTy row) = showsRow p row
   showsPrec _ (ProdTy (RowTy row)) | Map.null row = ("{}" ++)
   showsPrec p (ProdTy ty) = ('{' :) . showsPrec p ty . ('}' :)
-  showsPrec p (FunTy arg (Open eff) ret) = parens p (showsPrec 11 arg . (" -{" ++) . showsPrec p eff . ("}-> " ++) . showsPrec 9 ret)
-  showsPrec p (FunTy arg (Closed eff) ret) = parens p (showsPrec 11 arg . (" -{" ++) . foldr (\lbl fn -> (unpack lbl ++) . (' ' :) . fn) id (Map.keys eff) . ("}-> " ++) . showsPrec 9 ret)
+  showsPrec p (FunTy arg (Open eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . showsPrec p eff . ("}-> " ++) . showsPrec 9 ret)
+  showsPrec p (FunTy arg (Closed eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . foldr (\lbl fn -> (unpack lbl ++) . (' ' :) . fn) id (Map.keys eff) . ("}-> " ++) . showsPrec 9 ret)
+
+instance Pretty Type where
+  pretty =
+    \case
+      VarTy ty -> pretty ty
+      IntTy -> "IntTy"
+      RowTy row | Map.null row -> "()"
+      RowTy row -> hcat $ punctuate ("," <> space) ((\(lbl, ty) -> pretty lbl <+> "|>" <+> pretty ty) <$> Map.toList row)
+      ProdTy (RowTy row) | Map.null row -> "{}"
+      ProdTy ty -> "{" <+> pretty ty <+> "}"
+      FunTy arg eff ret -> pretty arg <+> "-{" <> pretty eff <> "}->" <+> pretty ret
 
 parens p =
   if p >= 10
@@ -107,6 +120,10 @@ data InternalRow
   = Closed Row
   | Open TVar
   deriving (Eq, Ord)
+
+instance Pretty InternalRow where
+  pretty (Closed row) = hcat $ punctuate ("," <> space) (fmap (\(lbl, ty) -> pretty lbl <+> "|>" <+> pretty ty) (Map.toAscList row))
+  pretty (Open tvar) = pretty tvar
 
 instance Show InternalRow where
   showsPrec p (Closed row)

@@ -14,9 +14,13 @@ import Data.Maybe
 import Data.Functor.Classes (Show1 (liftShowsPrec))
 import Data.List ((\\))
 import Type
+import Prettyprinter
 
 newtype Var = V Int
   deriving (Ord, Eq, Num, Enum, Show, Bounded)
+
+instance Pretty Var where
+  pretty = viaShow
 
 data Dir = L | R
   deriving (Show)
