@@ -106,6 +106,8 @@ pub fn aiahr_lexer() -> Lexer {
         // Keywords
         literal("match", Token::KwMatch),
         literal("end", Token::KwEnd),
+        literal("with", Token::KwWith),
+        literal("do", Token::KwDo),
         // Identifier
         (
             r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),

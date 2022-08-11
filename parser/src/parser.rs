@@ -122,6 +122,11 @@ enum TermPrefix<'a, 'i> {
         value: &'a Term<'a, 'i>,
         semi: Span,
     },
+    Handle {
+        with: Span,
+        handler: &'a Term<'a, 'i>,
+        do_: Span,
+    },
     Abstraction {
         lbar: Span,
         arg: SpanOf<&'i str>,
@@ -144,6 +149,12 @@ impl<'a, 'i> TermPrefix<'a, 'i> {
                 semi,
                 expr: t,
             }),
+            TermPrefix::Handle { with, handler, do_ } => arena.alloc(Term::Handle {
+                with,
+                handler,
+                do_,
+                expr: t,
+            }),
             TermPrefix::Abstraction { lbar, arg, rbar } => arena.alloc(Term::Abstraction {
                 lbar,
                 arg,
@@ -160,7 +171,7 @@ enum TermPostfix<'a, 'i> {
         arg: &'a Term<'a, 'i>,
         rpar: Span,
     },
-    FieldAccess {
+    DotAccess {
         dot: Span,
         field: SpanOf<&'i str>,
     },
@@ -175,8 +186,8 @@ impl<'a, 'i> TermPostfix<'a, 'i> {
                 arg,
                 rpar,
             }),
-            TermPostfix::FieldAccess { dot, field } => arena.alloc(Term::FieldAccess {
-                product: t,
+            TermPostfix::DotAccess { dot, field } => arena.alloc(Term::DotAccess {
+                base: t,
                 dot,
                 field,
             }),
@@ -210,7 +221,7 @@ fn term<'a, 'i: 'a>(
 
         let atom = choice((
             // variable
-            ident().map(|s| arena.alloc(Term::VariableRef(s)) as &Term),
+            ident().map(|s| arena.alloc(Term::SymbolRef(s)) as &Term),
             // explicit term precedence
             paren_term.clone().map(|((lpar, t), rpar)| {
                 arena.alloc(Term::Parenthesized {
@@ -231,7 +242,7 @@ fn term<'a, 'i: 'a>(
         // Field access
         let access = lit(Token::Dot)
             .then(ident())
-            .map(|(dot, field)| TermPostfix::FieldAccess { dot, field });
+            .map(|(dot, field)| TermPostfix::DotAccess { dot, field });
 
         let app_access = postfix(atom.clone(), choice((app, access)), |t, p| {
             p.apply(arena, t)
@@ -240,7 +251,7 @@ fn term<'a, 'i: 'a>(
         // Local variable binding
         let local_bind = ident()
             .then(lit(Token::Equal))
-            .then(term)
+            .then(term.clone())
             .then(lit(Token::Semicolon))
             .map(|(((var, eq), val), semi)| TermPrefix::Binding {
                 var,
@@ -248,6 +259,11 @@ fn term<'a, 'i: 'a>(
                 value: val,
                 semi,
             });
+
+        let handle = lit(Token::KwWith)
+            .then(term)
+            .then(lit(Token::KwDo))
+            .map(|((with, handler), do_)| TermPrefix::Handle { with, handler, do_ });
 
         // Lambda abstraction
         let closure = lit(Token::VerticalBar)
@@ -264,7 +280,7 @@ fn term<'a, 'i: 'a>(
         // closures correct. However we're recursive descent, so we only go top-down. To remedy
         // this we construct a series of prefixes top-down that are applied to the final expression
         // in right associative order.
-        let bound = prefix(choice((local_bind, closure)), app_access, |p, t| {
+        let bound = prefix(choice((local_bind, handle, closure)), app_access, |p, t| {
             p.apply(arena, t)
         });
         bound
@@ -377,6 +393,15 @@ mod tests {
             }
         };
     }
+    macro_rules! term_with {
+        ($handler:pat, $expr:pat) => {
+            &Term::Handle {
+                handler: $handler,
+                expr: $expr,
+                ..
+            }
+        };
+    }
     macro_rules! term_abs {
         ($arg:pat, $body:pat) => {
             &Term::Abstraction {
@@ -405,10 +430,10 @@ mod tests {
             &Term::SumRow(sum!($field))
         };
     }
-    macro_rules! term_get {
-        ($product:pat, $field:pat) => {
-            &Term::FieldAccess {
-                product: $product,
+    macro_rules! term_dot {
+        ($base:pat, $field:pat) => {
+            &Term::DotAccess {
+                base: $base,
                 field: ($field, ..),
                 ..
             }
@@ -419,9 +444,9 @@ mod tests {
             &Term::Match { cases: $cases, .. }
         };
     }
-    macro_rules! term_var {
+    macro_rules! term_sym {
         ($var:pat) => {
-            &Term::VariableRef(($var, ..))
+            &Term::SymbolRef(($var, ..))
         };
     }
     macro_rules! term_paren {
@@ -466,11 +491,19 @@ mod tests {
             parse_term_unwrap(&Bump::new(), "(|x| |w| w)(y)(z)"),
             term_app!(
                 term_app!(
-                    term_paren!(term_abs!("x", term_abs!("w", term_var!("w")))),
-                    term_var!("y")
+                    term_paren!(term_abs!("x", term_abs!("w", term_sym!("w")))),
+                    term_sym!("y")
                 ),
-                term_var!("z")
+                term_sym!("z")
             )
+        );
+    }
+
+    #[test]
+    fn test_with_do() {
+        assert_matches!(
+            parse_term_unwrap(&Bump::new(), "with h do a(b)"),
+            term_with!(term_sym!("h"), term_app!(term_sym!("a"), term_sym!("b")))
         );
     }
 
@@ -482,11 +515,11 @@ mod tests {
                 "x",
                 term_local!(
                     "y",
-                    term_abs!("z", term_app!(term_var!("y"), term_var!("z"))),
+                    term_abs!("z", term_app!(term_sym!("y"), term_sym!("z"))),
                     term_local!(
                         "w",
-                        term_app!(term_var!("x"), term_var!("y")),
-                        term_var!("w")
+                        term_app!(term_sym!("x"), term_sym!("y")),
+                        term_sym!("w")
                     )
                 )
             )
@@ -503,8 +536,8 @@ mod tests {
                     "y",
                     term_local!(
                         "z",
-                        term_app!(term_var!("x"), term_var!("y")),
-                        term_var!("z")
+                        term_app!(term_sym!("x"), term_sym!("y")),
+                        term_sym!("z")
                     )
                 )
             )
@@ -517,8 +550,8 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "{x = a, y = |t| t}"),
             term_prod!(Some(comma_sep!(
-                id_field!("x", term_var!("a")),
-                id_field!("y", term_abs!("t", term_var!("t")))
+                id_field!("x", term_sym!("a")),
+                id_field!("y", term_abs!("t", term_sym!("t")))
             )))
         );
     }
@@ -530,11 +563,11 @@ mod tests {
             term_app!(
                 term_prod!(Some(comma_sep!(id_field!(
                     "x",
-                    term_abs!("t", term_var!("t"))
+                    term_abs!("t", term_sym!("t"))
                 ),))),
                 term_prod!(Some(comma_sep!(id_field!(
                     "y",
-                    term_abs!("t", term_var!("u"))
+                    term_abs!("t", term_sym!("u"))
                 ),)))
             )
         );
@@ -544,10 +577,10 @@ mod tests {
     fn test_field_access() {
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "{x = a, y = b}.x"),
-            term_get!(
+            term_dot!(
                 term_prod!(Some(comma_sep!(
-                    id_field!("x", term_var!("a")),
-                    id_field!("y", term_var!("b"))
+                    id_field!("x", term_sym!("a")),
+                    id_field!("y", term_sym!("b"))
                 ))),
                 "x"
             )
@@ -558,7 +591,7 @@ mod tests {
     fn test_combined_postfixes() {
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "a.x(b)"),
-            term_app!(term_get!(term_var!("a"), "x"), term_var!("b"))
+            term_app!(term_dot!(term_sym!("a"), "x"), term_sym!("b"))
         );
     }
 
@@ -566,7 +599,7 @@ mod tests {
     fn test_sum_rows() {
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "<x = |t| t>"),
-            term_sum!(id_field!("x", term_abs!("t", term_var!("t"))))
+            term_sum!(id_field!("x", term_abs!("t", term_sym!("t"))))
         );
     }
 
@@ -577,10 +610,10 @@ mod tests {
             term_match!(comma_sep!(
                 field!(
                     pat_prod!(Some(comma_sep!(id_field!("x", pat_var!("a")),))),
-                    term_var!("a")
+                    term_sym!("a")
                 ),
-                field!(pat_sum!(id_field!("y", pat_var!("b"))), term_var!("b")),
-                field!(pat_var!("c"), term_var!("c"))
+                field!(pat_sum!(id_field!("y", pat_var!("b"))), term_sym!("b")),
+                field!(pat_var!("c"), term_sym!("c"))
             ))
         );
     }
@@ -590,9 +623,9 @@ mod tests {
         assert_matches!(
             parse_file_unwrap(&Bump::new(), "x = a\ny = |b| b\nz = t = x; t"),
             &[
-                item_term!("x", term_var!("a")),
-                item_term!("y", term_abs!("b", term_var!("b"))),
-                item_term!("z", term_local!("t", term_var!("x"), term_var!("t"))),
+                item_term!("x", term_sym!("a")),
+                item_term!("y", term_abs!("b", term_sym!("b"))),
+                item_term!("z", term_local!("t", term_sym!("x"), term_sym!("t"))),
             ]
         );
     }

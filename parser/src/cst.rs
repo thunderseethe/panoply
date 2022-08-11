@@ -105,6 +105,12 @@ pub enum Term<'a, 'i> {
         semi: Span,
         expr: &'a Term<'a, 'i>,
     },
+    Handle {
+        with: Span,
+        handler: &'a Term<'a, 'i>,
+        do_: Span,
+        expr: &'a Term<'a, 'i>,
+    },
     Abstraction {
         lbar: Span,
         arg: SpanOf<&'i str>,
@@ -119,8 +125,8 @@ pub enum Term<'a, 'i> {
     },
     ProductRow(ProductRow<'a, 'i, &'a Term<'a, 'i>>),
     SumRow(SumRow<'i, &'a Term<'a, 'i>>),
-    FieldAccess {
-        product: &'a Term<'a, 'i>,
+    DotAccess {
+        base: &'a Term<'a, 'i>,
         dot: Span,
         field: SpanOf<&'i str>,
     },
@@ -129,7 +135,7 @@ pub enum Term<'a, 'i> {
         cases: CommaSep<'a, Field<&'a Pattern<'a, 'i>, &'a Term<'a, 'i>>>,
         end: Span,
     },
-    VariableRef(SpanOf<&'i str>),
+    SymbolRef(SpanOf<&'i str>),
     Parenthesized {
         lpar: Span,
         term: &'a Term<'a, 'i>,
@@ -144,6 +150,10 @@ impl<'a, 'i> Spanned for Term<'a, 'i> {
                 start: var.start(),
                 end: expr.end(),
             },
+            Term::Handle { with, expr, .. } => Span {
+                start: with.start(),
+                end: expr.end(),
+            },
             Term::Abstraction { lbar, body, .. } => Span {
                 start: lbar.start(),
                 end: body.end(),
@@ -154,15 +164,15 @@ impl<'a, 'i> Spanned for Term<'a, 'i> {
             },
             Term::ProductRow(p) => p.span(),
             Term::SumRow(s) => s.span(),
-            Term::FieldAccess { product, field, .. } => Span {
-                start: product.start(),
+            Term::DotAccess { base, field, .. } => Span {
+                start: base.start(),
                 end: field.end(),
             },
             Term::Match { match_, end, .. } => Span {
                 start: match_.start(),
                 end: end.end(),
             },
-            Term::VariableRef(v) => v.span(),
+            Term::SymbolRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span {
                 start: lpar.start(),
                 end: rpar.end(),

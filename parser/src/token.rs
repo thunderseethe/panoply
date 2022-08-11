@@ -5,6 +5,8 @@ use std::fmt::Debug;
 pub enum Token<'i> {
     KwMatch,
     KwEnd,
+    KwWith,
+    KwDo,
     Identifier(&'i str),
     Equal,
     VerticalBar,
