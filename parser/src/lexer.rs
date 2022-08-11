@@ -105,7 +105,6 @@ pub fn aiahr_lexer() -> Lexer {
     Lexer::new(vec![
         // Keywords
         literal("match", Token::KwMatch),
-        literal("end", Token::KwEnd),
         literal("with", Token::KwWith),
         literal("do", Token::KwDo),
         // Identifier

@@ -132,8 +132,9 @@ pub enum Term<'a, 'i> {
     },
     Match {
         match_: Span,
+        langle: Span,
         cases: CommaSep<'a, Field<&'a Pattern<'a, 'i>, &'a Term<'a, 'i>>>,
-        end: Span,
+        rangle: Span,
     },
     SymbolRef(SpanOf<&'i str>),
     Parenthesized {
@@ -168,9 +169,9 @@ impl<'a, 'i> Spanned for Term<'a, 'i> {
                 start: base.start(),
                 end: field.end(),
             },
-            Term::Match { match_, end, .. } => Span {
+            Term::Match { match_, rangle, .. } => Span {
                 start: match_.start(),
-                end: end.end(),
+                end: rangle.end(),
             },
             Term::SymbolRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span {

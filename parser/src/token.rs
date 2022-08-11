@@ -4,7 +4,6 @@ use std::fmt::Debug;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Token<'i> {
     KwMatch,
-    KwEnd,
     KwWith,
     KwDo,
     Identifier(&'i str),

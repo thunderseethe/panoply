@@ -212,12 +212,20 @@ fn term<'a, 'i: 'a>(
         let sum = sum_row(term.clone()).map(|s| arena.alloc(Term::SumRow(s)) as &Term);
 
         let match_ = lit(Token::KwMatch)
+            .then(lit(Token::LAngle))
             .then(comma_sep(
                 arena,
                 field(pattern(arena), Token::BigArrow, term.clone()),
             ))
-            .then(lit(Token::KwEnd))
-            .map(|((match_, cases), end)| arena.alloc(Term::Match { match_, cases, end }) as &Term);
+            .then(lit(Token::RAngle))
+            .map(|(((match_, langle), cases), rangle)| {
+                arena.alloc(Term::Match {
+                    match_,
+                    langle,
+                    cases,
+                    rangle,
+                }) as &Term
+            });
 
         let atom = choice((
             // variable
@@ -606,7 +614,7 @@ mod tests {
     #[test]
     fn test_matches() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "match {x = a} => a, <y = b> => b, c => c end"),
+            parse_term_unwrap(&Bump::new(), "match < {x = a} => a, <y = b> => b, c => c >"),
             term_match!(comma_sep!(
                 field!(
                     pat_prod!(Some(comma_sep!(id_field!("x", pat_var!("a")),))),
