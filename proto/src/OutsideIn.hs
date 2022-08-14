@@ -54,13 +54,13 @@ import Prelude hiding (abs, interact, lookup)
 import Constraint
 import Core (CoreType (..), coreRowTv, coreTyTv)
 import qualified Core
-import Subst
-import Term
-import Type
-import qualified TVarSet
+import Data.Text (unpack)
 import Prettyprinter
 import Prettyprinter.Render.Text
-import Data.Text (unpack)
+import Subst
+import qualified TVarSet
+import Term
+import Type
 
 data Eff = Eff {name :: Label, ops :: Map Label Scheme}
 
@@ -86,6 +86,7 @@ monoScheme = Scheme [] []
 
 data Wrapper
   = TyApp Wrapper Core.CoreType
+  | EvApp Wrapper Core.CoreVar
   | Hole
 
 fillIn :: Wrapper -> Core.Core -> Core.Core
@@ -93,41 +94,46 @@ fillIn wrap core =
   case wrap of
     Hole -> core
     TyApp hole ty -> Core.TyApp (fillIn hole core) ty
+    EvApp hole ev -> Core.App (fillIn hole core) (Core.Var ev)
 
 rowTVars :: [Q] -> TVarSet.TVarSet
 rowTVars qs = TVarSet.fromList (qs >>= rowTvs)
-  where 
-    rowTvs (c1 :<~> c2) = ct c1 ++ ct c2
-
-    ct (T (VarTy tv)) = [tv]
-    ct (T _) = []
-    ct (l :⊙ r) = internalRow l ++ internalRow r
-
-   
-    internalRow (Open tv) = [tv]
-    internalRow (Closed _) = []
-
-schemeWrapper :: [TVar] -> [Q] -> Wrapper
-schemeWrapper bound qs =
-  let ev_wrap = foldr (\tv wrapper -> TyApp wrapper (CoreVar $ coreRowTv tv)) Hole (qs >>= rowEvs)
-   in foldr wrapEv ev_wrap bound
  where
+  rowTvs (c1 :<~> c2) = ct c1 ++ ct c2
+
+  ct (T (VarTy tv)) = [tv]
+  ct (T _) = []
+  ct (l :⊙ r) = internalRow l ++ internalRow r
+
+  internalRow (Open tv) = [tv]
+  internalRow (Closed _) = []
+
+schemeWrapper :: (Has (Fresh Var) sig m, Has (State (Map Var Q)) sig m) => [TVar] -> [Q] -> m Wrapper
+schemeWrapper bound qs = do
+  ev_wrap <- foldrM f Hole (qs >>= rowEvs)
+  return (foldr wrapEv ev_wrap bound)
+ where
+  f rowEvTy wrapper = do
+    var <- fresh
+    return (EvApp wrapper (Core.CoreV var rowEvTy))
+    
   wrapEv tv =
     if TVarSet.member tv rowSet
       then \wrap -> TyApp wrap (CoreVar $ coreRowTv tv)
       else \wrap -> TyApp wrap (CoreVar $ coreTyTv tv)
 
-  rowSet = rowTVars qs 
+  rowSet = rowTVars qs
 
-  rowEvs (T (VarTy tv) :<~> _ :⊙ _) = [tv]
-  rowEvs (_ :⊙ _ :<~> T (VarTy tv)) = [tv]
+  rowEvs (T (VarTy out) :<~> Open left :⊙ Open right) = [Core.rowEvType (Open left) (Open right) (Open out)]
+  rowEvs (Open left :⊙ Open right :<~> T (VarTy out)) = [Core.rowEvType (Open left) (Open right) (Open out)]
   rowEvs _ = []
 
-instantiate :: (Has (Fresh TVar) sig m) => Scheme -> m ([Constraint], Wrapper, Type)
+instantiate :: (Has (Fresh TVar) sig m, Has (Fresh Var) sig m, Has (State (Map Var Q)) sig m) => Scheme -> m ([Constraint], Wrapper, Type)
 instantiate (Scheme bound qs ty) = do
   freshVars <- mapM (\var -> (,) var . VarTy <$> fresh) bound
   let subst = foldr (\(var, ty) subst -> insert var ty subst) mempty freshVars
-  return (Simp <$> apply subst qs, schemeWrapper bound qs, apply subst ty)
+  wrapper <- schemeWrapper bound (apply subst qs)
+  return (Simp <$> apply subst qs, wrapper, apply subst ty)
 
 data Infer = Infer {_ty :: Type, _eff :: InternalRow}
   deriving (Show)
@@ -155,6 +161,7 @@ askCtx = ask
 generateConstraints ::
   ( Has (Reader Ctx) sig m
   , Has (Reader EffCtx) sig m
+  , Has (State (Map Var Q)) sig m
   , Has (Fresh TVar) sig m
   , Has (Fresh Var) sig m
   ) =>
@@ -214,18 +221,17 @@ generateConstraints term =
       (left, left_core, left_constr) <- generateConstraints left
       (right, right_core, right_constr) <- generateConstraints right
       -- TODO: Should both functions be marked with out_eff here, or just one?
-      let core_ev_ty =
-            CoreFun (CoreVar $ coreRowTv left_var) (Closed Map.empty) (CoreFun (CoreVar $ coreRowTv right_var) (Open out_eff) (CoreVar $ coreRowTv out))
+      let constr = VarTy out ~> Open left_var :⊙ Open right_var
+      modify (Map.insert out_ev constr)
       return
         ( Concat (Infer (ProdTy $ VarTy out) (Open out_eff)) left right
-        , Core.App (Core.App (Core.Var $ Core.CoreV out_ev core_ev_ty) left_core) right_core
+        , Core.App (Core.App (Core.Project 0 (Core.Var $ Core.CoreV out_ev (Core.rowEvType (Open left_var) (Open right_var) (Open out)))) left_core) right_core
         , Simp (left ^. meta . ty ~ ProdTy (VarTy left_var)) :
           Simp (right ^. meta . ty ~ ProdTy (VarTy right_var)) :
-          Simp (VarTy out ~> Open left_var :⊙ Open right_var) :
+          Simp constr :
           Simp (VarTy out_eff ~> (left ^. meta . eff) :⊙ (right ^. meta . eff)) :
           left_constr <> right_constr
         )
-    -- Todo figure out what to do with this, I think in theory we shouldn't be able to store effects in records at all?
     Prj _ dir term -> do
       rest <- fresh
       out <- fresh
@@ -233,15 +239,15 @@ generateConstraints term =
       input <- fresh
       (term, term_core, term_constr) <- generateConstraints term
       -- We want to unwrap a product into it's underlying row for it's constraint
-      let constr =
+      let (idx, constr) =
             case dir of
-              L -> VarTy input ~> Open out :⊙ Open rest
-              R -> VarTy input ~> Open rest :⊙ Open out
-      let core_ev_ty =
-            CoreFun (CoreVar $ coreRowTv input) (term ^. meta . eff) (CoreVar $ coreRowTv out)
+              L -> (3, VarTy input ~> Open out :⊙ Open rest)
+              R -> (4, VarTy input ~> Open rest :⊙ Open out)
+      -- Save our constraint
+      modify (Map.insert out_ev constr)
       return
         ( Prj (Infer (ProdTy $ VarTy out) (term ^. meta . eff)) dir term
-        , Core.App (Core.Var $ Core.CoreV out_ev core_ev_ty) term_core
+        , Core.App (Core.Project 0 (Core.Project idx (Core.Var $ Core.CoreV out_ev (Core.rowEvType (Open input) (Open input) (Open out))))) term_core
         , Simp (term ^. meta . ty ~ ProdTy (VarTy input)) : Simp constr : term_constr
         )
     -- Functions
@@ -416,7 +422,7 @@ canon q =
       | otherwise ->
         let (b_goal, a_goal) = Map.partitionWithKey (\k _ -> Map.member k b_row) goal
          in return $ Work [VarTy a_tv ~ RowTy a_goal, RowTy b_row ~ RowTy b_goal]
-    T (RowTy r) :<~> Open _ :⊙ Open _ -> error ("Should this be allowed? " ++ show r)
+    T (RowTy _) :<~> Open _ :⊙ Open _ -> return $ Residual q -- error ("Should this be allowed? " ++ show r)
     T IntTy :<~> ct@(_ :⊙ _) -> return $ Residual (IntTy ~> ct)
     T (ProdTy ty) :<~> ct@(_ :⊙ _) -> return $ Residual (ProdTy ty ~> ct)
     T (FunTy arg eff ret) :<~> ct@(_ :⊙ _) -> return $ Residual (FunTy arg eff ret ~> ct)
@@ -435,7 +441,8 @@ canon q =
 {- A canonical constraint.
    This is a tvar lhs equal to a type that does not contain tvar -}
 data CanonCt
-  = Ct TVar Ct
+  = -- tvar ~ ct
+    Ct TVar Ct
   deriving (Eq)
 
 instance Show CanonCt where
@@ -466,6 +473,7 @@ simplify i =
     -- SEQDIFF
     InteractOccurs given_tv given_ty wanted_occurence -> applyOccurs (given_tv |-> given_ty) wanted_occurence
 
+-- InteractOccurs a Int (Within b (a -{}-> r)) ~~> [b ~ Int -{}-> r]
 data Occurs
   = Within TVar Type
   | RowLeft TVar InternalRow InternalRow
@@ -609,6 +617,21 @@ instance Lookup (Map k v) k v where
 
 newtype PredMap = PM {unPM :: Map TVar (Set Ct)}
 
+predMapToList :: PredMap -> [(TVar, Ct)]
+predMapToList = concatMap (\(tv, cts) -> (,) tv <$> Set.toList cts) . Map.toAscList . unPM
+
+predMapFromList :: [(TVar, Ct)] -> PredMap
+predMapFromList = PM . foldr adjust Map.empty
+ where
+  adjust (tvar, ct) =
+    Map.alter
+      ( \curr ->
+          Just $ case curr of
+            Nothing -> Set.singleton ct
+            Just cts -> Set.insert ct cts
+      )
+      tvar
+
 instance Semigroup PredMap where
   (PM left) <> (PM right) =
     PM $
@@ -691,47 +714,13 @@ closeEffects tv_cts = fmap (\infer -> (infer & eff %~ clampItShut) & ty %~ clamp
 {- Applied to  top level terms after constraint solving to generalize open types into closed schemes.
   Zonking is the process of replacing each type variable by the type it was sovled to if available. -}
 zonkOrGeneralizeTrying :: PredMap -> Type -> Scheme
-zonkOrGeneralizeTrying solved ty = Scheme (TVarSet.toList bound) qs (apply subst ty)
+zonkOrGeneralizeTrying solved ty = Scheme bound qs ty
  where
-  (bound, qs, subst) = Map.foldrWithKey categorize (TVarSet.empty, [], mempty) (referenced ty solved <> Map.fromList ((\a -> (a, solved !? a)) <$> openTyVars ty))
+  bound = openTyVars ty
+  qs = Map.foldrWithKey fold [] (unPM solved)
+  fold tv cts acc = Set.foldr (\ct acc -> (T (VarTy tv) :<~> ct) : acc) acc cts
 
   openTyVars = toListOf (cosmos . typeVars)
-
-  openRowVars row_a row_b =
-    case (row_a, row_b) of
-      (Open a, Open b) -> [a, b]
-      (Open a, _) -> [a]
-      (_, Open b) -> [b]
-      (_, _) -> []
-
-  categorize tv ct acc =
-    case ct of
-      Nothing -> over _1 (TVarSet.insert tv) acc
-      Just cts ->
-        foldr
-          ( \ct acc ->
-              case ct of
-                T ty -> over _1 (tvarSetListUnion (openTyVars ty)) $ over _3 (insert tv ty) acc
-                left :⊙ right -> over _1 (tvarSetListUnion (tv : openRowVars left right)) $ over _2 (VarTy tv ~> left :⊙ right :) acc
-          )
-          acc
-          cts
-
-  tvarSetListUnion = TVarSet.union . TVarSet.fromList
-
-  {- Prune contstraints from our predicate map that are superfluous and don't need to appear in the final label.
-    You might assume it's enough to walk open type variables and use the constraints on each type. But with the :⊙ constraint we may have important information that is a constraint on an implied type.
-    So we walk our map and remove any irrelevant constraints and then walk the filtered map to construct our types. -}
-  referenced ty (PM solved) = Map.mapMaybe (fmap Just . toMaybe . Set.filter isRelevant) solved
-   where
-    toMaybe s = if Set.null s then Nothing else Just s
-    isRelevant ct =
-      case ct of
-        -- We don't care about type equalities for this, they'll be handled by substitution
-        T _ -> False
-        -- :⊙ might need to appear in entailment so we need to check if this is relevant to the final type
-        left :⊙ right -> any (\tv -> rowOccurs tv left || rowOccurs tv right) open
-    open = Set.fromList (openTyVars ty)
 
 zonk :: Subst -> PredMap -> Core.Core -> Core.Core
 zonk subst (PM _) =
@@ -751,8 +740,8 @@ wrap (Scheme bound qs _) core =
 {- Walk term and treat any unbound variables as evidence and wrap final term in a new lambda to bind evidence -}
 liftEv :: Core.Core -> Core.Core
 liftEv core = foldr Core.Lam core unbound
-  where
-    unbound = Core.coreUnboundVars core
+ where
+  unbound = Core.coreUnboundVars core
 
 defaultEffCtx :: EffCtx
 defaultEffCtx =
@@ -761,17 +750,41 @@ defaultEffCtx =
     , Eff "RowEff" (Map.fromList [("add_field", Scheme [TV 0, TV 1, TV 2] [VarTy 0 ~> Closed ("x" |> IntTy) :⊙ Open 1, VarTy 2 ~> Closed ("y" |> IntTy) :⊙ Open 1] (FunTy (VarTy 0) (Closed $ "RowEff" |> unitTy) (VarTy 2)))])
     ]
 
+prunePred :: Type -> PredMap -> PredMap
+prunePred ty = predMapFromList . filter (\(tv, ct) -> TVarSet.member tv bound || isRelevant ct) . predMapToList
+ where
+  isRelevant = any (`TVarSet.member` bound) . toListOf ctTVars
+  bound = TVarSet.fromList $ toListOf (cosmos . typeVars) ty
+
+generateEvidenceForSolved :: Map Var Q -> (Map Var Core.Core, [Q])
+generateEvidenceForSolved = Map.foldrWithKey f (Map.empty, [])
+ where
+  f v q =
+    case q of
+      T (RowTy goal) :<~> Closed left :⊙ Closed right -> _1 %~ Map.insert v (Core.rowEvidence left right goal)
+      -- TODO: We need to handle projection constraints here which will have one open type variable.
+      -- Except that type variable won't be referenced in the actual type because it doesn't really matter.
+      -- So we need to check if that is the case and if so solve with some idea of any row in our row evidence
+
+      -- Anything else we can't solve and needs to be lifted as an evidence param
+      _ -> _2 %~ (q :)
+
 infer :: Term () -> (Term Infer, Core.Core, Scheme)
 infer term =
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
-    Right (_, (subst, pred_map, [])) ->
+    Right (_, (subst, unpruned_pred_map, [])) ->
       let term = closeEffects pred_map $ apply subst typed_term
-          scheme = zonkOrGeneralizeTrying pred_map (term ^. meta . ty)
-       in trace (ppShowList (toList pred_map) ++ "\n" ++ ppShow typed_term ++ "\n" ++ ppShow subst ++ "\n") (term, zonk subst pred_map $ wrap scheme $ liftEv core_term, scheme)
+          pred_map = prunePred (term ^. meta . ty) unpruned_pred_map
+          (ev_map, residual_ev) = generateEvidenceForSolved (apply subst raw_ev_map)
+          term_ty = apply subst (term ^. meta . ty)
+          scheme = Scheme (nub $ toListOf (cosmos . typeVars) term_ty) residual_ev term_ty
+       in trace ("Pred Map:\n" ++ ppShowList (toList pred_map) ++ "\nTyped Term:\n" ++ ppShow typed_term ++ "\nSubst:\n" ++ ppShow subst ++ "\n")
+                (term, zonk subst pred_map $ wrap scheme $ liftEv (Core.varSubst ev_map core_term), scheme)
     Right (_, (subst, _, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow typed_term)
  where
-  (_, (tvar, (typed_term, core_term, constrs))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ generateConstraints term
+  (_, (tvar, (raw_ev_map, (typed_term, core_term, constrs)))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ runState empty_ev_map $ generateConstraints term
+  empty_ev_map = Map.empty :: Map Var Q
   maxVar = maxTermVar term
   res = runIdentity . runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
 
@@ -843,6 +856,12 @@ exampleGet = abs [v] $ var v <@> (op "get" <@> unit)
 
 exampleWand :: Term ()
 exampleWand = abs [m, n] $ unlabel (prj L $ record [var m, var n]) "x"
+ where
+  m = V 0
+  n = V 1
+
+exampleApWand :: Term ()
+exampleApWand = abs [m, n] (unlabel (prj L $ record [var m, var n]) "x") <@> record [label "x" (int 3), label "y" (int 4)] <@> record [label "w" (int 1), label "z" (int 2)]
  where
   m = V 0
   n = V 1
