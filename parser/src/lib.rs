@@ -6,9 +6,7 @@ pub mod cst;
 pub mod error;
 mod expr;
 pub mod lexer;
-pub mod loc;
 pub mod parser;
-pub mod span;
 pub mod token;
 
 #[cfg(test)]

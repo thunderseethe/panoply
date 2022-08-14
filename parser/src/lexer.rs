@@ -1,9 +1,9 @@
 use std::cmp::Reverse;
 
-use crate::{
+use crate::token::Token;
+use aiahr_core::{
     loc::{Loc, Locator},
     span::{Span, SpanOf},
-    token::Token,
 };
 use regex::{Captures, Regex, RegexSet};
 

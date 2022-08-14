@@ -1,3 +1,7 @@
+use aiahr_core::{
+    loc::Loc,
+    span::{Span, SpanOf},
+};
 use bumpalo::Bump;
 use chumsky::{
     prelude::{choice, empty, end, just, recursive},
@@ -8,8 +12,6 @@ use crate::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
     error::ParseErrors,
     expr::{postfix, prefix},
-    loc::Loc,
-    span::{Span, SpanOf},
     token::Token,
 };
 
