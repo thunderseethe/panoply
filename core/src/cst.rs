@@ -1,5 +1,6 @@
-use aiahr_core::span::{Span, SpanOf, Spanned};
 use std::fmt::Debug;
+
+use crate::span::{Span, SpanOf, Spanned};
 
 /// A non-empty comma-separated list. To allow an empty list, wrap in `Option`.
 #[derive(Clone, Copy, Debug)]

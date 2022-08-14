@@ -1,6 +1,8 @@
 use aiahr_core::{
+    cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
     loc::Loc,
     span::{Span, SpanOf},
+    token::Token,
 };
 use bumpalo::Bump;
 use chumsky::{
@@ -9,10 +11,8 @@ use chumsky::{
 };
 
 use crate::{
-    cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
     error::ParseErrors,
     expr::{postfix, prefix},
-    token::Token,
 };
 
 // Returns a spanned parser that matches just the given token and returns ().
@@ -329,13 +329,11 @@ pub fn to_stream<'i, I: IntoIterator<Item = SpanOf<Token<'i>>>>(
 
 #[cfg(test)]
 mod tests {
+    use aiahr_core::cst::{CommaSep, Field, Item, Pattern, ProductRow, SumRow, Term};
     use bumpalo::Bump;
     use chumsky::{prelude::end, Parser};
 
-    use crate::{
-        cst::{CommaSep, Field, Item, Pattern, ProductRow, SumRow, Term},
-        lexer::aiahr_lexer,
-    };
+    use crate::lexer::aiahr_lexer;
 
     use super::{aiahr_parser, term, to_stream};
 

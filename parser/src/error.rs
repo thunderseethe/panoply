@@ -1,5 +1,4 @@
-use crate::token::Token;
-use aiahr_core::{loc::Loc, span::Span};
+use aiahr_core::{loc::Loc, span::Span, token::Token};
 
 // TODO: design a better error type
 #[derive(Debug, Clone)]

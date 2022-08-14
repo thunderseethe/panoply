@@ -2,12 +2,10 @@
 #[macro_use]
 extern crate assert_matches;
 
-pub mod cst;
 pub mod error;
 mod expr;
 pub mod lexer;
 pub mod parser;
-pub mod token;
 
 #[cfg(test)]
 mod tests {
