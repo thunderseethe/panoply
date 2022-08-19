@@ -19,6 +19,12 @@ data Ct
 ctOccurs :: TVar -> Ct -> Bool
 ctOccurs tvar = anyOf (typeOf . typeVars) (== tvar)
 
+ctTVars :: Traversal' Ct TVar
+ctTVars f =
+  \case
+    T ty -> T <$> typeVars f ty
+    left :⊙ right -> liftA2 (:⊙) (internalRowTVars f left) (internalRowTVars f right)
+
 instance TypeOf Ct where
   typeOf f =
     \case
