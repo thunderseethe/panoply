@@ -3,7 +3,7 @@ use std::{fmt::Debug, ops::Range};
 use crate::loc::Loc;
 
 /// A span of a source text.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Span {
     pub start: Loc,
     pub end: Loc,
@@ -47,6 +47,12 @@ pub trait Spanned {
     fn end(&self) -> Loc {
         self.span().end
     }
+    fn span_map<T, F>(&self, f: F) -> SpanOf<T>
+    where
+        F: FnOnce(&Self) -> T,
+    {
+        (f(self), self.span())
+    }
 }
 
 impl Spanned for Span {
@@ -58,5 +64,14 @@ impl Spanned for Span {
 impl<T> Spanned for SpanOf<T> {
     fn span(&self) -> Span {
         self.1
+    }
+}
+
+impl<T> Spanned for &T
+where
+    T: Spanned,
+{
+    fn span(&self) -> Span {
+        (*self).span()
     }
 }

@@ -1,0 +1,15 @@
+[package]
+name = "aiahr-analysis"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+aiahr-core = { path = "../core" }
+bumpalo = "3.10"
+
+[dev-dependencies]
+aiahr-parser = { path = "../parser" }
+assert_matches = "1.5" # TODO: use `std` version when stabilized.
+chumsky = "0.8"

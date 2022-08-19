@@ -2,7 +2,10 @@
 #[macro_use]
 extern crate assert_matches;
 
-pub mod error;
+#[cfg(test)]
+#[macro_use]
+extern crate aiahr_core;
+
 mod expr;
 pub mod lexer;
 pub mod parser;

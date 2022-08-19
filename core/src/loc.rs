@@ -1,7 +1,7 @@
 use std::{fmt::Debug, marker::PhantomData};
 
 /// A location in a source file. Contains redundant data to avoid extra computation.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Loc {
     pub byte: usize,
     pub line: usize,

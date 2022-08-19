@@ -1,11 +1,24 @@
-use aiahr_core::{loc::Loc, span::Span, token::Token};
+use std::fmt::Debug;
+
+use crate::{
+    loc::Loc,
+    span::{Span, SpanOf},
+    token::Token,
+};
 
 // TODO: design a better error type
+#[derive(Debug)]
+pub enum AiahrcError<'i> {
+    NameResolutionError(NameResolutionError<'i>),
+    ParseError(ParseError<'i>),
+}
+
 #[derive(Debug, Clone)]
 pub enum ParseError<'i> {
+    // `None` tokens indicate EOF.
     WrongToken {
         loc: Loc,
-        got: Option<Token<'i>>, // None indicates EOF
+        got: Option<Token<'i>>,
         want_any: Vec<Option<Token<'i>>>,
     },
 }
@@ -38,5 +51,29 @@ impl<'i> chumsky::Error<Token<'i>> for ParseErrors<'i> {
         let ParseErrors(mut other) = other;
         errors.append(&mut other);
         ParseErrors(errors)
+    }
+}
+
+#[derive(Debug)]
+pub enum NameResolutionError<'i> {
+    Duplicate {
+        original: SpanOf<&'i str>,
+        duplicate: SpanOf<&'i str>,
+    },
+    NotFound(SpanOf<&'i str>),
+}
+
+pub trait Errors<E> {
+    fn new() -> Self;
+    fn push(&mut self, error: E);
+}
+
+impl<E> Errors<E> for Vec<E> {
+    fn new() -> Self {
+        Vec::new()
+    }
+
+    fn push(&mut self, error: E) {
+        self.push(error)
     }
 }

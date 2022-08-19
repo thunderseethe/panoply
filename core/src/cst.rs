@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, iter::FusedIterator};
 
 use crate::span::{Span, SpanOf, Spanned};
 
@@ -11,6 +11,16 @@ pub struct CommaSep<'a, T> {
     pub comma: Option<Span>,
 }
 
+impl<'a, T> CommaSep<'a, T> {
+    /// An iterator over the comma-separated elements.
+    pub fn elements<'b>(&'b self) -> Elements<'b, T> {
+        Elements {
+            cs: self,
+            idx: Some(0),
+        }
+    }
+}
+
 impl<'a, T: Spanned> Spanned for CommaSep<'a, T> {
     fn span(&self) -> Span {
         Span {
@@ -21,6 +31,56 @@ impl<'a, T: Spanned> Spanned for CommaSep<'a, T> {
                 .unwrap_or(self.first.span())
                 .end(),
         }
+    }
+}
+
+/// An iterator over the elements of a `CommaSep`. Needed because `std::iter::Chain` does not
+/// implement `ExactSizeIterator`.
+#[derive(Debug)]
+pub struct Elements<'a, T> {
+    cs: &'a CommaSep<'a, T>,
+
+    // `Some(0)` for `cs.first`, `Some(i + 1)` for `cs.elems[i].1`, or `None` for EOI.
+    idx: Option<usize>,
+}
+
+impl<'a, T> Clone for Elements<'a, T> {
+    fn clone(&self) -> Self {
+        Elements {
+            cs: self.cs,
+            idx: self.idx,
+        }
+    }
+}
+impl<'a, T> ExactSizeIterator for Elements<'a, T> {}
+impl<'a, T> FusedIterator for Elements<'a, T> {}
+impl<'a, T> Iterator for Elements<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        Some(match self.idx? {
+            0 => {
+                self.idx = if self.cs.elems.is_empty() {
+                    None
+                } else {
+                    Some(1)
+                };
+                &self.cs.first
+            }
+            i => {
+                self.idx = if i == self.cs.elems.len() {
+                    None
+                } else {
+                    Some(i + 1)
+                };
+                &self.cs.elems[i].1
+            }
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = 1 + self.cs.elems.len();
+        (size, Some(size))
     }
 }
 
@@ -80,13 +140,13 @@ impl<'i, T> Spanned for SumRow<'i, T> {
 
 /// A pattern over terms of type `T`.
 #[derive(Clone, Copy, Debug)]
-pub enum Pattern<'a, 'i> {
-    ProductRow(ProductRow<'a, 'i, &'a Pattern<'a, 'i>>),
-    SumRow(SumRow<'i, &'a Pattern<'a, 'i>>),
-    Whole(SpanOf<&'i str>),
+pub enum Pattern<'a, 'i, N> {
+    ProductRow(ProductRow<'a, 'i, &'a Pattern<'a, 'i, N>>),
+    SumRow(SumRow<'i, &'a Pattern<'a, 'i, N>>),
+    Whole(SpanOf<N>),
 }
 
-impl<'a, 'i> Spanned for Pattern<'a, 'i> {
+impl<'a, 'i, N> Spanned for Pattern<'a, 'i, N> {
     fn span(&self) -> Span {
         match self {
             Pattern::ProductRow(p) => p.span(),
@@ -98,54 +158,54 @@ impl<'a, 'i> Spanned for Pattern<'a, 'i> {
 
 /// An Aiahr term.
 #[derive(Clone, Copy, Debug)]
-pub enum Term<'a, 'i> {
+pub enum Term<'a, 'i, N> {
     Binding {
-        var: SpanOf<&'i str>,
+        var: SpanOf<N>,
         eq: Span,
-        value: &'a Term<'a, 'i>,
+        value: &'a Term<'a, 'i, N>,
         semi: Span,
-        expr: &'a Term<'a, 'i>,
+        expr: &'a Term<'a, 'i, N>,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a, 'i>,
+        handler: &'a Term<'a, 'i, N>,
         do_: Span,
-        expr: &'a Term<'a, 'i>,
+        expr: &'a Term<'a, 'i, N>,
     },
     Abstraction {
         lbar: Span,
-        arg: SpanOf<&'i str>,
+        arg: SpanOf<N>,
         rbar: Span,
-        body: &'a Term<'a, 'i>,
+        body: &'a Term<'a, 'i, N>,
     },
     Application {
-        func: &'a Term<'a, 'i>,
+        func: &'a Term<'a, 'i, N>,
         lpar: Span,
-        arg: &'a Term<'a, 'i>,
+        arg: &'a Term<'a, 'i, N>,
         rpar: Span,
     },
-    ProductRow(ProductRow<'a, 'i, &'a Term<'a, 'i>>),
-    SumRow(SumRow<'i, &'a Term<'a, 'i>>),
+    ProductRow(ProductRow<'a, 'i, &'a Term<'a, 'i, N>>),
+    SumRow(SumRow<'i, &'a Term<'a, 'i, N>>),
     DotAccess {
-        base: &'a Term<'a, 'i>,
+        base: &'a Term<'a, 'i, N>,
         dot: Span,
         field: SpanOf<&'i str>,
     },
     Match {
         match_: Span,
         langle: Span,
-        cases: CommaSep<'a, Field<&'a Pattern<'a, 'i>, &'a Term<'a, 'i>>>,
+        cases: CommaSep<'a, Field<&'a Pattern<'a, 'i, N>, &'a Term<'a, 'i, N>>>,
         rangle: Span,
     },
-    SymbolRef(SpanOf<&'i str>),
+    SymbolRef(SpanOf<N>),
     Parenthesized {
         lpar: Span,
-        term: &'a Term<'a, 'i>,
+        term: &'a Term<'a, 'i, N>,
         rpar: Span,
     },
 }
 
-impl<'a, 'i> Spanned for Term<'a, 'i> {
+impl<'a, 'i, N> Spanned for Term<'a, 'i, N> {
     fn span(&self) -> Span {
         match self {
             Term::Binding { var, expr, .. } => Span {
@@ -185,10 +245,192 @@ impl<'a, 'i> Spanned for Term<'a, 'i> {
 
 /// A top-level item in an Aiahr source file.
 #[derive(Clone, Copy, Debug)]
-pub enum Item<'a, 'i> {
+pub enum Item<'a, 'i, N> {
     Term {
-        name: SpanOf<&'i str>,
+        name: SpanOf<N>,
         eq: Span,
-        value: &'a Term<'a, 'i>,
+        value: &'a Term<'a, 'i, N>,
     },
+}
+
+impl<'a, 'i, N> Spanned for Item<'a, 'i, N> {
+    fn span(&self) -> Span {
+        match self {
+            Item::Term { name, value, .. } => Span {
+                start: name.start(),
+                end: value.end(),
+            },
+        }
+    }
+}
+
+// CST pattern macros. Used to construct patterns that ignore spans.
+
+#[macro_export]
+macro_rules! comma_sep {
+    ($first:pat $(,$elems:pat)*) => {
+        $crate::cst::CommaSep {
+            first: $first,
+            elems: &[$((.., $elems)),*],
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! field {
+    ($label:pat, $target:pat) => {
+        $crate::cst::Field {
+            label: $label,
+            target: $target,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! id_field {
+    ($label:pat, $target:pat) => {
+        $crate::field!(($label, ..), $target)
+    };
+}
+
+#[macro_export(local_inner_macros)]
+macro_rules! prod {
+    ($fields:pat) => {
+        $crate::cst::ProductRow {
+            fields: $fields,
+            ..
+        }
+    };
+}
+
+#[macro_export(local_inner_macros)]
+macro_rules! sum {
+    ($field:pat) => {
+        $crate::cst::SumRow { field: $field, .. }
+    };
+}
+
+#[macro_export]
+macro_rules! pat_prod {
+    ($fields:pat) => {
+        &$crate::cst::Pattern::ProductRow($crate::prod!($fields))
+    };
+}
+
+#[macro_export]
+macro_rules! pat_sum {
+    ($field:pat) => {
+        &$crate::cst::Pattern::SumRow($crate::sum!($field))
+    };
+}
+
+#[macro_export]
+macro_rules! pat_var {
+    ($var:pat) => {
+        &$crate::cst::Pattern::Whole(($var, ..))
+    };
+}
+
+#[macro_export]
+macro_rules! term_local {
+    ($var:pat, $value:pat, $expr:pat) => {
+        &$crate::cst::Term::Binding {
+            var: ($var, ..),
+            value: $value,
+            expr: $expr,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! term_with {
+    ($handler:pat, $expr:pat) => {
+        &$crate::cst::Term::Handle {
+            handler: $handler,
+            expr: $expr,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! term_abs {
+    ($arg:pat, $body:pat) => {
+        &$crate::cst::Term::Abstraction {
+            arg: ($arg, ..),
+            body: $body,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! term_app {
+    ($func:pat, $arg:pat) => {
+        &$crate::cst::Term::Application {
+            func: $func,
+            arg: $arg,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! term_prod {
+    ($fields:pat) => {
+        &$crate::cst::Term::ProductRow($crate::prod!($fields))
+    };
+}
+
+#[macro_export]
+macro_rules! term_sum {
+    ($field:pat) => {
+        &$crate::cst::Term::SumRow($crate::sum!($field))
+    };
+}
+
+#[macro_export]
+macro_rules! term_dot {
+    ($base:pat, $field:pat) => {
+        &$crate::cst::Term::DotAccess {
+            base: $base,
+            field: ($field, ..),
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! term_match {
+    ($cases:pat) => {
+        &$crate::cst::Term::Match { cases: $cases, .. }
+    };
+}
+
+#[macro_export]
+macro_rules! term_sym {
+    ($var:pat) => {
+        &$crate::cst::Term::SymbolRef(($var, ..))
+    };
+}
+
+#[macro_export]
+macro_rules! term_paren {
+    ($term:pat) => {
+        &$crate::cst::Term::Parenthesized { term: $term, .. }
+    };
+}
+
+#[macro_export]
+macro_rules! item_term {
+    ($name:pat, $value:pat) => {
+        $crate::cst::Item::Term {
+            name: ($name, ..),
+            value: $value,
+            ..
+        }
+    };
 }

@@ -1,5 +1,6 @@
 use aiahr_core::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
+    error::ParseErrors,
     loc::Loc,
     span::{Span, SpanOf},
     token::Token,
@@ -10,10 +11,7 @@ use chumsky::{
     select, Parser, Stream,
 };
 
-use crate::{
-    error::ParseErrors,
-    expr::{postfix, prefix},
-};
+use crate::expr::{postfix, prefix};
 
 // Returns a spanned parser that matches just the given token and returns ().
 fn lit<'i>(token: Token<'i>) -> impl Clone + Parser<Token<'i>, Span, Error = ParseErrors<'i>> {
@@ -106,38 +104,37 @@ fn sum_row<'i, T>(
 // Returns a parser for a pattern.
 fn pattern<'a, 'i: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'i>, &'a Pattern<'a, 'i>, Error = ParseErrors<'i>> {
+) -> impl Clone + Parser<Token<'i>, &'a Pattern<'a, 'i, &'i str>, Error = ParseErrors<'i>> {
     recursive(|pattern| {
         choice((
-            product_row(arena, pattern.clone())
-                .map(|p| arena.alloc(Pattern::ProductRow(p)) as &Pattern),
-            sum_row(pattern.clone()).map(|s| arena.alloc(Pattern::SumRow(s)) as &Pattern),
-            ident().map(|v| arena.alloc(Pattern::Whole(v)) as &Pattern),
+            product_row(arena, pattern.clone()).map(|p| arena.alloc(Pattern::ProductRow(p)) as &_),
+            sum_row(pattern.clone()).map(|s| arena.alloc(Pattern::SumRow(s)) as &_),
+            ident().map(|v| arena.alloc(Pattern::Whole(v)) as &_),
         ))
     })
 }
 
-enum TermPrefix<'a, 'i> {
+enum TermPrefix<'a, 'i, N> {
     Binding {
-        var: SpanOf<&'i str>,
+        var: SpanOf<N>,
         eq: Span,
-        value: &'a Term<'a, 'i>,
+        value: &'a Term<'a, 'i, N>,
         semi: Span,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a, 'i>,
+        handler: &'a Term<'a, 'i, N>,
         do_: Span,
     },
     Abstraction {
         lbar: Span,
-        arg: SpanOf<&'i str>,
+        arg: SpanOf<N>,
         rbar: Span,
     },
 }
 
-impl<'a, 'i> TermPrefix<'a, 'i> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i>) -> &'a Term<'a, 'i> {
+impl<'a, 'i, N> TermPrefix<'a, 'i, N> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i, N>) -> &'a Term<'a, 'i, N> {
         match self {
             TermPrefix::Binding {
                 var,
@@ -167,10 +164,10 @@ impl<'a, 'i> TermPrefix<'a, 'i> {
     }
 }
 
-enum TermPostfix<'a, 'i> {
+enum TermPostfix<'a, 'i, N> {
     Application {
         lpar: Span,
-        arg: &'a Term<'a, 'i>,
+        arg: &'a Term<'a, 'i, N>,
         rpar: Span,
     },
     DotAccess {
@@ -179,8 +176,8 @@ enum TermPostfix<'a, 'i> {
     },
 }
 
-impl<'a, 'i> TermPostfix<'a, 'i> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i>) -> &'a Term<'a, 'i> {
+impl<'a, 'i, N> TermPostfix<'a, 'i, N> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i, N>) -> &'a Term<'a, 'i, N> {
         match self {
             TermPostfix::Application { lpar, arg, rpar } => arena.alloc(Term::Application {
                 func: t,
@@ -198,9 +195,9 @@ impl<'a, 'i> TermPostfix<'a, 'i> {
 }
 
 /// Returns a parser for terms.
-fn term<'a, 'i: 'a>(
+pub fn term<'a, 'i: 'a>(
     arena: &'a Bump,
-) -> impl Parser<Token<'i>, &'a Term<'a, 'i>, Error = ParseErrors<'i>> {
+) -> impl Parser<Token<'i>, &'a Term<'a, 'i, &'i str>, Error = ParseErrors<'i>> {
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -208,10 +205,9 @@ fn term<'a, 'i: 'a>(
             .then(lit(Token::RParen));
 
         // Product row
-        let prod =
-            product_row(arena, term.clone()).map(|p| arena.alloc(Term::ProductRow(p)) as &Term);
+        let prod = product_row(arena, term.clone()).map(|p| arena.alloc(Term::ProductRow(p)) as &_);
 
-        let sum = sum_row(term.clone()).map(|s| arena.alloc(Term::SumRow(s)) as &Term);
+        let sum = sum_row(term.clone()).map(|s| arena.alloc(Term::SumRow(s)) as &_);
 
         let match_ = lit(Token::KwMatch)
             .then(lit(Token::LAngle))
@@ -226,19 +222,19 @@ fn term<'a, 'i: 'a>(
                     langle,
                     cases,
                     rangle,
-                }) as &Term
+                }) as &_
             });
 
         let atom = choice((
             // variable
-            ident().map(|s| arena.alloc(Term::SymbolRef(s)) as &Term),
+            ident().map(|s| arena.alloc(Term::SymbolRef(s)) as &_),
             // explicit term precedence
             paren_term.clone().map(|((lpar, t), rpar)| {
                 arena.alloc(Term::Parenthesized {
                     lpar,
                     term: t,
                     rpar,
-                }) as &Term
+                }) as &_
             }),
             prod,
             sum,
@@ -300,7 +296,7 @@ fn term<'a, 'i: 'a>(
 /// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
 pub fn aiahr_parser<'a, 'i: 'a>(
     arena: &'a Bump,
-) -> impl Parser<Token<'i>, &'a [Item<'a, 'i>], Error = ParseErrors<'i>> {
+) -> impl Parser<Token<'i>, &'a [Item<'a, 'i, &'i str>], Error = ParseErrors<'i>> {
     let term = ident()
         .then(lit(Token::Equal))
         .then(term(arena))
@@ -308,7 +304,7 @@ pub fn aiahr_parser<'a, 'i: 'a>(
 
     choice((term,))
         .repeated()
-        .map(|items| arena.alloc_slice_fill_iter(items.into_iter()) as &[Item])
+        .map(|items| arena.alloc_slice_fill_iter(items.into_iter()) as &[_])
         .then_ignore(end())
 }
 
@@ -329,7 +325,7 @@ pub fn to_stream<'i, I: IntoIterator<Item = SpanOf<Token<'i>>>>(
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::cst::{CommaSep, Field, Item, Pattern, ProductRow, SumRow, Term};
+    use aiahr_core::cst::{Item, Term};
     use bumpalo::Bump;
     use chumsky::{prelude::end, Parser};
 
@@ -337,143 +333,7 @@ mod tests {
 
     use super::{aiahr_parser, term, to_stream};
 
-    // CST pattern macros. Used to construct patterns that ignore spans.
-    macro_rules! comma_sep {
-        ($first:pat, $($elems:pat),*) => {
-            CommaSep {
-                first: $first,
-                elems: &[$((.., $elems)),*],
-                ..
-            }
-        };
-    }
-    macro_rules! field {
-        ($label:pat, $target:pat) => {
-            Field {
-                label: $label,
-                target: $target,
-                ..
-            }
-        };
-    }
-    macro_rules! id_field {
-        ($label:pat, $target:pat) => {
-            field!(($label, ..), $target)
-        };
-    }
-    macro_rules! prod {
-        ($fields:pat) => {
-            ProductRow {
-                fields: $fields,
-                ..
-            }
-        };
-    }
-    macro_rules! sum {
-        ($field:pat) => {
-            SumRow { field: $field, .. }
-        };
-    }
-
-    macro_rules! pat_prod {
-        ($fields:pat) => {
-            &Pattern::ProductRow(prod!($fields))
-        };
-    }
-    macro_rules! pat_sum {
-        ($field:pat) => {
-            &Pattern::SumRow(sum!($field))
-        };
-    }
-    macro_rules! pat_var {
-        ($var:pat) => {
-            &Pattern::Whole(($var, ..))
-        };
-    }
-
-    macro_rules! term_local {
-        ($var:pat, $value:pat, $expr:pat) => {
-            &Term::Binding {
-                var: ($var, ..),
-                value: $value,
-                expr: $expr,
-                ..
-            }
-        };
-    }
-    macro_rules! term_with {
-        ($handler:pat, $expr:pat) => {
-            &Term::Handle {
-                handler: $handler,
-                expr: $expr,
-                ..
-            }
-        };
-    }
-    macro_rules! term_abs {
-        ($arg:pat, $body:pat) => {
-            &Term::Abstraction {
-                arg: ($arg, ..),
-                body: $body,
-                ..
-            }
-        };
-    }
-    macro_rules! term_app {
-        ($func:pat, $arg:pat) => {
-            &Term::Application {
-                func: $func,
-                arg: $arg,
-                ..
-            }
-        };
-    }
-    macro_rules! term_prod {
-        ($fields:pat) => {
-            &Term::ProductRow(prod!($fields))
-        };
-    }
-    macro_rules! term_sum {
-        ($field:pat) => {
-            &Term::SumRow(sum!($field))
-        };
-    }
-    macro_rules! term_dot {
-        ($base:pat, $field:pat) => {
-            &Term::DotAccess {
-                base: $base,
-                field: ($field, ..),
-                ..
-            }
-        };
-    }
-    macro_rules! term_match {
-        ($cases:pat) => {
-            &Term::Match { cases: $cases, .. }
-        };
-    }
-    macro_rules! term_sym {
-        ($var:pat) => {
-            &Term::SymbolRef(($var, ..))
-        };
-    }
-    macro_rules! term_paren {
-        ($term:pat) => {
-            &Term::Parenthesized { term: $term, .. }
-        };
-    }
-
-    macro_rules! item_term {
-        ($name:pat, $value:pat) => {
-            Item::Term {
-                name: ($name, ..),
-                value: $value,
-                ..
-            }
-        };
-    }
-
-    fn parse_term_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a Term<'a, 'i> {
+    fn parse_term_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a Term<'a, 'i, &'i str> {
         let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
         term(arena)
             .then_ignore(end())
@@ -481,7 +341,10 @@ mod tests {
             .unwrap()
     }
 
-    fn parse_file_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a [Item<'a, 'i>] {
+    fn parse_file_unwrap<'a, 'i: 'a>(
+        arena: &'a Bump,
+        input: &'i str,
+    ) -> &'a [Item<'a, 'i, &'i str>] {
         let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
         aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
@@ -572,11 +435,11 @@ mod tests {
                 term_prod!(Some(comma_sep!(id_field!(
                     "x",
                     term_abs!("t", term_sym!("t"))
-                ),))),
+                )))),
                 term_prod!(Some(comma_sep!(id_field!(
                     "y",
                     term_abs!("t", term_sym!("u"))
-                ),)))
+                ))))
             )
         );
     }
@@ -617,7 +480,7 @@ mod tests {
             parse_term_unwrap(&Bump::new(), "match < {x = a} => a, <y = b> => b, c => c >"),
             term_match!(comma_sep!(
                 field!(
-                    pat_prod!(Some(comma_sep!(id_field!("x", pat_var!("a")),))),
+                    pat_prod!(Some(comma_sep!(id_field!("x", pat_var!("a"))))),
                     term_sym!("a")
                 ),
                 field!(pat_sum!(id_field!("y", pat_var!("b"))), term_sym!("b")),
