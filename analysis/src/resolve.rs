@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::names::Names;
 use aiahr_core::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
@@ -21,24 +19,6 @@ where
 {
     iter.collect::<Option<Vec<T>>>()
         .map(|v| arena.alloc_slice_fill_iter(v.into_iter()) as &[T])
-}
-
-// Maps the given function over the elements of `comma_sep`.
-fn always_resolve_comma_sep<'a, A, B, F>(
-    arena: &'a Bump,
-    comma_sep: &CommaSep<'_, A>,
-    f: F,
-) -> CommaSep<'a, B>
-where
-    F: FnMut(&A) -> B,
-{
-    let mut f = f;
-    CommaSep {
-        first: f(&comma_sep.first),
-        elems: arena.alloc_slice_fill_iter(comma_sep.elems.iter().map(|(c, elem)| (*c, f(elem))))
-            as &[_],
-        comma: comma_sep.comma,
-    }
 }
 
 // Tries to map the given function over the elements of `comma_sep`, returning all errors.
@@ -63,18 +43,6 @@ where
     })
 }
 
-// Maps the given function over the target.
-fn always_resolve_id_field<'i, A, B, F>(field: &IdField<'i, A>, f: F) -> IdField<'i, B>
-where
-    F: FnOnce(&A) -> B,
-{
-    IdField {
-        label: field.label,
-        sep: field.sep,
-        target: f(&field.target),
-    }
-}
-
 // Tries to map the given function over the target.
 fn resolve_id_field<'i, A, B, F>(field: &IdField<'i, A>, f: F) -> Option<IdField<'i, B>>
 where
@@ -85,27 +53,6 @@ where
         sep: field.sep,
         target: f(&field.target)?,
     })
-}
-
-// Maps the given function over the targets of `prod`.
-fn always_resolve_product_row<'a, 'i, A, B, F>(
-    arena: &'a Bump,
-    prod: &ProductRow<'_, 'i, A>,
-    f: F,
-) -> ProductRow<'a, 'i, B>
-where
-    F: FnMut(&A) -> B,
-{
-    let mut f = f;
-    ProductRow {
-        lbrace: prod.lbrace,
-        fields: prod.fields.as_ref().map(|fields| {
-            always_resolve_comma_sep(arena, &fields, |field| {
-                always_resolve_id_field(field, &mut f)
-            })
-        }),
-        rbrace: prod.rbrace,
-    }
 }
 
 // Tries to map the given function over the targets of `prod`.
@@ -132,18 +79,6 @@ where
     })
 }
 
-// Maps the given function over the target of `sum`.
-fn always_resolve_sum_row<'i, A, B, F>(sum: &SumRow<'i, A>, f: F) -> SumRow<'i, B>
-where
-    F: FnOnce(&A) -> B,
-{
-    SumRow {
-        langle: sum.langle,
-        field: always_resolve_id_field(&sum.field, f),
-        rangle: sum.rangle,
-    }
-}
-
 // Tries to map the given function over the target of `sum`.
 fn resolve_sum_row<'i, A, B, F>(sum: &SumRow<'i, A>, f: F) -> Option<SumRow<'i, B>>
 where
@@ -156,43 +91,22 @@ where
     })
 }
 
-// Resolves the given pattern, accumulating bindings into `vars`.
-fn always_resolve_pattern_accumulate<'a, 'i>(
+// Resolves the given pattern, accumulating bindings into `names`.
+pub fn resolve_pattern<'a, 'i, 'n, E: Errors<NameResolutionError<'i>>>(
     arena: &'a Bump,
+    names: &'n mut Names<'_, 'i>,
     pattern: &Pattern<'_, 'i, &'i str>,
-    vars: &mut HashSet<&'i str>,
-) -> &'a Pattern<'a, 'i, Handle<'i, str>> {
-    arena.alloc(match pattern {
-        Pattern::ProductRow(pr) => {
-            Pattern::ProductRow(always_resolve_product_row(arena, pr, |target| {
-                always_resolve_pattern_accumulate(arena, target, vars)
-            }))
-        }
-        Pattern::SumRow(sr) => Pattern::SumRow(always_resolve_sum_row(sr, |target| {
-            always_resolve_pattern_accumulate(arena, target, vars)
-        })),
-        // Repeats of the same variable in patterns are allowed; they indicate elements that
-        // be the same or bindings that occur in all branches.
-        Pattern::Whole(var) => Pattern::Whole(if vars.contains(var.0) {
-            var.span_map(|(v, ..)| Handle(*vars.get(v).unwrap()))
-        } else {
-            vars.insert(var.0);
-            handle(*var)
-        }),
-    })
-}
-
-// Resolves the given pattern, returning a new `Names` with the pattern bindings in scope.
-pub fn always_resolve_pattern<'a, 'i, 'n>(
-    arena: &'a Bump,
-    names: &'n Names<'_, 'i>,
-    pattern: &Pattern<'_, 'i, &'i str>,
-) -> (&'a Pattern<'a, 'i, Handle<'i, str>>, Names<'n, 'i>) {
-    let mut vars = HashSet::new();
-    (
-        always_resolve_pattern_accumulate(arena, pattern, &mut vars),
-        names.subscope_set(vars),
-    )
+    errors: &mut E,
+) -> Option<&'a Pattern<'a, 'i, Handle<'i, str>>> {
+    Some(arena.alloc(match pattern {
+        Pattern::ProductRow(pr) => Pattern::ProductRow(resolve_product_row(arena, pr, |target| {
+            resolve_pattern(arena, names, target, errors)
+        })?),
+        Pattern::SumRow(sr) => Pattern::SumRow(resolve_sum_row(sr, |target| {
+            resolve_pattern(arena, names, target, errors)
+        })?),
+        Pattern::Whole(var) => names.insert(*var, errors).map(Pattern::Whole)?,
+    }))
 }
 
 /// Resolves the given term, reporting errors to `errors`.
@@ -211,7 +125,7 @@ pub fn resolve_term<'a, 'i, E: Errors<NameResolutionError<'i>>>(
             expr,
         } => {
             let value = resolve_term(arena, names, value, errors);
-            let expr = resolve_term(arena, &names.subscope(var.0), expr, errors);
+            let expr = resolve_term(arena, &names.subscope_with_one(*var), expr, errors);
             Term::Binding {
                 var: handle(*var),
                 eq: *eq,
@@ -244,7 +158,7 @@ pub fn resolve_term<'a, 'i, E: Errors<NameResolutionError<'i>>>(
             lbar: *lbar,
             arg: handle(*arg),
             rbar: *rbar,
-            body: resolve_term(arena, &names.subscope(arg.0), body, errors)?,
+            body: resolve_term(arena, &names.subscope_with_one(*arg), body, errors)?,
         },
         Term::Application {
             func,
@@ -281,11 +195,13 @@ pub fn resolve_term<'a, 'i, E: Errors<NameResolutionError<'i>>>(
             match_: *match_,
             langle: *langle,
             cases: resolve_comma_sep(arena, cases, |field| {
-                let (pattern, names) = always_resolve_pattern(arena, names, field.label);
+                let mut scope = names.subscope();
+                let pattern = resolve_pattern(arena, &mut scope, field.label, errors);
+                let target = resolve_term(arena, &scope, field.target, errors);
                 Some(Field {
-                    label: pattern,
+                    label: pattern?,
                     sep: field.sep,
-                    target: resolve_term(arena, &names, field.target, errors)?,
+                    target: target?,
                 })
             })?,
             rangle: *rangle,
@@ -326,7 +242,7 @@ where
 {
     // Collect top-level names first so they can reference each other in `letrec` fashion. We'll do
     // recursion checking later.
-    let (names, ..) = Names::new(
+    let (names, ..) = Names::with_top_level(
         items.iter().map(|item| match item {
             Item::Term { name, .. } => *name,
         }),
@@ -404,7 +320,7 @@ mod tests {
         let mut errors = Vec::new();
         let resolved = resolve_term(
             arena,
-            &Names::new(iter::empty(), &mut errors).0,
+            &Names::with_top_level(iter::empty(), &mut errors).0,
             unresolved,
             &mut errors,
         );
@@ -655,25 +571,6 @@ mod tests {
     }
 
     #[test]
-    fn test_match_eq_bindings() {
-        assert_matches!(
-            parse_resolve_term(&Bump::new(), "match <{a = x, b = x} => x(x)>"),
-            Ok(term_match!(comma_sep!(field!(
-                pat_prod!(Some(comma_sep!(
-                    id_field!("a", pat_var!(x)),
-                    id_field!("b", pat_var!(x_re))
-                ))),
-                term_app!(term_sym!(x1), term_sym!(x2))
-            )))) => {
-                assert_eq!(x.0, "x");
-                assert_eq!(x_re, x);
-                assert_eq!(x1, x);
-                assert_eq!(x2, x);
-            }
-        );
-    }
-
-    #[test]
     fn test_match_errors() {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "match <{a = x} => f(x), {} => z>").unwrap_err()[..],
@@ -682,6 +579,15 @@ mod tests {
                 NameResolutionError::NotFound(("z", ..))
             ]
         );
+        assert_matches!(
+            parse_resolve_term(&Bump::new(), "match <{a = x, b = x} => x(x)>").unwrap_err()[..],
+            [NameResolutionError::Duplicate {
+                original: ("x", s),
+                duplicate: ("x", t)
+            }] => {
+                assert!(s.end.byte < t.start.byte);
+            }
+        )
     }
 
     #[test]
