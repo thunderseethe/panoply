@@ -8,7 +8,6 @@ module Core where
 import Data.Map.Strict ((!?))
 import qualified Data.Map.Strict as Map
 
-import Constraint
 import Control.Lens
 import Data.Maybe (fromMaybe)
 import qualified Data.Set as Set

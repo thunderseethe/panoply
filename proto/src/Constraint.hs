@@ -123,3 +123,9 @@ simple = traverse . constraintQs
 
 impl :: Traversable f => Traversal' (f Constraint) Implication
 impl = traverse . constraintImpls
+
+data Scheme = Scheme [TVar] [Q] Type
+  deriving (Show, Eq, Ord)
+
+monoScheme :: Type -> Scheme
+monoScheme = Scheme [] []

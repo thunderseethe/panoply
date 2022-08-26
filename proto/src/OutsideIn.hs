@@ -61,28 +61,9 @@ import Subst
 import qualified TVarSet
 import Term
 import Type
-
-data Eff = Eff {name :: Label, ops :: Map Label Scheme}
-
-type EffSigs = Map Label (Map Label Scheme)
-type SigsEff = Map Label (Eff, Scheme)
-
-data EffCtx = EffCtx {effs :: EffSigs, sigs :: SigsEff}
-
-emptyEffCtx :: EffCtx
-emptyEffCtx = EffCtx Map.empty Map.empty
-
-mkEffCtx :: (Foldable f) => f Eff -> EffCtx
-mkEffCtx = foldr go (EffCtx Map.empty Map.empty)
- where
-  go eff@(Eff name ops) (EffCtx effs sigs) =
-    EffCtx (Map.insert name ops effs) (Map.foldrWithKey (\op sig sigs -> Map.insert op (eff, sig) sigs) sigs ops)
-
-data Scheme = Scheme [TVar] [Q] Type
-  deriving (Show, Eq, Ord)
-
-monoScheme :: Type -> Scheme
-monoScheme = Scheme [] []
+import Program
+import Control.Effect.State (get)
+import Control.Effect.State (put)
 
 data Wrapper
   = TyApp Wrapper Core.CoreType
@@ -157,6 +138,7 @@ emptyCtx = Map.empty
 
 askCtx :: Has (Reader Ctx) sig m => m Ctx
 askCtx = ask
+
 
 generateConstraints ::
   ( Has (Reader Ctx) sig m
@@ -651,12 +633,11 @@ instance Lookup PredMap TVar (Set Ct) where
 toList :: PredMap -> [(TVar, Set Ct)]
 toList = Map.toList . unPM
 
-solveSimplConstraints :: (Has (Fresh TVar) sig m, Has (Throw TyErr) sig m) => [TVar] -> [Q] -> [Q] -> m (Subst, PredMap, [Q])
+solveSimplConstraints :: (Has (Fresh TVar) sig m, Has (Throw TyErr) sig m) => [TVar] -> [Q] -> [Q] -> m (Subst, [Q])
 solveSimplConstraints ctx_unifiers given wanted = do
   (_, flatten_subst, _, (wanted_canon, residue)) <- simples ctx_unifiers given wanted
   let q_wanted = flatten_q flatten_subst <$> wanted_canon
   let q_residue = over typeOf (apply flatten_subst) residue
-  let pred_map = PM $ foldr (\(Ct tv ct) -> Map.alter (Just . maybe (Set.singleton ct) (Set.insert ct)) tv) Map.empty q_wanted
   -- tie the knot
   let theta =
         let q_to_pairs subst q =
@@ -664,43 +645,42 @@ solveSimplConstraints ctx_unifiers given wanted = do
                 Ct tv (T ty) -> [(tv, apply subst ty)]
                 Ct _ (_ :⊙ _) -> []
          in Subst . LazyMap.fromList . mconcat $ q_to_pairs theta <$> q_wanted
-  return (theta, pred_map, over typeOf (apply theta) q_residue)
+  return (theta, over typeOf (apply theta) q_residue)
  where
   flatten_q subst q =
     case q of
       Ct tv (T ty) -> Ct tv (T (apply subst ty))
       Ct tv (left :⊙ right) -> Ct tv (apply subst left :⊙ apply subst right)
 
-solveConstraints :: (Has (Reader [Q]) sig m, Has (Throw TyErr) sig m, Has (Fresh TVar) sig m) => [TVar] -> [Q] -> [Constraint] -> m (Subst, PredMap, [Q])
+solveConstraints :: (Has (Reader [Q]) sig m, Has (Throw TyErr) sig m, Has (Fresh TVar) sig m) => [TVar] -> [Q] -> [Constraint] -> m (Subst, [Q])
 solveConstraints unifiers given constrs = do
-  (subst, pred_map, residue) <- solveSimplConstraints unifiers given simpls
-  (impl_substs, impl_pred_map) <-
-    unzip
-      <$> forM
+  (subst, residue) <- solveSimplConstraints unifiers given simpls
+  impl_substs <-
+    forM
         impls
         ( \(Imp exists prop impl) -> do
-            (subst, pred_map, residue) <- solveConstraints (unifiers <> exists) (given <> residue <> prop) impl
+            (subst, residue) <- solveConstraints (unifiers <> exists) (given <> residue <> prop) impl
             if not (null residue)
               then error "Expected empty residue for implication constraint"
-              else return (subst, pred_map)
+              else return subst
         )
   _ <- trace (ppShowList residue) $ return ()
-  return (foldr (<>) subst impl_substs, foldr (<>) pred_map impl_pred_map, residue)
+  return (foldr (<>) subst impl_substs, residue)
  where
   (simpls, impls) = partitionEithers (view constraintEither <$> constrs)
 
 {- We assume during type checking that all effect rows are open.
   Once we complete type checking we know any remaining open rows
-  are empty so we walk the term effects and close everything. -}
+  are empty so we walk the term effects and close everything. 
 closeEffects :: PredMap -> Term Infer -> Term Infer
 closeEffects tv_cts = fmap (\infer -> (infer & eff %~ clampItShut) & ty %~ clampFns)
  where
   clampFns = transform (over typeEffs clampItShut)
 
   clampItShut (Closed eff) = Closed eff
-  clampItShut (Open eff) = Closed . foldMap f $ fromMaybe Set.empty (tv_cts !? eff)
+  clampItShut (Open eff) = Closed . foldMap containsRow $ fromMaybe Set.empty (tv_cts !? eff)
    where
-    f ct =
+    containsRow ct =
       case ct of
         -- These are cases where we can solve a row
         (T (RowTy row)) -> row
@@ -709,7 +689,8 @@ closeEffects tv_cts = fmap (\infer -> (infer & eff %~ clampItShut) & ty %~ clamp
         -- Sanity check
         (Closed _ :⊙ Closed _) -> error "This should be impossible"
         -- For anything else treat it as the empty row at this stage
-        _ -> Map.empty
+        _ -> Map.empty 
+-}
 
 {- Applied to  top level terms after constraint solving to generalize open types into closed schemes.
   Zonking is the process of replacing each type variable by the type it was sovled to if available. -}
@@ -722,8 +703,8 @@ zonkOrGeneralizeTrying solved ty = Scheme bound qs ty
 
   openTyVars = toListOf (cosmos . typeVars)
 
-zonk :: Subst -> PredMap -> Core.Core -> Core.Core
-zonk subst (PM _) =
+zonk :: Subst -> Core.Core -> Core.Core
+zonk subst =
   transform (over (Core.coreVars . Core.coreVarTy) (apply subst))
 
 wrap :: Scheme -> Core.Core -> Core.Core
@@ -750,11 +731,13 @@ defaultEffCtx =
     , Eff "RowEff" (Map.fromList [("add_field", Scheme [TV 0, TV 1, TV 2] [VarTy 0 ~> Closed ("x" |> IntTy) :⊙ Open 1, VarTy 2 ~> Closed ("y" |> IntTy) :⊙ Open 1] (FunTy (VarTy 0) (Closed $ "RowEff" |> unitTy) (VarTy 2)))])
     ]
 
+{-
 prunePred :: Type -> PredMap -> PredMap
 prunePred ty = predMapFromList . filter (\(tv, ct) -> TVarSet.member tv bound || isRelevant ct) . predMapToList
  where
   isRelevant = any (`TVarSet.member` bound) . toListOf ctTVars
   bound = TVarSet.fromList $ toListOf (cosmos . typeVars) ty
+-}
 
 generateEvidenceForSolved :: Map Var Q -> (Map Var Core.Core, [Q])
 generateEvidenceForSolved = Map.foldrWithKey f (Map.empty, [])
@@ -769,30 +752,49 @@ generateEvidenceForSolved = Map.foldrWithKey f (Map.empty, [])
       -- Anything else we can't solve and needs to be lifted as an evidence param
       _ -> _2 %~ (q :)
 
-infer :: Term () -> (Term Infer, Core.Core, Scheme)
-infer term =
+inferTerm :: (Has (Reader Ctx) sig m, Has (Reader EffCtx) sig m) => Term () -> m (Term Infer, Core.Core, Scheme)
+inferTerm term = do
+  (_, (tvar, (raw_ev_map, (typed_term, core_term, constrs)))) <- runFresh (maxVar + 1) $ runFresh (TV 0) $ runState empty_ev_map $ generateConstraints term
+  res <- runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
+  let generalizeAndLiftEv subst =
+        let term = {-closeEffects pred_map $-} apply subst typed_term
+            (ev_map, residual_ev) = generateEvidenceForSolved (apply subst raw_ev_map)
+            term_ty = apply subst (term ^. meta . ty)
+            scheme = Scheme (nub $ toListOf (cosmos . typeVars) term_ty) residual_ev term_ty
+         in trace ("Typed Term:\n" ++ ppShow typed_term ++ "\nSubst:\n" ++ ppShow subst ++ "\n")
+                  (term, zonk subst $ wrap scheme $ liftEv (Core.varSubst ev_map core_term), scheme)
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
-    Right (_, (subst, unpruned_pred_map, [])) ->
-      let term = closeEffects pred_map $ apply subst typed_term
-          pred_map = prunePred (term ^. meta . ty) unpruned_pred_map
-          (ev_map, residual_ev) = generateEvidenceForSolved (apply subst raw_ev_map)
-          term_ty = apply subst (term ^. meta . ty)
-          scheme = Scheme (nub $ toListOf (cosmos . typeVars) term_ty) residual_ev term_ty
-       in trace ("Pred Map:\n" ++ ppShowList (toList pred_map) ++ "\nTyped Term:\n" ++ ppShow typed_term ++ "\nSubst:\n" ++ ppShow subst ++ "\n")
-                (term, zonk subst pred_map $ wrap scheme $ liftEv (Core.varSubst ev_map core_term), scheme)
-    Right (_, (subst, _, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow typed_term)
+    Right (_, (subst, [])) -> return $ generalizeAndLiftEv subst
+    Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ show qs ++ "\nSubst: " ++ show subst ++ "\nType: " ++ ppShow typed_term)
  where
-  (_, (tvar, (raw_ev_map, (typed_term, core_term, constrs)))) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ runFresh (maxVar + 1) $ runFresh (TV 0) $ runState empty_ev_map $ generateConstraints term
   empty_ev_map = Map.empty :: Map Var Q
   maxVar = maxTermVar term
-  res = runIdentity . runReader ([] :: [Q]) . runThrow . runFresh tvar $ solveConstraints [] [] constrs
 
-prettyInfer :: Term () -> IO ()
-prettyInfer term = putStrLn $ ppShow inferTerm ++ "\n\n" ++ unpack (prettyRender core) ++ "\n\n" ++ ppShow scheme ++ "\n"
+infer :: Prog () -> (Prog Infer, [Core.Core], [Scheme])
+infer (Prog defs effs) = snd . runIdentity . runReader defaultEffCtx . runState emptyCtx $ inferDefs effs defs
+
+inferDefs :: (Has (State Ctx) sig m, Has (Reader EffCtx) sig m) => [Eff] -> [Def ()] -> m (Prog Infer, [Core.Core], [Scheme])
+inferDefs es [] = return (Prog [] es, [], [])
+inferDefs es (Def name term : tail) = do
+      ctx :: Ctx <- get
+      eff_ctx :: EffCtx <- ask
+      let (infer_term, core, scheme) = runIdentity $ runReader eff_ctx $ runReader ctx $ inferTerm term
+      modify (bind name (infer_term ^. meta . ty))
+      (prog, cores, schemes) <- inferDefs es tail
+      return (addDef (Def name infer_term) prog, core : cores, scheme : schemes)
+
+prettyInferTerm :: Term () -> IO ()
+prettyInferTerm term = putStrLn $ ppShow infer ++ "\n\n" ++ unpack (prettyRender core) ++ "\n\n" ++ ppShow scheme ++ "\n"
  where
-  (inferTerm, core, scheme) = infer term
+  (infer, core, scheme) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ inferTerm term
   prettyRender = renderStrict . layoutSmart defaultLayoutOptions . pretty
+
+prettyInfer :: Prog () -> IO ()
+prettyInfer prog = putStrLn $ ppShowList defs ++ "\n\n" ++ unpack (prettyRender cores) ++ "\n\n" ++ ppShowList schemes ++ "\n"
+  where
+    (Prog defs _, cores, schemes) = infer prog
+    prettyRender = renderStrict . layoutSmart defaultLayoutOptions . pretty
 
 example :: Term ()
 example = abs [x, y, z] $ var x <@> var z <@> (var y <@> var z)
@@ -865,6 +867,15 @@ exampleApWand = abs [m, n] (unlabel (prj L $ record [var m, var n]) "x") <@> rec
  where
   m = V 0
   n = V 1
+
+exampleProgWand :: Prog ()
+exampleProgWand = 
+  Prog {
+    terms= [wand, ap], 
+    effects=[] }
+  where
+    wand = Def (V (-1)) exampleWand 
+    ap = Def (V (-2)) (var (-1) <@> record [label "w" (int 1), label "z" (int 2)])
 
 -- This one should fail and it does!
 exampleHandleErr :: Term ()
