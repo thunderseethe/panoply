@@ -1,5 +1,6 @@
 pub mod cst;
-pub mod error;
+pub mod diagnostic;
+mod display_iter;
 pub mod handle;
 pub mod loc;
 pub mod span;

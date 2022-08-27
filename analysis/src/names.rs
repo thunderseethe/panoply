@@ -5,7 +5,7 @@ use std::{
 };
 
 use aiahr_core::{
-    error::{Errors, NameResolutionError},
+    diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     handle::Handle,
     span::{Span, SpanOf},
 };
@@ -15,12 +15,12 @@ use aiahr_core::{
 fn iter_layer<'i, I, E>(names: I, errors: &mut E) -> (HashMap<&'i str, Span>, bool)
 where
     I: IntoIterator<Item = SpanOf<&'i str>>,
-    E: Errors<NameResolutionError<'i>>,
+    E: DiagnosticSink<NameResolutionError<'i>>,
 {
     let mut layer = HashMap::new();
     let ok = names.into_iter().all(|name| {
         if let Some((&n, &s)) = layer.get_key_value(name.0) {
-            errors.push(NameResolutionError::Duplicate {
+            errors.add(NameResolutionError::Duplicate {
                 original: (n, s),
                 duplicate: name,
             });
@@ -46,7 +46,7 @@ impl<'n, 'i> Names<'n, 'i> {
     pub fn with_top_level<I, E>(top_level: I, errors: &mut E) -> (Names<'n, 'i>, bool)
     where
         I: IntoIterator<Item = SpanOf<&'i str>>,
-        E: Errors<NameResolutionError<'i>>,
+        E: DiagnosticSink<NameResolutionError<'i>>,
     {
         let (locals, ok) = iter_layer(top_level, errors);
         (
@@ -85,7 +85,7 @@ impl<'n, 'i> Names<'n, 'i> {
     }
 
     /// Gets the handle for the given name, or reports an error to `errors`.
-    pub fn get<E: Errors<NameResolutionError<'i>>>(
+    pub fn get<E: DiagnosticSink<NameResolutionError<'i>>>(
         &self,
         name: SpanOf<&'i str>,
         errors: &mut E,
@@ -95,21 +95,21 @@ impl<'n, 'i> Names<'n, 'i> {
             .find_map(|layer| layer.get_key_value(name.0))
             .map(|(&orig, &s)| (Handle(orig), s));
         if let None = out {
-            errors.push(NameResolutionError::NotFound(name));
+            errors.add(NameResolutionError::NotFound(name));
         }
         out
     }
 
     /// Inserts the new element into the frontmost layer, or reports a `Duplicate` error. Returns
     /// a handle to the new name if successful.
-    pub fn insert<E: Errors<NameResolutionError<'i>>>(
+    pub fn insert<E: DiagnosticSink<NameResolutionError<'i>>>(
         &mut self,
         name: SpanOf<&'i str>,
         errors: &mut E,
     ) -> Option<SpanOf<Handle<'i, str>>> {
         let (n, s) = name;
         if let Some((&orig, &t)) = self.locals.get_key_value(n) {
-            errors.push(NameResolutionError::Duplicate {
+            errors.add(NameResolutionError::Duplicate {
                 original: (orig, t),
                 duplicate: name,
             });

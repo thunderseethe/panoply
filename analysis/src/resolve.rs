@@ -1,7 +1,7 @@
 use crate::names::Names;
 use aiahr_core::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
-    error::{Errors, NameResolutionError},
+    diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     handle::Handle,
     span::{SpanOf, Spanned},
 };
@@ -92,7 +92,7 @@ where
 }
 
 // Resolves the given pattern, accumulating bindings into `names`.
-pub fn resolve_pattern<'a, 'i, 'n, E: Errors<NameResolutionError<'i>>>(
+pub fn resolve_pattern<'a, 'i, 'n, E: DiagnosticSink<NameResolutionError<'i>>>(
     arena: &'a Bump,
     names: &'n mut Names<'_, 'i>,
     pattern: &Pattern<'_, 'i, &'i str>,
@@ -110,7 +110,7 @@ pub fn resolve_pattern<'a, 'i, 'n, E: Errors<NameResolutionError<'i>>>(
 }
 
 /// Resolves the given term, reporting errors to `errors`.
-pub fn resolve_term<'a, 'i, E: Errors<NameResolutionError<'i>>>(
+pub fn resolve_term<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
     arena: &'a Bump,
     names: &Names<'_, 'i>,
     term: &Term<'_, 'i, &'i str>,
@@ -216,7 +216,7 @@ pub fn resolve_term<'a, 'i, E: Errors<NameResolutionError<'i>>>(
 }
 
 /// Resolves the given item, reporting errors to `errors`.
-pub fn resolve_item<'a, 'i, E: Errors<NameResolutionError<'i>>>(
+pub fn resolve_item<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
     arena: &'a Bump,
     names: &Names<'_, 'i>,
     item: &Item<'_, 'i, &'i str>,
@@ -238,7 +238,7 @@ pub fn resolve_module<'a, 'i, E>(
     errors: &mut E,
 ) -> ResolvedModule<'a, 'i>
 where
-    E: Errors<NameResolutionError<'i>>,
+    E: DiagnosticSink<NameResolutionError<'i>>,
 {
     // Collect top-level names first so they can reference each other in `letrec` fashion. We'll do
     // recursion checking later.
@@ -293,7 +293,7 @@ mod tests {
     use aiahr_core::{
         comma_sep,
         cst::{Item, Term},
-        error::NameResolutionError,
+        diagnostic::nameres::NameResolutionError,
         field,
         handle::Handle,
         id_field, item_term, pat_prod, pat_var, term_abs, term_app, term_dot, term_local,

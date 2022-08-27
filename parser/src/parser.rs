@@ -1,6 +1,6 @@
 use aiahr_core::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
-    error::ParseErrors,
+    diagnostic::parser::ParseErrors,
     loc::Loc,
     span::{Span, SpanOf},
     token::Token,
