@@ -10,7 +10,7 @@ use aiahr_core::{
     span::{Span, SpanOf},
 };
 
-// Returns a new layer from `names`. If `names` contains duplicates, then errors are reported to
+// Constructs a new layer from `names`. If `names` contains duplicates, then errors are reported to
 // `errors` and `false` is returned in the second value.
 fn iter_layer<'i, I, E>(names: I, errors: &mut E) -> (HashMap<&'i str, Span>, bool)
 where
@@ -49,13 +49,7 @@ impl<'n, 'i> Names<'n, 'i> {
         E: DiagnosticSink<NameResolutionError<'i>>,
     {
         let (locals, ok) = iter_layer(top_level, errors);
-        (
-            Names {
-                locals: locals,
-                next: None,
-            },
-            ok,
-        )
+        (Names { locals, next: None }, ok)
     }
 
     /// Returns a new subscope of `self`. Names added to the returned object will shadow those in
