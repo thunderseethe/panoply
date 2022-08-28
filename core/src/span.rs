@@ -12,6 +12,14 @@ pub struct Span {
 pub type SpanOf<T> = (T, Span);
 
 impl Span {
+    /// Returns a span consisting of a single character at the given location.
+    pub fn char(loc: Loc) -> Span {
+        Span {
+            start: loc,
+            end: loc.next(),
+        }
+    }
+
     /// Returns `self` but with the given value.
     pub fn of<T>(&self, val: T) -> SpanOf<T> {
         (val, *self)

@@ -1,6 +1,7 @@
 use std::cmp::Reverse;
 
 use aiahr_core::{
+    diagnostic::lexer::LexError,
     loc::{Loc, Locator},
     span::{Span, SpanOf},
     token::Token,
@@ -18,12 +19,6 @@ type TokenFactory = Box<dyn Fn(Captures) -> Token>;
 pub struct Lexer {
     union: RegexSet, // The set of all regexes in `tokens`.
     tokens: Vec<(Regex, Option<TokenFactory>)>,
-}
-
-/// Indicates that the text at the given location could not be parsed as a token.
-#[derive(Debug)]
-pub struct NotATokenError {
-    pub loc: Loc,
 }
 
 impl Lexer {
@@ -44,7 +39,7 @@ impl Lexer {
     }
 
     /// Splits `text` into a sequence of tokens.
-    pub fn lex<'i>(&self, text: &'i str) -> Result<(Vec<SpanOf<Token<'i>>>, Loc), NotATokenError> {
+    pub fn lex<'i>(&self, text: &'i str) -> Result<(Vec<SpanOf<Token<'i>>>, Loc), LexError> {
         let locator = Locator::new(text);
         let mut end_of_input = Loc::default();
         let mut idx = 0;
@@ -75,17 +70,10 @@ impl Lexer {
                 }
                 idx += len
             } else {
-                return Err(NotATokenError {
-                    loc: locator.locate(idx),
-                });
+                return Err(LexError::NotAToken(locator.locate(idx)));
             }
         }
-
-        // End of input is 1 byte past whereever our final token is
-        end_of_input.byte += 1;
-        end_of_input.col += 1;
-
-        Ok((tokens, end_of_input))
+        Ok((tokens, end_of_input.next()))
     }
 }
 

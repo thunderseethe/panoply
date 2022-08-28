@@ -7,6 +7,7 @@ pub struct Loc {
     pub line: usize,
     pub col: usize,
 }
+
 impl Loc {
     // The next location after this one, on the same line
     pub fn next(self) -> Self {
