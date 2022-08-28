@@ -30,11 +30,11 @@ impl<'i> Diagnostic for NameResolutionError<'i> {
         match self {
             NameResolutionError::Duplicate { duplicate, .. } => Citation {
                 span: duplicate.span(),
-                message: format!("Duplicate definition of symbol '{}'", duplicate.0),
+                message: format!("Duplicate definition of symbol '{}'", duplicate.value),
             },
             NameResolutionError::NotFound(name) => Citation {
                 span: name.span(),
-                message: format!("Unknown symbol '{}'", name.0),
+                message: format!("Unknown symbol '{}'", name.value),
             },
         }
     }

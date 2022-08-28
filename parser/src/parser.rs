@@ -2,7 +2,7 @@ use aiahr_core::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
     diagnostic::parser::ParseErrors,
     loc::Loc,
-    span::{Span, SpanOf},
+    span::{Span, SpanOf, Spanned},
     token::Token,
 };
 use bumpalo::Bump;
@@ -24,7 +24,7 @@ fn ident<'i>() -> impl Clone + Parser<Token<'i>, SpanOf<&'i str>, Error = ParseE
     select! {
         Token::Identifier(id) => id,
     }
-    .map_with_span(|s, span| (s, span))
+    .map_with_span(|s, span: Span| span.of(s))
 }
 
 // Returns a parser for either `parser` or the empty string.
@@ -309,17 +309,21 @@ pub fn aiahr_parser<'a, 'i: 'a>(
 }
 
 /// Converts lexer output to a stream readable by a Chumsky parser.
-pub fn to_stream<'i, I: IntoIterator<Item = SpanOf<Token<'i>>>>(
+pub fn to_stream<'i, I>(
     tokens: I,
     end_of_input: Loc,
-) -> Stream<'i, Token<'i>, Span, I::IntoIter> {
+) -> Stream<'i, Token<'i>, Span, Box<dyn Iterator<Item = (Token<'i>, Span)> + 'i>>
+where
+    I: IntoIterator<Item = SpanOf<Token<'i>>>,
+    I::IntoIter: 'i,
+{
     // TODO: figure out what the `eoi` parameter is actually used for.
     Stream::from_iter(
         Span {
             start: end_of_input,
             end: end_of_input.next(),
         },
-        tokens.into_iter(),
+        Box::new(tokens.into_iter().map(|token| (token.value, token.span()))),
     )
 }
 

@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use aiahr_core::{
     diagnostic::lexer::LexError,
     loc::{Loc, Locator},
-    span::{Span, SpanOf},
+    span::SpanOf,
     token::Token,
 };
 use regex::{Captures, Regex, RegexSet};
@@ -59,13 +59,11 @@ impl Lexer {
                 let len = caps[0].len();
                 if let Some(f) = f {
                     let end = locator.locate(idx + len);
-                    tokens.push((
-                        f(caps),
-                        Span {
-                            start: locator.locate(idx),
-                            end,
-                        },
-                    ));
+                    tokens.push(SpanOf {
+                        start: locator.locate(idx),
+                        value: f(caps),
+                        end,
+                    });
                     end_of_input = end;
                 }
                 idx += len

@@ -7,7 +7,7 @@ use std::{
 use aiahr_core::{
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     handle::Handle,
-    span::{Span, SpanOf},
+    span::{Span, SpanOf, Spanned},
 };
 
 // Constructs a new layer from `names`. If `names` contains duplicates, then errors are reported to
@@ -17,16 +17,16 @@ where
     I: IntoIterator<Item = SpanOf<&'i str>>,
     E: DiagnosticSink<NameResolutionError<'i>>,
 {
-    let mut layer = HashMap::new();
+    let mut layer = HashMap::<_, Span>::new();
     let ok = names.into_iter().all(|name| {
-        if let Some((&n, &s)) = layer.get_key_value(name.0) {
+        if let Some((&n, &s)) = layer.get_key_value(name.value) {
             errors.add(NameResolutionError::Duplicate {
-                original: (n, s),
+                original: s.of(n),
                 duplicate: name,
             });
             false
         } else {
-            layer.insert(name.0, name.1);
+            layer.insert(name.value, name.span());
             true
         }
     });
@@ -61,7 +61,7 @@ impl<'n, 'i> Names<'n, 'i> {
     /// Returns a new subscope of `self` with the given name. `name` and other names added to the
     /// returned object will shadow those in `self`.
     pub fn subscope_with_one<'m>(&'m self, name: SpanOf<&'i str>) -> Names<'m, 'i> {
-        self.subscope_with_map(HashMap::from([name]))
+        self.subscope_with_map(HashMap::from([(name.value, name.span())]))
     }
 
     fn subscope_with_map<'m>(&'m self, layer: HashMap<&'i str, Span>) -> Names<'m, 'i> {
@@ -86,8 +86,8 @@ impl<'n, 'i> Names<'n, 'i> {
     ) -> Option<SpanOf<Handle<'i, str>>> {
         let out = self
             .layers()
-            .find_map(|layer| layer.get_key_value(name.0))
-            .map(|(&orig, &s)| (Handle(orig), s));
+            .find_map(|layer| layer.get_key_value(name.value))
+            .map(|(&orig, &s)| s.of(Handle(orig)));
         if let None = out {
             errors.add(NameResolutionError::NotFound(name));
         }
@@ -101,16 +101,15 @@ impl<'n, 'i> Names<'n, 'i> {
         name: SpanOf<&'i str>,
         errors: &mut E,
     ) -> Option<SpanOf<Handle<'i, str>>> {
-        let (n, s) = name;
-        if let Some((&orig, &t)) = self.locals.get_key_value(n) {
+        if let Some((&orig, &s)) = self.locals.get_key_value(name.value) {
             errors.add(NameResolutionError::Duplicate {
-                original: (orig, t),
+                original: s.of(orig),
                 duplicate: name,
             });
             None
         } else {
-            self.locals.insert(n, s);
-            Some(s.of(Handle(n)))
+            self.locals.insert(name.value, name.span());
+            Some(name.map(Handle))
         }
     }
 }

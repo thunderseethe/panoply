@@ -291,7 +291,7 @@ macro_rules! field {
 #[macro_export]
 macro_rules! id_field {
     ($label:pat, $target:pat) => {
-        $crate::field!(($label, ..), $target)
+        $crate::field!($crate::span_of!($label), $target)
     };
 }
 
@@ -329,7 +329,7 @@ macro_rules! pat_sum {
 #[macro_export]
 macro_rules! pat_var {
     ($var:pat) => {
-        &$crate::cst::Pattern::Whole(($var, ..))
+        &$crate::cst::Pattern::Whole($crate::span_of!($var))
     };
 }
 
@@ -337,7 +337,7 @@ macro_rules! pat_var {
 macro_rules! term_local {
     ($var:pat, $value:pat, $expr:pat) => {
         &$crate::cst::Term::Binding {
-            var: ($var, ..),
+            var: $crate::span_of!($var),
             value: $value,
             expr: $expr,
             ..
@@ -360,7 +360,7 @@ macro_rules! term_with {
 macro_rules! term_abs {
     ($arg:pat, $body:pat) => {
         &$crate::cst::Term::Abstraction {
-            arg: ($arg, ..),
+            arg: $crate::span_of!($arg),
             body: $body,
             ..
         }
@@ -397,7 +397,7 @@ macro_rules! term_dot {
     ($base:pat, $field:pat) => {
         &$crate::cst::Term::DotAccess {
             base: $base,
-            field: ($field, ..),
+            field: $crate::span_of!($field),
             ..
         }
     };
@@ -413,7 +413,7 @@ macro_rules! term_match {
 #[macro_export]
 macro_rules! term_sym {
     ($var:pat) => {
-        &$crate::cst::Term::SymbolRef(($var, ..))
+        &$crate::cst::Term::SymbolRef($crate::span_of!($var))
     };
 }
 
@@ -428,7 +428,7 @@ macro_rules! term_paren {
 macro_rules! item_term {
     ($name:pat, $value:pat) => {
         $crate::cst::Item::Term {
-            name: ($name, ..),
+            name: $crate::span_of!($name),
             value: $value,
             ..
         }

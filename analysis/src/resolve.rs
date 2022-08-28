@@ -3,14 +3,9 @@ use aiahr_core::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     handle::Handle,
-    span::{SpanOf, Spanned},
+    span::SpanOf,
 };
 use bumpalo::Bump;
-
-// Wraps the inner string in `Handle`.
-fn handle<'i>(var: SpanOf<&'i str>) -> SpanOf<Handle<'i, str>> {
-    var.span_map(|(v, ..)| Handle(*v))
-}
 
 // Allocates the items in `iter` on the given arena, but only if they are all `Some(..)`.
 fn alloc_all<'a, 'i, T, I>(arena: &'a Bump, iter: I) -> Option<&'a [T]>
@@ -74,7 +69,7 @@ where
     };
     Some(ProductRow {
         lbrace: prod.lbrace,
-        fields: fields,
+        fields,
         rbrace: prod.rbrace,
     })
 }
@@ -127,7 +122,7 @@ pub fn resolve_term<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
             let value = resolve_term(arena, names, value, errors);
             let expr = resolve_term(arena, &names.subscope_with_one(*var), expr, errors);
             Term::Binding {
-                var: handle(*var),
+                var: var.map(Handle),
                 eq: *eq,
                 value: value?,
                 semi: *semi,
@@ -156,7 +151,7 @@ pub fn resolve_term<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
             body,
         } => Term::Abstraction {
             lbar: *lbar,
-            arg: handle(*arg),
+            arg: arg.map(Handle),
             rbar: *rbar,
             body: resolve_term(arena, &names.subscope_with_one(*arg), body, errors)?,
         },
@@ -224,7 +219,7 @@ pub fn resolve_item<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
 ) -> Option<Item<'a, 'i, Handle<'i, str>>> {
     Some(match item {
         Item::Term { name, eq, value } => Item::Term {
-            name: handle(*name),
+            name: name.map(Handle),
             eq: *eq,
             value: arena.alloc(resolve_term(arena, names, value, errors)?),
         },
@@ -296,8 +291,10 @@ mod tests {
         diagnostic::nameres::NameResolutionError,
         field,
         handle::Handle,
-        id_field, item_term, pat_prod, pat_var, term_abs, term_app, term_dot, term_local,
-        term_match, term_prod, term_sum, term_sym, term_with,
+        id_field, item_term, pat_prod, pat_var,
+        span::SpanOf,
+        span_of, term_abs, term_app, term_dot, term_local, term_match, term_prod, term_sum,
+        term_sym, term_with,
     };
     use aiahr_parser::{
         lexer::aiahr_lexer,
@@ -380,8 +377,8 @@ mod tests {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "x = y; z").unwrap_err()[..],
             [
-                NameResolutionError::NotFound(("y", ..)),
-                NameResolutionError::NotFound(("z", ..))
+                NameResolutionError::NotFound(span_of!("x")),
+                NameResolutionError::NotFound(span_of!("z"))
             ]
         );
     }
@@ -407,8 +404,8 @@ mod tests {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "with h do x").unwrap_err()[..],
             [
-                NameResolutionError::NotFound(("h", ..)),
-                NameResolutionError::NotFound(("x", ..))
+                NameResolutionError::NotFound(span_of!("h")),
+                NameResolutionError::NotFound(span_of!("x"))
             ]
         );
     }
@@ -471,8 +468,8 @@ mod tests {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "f(x)").unwrap_err()[..],
             [
-                NameResolutionError::NotFound(("f", ..)),
-                NameResolutionError::NotFound(("x", ..))
+                NameResolutionError::NotFound(span_of!("f")),
+                NameResolutionError::NotFound(span_of!("x"))
             ]
         );
     }
@@ -501,8 +498,8 @@ mod tests {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "{x = y, z = x}").unwrap_err()[..],
             [
-                NameResolutionError::NotFound(("y", ..)),
-                NameResolutionError::NotFound(("x", ..))
+                NameResolutionError::NotFound(span_of!("y")),
+                NameResolutionError::NotFound(span_of!("x"))
             ]
         );
     }
@@ -522,7 +519,7 @@ mod tests {
     fn test_sum_row_errors() {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "<x = x>").unwrap_err()[..],
-            [NameResolutionError::NotFound(("x", ..))]
+            [NameResolutionError::NotFound(span_of!("x"))]
         );
     }
 
@@ -550,7 +547,7 @@ mod tests {
     fn test_dot_access_errors() {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "x.a").unwrap_err()[..],
-            [NameResolutionError::NotFound(("x", ..))]
+            [NameResolutionError::NotFound(span_of!("x"))]
         );
     }
 
@@ -575,17 +572,17 @@ mod tests {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "match <{a = x} => f(x), {} => z>").unwrap_err()[..],
             [
-                NameResolutionError::NotFound(("f", ..)),
-                NameResolutionError::NotFound(("z", ..))
+                NameResolutionError::NotFound(span_of!("f")),
+                NameResolutionError::NotFound(span_of!("z"))
             ]
         );
         assert_matches!(
             parse_resolve_term(&Bump::new(), "match <{a = x, b = x} => x(x)>").unwrap_err()[..],
             [NameResolutionError::Duplicate {
-                original: ("x", s),
-                duplicate: ("x", t)
+                original: SpanOf { value: "x", end, ..},
+                duplicate: SpanOf { value: "x", start, ..},
             }] => {
-                assert!(s.end.byte < t.start.byte);
+                assert!(end.byte < start.byte);
             }
         )
     }
@@ -624,8 +621,8 @@ mod tests {
         assert_matches!(
             parse_resolve_module(&Bump::new(), "foo = x\nbar = y").unwrap_err()[..],
             [
-                NameResolutionError::NotFound(("x", ..)),
-                NameResolutionError::NotFound(("y", ..))
+                NameResolutionError::NotFound(span_of!("x")),
+                NameResolutionError::NotFound(span_of!("y"))
             ]
         );
     }
