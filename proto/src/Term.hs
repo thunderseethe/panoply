@@ -73,8 +73,10 @@ data Term meta
     Abs meta Var (Term meta)
   | -- Application
     App meta (Term meta) (Term meta)
+  | -- Handle Control Flow Operation
+    Handle { handle_meta :: meta, handle_effect :: Label, handle_handler :: Term meta, handle_body :: Term meta }
   | -- Effect Handler
-    Handle meta Label (HandleClause meta) (Term meta)
+    Handler meta (HandleClause meta)
   | -- Effect Operation
     Op meta Label
   deriving (Show)
@@ -95,6 +97,7 @@ meta = lens get set
       Abs m _ _ -> m
       App m _ _ -> m
       Handle m _ _ _ -> m
+      Handler m _ -> m
       Op m _ -> m
 
 meta' :: Traversal (Term a) (Term b) a b
@@ -109,7 +112,8 @@ meta' f =
     Prj m d term -> Prj <$> f m <*> pure d <*> meta' f term
     Abs m x body -> Abs <$> f m <*> pure x <*> meta' f body
     App m fn arg -> App <$> f m <*> meta' f fn <*> meta' f arg
-    Handle m lbl clauses term -> Handle <$> f m <*> pure lbl <*> handleClauseTerms (meta' f) clauses <*> meta' f term
+    Handle m lbl handler term -> Handle <$> f m <*> pure lbl <*> meta' f handler <*> meta' f term
+    Handler m clauses -> Handler <$> f m <*> handleClauseTerms (meta' f) clauses
     Op m op -> Op <$> f m <*> pure op
 
 voidAnn :: Term meta -> Term ()
@@ -130,7 +134,8 @@ instance Show1 Term where
         Prj m _ term -> ("prj " ++) . go term . (" :: " ++) . (' ' :) . show p m
         Abs m v term -> ("λ " ++) . showsPrec p v . (" . " ++) . go term . (' ' :) . show p m
         App m fn arg -> go fn . (' ' :) . go arg . (" :: " ++) . (' ' :) . show p m
-        Handle m eff handler term -> ("handle<" ++) . showsPrec p eff . ("> " ++) . liftShowsPrec show showList p handler . (' ' :) . go term . (' ' :) . show p m
+        Handle m eff handler term -> ("handle<" ++) . showsPrec p eff . ("> " ++) . go handler . (' ' :) . go term . (' ' :) . show p m
+        Handler _ clauses -> liftShowsPrec show showList p clauses
         Op m op -> showsPrec p op . (" :: " ++) . (' ' :) . show p m
 
 instance Functor Term where
@@ -143,6 +148,7 @@ instance Functor Term where
       App m fn arg -> App (f m) (f <$> fn) (f <$> arg)
       Concat m left right -> Concat (f m) (f <$> left) (f <$> right)
       Handle m eff handler term -> Handle (f m) eff (f <$> handler) (f <$> term)
+      Handler m clauses -> Handler (f m) (f <$> clauses)
       Var m x -> Var (f m) x
       Int m i -> Int (f m) i
       Op m op -> Op (f m) op
@@ -158,6 +164,7 @@ instance Foldable Term where
       App m fn arg -> f m <> foldMap f fn <> foldMap f arg
       Concat m left right -> f m <> foldMap f left <> foldMap f right
       Handle m _ handler term -> f m <> foldMap f handler <> foldMap f term
+      Handler m clauses -> f m <> foldMap f clauses
       Var m _ -> f m
       Int m _ -> f m
       Op m _ -> f m
@@ -172,7 +179,8 @@ instance Traversable Term where
       Abs m v term -> Abs <$> f m <*> pure v <*> traverse f term
       App m fn arg -> App <$> f m <*> traverse f fn <*> traverse f arg
       Concat m left right -> Concat <$> f m <*> traverse f left <*> traverse f right
-      Handle m eff handler term -> Handle <$> f m <*> pure eff <*> handleClauseTerms (traverse f) handler <*> traverse f term
+      Handle m eff handler term -> Handle <$> f m <*> pure eff <*> traverse f handler <*> traverse f term
+      Handler m clauses -> Handler <$> f m <*> handleClauseTerms (traverse f) clauses
       Var m x -> Var <$> f m <*> pure x
       Int m i -> Int <$> f m <*> pure i
       Op m op -> Op <$> f m <*> pure op
@@ -187,7 +195,8 @@ instance Plated (Term meta) where
       Concat m left right -> Concat m <$> f left <*> f right
       Abs m v term -> Abs m v <$> f term
       App m fn arg -> App m <$> f fn <*> f arg
-      Handle m eff handler term -> Handle m eff <$> handleClauseTerms f handler <*> f term
+      Handle m eff handler term -> Handle m eff <$> f handler <*> f term
+      Handler m handler -> Handler m <$> handleClauseTerms f handler
       t -> pure t
 
 handleClauseTerms :: Traversal (HandleClause a) (HandleClause b) (Term a) (Term b)
@@ -224,6 +233,8 @@ unit = Unit ()
 label = Label ()
 
 unlabel = Unlabel ()
+
+handler clauses ret = Handler () $ HandleClause clauses ret
 
 record [] = unit
 record [term] = term

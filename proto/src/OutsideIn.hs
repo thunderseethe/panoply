@@ -49,7 +49,7 @@ import Data.List.NonEmpty (NonEmpty ((:|)))
 import qualified Data.List.NonEmpty as NonEmpty
 import Debug.Trace
 import Text.Show.Pretty
-import Prelude hiding (abs, interact, lookup)
+import Prelude hiding (abs, interact, lookup, unzip3)
 
 import Constraint
 import Core (CoreType (..), coreRowTv, coreTyTv)
@@ -63,7 +63,6 @@ import Term
 import Type
 import Program
 import Control.Effect.State (get)
-import Control.Effect.State (put)
 
 data Wrapper
   = TyApp Wrapper Core.CoreType
@@ -97,7 +96,7 @@ schemeWrapper bound qs = do
   f rowEvTy wrapper = do
     var <- fresh
     return (EvApp wrapper (Core.CoreV var rowEvTy))
-    
+
   wrapEv tv =
     if TVarSet.member tv rowSet
       then \wrap -> TyApp wrap (CoreVar $ coreRowTv tv)
@@ -267,7 +266,7 @@ generateConstraints term =
         , error "todo!"
         , constrs
         )
-    Handle _ lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_body)) body -> do
+  {-Handle _ lbl (Handler _ (HandleClause clauses (Clause ret_name ret_arg ret_resume ret_body))) body -> do
       EffCtx effs _ <- ask
       let ops = fromMaybe (error $ "Undefined effect " ++ show lbl) (effs !? lbl)
       let handled_eff = Closed (lbl |> unitTy)
@@ -300,19 +299,94 @@ generateConstraints term =
                   , Simp (VarTy out ~ (ret ^. meta . ty)) :
                     Simp (VarTy out ~ (clause ^. meta . ty)) : -- Clause type and return type must agree
                     Simp (op_ty ~ FunTy (VarTy tin) handled_eff (VarTy tout)) : -- Operation needs to be a function that handles our effect
-                    Simp (VarTy out_eff ~ rowToType (clause ^. meta . eff)) : -- Each clause can have pass on unhandled effects from handler body
+                    Simp (VarTy out_eff ~ rowToType (clause ^. meta . eff)) : -- Each clause can pass on unhandled effects from handler body
                     op_constr <> clause_constr -- Ambient constraints from recursive calls
                   )
             )
 
       return
-        ( Handle (Infer (ret ^. meta . ty) (Open out_eff)) lbl (HandleClause clauses (Clause ret_name ret_arg ret_resume ret)) body -- Return type of the handler is the type of the return clause
+        ( Handle (Infer (ret ^. meta . ty) (Open out_eff)) lbl (Handler (error "shit") (HandleClause clauses (Clause ret_name ret_arg ret_resume ret))) body -- Return type of the handler is the type of the return clause
         , error "todo!"
         , Simp (rowToType (body ^. meta . eff) ~> Open out_eff :⊙ handled_eff) : -- The body eff must include l, our output will be whatever effs are leftover from l
           Simp (VarTy out_eff ~ rowToType (ret ^. meta . eff)) :
           Simp (VarTy alpha ~ (body ^. meta . ty)) : -- Input to the return clause should match the body type
           body_constr <> ret_constr <> mconcat (NonEmpty.toList op_constr)
-        )
+        )-}
+    Handle _ lbl handler body -> do
+      -- TODO: Should eff be on handler instead of handle? I lean no because it complicates the "type" that has to be passed.
+      --    I lean yes because which effect is handled is a property of the handler not `handle ... with ...`.
+      --    If we want to remove the handler and replace it with a record literal then it's bad to have it contain the effect
+      -- Check that handler has a type compatible with eff
+
+      EffCtx effs _ <- ask
+      let ops = fromMaybe (error $ "Undefined effect " ++ show lbl) (effs !? lbl)
+      let handled_eff = Closed (lbl |> unitTy) -- TODO: This should map to the type of it's handler prolly?
+      out_eff <- fresh
+
+      (body, body_core, body_constr) <- generateConstraints body
+      (handler, handler_core, handler_constr) <- generateConstraints handler
+
+      -- TODO: figure out what to do with wrappers
+      (constrs, _, tys) <- unzip3 <$> forM ops instantiate
+      let (expected_body_ty, handle_out_ty) = 
+            case tys !? "return" of
+                Just (FunTy argTy _ retTy) -> (argTy, retTy)
+                _ -> error "Expected a return label with a function type"
+
+      let eff_op_constrs = mconcat $ Map.elems constrs
+      return ( Handle (Infer handle_out_ty (Open out_eff)) lbl handler body
+             , error "We're getting there"
+             , Simp (rowToType (handler ^. meta . eff) ~ rowToType handled_eff)
+             : Simp (expected_body_ty ~ (body ^. meta . ty))
+             : Simp (rowToType (body ^. meta . eff) ~> Open out_eff :⊙ handled_eff)
+             : body_constr <> handler_constr <> eff_op_constrs
+             )
+    Handler _ (HandleClause clauses (Clause ret_name ret_arg ret_unused ret_body)) -> do
+      expected_eff <- fresh
+      out_eff <- fresh
+      alpha <- fresh
+      (ret, ret_core, ret_constr) <- local (Map.insert ret_arg (monoScheme $ VarTy alpha)) $ generateConstraints ret_body
+      let ret_ty = FunTy (VarTy alpha) (Closed Map.empty) (ret ^. meta . ty)
+      (clauses, prod_ty_fields, clause_cores, clause_constrs) <-
+        unzip4 <$> forM
+            clauses
+            ( \(Clause name x resume clause_body) -> do
+                (tout, out) <- (,) <$> fresh <*> fresh
+                (clause, clause_core, clause_constr) <-
+                  local (bind resume (FunTy (VarTy tout) (Open out_eff) (VarTy out)) . bind x (VarTy tout)) $ generateConstraints clause_body
+                return
+                  ( Clause name x resume clause
+                  , (name, FunTy (VarTy tout) (Open expected_eff) (clause ^. meta .ty))
+                  , Core.Lam (Core.CoreV x (Core.fromType (VarTy tout))) $ Core.Lam (Core.CoreV resume (Core.fromType $ FunTy (VarTy tout) (Open out_eff) (VarTy out))) clause_core
+                  , Simp (VarTy out ~ (ret ^. meta . ty)) :
+                    Simp (VarTy out ~ (clause ^. meta . ty)) : -- Clause type and return type must agree
+                    -- Replicate this in the Handle operation
+                    --Simp (op_ty ~ FunTy (VarTy tin) handled_eff (VarTy tout)) : -- Operation needs to be a function that handles our effect
+                    Simp (VarTy out_eff ~ rowToType (clause ^. meta . eff)) : -- Each clause can pass on unhandled effects from handler body
+                    clause_constr -- Ambient constraints from recursive calls
+                  )
+            )
+
+      let handler_row = Map.fromList ((ret_name, ret_ty) : NonEmpty.toList prod_ty_fields)
+      return ( Handler (Infer (ProdTy $ RowTy handler_row) (Open expected_eff)) (HandleClause clauses (Clause ret_name ret_arg ret_unused ret))
+             , Core.Product (ret_core : NonEmpty.toList clause_cores)
+             , ret_constr <> mconcat (NonEmpty.toList clause_constrs)
+             )
+
+unzip3 :: (Functor f) => f (a, b, c) -> (f a, f b, f c)
+unzip3 abcs = (fst3 <$> abcs, snd3 <$> abcs, thd3 <$> abcs)
+  where
+    fst3 (a, _, _) = a
+    snd3 (_, b, _) = b
+    thd3 (_, _, c) = c
+
+unzip4 :: (Functor f) => f (a, b, c, d) -> (f a, f b, f c, f d)
+unzip4 abcds = (fst4 <$> abcds, snd4 <$> abcds, thd4 <$> abcds, fth4 <$> abcds)
+  where
+    fst4 (a, _, _, _) = a
+    snd4 (_, b, _, _) = b
+    thd4 (_, _, c, _) = c
+    fth4 (_, _, _, d) = d
 
 data TyErr
   = OccursCheckFailed TVar Ct
@@ -669,29 +743,6 @@ solveConstraints unifiers given constrs = do
  where
   (simpls, impls) = partitionEithers (view constraintEither <$> constrs)
 
-{- We assume during type checking that all effect rows are open.
-  Once we complete type checking we know any remaining open rows
-  are empty so we walk the term effects and close everything. 
-closeEffects :: PredMap -> Term Infer -> Term Infer
-closeEffects tv_cts = fmap (\infer -> (infer & eff %~ clampItShut) & ty %~ clampFns)
- where
-  clampFns = transform (over typeEffs clampItShut)
-
-  clampItShut (Closed eff) = Closed eff
-  clampItShut (Open eff) = Closed . foldMap containsRow $ fromMaybe Set.empty (tv_cts !? eff)
-   where
-    containsRow ct =
-      case ct of
-        -- These are cases where we can solve a row
-        (T (RowTy row)) -> row
-        (Closed row :⊙ Open _) -> row
-        (Open _ :⊙ Closed row) -> row
-        -- Sanity check
-        (Closed _ :⊙ Closed _) -> error "This should be impossible"
-        -- For anything else treat it as the empty row at this stage
-        _ -> Map.empty 
--}
-
 {- Applied to  top level terms after constraint solving to generalize open types into closed schemes.
   Zonking is the process of replacing each type variable by the type it was sovled to if available. -}
 zonkOrGeneralizeTrying :: PredMap -> Type -> Scheme
@@ -730,14 +781,6 @@ defaultEffCtx =
     [ Eff "State" (Map.fromList [("get", monoScheme (FunTy unitTy (Closed $ "State" |> unitTy) IntTy)), ("put", monoScheme (FunTy IntTy (Closed $ "State" |> unitTy) unitTy))])
     , Eff "RowEff" (Map.fromList [("add_field", Scheme [TV 0, TV 1, TV 2] [VarTy 0 ~> Closed ("x" |> IntTy) :⊙ Open 1, VarTy 2 ~> Closed ("y" |> IntTy) :⊙ Open 1] (FunTy (VarTy 0) (Closed $ "RowEff" |> unitTy) (VarTy 2)))])
     ]
-
-{-
-prunePred :: Type -> PredMap -> PredMap
-prunePred ty = predMapFromList . filter (\(tv, ct) -> TVarSet.member tv bound || isRelevant ct) . predMapToList
- where
-  isRelevant = any (`TVarSet.member` bound) . toListOf ctTVars
-  bound = TVarSet.fromList $ toListOf (cosmos . typeVars) ty
--}
 
 generateEvidenceForSolved :: Map Var Q -> (Map Var Core.Core, [Q])
 generateEvidenceForSolved = Map.foldrWithKey f (Map.empty, [])
@@ -833,7 +876,7 @@ exampleUpFn = abs [v] (abs [r] $ record [label "x" $ var v, prj R (var r)])
   v = V 1
 
 exampleSmolEff :: Term ()
-exampleSmolEff = handle "State" (HandleClause clauses ret) (op "get" <@> unit)
+exampleSmolEff = handle "State" (handler clauses ret) (op "get" <@> unit)
  where
   resume = V 1
   x = V 2
@@ -842,7 +885,7 @@ exampleSmolEff = handle "State" (HandleClause clauses ret) (op "get" <@> unit)
   ret = Clause "" x resume (label "x" $ var x)
 
 exampleEff :: Term ()
-exampleEff = handle "State" (HandleClause clauses ret) $ abs [v] (op "put" <@> var v) <@> (op "get" <@> unit)
+exampleEff = handle "State" (handler clauses ret) $ abs [v] (op "put" <@> var v) <@> (op "get" <@> unit)
  where
   v = V 0
   resume = V 1
@@ -869,17 +912,17 @@ exampleApWand = abs [m, n] (unlabel (prj L $ record [var m, var n]) "x") <@> rec
   n = V 1
 
 exampleProgWand :: Prog ()
-exampleProgWand = 
+exampleProgWand =
   Prog {
-    terms= [wand, ap], 
-    effects=[] }
+    terms = [wand, ap],
+    effects = [] }
   where
-    wand = Def (V (-1)) exampleWand 
+    wand = Def (V (-1)) exampleWand
     ap = Def (V (-2)) (var (-1) <@> record [label "w" (int 1), label "z" (int 2)])
 
 -- This one should fail and it does!
 exampleHandleErr :: Term ()
-exampleHandleErr = handle "State" (HandleClause whoops ret) $ abs [v] (op "put" <@> var v) <@> (op "get" <@> unit)
+exampleHandleErr = handle "State" (handler whoops ret) $ abs [v] (op "put" <@> var v) <@> (op "get" <@> unit)
  where
   v = V 0
   resume = V 1
