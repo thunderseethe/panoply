@@ -138,6 +138,8 @@ emptyCtx = Map.empty
 askCtx :: Has (Reader Ctx) sig m => m Ctx
 askCtx = ask
 
+-- Global variables that can't be referenced by users
+evv = V (-1)
 
 generateConstraints ::
   ( Has (Reader Ctx) sig m
@@ -231,8 +233,8 @@ generateConstraints term =
         , Core.App (Core.Project 0 (Core.Project idx (Core.Var $ Core.CoreV out_ev (Core.rowEvType (Open input) (Open input) (Open out))))) term_core
         , Simp (term ^. meta . ty ~ ProdTy (VarTy input)) : Simp constr : term_constr
         )
-    -- Functions
-    App _ fn arg -> do
+    -- Special case application chains so we don't pass evidence vector unecessarily
+    App _ fn@(App {}) arg -> do   
       alpha <- fresh
       out_eff <- fresh
       (fn, fn_core, fn_constr) <- generateConstraints fn
@@ -244,6 +246,21 @@ generateConstraints term =
           Simp (fn ^. meta . ty ~ FunTy (arg ^. meta . ty) (fn ^. meta . eff) (VarTy alpha)) :
           fn_constr <> arg_constr
         )
+    -- Function application
+    -- Here we're at the root of a chain so we pass the evidence vector to our function
+    App _ fn arg -> do
+      alpha <- fresh
+      out_eff <- fresh
+      (fn, fn_core, fn_constr) <- generateConstraints fn
+      (arg, arg_core, arg_constr) <- generateConstraints arg
+      return
+        ( App (Infer (VarTy alpha) (Open out_eff)) fn arg
+        -- Pass evidence vector as first argument to function
+        , Core.App (Core.App fn_core (Core.Var $ Core.CoreV evv (Core.CoreVar $ Core.coreRowTv out_eff))) arg_core
+        , Simp (VarTy out_eff ~> (fn ^. meta . eff) :⊙ (arg ^. meta . eff)) :
+          Simp (fn ^. meta . ty ~ FunTy (arg ^. meta . ty) (fn ^. meta . eff) (VarTy alpha)) :
+          fn_constr <> arg_constr
+        )
     Abs _ x body -> do
       alpha <- fresh
       out_eff <- fresh
@@ -251,7 +268,8 @@ generateConstraints term =
       let fn_ty = FunTy (VarTy alpha) (body ^. meta . eff) (body ^. meta . ty)
       return
         ( Abs (Infer fn_ty (Open out_eff)) x body
-        , Core.Lam (Core.CoreV x (CoreVar $ coreTyTv alpha)) body_core
+        -- Wrap any lambdas with an extra parameter for evidence vector
+        , Core.Lam (Core.CoreV evv (CoreVar $ coreRowTv out_eff)) $ Core.Lam (Core.CoreV x (CoreVar $ coreTyTv alpha)) body_core
         , constr
         )
     Op _ op -> do
@@ -744,7 +762,7 @@ solveConstraints unifiers given constrs = do
   (simpls, impls) = partitionEithers (view constraintEither <$> constrs)
 
 {- Applied to  top level terms after constraint solving to generalize open types into closed schemes.
-  Zonking is the process of replacing each type variable by the type it was sovled to if available. -}
+  Zonking is the process of replacing each type variable by the type it was sovled to if available.
 zonkOrGeneralizeTrying :: PredMap -> Type -> Scheme
 zonkOrGeneralizeTrying solved ty = Scheme bound qs ty
  where
@@ -752,7 +770,7 @@ zonkOrGeneralizeTrying solved ty = Scheme bound qs ty
   qs = Map.foldrWithKey fold [] (unPM solved)
   fold tv cts acc = Set.foldr (\ct acc -> (T (VarTy tv) :<~> ct) : acc) acc cts
 
-  openTyVars = toListOf (cosmos . typeVars)
+  openTyVars = toListOf (cosmos . typeVars) -}
 
 zonk :: Subst -> Core.Core -> Core.Core
 zonk subst =
@@ -783,9 +801,9 @@ defaultEffCtx =
     ]
 
 generateEvidenceForSolved :: Map Var Q -> (Map Var Core.Core, [Q])
-generateEvidenceForSolved = Map.foldrWithKey f (Map.empty, [])
+generateEvidenceForSolved = Map.foldrWithKey generateEvidence (Map.empty, [])
  where
-  f v q =
+  generateEvidence v q =
     case q of
       T (RowTy goal) :<~> Closed left :⊙ Closed right -> _1 %~ Map.insert v (Core.rowEvidence left right goal)
       -- TODO: We need to handle projection constraints here which will have one open type variable.
@@ -805,7 +823,7 @@ inferTerm term = do
             term_ty = apply subst (term ^. meta . ty)
             scheme = Scheme (nub $ toListOf (cosmos . typeVars) term_ty) residual_ev term_ty
          in trace ("Typed Term:\n" ++ ppShow typed_term ++ "\nSubst:\n" ++ ppShow subst ++ "\n")
-                  (term, zonk subst $ wrap scheme $ liftEv (Core.varSubst ev_map core_term), scheme)
+                  (term, passEvVector (term ^. meta . eff) $ zonk subst $ wrap scheme $ liftEv (Core.varSubst ev_map core_term), scheme)
   case res of
     Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
     Right (_, (subst, [])) -> return $ generalizeAndLiftEv subst
@@ -814,18 +832,24 @@ inferTerm term = do
   empty_ev_map = Map.empty :: Map Var Q
   maxVar = maxTermVar term
 
+passEvVector :: InternalRow -> Core.Core -> Core.Core
+passEvVector row = 
+  case row of
+    Open eff -> Core.Lam (Core.CoreV evv (CoreVar $ coreRowTv eff))
+    Closed eff -> Core.Lam (Core.CoreV evv (Core.fromType . ProdTy . RowTy $ eff))
+
 infer :: Prog () -> (Prog Infer, [Core.Core], [Scheme])
 infer (Prog defs effs) = snd . runIdentity . runReader defaultEffCtx . runState emptyCtx $ inferDefs effs defs
 
 inferDefs :: (Has (State Ctx) sig m, Has (Reader EffCtx) sig m) => [Eff] -> [Def ()] -> m (Prog Infer, [Core.Core], [Scheme])
 inferDefs es [] = return (Prog [] es, [], [])
 inferDefs es (Def name term : tail) = do
-      ctx :: Ctx <- get
-      eff_ctx :: EffCtx <- ask
-      let (infer_term, core, scheme) = runIdentity $ runReader eff_ctx $ runReader ctx $ inferTerm term
-      modify (bind name (infer_term ^. meta . ty))
-      (prog, cores, schemes) <- inferDefs es tail
-      return (addDef (Def name infer_term) prog, core : cores, scheme : schemes)
+    ctx :: Ctx <- get
+    eff_ctx :: EffCtx <- ask
+    let (infer_term, core, scheme) = runIdentity $ runReader eff_ctx $ runReader ctx $ inferTerm term
+    modify (bind name (infer_term ^. meta . ty))
+    (prog, cores, schemes) <- inferDefs es tail
+    return (addDef (Def name infer_term) prog, core : cores, scheme : schemes)
 
 prettyInferTerm :: Term () -> IO ()
 prettyInferTerm term = putStrLn $ ppShow infer ++ "\n\n" ++ unpack (prettyRender core) ++ "\n\n" ++ ppShow scheme ++ "\n"
@@ -914,11 +938,12 @@ exampleApWand = abs [m, n] (unlabel (prj L $ record [var m, var n]) "x") <@> rec
 exampleProgWand :: Prog ()
 exampleProgWand =
   Prog {
-    terms = [wand, ap],
+    terms = [wand_def, ap],
     effects = [] }
   where
-    wand = Def (V (-1)) exampleWand
-    ap = Def (V (-2)) (var (-1) <@> record [label "w" (int 1), label "z" (int 2)])
+    wand = V (-2)
+    wand_def = Def wand exampleWand
+    ap = Def (V (-3)) (var wand <@> record [label "w" (int 1), label "z" (int 2)])
 
 -- This one should fail and it does!
 exampleHandleErr :: Term ()
