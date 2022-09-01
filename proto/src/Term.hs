@@ -5,7 +5,7 @@
 module Term where
 
 import Control.Lens (Lens', Plated (plate), Traversal, Traversal', cosmos, lens, maximumOf, over)
-import Data.List.NonEmpty (NonEmpty)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -15,6 +15,7 @@ import Data.Functor.Classes (Show1 (liftShowsPrec))
 import Data.List ((\\))
 import Type
 import Prettyprinter
+import qualified Data.Foldable as Foldable
 
 newtype Var = V Int
   deriving (Ord, Eq, Num, Enum, Show, Bounded)
@@ -70,9 +71,9 @@ data Term meta
   | -- Record projection (elim)
     Prj meta Dir (Term meta)
   | -- Lambda Abstraction
-    Abs meta Var (Term meta)
+    Abs { abs_meta :: meta, abs_args :: NonEmpty Var, abs_body :: Term meta }
   | -- Application
-    App meta (Term meta) (Term meta)
+    App { app_meta :: meta, app_head :: Term meta, app_spine :: NonEmpty (Term meta) }
   | -- Handle Control Flow Operation
     Handle { handle_meta :: meta, handle_effect :: Label, handle_handler :: Term meta, handle_body :: Term meta }
   | -- Effect Handler
@@ -111,7 +112,7 @@ meta' f =
     Concat m left right -> Concat <$> f m <*> meta' f left <*> meta' f right
     Prj m d term -> Prj <$> f m <*> pure d <*> meta' f term
     Abs m x body -> Abs <$> f m <*> pure x <*> meta' f body
-    App m fn arg -> App <$> f m <*> meta' f fn <*> meta' f arg
+    App m fn arg -> App <$> f m <*> meta' f fn <*> traverse (meta' f) arg
     Handle m lbl handler term -> Handle <$> f m <*> pure lbl <*> meta' f handler <*> meta' f term
     Handler m clauses -> Handler <$> f m <*> handleClauseTerms (meta' f) clauses
     Op m op -> Op <$> f m <*> pure op
@@ -133,7 +134,7 @@ instance Show1 Term where
         Concat m left right -> go left . (" :*: " ++) . go right . (' ' :) . show p m
         Prj m _ term -> ("prj " ++) . go term . (" :: " ++) . (' ' :) . show p m
         Abs m v term -> ("λ " ++) . showsPrec p v . (" . " ++) . go term . (' ' :) . show p m
-        App m fn arg -> go fn . (' ' :) . go arg . (" :: " ++) . (' ' :) . show p m
+        App m fn arg -> go fn . (" [" ++) . foldr (\item acc -> item . (',' :) . acc) (']' :) (go <$> arg) . (" :: " ++) . (' ' :) . show p m
         Handle m eff handler term -> ("handle<" ++) . showsPrec p eff . ("> " ++) . go handler . (' ' :) . go term . (' ' :) . show p m
         Handler _ clauses -> liftShowsPrec show showList p clauses
         Op m op -> showsPrec p op . (" :: " ++) . (' ' :) . show p m
@@ -145,7 +146,7 @@ instance Functor Term where
       Unlabel m term lbl -> Unlabel (f m) (f <$> term) lbl
       Prj m dir term -> Prj (f m) dir (f <$> term)
       Abs m v term -> Abs (f m) v (f <$> term)
-      App m fn arg -> App (f m) (f <$> fn) (f <$> arg)
+      App m fn arg -> App (f m) (f <$> fn) (fmap f <$> arg)
       Concat m left right -> Concat (f m) (f <$> left) (f <$> right)
       Handle m eff handler term -> Handle (f m) eff (f <$> handler) (f <$> term)
       Handler m clauses -> Handler (f m) (f <$> clauses)
@@ -161,7 +162,7 @@ instance Foldable Term where
       Unlabel m term _ -> f m <> foldMap f term
       Prj m _ term -> f m <> foldMap f term
       Abs m _ term -> f m <> foldMap f term
-      App m fn arg -> f m <> foldMap f fn <> foldMap f arg
+      App m fn arg -> f m <> foldMap f fn <> foldMap (foldMap f) arg
       Concat m left right -> f m <> foldMap f left <> foldMap f right
       Handle m _ handler term -> f m <> foldMap f handler <> foldMap f term
       Handler m clauses -> f m <> foldMap f clauses
@@ -177,7 +178,7 @@ instance Traversable Term where
       Unlabel m term lbl -> Unlabel <$> f m <*> traverse f term <*> pure lbl
       Prj m dir term -> Prj <$> f m <*> pure dir <*> traverse f term
       Abs m v term -> Abs <$> f m <*> pure v <*> traverse f term
-      App m fn arg -> App <$> f m <*> traverse f fn <*> traverse f arg
+      App m fn arg -> App <$> f m <*> traverse f fn <*> traverse (traverse f) arg
       Concat m left right -> Concat <$> f m <*> traverse f left <*> traverse f right
       Handle m eff handler term -> Handle <$> f m <*> pure eff <*> traverse f handler <*> traverse f term
       Handler m clauses -> Handler <$> f m <*> handleClauseTerms (traverse f) clauses
@@ -194,7 +195,7 @@ instance Plated (Term meta) where
       Prj m dir term -> Prj m dir <$> f term
       Concat m left right -> Concat m <$> f left <*> f right
       Abs m v term -> Abs m v <$> f term
-      App m fn arg -> App m <$> f fn <*> f arg
+      App m fn arg -> App m <$> f fn <*> traverse f arg
       Handle m eff handler term -> Handle m eff <$> f handler <*> f term
       Handler m handler -> Handler m <$> handleClauseTerms f handler
       t -> pure t
@@ -218,8 +219,8 @@ maxTermVar :: Term m -> Var
 maxTermVar = fromMaybe (V $ -1) . maximumOf (cosmos . termVar)
 
 {- Smart Constructors -}
-abs :: (Foldable f) => f Var -> Term () -> Term ()
-abs vars body = foldr (Abs ()) body vars
+abs :: [Var] -> Term () -> Term ()
+abs vars = Abs () (NonEmpty.fromList vars)
 
 var :: Var -> Term ()
 var = Var ()
@@ -242,7 +243,10 @@ record terms = foldl1 (Concat ()) terms
 
 prj = Prj ()
 
-fn <@> arg = App () fn arg
+fn <@> arg = App () fn (arg :| [])
+
+-- Panics on empty list
+app fn args = App () fn (NonEmpty.fromList (Foldable.toList args))
 
 handle = Handle ()
 op = Op ()

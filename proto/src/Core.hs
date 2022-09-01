@@ -134,6 +134,9 @@ data Core
   | TyApp Core CoreType
   | Product [Core]
   | Project Int Core
+  | NewPrompt
+  | Prompt { prompt_marker :: Core, prompt_handler :: Core, prompt_body :: Core }
+  | Yield { yield_marker :: Core, yield_value :: Core }
   deriving (Show)
 
 instance Plated Core where
@@ -145,6 +148,8 @@ instance Plated Core where
       TyApp forall ty -> TyApp <$> f forall <*> pure ty
       Product elems -> Product <$> traverse f elems
       Project idx product -> Project idx <$> f product
+      Prompt marker handler body -> Prompt <$> f marker <*> f handler <*> f body
+      Yield marker value -> Yield <$> f marker <*> f value
       core -> pure core
 
 instance Pretty Core where
@@ -158,6 +163,9 @@ instance Pretty Core where
       TyApp forall ty -> pretty forall <+> pretty ty
       Product elems -> "{" <> hcat (punctuate ("," <> space) (pretty <$> elems)) <> "}"
       Project idx core -> "π" <> pretty idx <+> pretty core
+      NewPrompt -> "fresh prompt"
+      Prompt m h body -> "prompt" <+> pretty m <+> pretty h <+> pretty body
+      Yield m v -> "yield" <+> pretty m <+> pretty v
 
 coreVars :: Traversal' Core CoreVar
 coreVars f core =
@@ -211,16 +219,20 @@ prjR outRow inRow = Lam inVar out
     case [(inSize - outSize) .. inSize] of
       -- Special case for singleton
       [_] -> Project 0 (Core.Var inVar) 
-      idxs -> Product (fmap (\i -> Project i (Core.Var inVar)) idxs)
+      idxs -> Product (fmap (\i -> indx i (Core.Var inVar)) idxs)
   inVar = CoreV (V 0) inTy
-  inTy = fromType (ProdTy (RowTy inRow))
+  indx = 
+    case inTy of 
+      CoreProduct _ -> Project
+      _ -> \_ ty -> ty
+  inTy = unwrapSingleton $ fromType (ProdTy (RowTy inRow))
 
 prjL outRow inRow = Lam inVar out
  where
   out =
     case [0..(Map.size outRow - 1)] of
       [_] -> Project 0 (Core.Var inVar) 
-      idxs -> Product (fmap (\i -> Project i (Core.Var inVar)) idxs)
+      idxs -> Product (fmap (\i -> indx inTy i (Core.Var inVar)) idxs)
   inVar = CoreV (V 0) inTy
   inTy = fromType (ProdTy (RowTy inRow))
 
@@ -229,9 +241,19 @@ concat left right = Lam m $ Lam n (Product splat)
  where
   m = CoreV (V 0) leftTy
   n = CoreV (V 1) rightTy
-  splat = fmap (\i -> Project i (Core.Var m)) [0 .. (Map.size left - 1)] ++ fmap (\i -> Project i (Core.Var n)) [0 .. (Map.size right - 1)]
-  leftTy = fromType (ProdTy (RowTy left))
-  rightTy = fromType (ProdTy (RowTy right))
+  splat = fmap (\i -> indx leftTy i (Core.Var m)) [0 .. (Map.size left - 1)] ++ fmap (\i -> indx rightTy i (Core.Var n)) [0 .. (Map.size right - 1)]
+  leftTy = unwrapSingleton $ fromType (ProdTy (RowTy left))
+  rightTy = unwrapSingleton $ fromType (ProdTy (RowTy right))
+
+indx ty =
+  case ty of
+    CoreProduct _ -> Project
+    _ -> \_ ty -> ty
+
+unwrapSingleton ty = 
+  case ty of
+    CoreProduct [ty] -> ty
+    ty -> ty
 
 varSubst :: Map.Map Var Core.Core -> Core.Core -> Core.Core
 varSubst env = transform
