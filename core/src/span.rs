@@ -10,11 +10,11 @@ pub struct Span {
 }
 
 impl Span {
-    /// Returns a span consisting of a single character at the given location.
-    pub fn char(loc: Loc) -> Span {
+    /// Returns a zero-width span at the given location.
+    pub fn zero(loc: Loc) -> Span {
         Span {
             start: loc,
-            end: loc.next(),
+            end: loc,
         }
     }
 

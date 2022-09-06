@@ -319,10 +319,7 @@ where
 {
     // TODO: figure out what the `eoi` parameter is actually used for.
     Stream::from_iter(
-        Span {
-            start: end_of_input,
-            end: end_of_input.next(),
-        },
+        Span::zero(end_of_input),
         Box::new(tokens.into_iter().map(|token| (token.value, token.span()))),
     )
 }

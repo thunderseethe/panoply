@@ -21,7 +21,7 @@ impl Diagnostic for LexError {
     fn principal(&self) -> Citation {
         match self {
             LexError::NotAToken(loc) => Citation {
-                span: Span::char(*loc),
+                span: Span::zero(*loc),
                 message: "Not a valid token".to_owned(),
             },
         }
