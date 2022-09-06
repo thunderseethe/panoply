@@ -286,7 +286,6 @@ mod tests {
     use std::iter;
 
     use aiahr_core::{
-        comma_sep,
         cst::{Item, Term},
         diagnostic::nameres::NameResolutionError,
         field,
@@ -345,8 +344,8 @@ mod tests {
             parse_resolve_term(&Bump::new(), "x = {}; y = {}; x"),
             Ok(term_local!(
                 x,
-                term_prod!(None),
-                term_local!(y, term_prod!(None), term_sym!(x1))
+                term_prod!(),
+                term_local!(y, term_prod!(), term_sym!(x1))
             )) => {
                 assert_eq!(x.0, "x");
                 assert_eq!(y.0, "y");
@@ -361,7 +360,7 @@ mod tests {
             parse_resolve_term(&Bump::new(), "x = {}; x = x; x"),
             Ok(term_local!(
                 x_out,
-                term_prod!(None),
+                term_prod!(),
                 term_local!(x_in, term_sym!(x1), term_sym!(x2))
             )) => {
                 assert_eq!(x_out.0, "x");
@@ -377,7 +376,7 @@ mod tests {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "x = y; z").unwrap_err()[..],
             [
-                NameResolutionError::NotFound(span_of!("x")),
+                NameResolutionError::NotFound(span_of!("y")),
                 NameResolutionError::NotFound(span_of!("z"))
             ]
         );
@@ -389,7 +388,7 @@ mod tests {
             parse_resolve_term(&Bump::new(), "x = {}; with x do x"),
             Ok(term_local!(
                 x,
-                term_prod!(None),
+                term_prod!(),
                 term_with!(term_sym!(x1), term_sym!(x2))
             )) => {
                 assert_eq!(x.0, "x");
@@ -478,14 +477,14 @@ mod tests {
     fn test_product_row() {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "x = {}; {a = x, b = {x = x}}"),
-            Ok(term_local!(x, term_prod!(None),
-                term_prod!(Some(comma_sep!(
+            Ok(term_local!(x, term_prod!(),
+                term_prod!(
                 id_field!("a", term_sym!(x1)),
                 id_field!(
                     "b",
-                    term_prod!(Some(comma_sep!(id_field!("x", term_sym!(x2)))))
-                )
-            ))))) => {
+                    term_prod!(id_field!("x", term_sym!(x2)))
+                ),
+            ))) => {
                 assert_eq!(x.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
@@ -531,7 +530,7 @@ mod tests {
                 id,
                 term_abs!(x, term_sym!(x1)),
                 term_dot!(
-                    term_prod!(Some(comma_sep!(id_field!("x", term_sym!(id1))))),
+                    term_prod!(id_field!("x", term_sym!(id1))),
                     "x"
                 )
             )) => {
@@ -555,10 +554,10 @@ mod tests {
     fn test_match() {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "match <{a = x} => x, y => y>"),
-            Ok(term_match!(comma_sep!(
-                field!(pat_prod!(Some(comma_sep!(id_field!("a", pat_var!(x))))), term_sym!(x1)),
+            Ok(term_match!(
+                field!(pat_prod!(id_field!("a", pat_var!(x))), term_sym!(x1)),
                 field!(pat_var!(y), term_sym!(y1))
-            ))) => {
+            )) => {
                 assert_eq!(x.0, "x");
                 assert_eq!(y.0, "y");
                 assert_eq!(x1, x);
@@ -591,7 +590,7 @@ mod tests {
     fn test_mixed_shadowing() {
         assert_matches!(
             parse_resolve_term(&Bump::new(), "x = {}; |x| match <x => x>"),
-            Ok(term_local!(x_top, term_prod!(None), term_abs!(x_mid, term_match!(comma_sep!(field!(pat_var!(x_bot), term_sym!(x1))))))) => {
+            Ok(term_local!(x_top, term_prod!(), term_abs!(x_mid, term_match!(field!(pat_var!(x_bot), term_sym!(x1)))))) => {
                 assert_eq!(x_top.0, "x");
                 assert_eq!(x_mid.0, "x");
                 assert_eq!(x_bot.0, "x");

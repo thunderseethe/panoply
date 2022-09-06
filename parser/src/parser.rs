@@ -418,13 +418,13 @@ mod tests {
 
     #[test]
     fn test_product_rows() {
-        assert_matches!(parse_term_unwrap(&Bump::new(), "{}"), term_prod!(None));
+        assert_matches!(parse_term_unwrap(&Bump::new(), "{}"), term_prod!());
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "{x = a, y = |t| t}"),
-            term_prod!(Some(comma_sep!(
+            term_prod!(
                 id_field!("x", term_sym!("a")),
-                id_field!("y", term_abs!("t", term_sym!("t")))
-            )))
+                id_field!("y", term_abs!("t", term_sym!("t"))),
+            )
         );
     }
 
@@ -433,14 +433,8 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "{x = |t| t}({y = |t| u})"),
             term_app!(
-                term_prod!(Some(comma_sep!(id_field!(
-                    "x",
-                    term_abs!("t", term_sym!("t"))
-                )))),
-                term_prod!(Some(comma_sep!(id_field!(
-                    "y",
-                    term_abs!("t", term_sym!("u"))
-                ))))
+                term_prod!(id_field!("x", term_abs!("t", term_sym!("t")))),
+                term_prod!(id_field!("y", term_abs!("t", term_sym!("u"))))
             )
         );
     }
@@ -450,10 +444,10 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "{x = a, y = b}.x"),
             term_dot!(
-                term_prod!(Some(comma_sep!(
+                term_prod!(
                     id_field!("x", term_sym!("a")),
-                    id_field!("y", term_sym!("b"))
-                ))),
+                    id_field!("y", term_sym!("b")),
+                ),
                 "x"
             )
         );
@@ -479,14 +473,11 @@ mod tests {
     fn test_matches() {
         assert_matches!(
             parse_term_unwrap(&Bump::new(), "match < {x = a} => a, <y = b> => b, c => c >"),
-            term_match!(comma_sep!(
-                field!(
-                    pat_prod!(Some(comma_sep!(id_field!("x", pat_var!("a"))))),
-                    term_sym!("a")
-                ),
+            term_match!(
+                field!(pat_prod!(id_field!("x", pat_var!("a"))), term_sym!("a")),
                 field!(pat_sum!(id_field!("y", pat_var!("b"))), term_sym!("b")),
-                field!(pat_var!("c"), term_sym!("c"))
-            ))
+                field!(pat_var!("c"), term_sym!("c")),
+            )
         );
     }
 

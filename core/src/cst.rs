@@ -266,9 +266,9 @@ impl<'a, 'i, N> Spanned for Item<'a, 'i, N> {
 
 // CST pattern macros. Used to construct patterns that ignore spans.
 
-#[macro_export]
+#[macro_export(local_inner_macros)]
 macro_rules! comma_sep {
-    ($first:pat $(,$elems:pat)*) => {
+    ($first:pat $(,$elems:pat)* $(,)?) => {
         $crate::cst::CommaSep {
             first: $first,
             elems: &[$((.., $elems)),*],
@@ -297,12 +297,18 @@ macro_rules! id_field {
 
 #[macro_export(local_inner_macros)]
 macro_rules! prod {
-    ($fields:pat) => {
+    ($($fields:pat),+ $(,)?) => {
         $crate::cst::ProductRow {
-            fields: $fields,
+            fields: Some($crate::comma_sep!($($fields),+)),
             ..
         }
     };
+    () => {
+        $crate::cst::ProductRow {
+            fields: None,
+            ..
+        }
+    }
 }
 
 #[macro_export(local_inner_macros)]
@@ -314,8 +320,8 @@ macro_rules! sum {
 
 #[macro_export]
 macro_rules! pat_prod {
-    ($fields:pat) => {
-        &$crate::cst::Pattern::ProductRow($crate::prod!($fields))
+    ($($fields:pat),* $(,)?) => {
+        &$crate::cst::Pattern::ProductRow($crate::prod!($($fields,)+))
     };
 }
 
@@ -380,8 +386,11 @@ macro_rules! term_app {
 
 #[macro_export]
 macro_rules! term_prod {
-    ($fields:pat) => {
-        &$crate::cst::Term::ProductRow($crate::prod!($fields))
+    ($($fields:pat),* $(,)?) => {
+        &$crate::cst::Term::ProductRow($crate::prod!($($fields,)*))
+    };
+    () => {
+        &$crate::cst::Term::ProductRow($crate::prod!())
     };
 }
 
@@ -405,8 +414,8 @@ macro_rules! term_dot {
 
 #[macro_export]
 macro_rules! term_match {
-    ($cases:pat) => {
-        &$crate::cst::Term::Match { cases: $cases, .. }
+    ($($cases:pat),+ $(,)?) => {
+        &$crate::cst::Term::Match { cases: $crate::comma_sep!($($cases),+), .. }
     };
 }
 
