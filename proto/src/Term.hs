@@ -78,8 +78,8 @@ data Term meta
     Handle { handle_meta :: meta, handle_effect :: Label, handle_handler :: Term meta, handle_body :: Term meta }
   | -- Effect Handler
     Handler meta (HandleClause meta)
-  | -- Effect Operation
-    Op meta Label
+  | -- Effect Perform Operation
+    Perform { perform_meta :: meta, perform_op :: Label, perform_val :: Term meta }
   deriving (Show)
 
 meta :: Lens' (Term meta) meta
@@ -99,7 +99,7 @@ meta = lens get set
       App m _ _ -> m
       Handle m _ _ _ -> m
       Handler m _ -> m
-      Op m _ -> m
+      Perform m _ _ -> m
 
 meta' :: Traversal (Term a) (Term b) a b
 meta' f =
@@ -115,7 +115,7 @@ meta' f =
     App m fn arg -> App <$> f m <*> meta' f fn <*> traverse (meta' f) arg
     Handle m lbl handler term -> Handle <$> f m <*> pure lbl <*> meta' f handler <*> meta' f term
     Handler m clauses -> Handler <$> f m <*> handleClauseTerms (meta' f) clauses
-    Op m op -> Op <$> f m <*> pure op
+    Perform m op val -> Perform <$> f m <*> pure op <*> meta' f val
 
 voidAnn :: Term meta -> Term ()
 voidAnn = over meta' (const ())
@@ -137,7 +137,7 @@ instance Show1 Term where
         App m fn arg -> go fn . (" [" ++) . foldr (\item acc -> item . (',' :) . acc) (']' :) (go <$> arg) . (" :: " ++) . (' ' :) . show p m
         Handle m eff handler term -> ("handle<" ++) . showsPrec p eff . ("> " ++) . go handler . (' ' :) . go term . (' ' :) . show p m
         Handler _ clauses -> liftShowsPrec show showList p clauses
-        Op m op -> showsPrec p op . (" :: " ++) . (' ' :) . show p m
+        Perform m op val -> ("perform " ++) . showsPrec p op . (' ' :) . go val . (" :: " ++) . (' ' :) . show p m
 
 instance Functor Term where
   fmap f =
@@ -152,7 +152,7 @@ instance Functor Term where
       Handler m clauses -> Handler (f m) (f <$> clauses)
       Var m x -> Var (f m) x
       Int m i -> Int (f m) i
-      Op m op -> Op (f m) op
+      Perform m op val -> Perform (f m) op (f <$> val)
       Unit m -> Unit (f m)
 
 instance Foldable Term where
@@ -168,7 +168,7 @@ instance Foldable Term where
       Handler m clauses -> f m <> foldMap f clauses
       Var m _ -> f m
       Int m _ -> f m
-      Op m _ -> f m
+      Perform m _ _ -> f m
       Unit m -> f m
 
 instance Traversable Term where
@@ -184,7 +184,7 @@ instance Traversable Term where
       Handler m clauses -> Handler <$> f m <*> handleClauseTerms (traverse f) clauses
       Var m x -> Var <$> f m <*> pure x
       Int m i -> Int <$> f m <*> pure i
-      Op m op -> Op <$> f m <*> pure op
+      Perform m op val -> Perform <$> f m <*> pure op <*> traverse f val
       Unit m -> Unit <$> f m
 
 instance Plated (Term meta) where
@@ -249,7 +249,7 @@ fn <@> arg = App () fn (arg :| [])
 app fn args = App () fn (NonEmpty.fromList (Foldable.toList args))
 
 handle = Handle ()
-op = Op ()
+perform = Perform ()
 
 f x =
   case x of

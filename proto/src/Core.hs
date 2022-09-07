@@ -16,6 +16,8 @@ import Prettyprinter
 import Subst
 import Term
 import Type
+import Data.Bifunctor
+import Data.Text (Text)
 
 data Literal = I Int
   deriving (Show)
@@ -42,10 +44,10 @@ data CoreVar = CoreV Var CoreType
   deriving (Show, Eq, Ord)
 
 instance Pretty CoreVar where
-  pretty (CoreV v ty) = pretty v <+> ":" <+> shortTy ty
+  pretty cv@(CoreV _ ty) = shortVar cv <+> ":" <+> shortTy ty
 
 shortVar :: CoreVar -> Doc ann
-shortVar (CoreV v _) = pretty v
+shortVar (CoreV v _) = maybe ("(" <> pretty v <> ")") pretty (namedVar v)
 
 coreVarTy :: Lens' CoreVar CoreType
 coreVarTy =
@@ -99,7 +101,7 @@ instance SubstApp CoreType where
   apply (Subst map) =
     transform
       ( \case
-          core_ty@(CoreVar (CoreTV tv _)) -> fromMaybe core_ty $ Map.lookup tv map >>= toType
+          core_ty@(CoreVar (CoreTV tv _)) -> fromMaybe core_ty (Map.lookup tv map >>= toType)
           core_ty -> core_ty
       )
 
@@ -135,7 +137,7 @@ data Core
   | Product [Core]
   | Project Int Core
   | NewPrompt
-  | Prompt { prompt_marker :: Core, prompt_handler :: Core, prompt_body :: Core }
+  | Prompt { prompt_marker :: Core, prompt_handler :: Core, prompt_body :: Core  }
   | Yield { yield_marker :: Core, yield_value :: Core }
   deriving (Show)
 
@@ -152,20 +154,57 @@ instance Plated Core where
       Yield marker value -> Yield <$> f marker <*> f value
       core -> pure core
 
+-- Global core specific variables that users won't see
+evv = V (-1)
+marker = V (-2)
+
+namedVar :: Var -> Maybe Text
+namedVar (V (-1)) = Just "evv"
+namedVar (V (-2)) = Just "marker"
+namedVar (V (-3)) = Just "op_arg"
+namedVar _ = Nothing
+
 instance Pretty Core where
   pretty =
     \case
       Core.Var var -> shortVar var
       Lit lit -> pretty lit
-      Lam x body -> "λ" <+> pretty x <+> "." <+> pretty body
-      Core.App fn arg -> "(" <> pretty fn <+> pretty arg <> ")"
-      TyLam x body -> "Λ" <+> pretty x <+> "." <+> pretty body
+      Lam x core -> 
+        let (xs, body) = gatherLams core
+         in group ("fun(" <> group (nest 4 (line <> vcat ((<> ", ") . pretty <$> x:xs))) <> softline 
+            <> ") ." <> line <> group (nest 4 (pretty body)))
+
+      Core.App fn arg@(Core.App {}) -> group (pretty fn <+> "(" <> pretty arg <> ")")
+      Core.App fn arg -> group (pretty fn <+> pretty arg)
+
+      TyLam x core -> 
+          let (xs, body) = gatherTyLams core
+              nesting = 
+                case body of 
+                  -- Special case don't indent lambdas
+                  Lam {} -> id
+                  _ -> nest 4
+           in "ty_fun<" <> softline <> (group . nest 4 $ vcat ((<> ", ") . pretty <$> x:xs)) <+> "> ." <> line <> group (nesting (pretty body))
+
       TyApp forall ty -> pretty forall <+> pretty ty
-      Product elems -> "{" <> hcat (punctuate ("," <> space) (pretty <$> elems)) <> "}"
+      Product elems -> 
+        case elems of 
+            [] -> "{}"
+            (elem : elems) -> group ("{" <+> group (pretty elem <> line <> vcat ((", " <>) . pretty <$> elems)) <> line <> "}")
       Project idx core -> "π" <> pretty idx <+> pretty core
-      NewPrompt -> "fresh prompt"
-      Prompt m h body -> "prompt" <+> pretty m <+> pretty h <+> pretty body
-      Yield m v -> "yield" <+> pretty m <+> pretty v
+      NewPrompt -> "fresh_prompt()"
+
+      Prompt m h@(Core.Var {}) body -> "prompt" <+> pretty m <+> pretty h <+> pretty body 
+
+      Prompt m h body -> "prompt" <+> pretty m <> line <> indent 4 (pretty h <> line <> "(|" <> pretty body <> "|)")
+
+      Yield m v -> "yield" <+> "(" <> pretty m <> ")" <+> "(" <> pretty v <> ")"
+    where
+      gatherTyLams (TyLam x body) = first (x :) (gatherTyLams body)
+      gatherTyLams core = ([], core)
+
+      gatherLams (Lam x body) = first (x :) (gatherLams body)
+      gatherLams core = ([], core)
 
 coreVars :: Traversal' Core CoreVar
 coreVars f core =
@@ -187,23 +226,23 @@ coreUnboundVars core = allVars `Set.difference` boundVars
   boundVars = foldrOf (cosmos . coreBoundVars) Set.insert Set.empty core
 
 rowEvType :: InternalRow -> InternalRow -> InternalRow -> CoreType
-rowEvType left right goal = 
-  CoreProduct 
+rowEvType left right goal =
+  CoreProduct
     [ CoreFun leftTy (Closed Map.empty) (CoreFun rightTy (Closed Map.empty) goalTy)
     , CoreProduct []
-    , CoreProduct 
-      [ CoreFun goalTy (Closed Map.empty) leftTy
-      , CoreProduct []
-      ]
-    , CoreProduct 
-      [ CoreFun goalTy (Closed Map.empty) rightTy
-      , CoreProduct []
-      ]
+    , CoreProduct
+        [ CoreFun goalTy (Closed Map.empty) leftTy
+        , CoreProduct []
+        ]
+    , CoreProduct
+        [ CoreFun goalTy (Closed Map.empty) rightTy
+        , CoreProduct []
+        ]
     ]
-  where
-    leftTy = fromType (ProdTy (rowToType left))
-    rightTy = fromType (ProdTy (rowToType right))
-    goalTy = fromType (ProdTy (rowToType goal))
+ where
+  leftTy = fromType (ProdTy (rowToType left))
+  rightTy = fromType (ProdTy (rowToType right))
+  goalTy = fromType (ProdTy (rowToType goal))
 
 rowEvidence :: Row -> Row -> Row -> Core
 rowEvidence left right goal = Product [Core.concat left right, placeholder, Product [prjL left goal, placeholder], Product [prjR right goal, placeholder]]
@@ -218,11 +257,11 @@ prjR outRow inRow = Lam inVar out
   out =
     case [(inSize - outSize) .. inSize] of
       -- Special case for singleton
-      [_] -> Project 0 (Core.Var inVar) 
+      [_] -> Project 0 (Core.Var inVar)
       idxs -> Product (fmap (\i -> indx i (Core.Var inVar)) idxs)
   inVar = CoreV (V 0) inTy
-  indx = 
-    case inTy of 
+  indx =
+    case inTy of
       CoreProduct _ -> Project
       _ -> \_ ty -> ty
   inTy = unwrapSingleton $ fromType (ProdTy (RowTy inRow))
@@ -230,8 +269,8 @@ prjR outRow inRow = Lam inVar out
 prjL outRow inRow = Lam inVar out
  where
   out =
-    case [0..(Map.size outRow - 1)] of
-      [_] -> Project 0 (Core.Var inVar) 
+    case [0 .. (Map.size outRow - 1)] of
+      [_] -> Project 0 (Core.Var inVar)
       idxs -> Product (fmap (\i -> indx inTy i (Core.Var inVar)) idxs)
   inVar = CoreV (V 0) inTy
   inTy = fromType (ProdTy (RowTy inRow))
@@ -250,13 +289,15 @@ indx ty =
     CoreProduct _ -> Project
     _ -> \_ ty -> ty
 
-unwrapSingleton ty = 
+unwrapSingleton ty =
   case ty of
     CoreProduct [ty] -> ty
     ty -> ty
 
 varSubst :: Map.Map Var Core.Core -> Core.Core -> Core.Core
-varSubst env = transform
-  (\case
-    core@(Core.Var (CoreV v _)) -> fromMaybe core $ env !? v
-    core -> core)
+varSubst env =
+  transform
+    ( \case
+        core@(Core.Var (CoreV v _)) -> fromMaybe core $ env !? v
+        core -> core
+    )
