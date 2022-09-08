@@ -326,7 +326,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::cst::{Item, Term};
+    use aiahr_core::{
+        cst::{Item, Term},
+        field, id_field, item_term, pat_prod, pat_sum, pat_var, term_abs, term_app, term_dot,
+        term_local, term_match, term_paren, term_prod, term_sum, term_sym, term_with,
+    };
+    use assert_matches::assert_matches;
     use bumpalo::Bump;
     use chumsky::{prelude::end, Parser};
 

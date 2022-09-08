@@ -155,6 +155,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use assert_matches::assert_matches;
     use chumsky::{
         prelude::{end, just, Simple},
         Parser,
