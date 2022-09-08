@@ -101,8 +101,8 @@ fn sum_row<'i, T>(
         })
 }
 
-// Returns a parser for a pattern.
-fn pattern<'a, 'i: 'a>(
+/// Returns a parser for a pattern.
+pub fn pattern<'a, 'i: 'a>(
     arena: &'a Bump,
 ) -> impl Clone + Parser<Token<'i>, &'a Pattern<'a, 'i, &'i str>, Error = ParseErrors<'i>> {
     recursive(|pattern| {

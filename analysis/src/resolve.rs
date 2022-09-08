@@ -86,7 +86,7 @@ where
     })
 }
 
-// Resolves the given pattern, accumulating bindings into `names`.
+/// Resolves the given pattern, accumulating bindings into `names`.
 pub fn resolve_pattern<'a, 'i, 'n, E: DiagnosticSink<NameResolutionError<'i>>>(
     arena: &'a Bump,
     names: &'n mut Names<'_, 'i>,
