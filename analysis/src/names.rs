@@ -87,7 +87,7 @@ impl<'n, 'i> Names<'n, 'i> {
         let out = self
             .layers()
             .find_map(|layer| layer.get_key_value(name.value))
-            .map(|(&orig, &s)| s.of(Handle(orig)));
+            .map(|(&orig, _)| name.span().of(Handle(orig)));
         if let None = out {
             errors.add(NameResolutionError::NotFound(name));
         }
