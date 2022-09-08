@@ -6,7 +6,7 @@ use std::{
 
 use aiahr_core::{
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
-    handle::Handle,
+    handle::{Handle, RefHandle},
     span::{Span, SpanOf, Spanned},
 };
 
@@ -83,7 +83,7 @@ impl<'n, 'i> Names<'n, 'i> {
         &self,
         name: SpanOf<&'i str>,
         errors: &mut E,
-    ) -> Option<SpanOf<Handle<'i, str>>> {
+    ) -> Option<SpanOf<RefHandle<'i, str>>> {
         let out = self
             .layers()
             .find_map(|layer| layer.get_key_value(name.value))
@@ -100,7 +100,7 @@ impl<'n, 'i> Names<'n, 'i> {
         &mut self,
         name: SpanOf<&'i str>,
         errors: &mut E,
-    ) -> Option<SpanOf<Handle<'i, str>>> {
+    ) -> Option<SpanOf<RefHandle<'i, str>>> {
         if let Some((&orig, &s)) = self.locals.get_key_value(name.value) {
             errors.add(NameResolutionError::Duplicate {
                 original: s.of(orig),

@@ -2,7 +2,7 @@ use crate::names::Names;
 use aiahr_core::{
     cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
-    handle::Handle,
+    handle::{Handle, RefHandle},
     span::SpanOf,
 };
 use bumpalo::Bump;
@@ -92,7 +92,7 @@ pub fn resolve_pattern<'a, 'i, 'n, E: DiagnosticSink<NameResolutionError<'i>>>(
     names: &'n mut Names<'_, 'i>,
     pattern: &Pattern<'_, 'i, &'i str>,
     errors: &mut E,
-) -> Option<&'a Pattern<'a, 'i, Handle<'i, str>>> {
+) -> Option<&'a Pattern<'a, 'i, RefHandle<'i, str>>> {
     Some(arena.alloc(match pattern {
         Pattern::ProductRow(pr) => Pattern::ProductRow(resolve_product_row(arena, pr, |target| {
             resolve_pattern(arena, names, target, errors)
@@ -110,7 +110,7 @@ pub fn resolve_term<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
     names: &Names<'_, 'i>,
     term: &Term<'_, 'i, &'i str>,
     errors: &mut E,
-) -> Option<&'a Term<'a, 'i, Handle<'i, str>>> {
+) -> Option<&'a Term<'a, 'i, RefHandle<'i, str>>> {
     Some(arena.alloc(match term {
         Term::Binding {
             var,
@@ -216,7 +216,7 @@ pub fn resolve_item<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
     names: &Names<'_, 'i>,
     item: &Item<'_, 'i, &'i str>,
     errors: &mut E,
-) -> Option<Item<'a, 'i, Handle<'i, str>>> {
+) -> Option<Item<'a, 'i, RefHandle<'i, str>>> {
     Some(match item {
         Item::Term { name, eq, value } => Item::Term {
             name: name.map(Handle),
@@ -275,7 +275,7 @@ where
 #[derive(Debug)]
 pub struct ResolvedModule<'a, 'i> {
     /// Top-level items that were successfully resolved.
-    pub succeeded: Vec<Item<'a, 'i, Handle<'i, str>>>,
+    pub succeeded: Vec<Item<'a, 'i, RefHandle<'i, str>>>,
 
     /// Top-level items that could not be resolved.
     pub failed: Vec<SpanOf<&'i str>>,
@@ -289,7 +289,7 @@ mod tests {
         cst::{Item, Term},
         diagnostic::nameres::NameResolutionError,
         field,
-        handle::Handle,
+        handle::RefHandle,
         id_field, item_term, pat_prod, pat_var,
         span::SpanOf,
         span_of, term_abs, term_app, term_dot, term_local, term_match, term_prod, term_sum,
@@ -310,7 +310,7 @@ mod tests {
     fn parse_resolve_term<'a, 'i>(
         arena: &'a Bump,
         input: &'i str,
-    ) -> Result<&'a Term<'a, 'i, Handle<'i, str>>, Vec<NameResolutionError<'i>>> {
+    ) -> Result<&'a Term<'a, 'i, RefHandle<'i, str>>, Vec<NameResolutionError<'i>>> {
         let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
         let unresolved = term(arena).parse(to_stream(tokens, eoi)).unwrap();
         let mut errors = Vec::new();
@@ -326,7 +326,7 @@ mod tests {
     fn parse_resolve_module<'a, 'i>(
         arena: &'a Bump,
         input: &'i str,
-    ) -> Result<Vec<Item<'a, 'i, Handle<'i, str>>>, Vec<NameResolutionError<'i>>> {
+    ) -> Result<Vec<Item<'a, 'i, RefHandle<'i, str>>>, Vec<NameResolutionError<'i>>> {
         let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
         let unresolved = aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap();
         let mut errors = Vec::new();
