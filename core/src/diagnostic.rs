@@ -64,4 +64,11 @@ where
     fn add(&mut self, diag: D) {
         self.push(E::from(diag))
     }
+
+    fn add_all<I>(&mut self, iter: I)
+    where
+        I: Iterator<Item = D>,
+    {
+        self.extend(iter.map(E::from))
+    }
 }
