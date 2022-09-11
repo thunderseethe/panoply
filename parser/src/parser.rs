@@ -1,5 +1,5 @@
 use aiahr_core::{
-    cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
+    cst::{Field, IdField, Item, Pattern, ProductRow, Separated, SumRow, Term},
     diagnostic::parser::ParseErrors,
     loc::Loc,
     span::{Span, SpanOf, Spanned},
@@ -34,15 +34,17 @@ fn option<'i, T>(
     choice((parser.map(Some), empty().map(|_| None)))
 }
 
-// Returns a parser for one or more comma-separated `T` values, represented by `CommaSep<T>`.
-fn comma_sep<'a, 'i, T: 'a>(
+// Returns a parser for one or more `T` values separated by `sep`, representing the sequence with
+// `Separated<T>`.
+fn separated<'a, 'i, T: 'a>(
     arena: &'a Bump,
     elem: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, CommaSep<'a, T>, Error = ParseErrors<'i>> {
+    sep: impl Clone + Parser<Token<'i>, Span, Error = ParseErrors<'i>>,
+) -> impl Clone + Parser<Token<'i>, Separated<'a, T>, Error = ParseErrors<'i>> {
     elem.clone()
-        .then(lit(Token::Comma).then(elem).repeated())
-        .then(choice((lit(Token::Comma).map(Some), empty().map(|_| None))))
-        .map(|((first, elems), comma)| CommaSep {
+        .then(sep.clone().then(elem).repeated())
+        .then(choice((sep.map(Some), empty().map(|_| None))))
+        .map(|((first, elems), comma)| Separated {
             first,
             elems: arena.alloc_slice_fill_iter(elems.into_iter()),
             comma,
@@ -75,9 +77,10 @@ fn product_row<'a, 'i: 'a, T: 'a>(
     term: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
 ) -> impl Clone + Parser<Token<'i>, ProductRow<'a, 'i, T>, Error = ParseErrors<'i>> {
     lit(Token::LBrace)
-        .then(option(comma_sep(
+        .then(option(separated(
             arena,
             id_field(Token::Equal, term.clone()),
+            lit(Token::Comma),
         )))
         .then(lit(Token::RBrace))
         .map(|((lbrace, fields), rbrace)| ProductRow {
@@ -211,9 +214,10 @@ pub fn term<'a, 'i: 'a>(
 
         let match_ = lit(Token::KwMatch)
             .then(lit(Token::LAngle))
-            .then(comma_sep(
+            .then(separated(
                 arena,
                 field(pattern(arena), Token::BigArrow, term.clone()),
+                lit(Token::Comma),
             ))
             .then(lit(Token::RAngle))
             .map(|(((match_, langle), cases), rangle)| {

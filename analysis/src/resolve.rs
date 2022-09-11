@@ -1,6 +1,6 @@
 use crate::names::Names;
 use aiahr_core::{
-    cst::{CommaSep, Field, IdField, Item, Pattern, ProductRow, SumRow, Term},
+    cst::{Field, IdField, Item, Pattern, ProductRow, Separated, SumRow, Term},
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     handle::{Handle, RefHandle},
     span::SpanOf,
@@ -16,25 +16,25 @@ where
         .map(|v| arena.alloc_slice_fill_iter(v.into_iter()) as &[T])
 }
 
-// Tries to map the given function over the elements of `comma_sep`, returning all errors.
-fn resolve_comma_sep<'a, A, B, F>(
+// Tries to map the given function over the elements of `separated`, returning all errors.
+fn resolve_separated<'a, A, B, F>(
     arena: &'a Bump,
-    comma_sep: &CommaSep<'_, A>,
+    separated: &Separated<'_, A>,
     f: F,
-) -> Option<CommaSep<'a, B>>
+) -> Option<Separated<'a, B>>
 where
     F: FnMut(&A) -> Option<B>,
 {
     let mut f = f;
-    let first = f(&comma_sep.first);
+    let first = f(&separated.first);
     let elems = alloc_all(
         arena,
-        comma_sep.elems.iter().map(|(c, a)| Some((*c, f(a)?))),
+        separated.elems.iter().map(|(c, a)| Some((*c, f(a)?))),
     );
-    Some(CommaSep {
+    Some(Separated {
         first: first?,
         elems: elems?,
-        comma: comma_sep.comma,
+        comma: separated.comma,
     })
 }
 
@@ -61,7 +61,7 @@ where
 {
     let mut f = f;
     let fields = if let Some(cs) = &prod.fields {
-        Some(resolve_comma_sep(arena, &cs, |field| {
+        Some(resolve_separated(arena, &cs, |field| {
             resolve_id_field(field, &mut f)
         })?)
     } else {
@@ -189,7 +189,7 @@ pub fn resolve_term<'a, 'i, E: DiagnosticSink<NameResolutionError<'i>>>(
         } => Term::Match {
             match_: *match_,
             langle: *langle,
-            cases: resolve_comma_sep(arena, cases, |field| {
+            cases: resolve_separated(arena, cases, |field| {
                 let mut scope = names.subscope();
                 let pattern = resolve_pattern(arena, &mut scope, field.label, errors);
                 let target = resolve_term(arena, &scope, field.target, errors);

@@ -2,17 +2,18 @@ use std::{fmt::Debug, iter::FusedIterator};
 
 use crate::span::{Span, SpanOf, Spanned};
 
-/// A non-empty comma-separated list. To allow an empty list, wrap in `Option`.
+/// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
+/// `Option`.
 #[derive(Clone, Copy, Debug)]
-pub struct CommaSep<'a, T> {
+pub struct Separated<'a, T> {
     pub first: T,
     pub elems: &'a [(Span, T)],
-    /// The optional final comma.
+    /// The optional final separator.
     pub comma: Option<Span>,
 }
 
-impl<'a, T> CommaSep<'a, T> {
-    /// An iterator over the comma-separated elements.
+impl<'a, T> Separated<'a, T> {
+    /// An iterator over the non-separator elements.
     pub fn elements<'b>(&'b self) -> Elements<'b, T> {
         Elements {
             cs: self,
@@ -21,7 +22,7 @@ impl<'a, T> CommaSep<'a, T> {
     }
 }
 
-impl<'a, T: Spanned> Spanned for CommaSep<'a, T> {
+impl<'a, T: Spanned> Spanned for Separated<'a, T> {
     fn span(&self) -> Span {
         Span {
             start: self.first.start(),
@@ -34,11 +35,11 @@ impl<'a, T: Spanned> Spanned for CommaSep<'a, T> {
     }
 }
 
-/// An iterator over the elements of a `CommaSep`. Needed because `std::iter::Chain` does not
+/// An iterator over the elements of a `Separated`. Needed because `std::iter::Chain` does not
 /// implement `ExactSizeIterator`.
 #[derive(Debug)]
 pub struct Elements<'a, T> {
-    cs: &'a CommaSep<'a, T>,
+    cs: &'a Separated<'a, T>,
 
     // `Some(0)` for `cs.first`, `Some(i + 1)` for `cs.elems[i].1`, or `None` for EOI.
     idx: Option<usize>,
@@ -108,7 +109,7 @@ pub type IdField<'i, T> = Field<SpanOf<&'i str>, T>;
 #[derive(Clone, Copy, Debug)]
 pub struct ProductRow<'a, 'i, T> {
     pub lbrace: Span,
-    pub fields: Option<CommaSep<'a, IdField<'i, T>>>,
+    pub fields: Option<Separated<'a, IdField<'i, T>>>,
     pub rbrace: Span,
 }
 
@@ -194,7 +195,7 @@ pub enum Term<'a, 'i, N> {
     Match {
         match_: Span,
         langle: Span,
-        cases: CommaSep<'a, Field<&'a Pattern<'a, 'i, N>, &'a Term<'a, 'i, N>>>,
+        cases: Separated<'a, Field<&'a Pattern<'a, 'i, N>, &'a Term<'a, 'i, N>>>,
         rangle: Span,
     },
     SymbolRef(SpanOf<N>),
@@ -267,9 +268,9 @@ impl<'a, 'i, N> Spanned for Item<'a, 'i, N> {
 // CST pattern macros. Used to construct patterns that ignore spans.
 
 #[macro_export(local_inner_macros)]
-macro_rules! comma_sep {
+macro_rules! separated {
     ($first:pat $(,$elems:pat)* $(,)?) => {
-        $crate::cst::CommaSep {
+        $crate::cst::Separated {
             first: $first,
             elems: &[$((.., $elems)),*],
             ..
@@ -299,7 +300,7 @@ macro_rules! id_field {
 macro_rules! prod {
     ($($fields:pat),+ $(,)?) => {
         $crate::cst::ProductRow {
-            fields: Some($crate::comma_sep!($($fields),+)),
+            fields: Some($crate::separated!($($fields),+)),
             ..
         }
     };
@@ -415,7 +416,7 @@ macro_rules! term_dot {
 #[macro_export]
 macro_rules! term_match {
     ($($cases:pat),+ $(,)?) => {
-        &$crate::cst::Term::Match { cases: $crate::comma_sep!($($cases),+), .. }
+        &$crate::cst::Term::Match { cases: $crate::separated!($($cases),+), .. }
     };
 }
 
