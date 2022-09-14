@@ -47,6 +47,7 @@ library
         lens ^>= 5.1,
         pretty-show ^>= 1.10,
         prettyprinter ^>= 1.7,
+        prettyprinter-ansi-terminal ^>= 1.1,
         text >= 2.0,
         transformers ^>= 0.5
     ghc-options: -W

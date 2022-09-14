@@ -41,33 +41,26 @@ infixl 9 :⊙
 infixl 8 :<~>
 infixl 8 ~
 infixl 8 ~>
-infixl 8 <~
 
 -- Need a better name for this
 data Q
   = -- Equality constraint
-    Ct :<~> Ct
+    Type :<~> Ct
   deriving (Eq, Ord)
 
 -- NB: Convention is that < and > point towards the more complex constraint
 -- So :<~> can have a full constraint on either side.
 -- (~) can only have a type on either side.
 (~) :: Type -> Type -> Q
-t1 ~ t2 = T t1 :<~> T t2
+t1 ~ t2 = t1 :<~> T t2
 
 -- (~>) has a type as it's left argument and a full constraint as it's right argument
 (~>) :: Type -> Ct -> Q
-ty ~> ct = T ty :<~> ct
-
--- (<~) has a constraint as it's left argument and a type as it's right argument
-(<~) :: Ct -> Type -> Q
-ct <~ ty = ct :<~> T ty
+ty ~> ct = ty :<~> ct
 
 instance Show Q where
-  showsPrec p (T t1 :<~> T t2) = showsPrec p t1 . (" :~ " ++) . showsPrec p t2
-  showsPrec p (T t1 :<~> ct) = showsPrec p t1 . (" :~> " ++) . showsPrec p ct
-  showsPrec p (ct :<~> T t2) = showsPrec p ct . (" :<~ " ++) . showsPrec p t2
-  showsPrec p (ct1 :<~> ct2) = showsPrec p ct1 . (" :<~> " ++) . showsPrec p ct2
+  showsPrec p (t1 :<~> T t2) = showsPrec p t1 . (" :~ " ++) . showsPrec p t2
+  showsPrec p (t1 :<~> ct) = showsPrec p t1 . (" :~> " ++) . showsPrec p ct
 
 instance SubstApp Q where
   apply subst (ct1 :<~> ct2) = apply subst ct1 :<~> apply subst ct2

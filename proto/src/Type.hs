@@ -37,6 +37,9 @@ instance Show TVar where
 instance Pretty TVar where
   pretty = viaShow
 
+instance Plated TVar where
+  plate _ (TV i) = pure (TV i)
+
 type Row = Map Label Type
 
 data Type
@@ -55,6 +58,9 @@ typeEffs f =
   \case
     FunTy arg eff ret -> FunTy arg <$> f eff <*> pure ret
     ty -> pure ty
+
+typeEffects :: Type -> [InternalRow]
+typeEffects ty = universe ty >>= toListOf typeEffs
 
 isVar :: Type -> Bool
 isVar (VarTy _) = True
@@ -75,7 +81,7 @@ instance Show Type where
   showsPrec _ (ProdTy (RowTy row)) | Map.null row = ("{}" ++)
   showsPrec p (ProdTy ty) = ('{' :) . showsPrec p ty . ('}' :)
   showsPrec p (FunTy arg (Open eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . showsPrec p eff . ("}-> " ++) . showsPrec 9 ret)
-  showsPrec p (FunTy arg (Closed eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . foldr (\lbl fn -> (unpack lbl ++) . (' ' :) . fn) id (Map.keys eff) . ("}-> " ++) . showsPrec 9 ret)
+  showsPrec p (FunTy arg (Closed eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . Map.foldrWithKey' (\lbl ty fn -> (unpack lbl ++) . (" |> " ++) . showsPrec 10 ty . (", " ++) . fn) id eff . ("}-> " ++) . showsPrec 9 ret)
 
 instance Pretty Type where
   pretty =
@@ -110,7 +116,11 @@ typeVars :: Traversal' Type TVar
 typeVars f ty =
   case ty of
     VarTy var -> VarTy <$> f var
+    FunTy a (Open v) r -> FunTy a <$> (Open <$> f v) <*> pure r
     ty -> pure ty
+
+typeVariables :: Type -> [TVar]
+typeVariables ty = universe ty >>= toListOf typeVars
 
 {- Returns true if tvar appears in type, false otherwise -}
 occurs :: TVar -> Type -> Bool
