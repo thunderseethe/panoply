@@ -18,20 +18,17 @@ import qualified Prettyprinter.Render.Terminal as Terminal
 import Subst
 import Term
 import Type
-import Data.Text (Text)
-import Prettyprinter.Render.Text (renderStrict)
-import qualified Data.List as Data.Traversal
+import Data.Text (Text, pack)
 import Data.Bifunctor (Bifunctor(first))
-import Debug.Trace
 
 data Literal = I Int
-  deriving (Show)
+  deriving (Show, Read)
 
 instance Pretty Literal where
   pretty (I i) = pretty i
 
 data LiteralTy = IntTy
-  deriving (Show, Eq, Ord)
+  deriving (Show, Read, Eq, Ord)
 
 instance Pretty LiteralTy where
   pretty Core.IntTy = "IntTy"
@@ -39,14 +36,14 @@ instance Pretty LiteralTy where
 data Kind
   = KindType
   | KindRow
-  deriving (Show, Eq, Ord)
+  deriving (Show, Read, Eq, Ord)
 
 instance Pretty Kind where
   pretty KindType = "Type"
   pretty KindRow = "Row"
 
 data CoreVar = CoreV Var CoreType
-  deriving (Show, Eq, Ord)
+  deriving (Show, Read, Eq, Ord)
 
 
 prettyVar :: CoreVar -> Doc SyntaxHighlight
@@ -62,7 +59,7 @@ coreVarTy =
     (\(CoreV v _) ty -> CoreV v ty)
 
 data TypeVar = CoreTV TVar Kind
-  deriving (Show, Eq, Ord)
+  deriving (Show, Read, Eq, Ord)
 
 instance Pretty TypeVar where
   pretty (CoreTV tvar kind) = viaShow tvar <+> "::" <+> pretty kind
@@ -76,7 +73,7 @@ data CoreType
   | CoreFun CoreType InternalRow CoreType
   | CoreProduct [CoreType]
   | CoreForall TypeVar CoreType
-  deriving (Show, Eq, Ord)
+  deriving (Show, Read, Eq, Ord)
 
 instance Pretty CoreType where
   pretty =
@@ -89,6 +86,7 @@ instance Pretty CoreType where
       CoreProduct tys -> "{" <+> hcat (punctuate ("," <> space) (pretty <$> tys)) <+> "}"
       CoreForall tyvar ty -> "∀" <+> pretty tyvar <+> "." <+> pretty ty
 
+prettyTy :: CoreType -> Doc SyntaxHighlight
 prettyTy = go
   where
     go = 
@@ -98,7 +96,8 @@ prettyTy = go
         CoreFun arg (Closed eff) ret
           -- If function is total don't print effect
           | Map.null eff -> go arg <+> "->" <+> go ret
-        CoreFun arg eff ret -> go arg <+> "-{" <> pretty eff <> "}->" <+> go ret
+        CoreFun arg (Open eff) ret -> go arg <+> "-{" <> pretty eff <> "}->" <+> go ret
+        CoreFun arg (Closed row) ret -> go arg <+> "-{" <> hsep (punctuate comma (pretty <$> Map.keys row)) <> "}->" <+> go ret
         CoreProduct tys -> "{" <> hcat (punctuate ("," <> space) (go <$> tys)) <> "}"
         CoreForall tyvar ty -> "∀" <+> pretty tyvar <+> "." <+> go ty
 
@@ -114,7 +113,7 @@ instance SubstApp CoreType where
   apply (Subst map) =
     transform
       ( \case
-          core_ty@(CoreVar (CoreTV tv _)) -> fromMaybe core_ty (Map.lookup tv map >>= toType)
+          core_ty@(CoreVar (CoreTV tv _)) -> fromMaybe core_ty (Map.lookup tv map >>= fromTypeSafe)
           core_ty -> core_ty
       )
 
@@ -129,19 +128,31 @@ fromType ty =
     ProdTy _ -> error "Invalid product type"
     FunTy arg eff ret -> CoreFun (fromType arg) eff (fromType ret)
 
-toType :: Type -> Maybe CoreType
-toType ty =
+fromTypeSafe :: Type -> Maybe CoreType
+fromTypeSafe ty =
   case ty of
     VarTy tv -> Just $ CoreVar (coreTyTv tv)
     Type.IntTy -> Just $ CoreLit Core.IntTy
     RowTy row
       -- If this is a map of length 1, unwrap it
-      | Map.size row == 1 -> toType .  head $ Map.elems row
+      | Map.size row == 1 -> fromTypeSafe . head $ Map.elems row
       | otherwise -> Nothing
     ProdTy (RowTy row) -> Just $ CoreProduct (fromType <$> Map.elems row)
     ProdTy (VarTy tv) -> Just $ CoreVar (coreRowTv tv)
     ProdTy _ -> error "Invalid product type"
     FunTy arg eff ret -> Just $ CoreFun (fromType arg) eff (fromType ret)
+
+toType :: CoreType -> Type
+toType ty = 
+  case ty of
+    CoreVar (CoreTV tv KindType) -> VarTy tv
+    CoreVar (CoreTV _ KindRow) -> error "idk what to do this yet"
+    CoreLit Core.IntTy -> Type.IntTy
+    CoreFun arg eff ret -> FunTy (toType arg) eff (toType ret)
+    -- We make up names for our row type that will put them in the same order when we go back to  core
+    CoreProduct elems -> ProdTy (RowTy (Map.fromList $ zip (pack . show <$> [0..]) (toType <$> elems)))
+    CoreForall _ _ -> error "idk what to do  here"
+
 
 data Core
   = Var CoreVar
@@ -152,15 +163,16 @@ data Core
   | TyApp Core CoreType
   | Product [Core]
   | Project Int Core
-  | NewPrompt
+  | NewPrompt CoreVar Core
   | Prompt { prompt_marker :: Core, prompt_handler :: Core, prompt_body :: Core  }
   | Yield { yield_marker :: Core, yield_value :: Core }
-  deriving (Show)
+  deriving (Show, Read)
 
 instance Plated Core where
   plate f core =
     case core of
       Lam x body -> Lam x <$> f body
+      NewPrompt x body -> NewPrompt x <$> f body
       Core.App fn arg -> Core.App <$> f fn <*> f arg
       TyLam x body -> TyLam x <$> f body
       TyApp forall ty -> TyApp <$> f forall <*> pure ty
@@ -178,6 +190,7 @@ namedVar :: Var -> Maybe Text
 namedVar (V (-1)) = Just "evv"
 namedVar (V (-2)) = Just "marker"
 namedVar (V (-3)) = Just "op_arg"
+namedVar (V (-4)) = Just "k"
 namedVar _ = Nothing
 
 
@@ -193,7 +206,7 @@ isSingleDoc (Core.Var _) = True
 isSingleDoc (Lit _) = True
 isSingleDoc (Product elems) 
   | Prelude.null elems = True
-isSingleDoc NewPrompt = True
+--isSingleDoc NewPrompt = True
 isSingleDoc (Project _ _) = True
 isSingleDoc _ = False
 
@@ -202,13 +215,12 @@ prettyCore = go
   where
     go core = 
       case core of
-        Core.Var var -> shortVar var
+        Core.Var var -> shortVar var -- shortVar var 
         Lit lit -> annotate Literal (pretty lit)
         Lam x core -> annotate Keyword "fun" <+> align (group (prettyVar x <> line <> go core))
         Core.App (Lam x lets) defn ->
           let (defns_tail, body) = collectLets lets
               defns = (x, defn) : defns_tail
-              prettyDefn (x, defn) = group (prettyVar x <+> "=" <> align (line <> go defn))
            in align (annotate Keyword "let" <+> (align (vcat $ punctuate line (prettyDefn <$> defns)) <> line <> group (annotate Keyword " in" <+> go body)))
         Core.App fn arg -> 
           let (head, spine) = collectSpine [arg] fn
@@ -220,7 +232,7 @@ prettyCore = go
           | Prelude.null elems -> annotate Literal "Unit"
           | otherwise -> "Product" <+> align (list (go <$> elems))
         Project indx core -> go core <> "[" <> pretty indx <> "]"
-        NewPrompt -> annotate Literal "NewPrompt"
+        NewPrompt x body -> align (annotate Keyword "let" <+> group (prettyVar x <+> "=" <+> annotate Literal "NewPrompt") <> line <> group (annotate Keyword " in" <+> go body))
         Prompt marker handler body -> "Prompt" <+> record [("prompt_marker", go marker), ("prompt_handler", go handler), ("prompt_body", go body)]
         Yield marker value -> "Yield" <+> record [("yield_marker", go marker), ("yield_value", go value)]
 
@@ -228,6 +240,8 @@ prettyCore = go
     record fields = align . group . encloseSep "{ " "}" ", " $ fmap prettyField fields
 
     prettyField (field_name, field) = group (hang 4 (pretty field_name <+> "=" <> line <> field))
+
+    prettyDefn (x, defn) = group (align (prettyVar x <+> "=" <> line <> go defn))
 
     parens core = 
       if isSingleDoc core
@@ -305,42 +319,42 @@ prjR outRow inRow = Lam inVar out
   out =
     case [(inSize - outSize) .. inSize] of
       -- Special case for singleton
-      [_] -> Project 0 (Core.var inVar)
-      idxs -> Product (fmap (\i -> indx i (Core.var inVar)) idxs)
+      [_] -> indx' 0 (Core.var inVar)
+      idxs -> Product (fmap (\i -> indx' i (Core.var inVar)) idxs)
   inVar = CoreV (V 0) inTy
-  indx =
-    case inTy of
-      CoreProduct _ -> Project
-      _ -> \_ ty -> ty
-  inTy = unwrapSingleton $ fromType (ProdTy (RowTy inRow))
+  indx' = indx inRow
+  inTy = fromType (unwrapSingleton inRow)
 
 prjL outRow inRow = Lam inVar out
  where
   out =
     case [0 .. (Map.size outRow - 1)] of
-      [_] -> Project 0 (Core.var inVar)
-      idxs -> Product (fmap (\i -> indx inTy i (Core.var inVar)) idxs)
+      [_] -> indx' 0 (Core.var inVar)
+      idxs -> Product (fmap (\i -> indx' i (Core.var inVar)) idxs)
+  indx' = indx inRow
   inVar = CoreV (V 0) inTy
   inTy = fromType (ProdTy (RowTy inRow))
 
 concat :: Row -> Row -> Core
-concat left right = Lam m $ Lam n (Product splat)
+concat left right = Lam m $ Lam n prod
  where
   m = CoreV (V 0) leftTy
   n = CoreV (V 1) rightTy
-  splat = fmap (\i -> indx leftTy i (Core.var m)) [0 .. (Map.size left - 1)] ++ fmap (\i -> indx rightTy i (Core.var n)) [0 .. (Map.size right - 1)]
-  leftTy = unwrapSingleton $ fromType (ProdTy (RowTy left))
-  rightTy = unwrapSingleton $ fromType (ProdTy (RowTy right))
+  prod = if length splat == 1 then head splat else Product splat
+  splat = fmap (\i -> indx left i (Core.var m)) [0 .. (Map.size left - 1)] ++ fmap (\i -> indx right i (Core.var n)) [0 .. (Map.size right - 1)]
+  leftTy = fromType (unwrapSingleton left)
+  rightTy = fromType (unwrapSingleton right)
 
-indx ty =
-  case ty of
-    CoreProduct _ -> Project
-    _ -> \_ ty -> ty
+indx row =
+  case Map.size row of
+    1 -> \_ ty -> ty
+    _ -> Project
 
-unwrapSingleton ty =
-  case ty of
-    CoreProduct [ty] -> ty
-    ty -> ty
+unwrapSingleton row =
+  case Map.size row of
+    1 -> head $ Map.elems row
+    _ -> ProdTy (RowTy row)
+
 
 varSubst :: Map.Map Var Core.Core -> Core.Core -> Core.Core
 varSubst env =
@@ -352,10 +366,12 @@ varSubst env =
 
 var = Core.Var
 
+lam args body = foldr Core.Lam body args
+
 simplify :: Core -> Core
 simplify = transform
   (\case
-    Core.App (Lam (CoreV x _) body) arg -> simplify $ varSubst (Map.singleton x arg) body
+    --Core.App (Lam (CoreV x _) body) arg -> simplify $ varSubst (Map.singleton x arg) body
     Project idx (Product elems) ->
       if idx < length elems
         then simplify $ elems !! idx

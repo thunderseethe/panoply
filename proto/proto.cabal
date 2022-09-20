@@ -27,7 +27,9 @@ library
     other-modules:
       Constraint
       Core
+      Example
       Fresh
+      Interpret
       Program
       Term
       Type
@@ -43,11 +45,14 @@ library
     build-depends:    
         base >= 4.15,
         containers ^>= 0.6,
+        CC-delcont ^>= 0.2.1.0,
         fused-effects ^>= 1.1,
         lens ^>= 5.1,
+        mtl ^>= 2.2,
         pretty-show ^>= 1.10,
         prettyprinter ^>= 1.7,
         prettyprinter-ansi-terminal ^>= 1.1,
+        raw-strings-qq ^>= 1.1,
         text >= 2.0,
         transformers ^>= 0.5
     ghc-options: -W

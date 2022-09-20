@@ -21,7 +21,7 @@ instance (Traversable t, TypeOf a) => TypeOf (t a) where
   typeOf f = traverse (typeOf f)
 
 newtype TVar = TV { unTV :: Int }
-  deriving (Ord, Eq, Num, Enum, Bounded)
+  deriving (Show, Read, Ord, Eq, Num, Enum, Bounded)
 
 typeVarNames :: [String]
 typeVarNames = go 1 base
@@ -31,11 +31,9 @@ typeVarNames = go 1 base
   go n [] = go (n + 1) ((++ replicate n '\'') <$> base)
   go n (name : tail) = name : go n tail
 
-instance Show TVar where
-  showsPrec _ (TV tv) = (++) (typeVarNames !! tv)
 
 instance Pretty TVar where
-  pretty = viaShow
+  pretty (TV i) = pretty (typeVarNames !! i)
 
 instance Plated TVar where
   plate _ (TV i) = pure (TV i)
@@ -48,7 +46,7 @@ data Type
   | RowTy Row
   | ProdTy Type
   | FunTy Type InternalRow Type
-  deriving (Eq, Ord)
+  deriving (Show, Read, Eq, Ord)
 
 unitTy :: Type
 unitTy = ProdTy $ RowTy Map.empty
@@ -73,7 +71,7 @@ lbl |> ty = Map.singleton lbl ty
 showsRow :: Int -> Row -> ShowS
 showsRow p row s = foldr (\f s -> f s) s $ intersperse (", " ++) $ (\(lbl, ty) -> showsPrec p lbl . (" |> " ++) . showsPrec p ty) <$> Map.toList row
 
-instance Show Type where
+  {-instance Show Type where
   showsPrec p (VarTy tv) = showsPrec p tv
   showsPrec _ IntTy = ("IntTy" ++)
   showsPrec _ (RowTy row) | Map.null row = ("() " ++)
@@ -81,7 +79,7 @@ instance Show Type where
   showsPrec _ (ProdTy (RowTy row)) | Map.null row = ("{}" ++)
   showsPrec p (ProdTy ty) = ('{' :) . showsPrec p ty . ('}' :)
   showsPrec p (FunTy arg (Open eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . showsPrec p eff . ("}-> " ++) . showsPrec 9 ret)
-  showsPrec p (FunTy arg (Closed eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . Map.foldrWithKey' (\lbl ty fn -> (unpack lbl ++) . (" |> " ++) . showsPrec 10 ty . (", " ++) . fn) id eff . ("}-> " ++) . showsPrec 9 ret)
+  showsPrec p (FunTy arg (Closed eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . Map.foldrWithKey' (\lbl ty fn -> (unpack lbl ++) . (" |> " ++) . showsPrec 10 ty . (", " ++) . fn) id eff . ("}-> " ++) . showsPrec 9 ret)-}
 
 instance Pretty Type where
   pretty =
@@ -129,17 +127,11 @@ occurs tvar = anyOf (plate . typeVars) (== tvar)
 data InternalRow
   = Closed Row
   | Open TVar
-  deriving (Eq, Ord)
+  deriving (Show, Read, Eq, Ord)
 
 instance Pretty InternalRow where
   pretty (Closed row) = hcat $ punctuate ("," <> space) (fmap (\(lbl, ty) -> pretty lbl <+> "|>" <+> pretty ty) (Map.toAscList row))
   pretty (Open tvar) = pretty tvar
-
-instance Show InternalRow where
-  showsPrec p (Closed row)
-    | Map.null row = ("Closed ()" ++)
-    | otherwise = showsRow p row
-  showsPrec p (Open tv) = ("Open " ++) . showsPrec p tv
 
 instance TypeOf InternalRow where
   typeOf f =

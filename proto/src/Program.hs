@@ -25,7 +25,7 @@ mkEffCtx = foldr go (EffCtx Map.empty Map.empty)
     EffCtx (Map.insert name eff effs) (Map.foldrWithKey (\ op (i, sig) sigs -> Map.insert op (eff, i, sig) sigs) sigs (calcIndex ops))
 
 calcIndex :: Map Label Scheme -> Map Label (Int, Scheme)
-calcIndex = snd . Map.mapAccum (\i sig -> (i + 1, (i, sig))) 0
+calcIndex = snd . Map.mapAccum (\i sig -> (i + 1, (i, sig))) 1 {- return always goes in 0 so we start index here at 1 -}
 
 data Def meta = Def { def_name :: Var, def_term :: Term meta }
   deriving (Show)

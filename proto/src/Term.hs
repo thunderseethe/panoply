@@ -18,7 +18,7 @@ import Prettyprinter
 import qualified Data.Foldable as Foldable
 
 newtype Var = V Int
-  deriving (Ord, Eq, Num, Enum, Show, Bounded)
+  deriving (Ord, Eq, Num, Enum, Show, Read, Bounded)
 
 instance Pretty Var where
   pretty = viaShow

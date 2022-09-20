@@ -32,7 +32,7 @@ import Control.Lens (
  )
 import Control.Lens.Tuple
 import qualified Data.Map.Merge.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 
 import Control.Carrier.Reader (runReader)
 import Control.Carrier.State.Strict (runState)
@@ -43,7 +43,7 @@ import Control.Monad (forM)
 import Data.Bifunctor (Bifunctor (first, second))
 import Data.Either (partitionEithers)
 import Data.Foldable ( foldrM, Foldable(..) )
-import Data.List (nub)
+import Data.List (nub, sort)
 import Data.List.NonEmpty (NonEmpty ((:|)), (<|))
 import qualified Data.List.NonEmpty as NonEmpty
 import Debug.Trace
@@ -63,6 +63,8 @@ import qualified TVarSet
 import Term
 import Type
 import Control.Lens.Plated
+import Control.Effect.Reader (asks)
+import Data.List (sortBy)
 
 data Wrapper
   = TyApp Wrapper Core.CoreType
@@ -229,7 +231,7 @@ generateConstraints term =
       return
         ( Prj (Infer (ProdTy $ VarTy out) (term ^. meta . eff)) dir term
         , Core.App (Core.Project 0 (Core.Project idx (Core.var $ Core.CoreV out_ev rowEvTy))) term_core
-        , Simp (term ^. meta . ty ~ ProdTy (VarTy input)) : trace (show constr) (Simp constr) : term_constr
+        , Simp (term ^. meta . ty ~ ProdTy (VarTy input)) : Simp constr : term_constr
         )
     -- Special case application chains so we don't pass evidence vector unecessarily
     App _ fn arg ->
@@ -241,13 +243,14 @@ generateConstraints term =
        in do
             alpha <- fresh
             out_eff <- fresh
+            Scheme _ _ evv_ty <- asks (\(ctx :: Ctx) -> fromJust $ ctx !? Core.evv)
             (fn, fn_core, fn_constr) <- generateConstraints fn
             (args, arg_cores, arg_constrs) <- unzip3 <$> traverse generateConstraints arg
-            let expected_arg_ty = foldr (\arg ret -> FunTy (arg ^. meta . ty) (fn ^. meta . eff) ret) (VarTy alpha) args
+            let expected_arg_ty = foldr (\arg_ty ret -> FunTy arg_ty (fn ^. meta . eff) ret) (VarTy alpha) (evv_ty <| (view (meta . ty) <$> args))
             (arg_eff, expected_eff_constrs) <- args_eff args
             return
               ( App (Infer (VarTy alpha) (Open out_eff)) fn args
-              , foldl' Core.App (Core.App fn_core (Core.var $ Core.CoreV Core.evv (Core.CoreVar $ Core.coreRowTv out_eff))) arg_cores
+              , foldl' Core.App (Core.App fn_core (Core.var $ Core.CoreV Core.evv (Core.fromType evv_ty))) arg_cores
               , Simp (VarTy out_eff ~> (fn ^. meta . eff) :⊙ arg_eff) :
                 Simp (fn ^. meta . ty ~ expected_arg_ty) :
                 (Simp <$> expected_eff_constrs) <> fn_constr <> mconcat (NonEmpty.toList arg_constrs)
@@ -255,13 +258,14 @@ generateConstraints term =
     Abs _ xs body -> do
       arg_tys <- traverse (\v -> fresh <&> (v,)) xs
       out_eff <- fresh
-      (body, body_core, constr) <- local (foldr (\(x, alpha) f -> Map.insert x (monoScheme $ VarTy alpha) . f) id ((Core.evv, out_eff) <| arg_tys)) (generateConstraints body)
+      evv_ty <- fresh
+      (body, body_core, constr) <- local (foldr (\(x, alpha) f -> Map.insert x (monoScheme $ VarTy alpha) . f) (Map.insert Core.evv (monoScheme $ ProdTy (VarTy out_eff))) arg_tys) (generateConstraints body)
       let fn_ty = foldr (\(_, alpha) ty -> FunTy (VarTy alpha) (body ^. meta . eff) ty) (body ^. meta . ty) arg_tys
       return
         ( Abs (Infer fn_ty (Open out_eff)) xs body
         , -- Wrap any lambdas with an extra parameter for evidence vector
-          Core.Lam (Core.CoreV Core.evv (CoreVar $ coreRowTv out_eff)) $ foldr (\(x, alpha) body -> Core.Lam (Core.CoreV x (CoreVar $ coreTyTv alpha)) body) body_core arg_tys
-        , Simp (VarTy out_eff ~ rowToType (body ^. meta . eff)) : constr
+          Core.Lam (Core.CoreV Core.evv (CoreVar $ coreTyTv evv_ty)) $ foldr (\(x, alpha) body -> Core.Lam (Core.CoreV x (CoreVar $ coreTyTv alpha)) body) body_core arg_tys
+        , Simp (VarTy evv_ty ~ ProdTy (VarTy out_eff)) : Simp (VarTy out_eff ~ rowToType (body ^. meta . eff)) : constr
         )
     Perform _ op val_ -> do
       EffCtx _ sigs <- ask
@@ -270,26 +274,25 @@ generateConstraints term =
               Nothing -> error $ "Undefined operator " ++ show op
               Just (Eff name core_ty _, i, sig) -> (name, core_ty, i, sig)
       (constrs, _, op_ty) <- instantiate scheme
-      let (arg_ty, ret_ty) =
-            case op_ty of
-              FunTy arg _ ret -> (arg, ret)
-              _ -> error "This should be impossible"
+      let (arg_ty, _, ret_ty) = expectFunTy op_ty
       (val, val_core, val_constrs) <- generateConstraints val_
 
       -- Figure out how to get the type of evv from context here
       (lookup_term, lookup_handler_in_evv, lookup_constrs) <- generateConstraints $ unlabel (prj R (var Core.evv)) eff_name
-      --_ <- trace (ppShowList lookup_constrs) (return ())
+      _ <- trace (ppShow $ lookup_term ^. meta . ty) (return ())
 
       let local_var = Core.CoreV (V (-3)) (Core.fromType $ lookup_term ^. meta . ty)
       -- Figure out how to type this honestly, I think it involves answer types?
       k_ty <- fresh
-      let k_var = Core.CoreV (V (-4)) (Core.CoreVar $ Core.coreTyTv k_ty)
-      let handler = Core.Lam k_var $ Core.App (Core.App (Core.Project core_indx (Core.Project 0 (Core.var local_var))) val_core) (Core.var k_var)
+      let k_var = Core.CoreV (V (-4)) (Core.fromType $ FunTy ret_ty (Closed (eff_name |> core_ty)) (VarTy k_ty))
+      let handler = Core.Lam k_var $ Core.App (Core.App (Core.Project core_indx (Core.Project 1 (Core.var local_var))) val_core) (Core.var k_var)
       return
-        ( Perform (Infer ret_ty (Closed (eff_name |> core_ty))) op val
+        ( Perform (Infer (VarTy k_ty) (Closed (eff_name |> core_ty))) op val
         , -- We need to look up our marker from evidence vector
-          Core.App (Core.Lam local_var (Core.Yield (Core.Project 1 (Core.var local_var)) handler)) lookup_handler_in_evv
-        , Simp ((val ^. meta . ty) ~ arg_ty): val_constrs <> lookup_constrs <> constrs
+          Core.App (Core.Lam local_var (Core.Yield (Core.Project 0 (Core.var local_var)) handler)) lookup_handler_in_evv
+        , --Simp (VarTy k_ty ~ op_ty) :
+          Simp ((val ^. meta . ty) ~ arg_ty) : 
+          val_constrs <> lookup_constrs <> constrs
         )
     Handle _ lbl handler body -> do
       -- TODO: Should eff be on handler instead of handle? I lean no because it complicates the "type" that has to be passed.
@@ -302,12 +305,12 @@ generateConstraints term =
       let handled_eff = Closed (lbl |> core_ty)
       out_eff <- fresh
 
-      (handler, handler_core, handler_constr) <- generateConstraints handler
+      (handler, handler_core, handler_constr) <- local (bind Core.evv (ProdTy (VarTy out_eff))) (generateConstraints handler)
 
       -- TODO: figure out what to do with wrappers
       -- TODO: Check handler types against op types
-      (constrs, _, tys) <- unzip3 <$> forM ops instantiate
-      let (handler_ty, expected_body_ty, handle_out_ty) =
+      (constrs, _, _) <- unzip3 <$> forM ops instantiate
+      let (_, expected_body_ty, handle_out_ty) =
             case handler ^. meta . ty of
               ProdTy (RowTy row) ->
                 case row !? "return" of
@@ -324,50 +327,71 @@ generateConstraints term =
               (Map.zipWithMatched (\_ expected_ty actual_ty -> expected_ty ~ actual_ty))
               tys
               handler_ty-}
+      local_handler_var <- fresh
       let eff_op_constrs = mconcat $ Map.elems constrs
       let marker_var = Core.CoreV Core.marker (Core.CoreLit Core.IntTy)
-      (infer, update_evv_core, evv_constrs) <- local (bind Core.evv (VarTy out_eff) . bind Core.marker IntTy) $ generateConstraints 
-        (record [prj L (var Core.evv), label lbl (record [label "marker" $ var Core.marker, label "handler" (voidAnn handler {- this is kind of a waste probably something smarter we can do here? -})])])
+      (infer, update_evv_core, evv_constrs) <- local (bind local_handler_var (handler ^. meta . ty) . bind Core.evv (ProdTy (VarTy out_eff)) . bind Core.marker IntTy) $ generateConstraints 
+        (record [prj L (var Core.evv), label lbl (record [label "marker" $ var Core.marker, label "handler" (var local_handler_var)])])
+
+      --_ <- trace ("update_evv_core: " ++ unpack (Core.prettyRender update_evv_core)) (return ())
       --_ <- trace ("handler_constr: " ++ ppShowList handler_constr) (return ())
       --_ <- trace ("evv_constrs: " ++ ppShowList evv_constrs) (return ())
       --_ <- trace ("infer meta:" ++ ppShow (infer ^. meta)) (return ())
-      -- Locally bind updated evv vector in body_core
+      -- Locally bind updated evv vector in body_core  
       (body, body_core, body_constr) <- local (bind Core.evv (infer ^. meta . ty)) $ generateConstraints body
-      let handler_body = Core.App (Core.Lam (Core.CoreV Core.evv (Core.fromType $ infer ^. meta . ty)) body_core) update_evv_core
+      let handler_body = Core.App (Core.Lam (Core.CoreV Core.evv (Core.fromType $ infer ^. meta . ty)) body_core) (Core.App (Core.Lam (Core.CoreV local_handler_var (Core.fromType $ handler ^. meta . ty)) update_evv_core) handler_core)
+      let cs = Simp (rowToType (handler ^. meta . eff) ~ rowToType handled_eff) :
+               Simp (expected_body_ty ~ (body ^. meta . ty)) :
+               Simp (rowToType (body ^. meta . eff) ~> Open out_eff :⊙ handled_eff) :
+               body_constr <> handler_constr <> eff_op_constrs <> evv_constrs
       return
         ( Handle (Infer handle_out_ty (Open out_eff)) lbl handler body
         , -- TODO: insert into the evidence vector
-          Core.App (Core.Lam marker_var (Core.Prompt (Core.var marker_var) handler_core handler_body)) Core.NewPrompt
-        , Simp (rowToType (handler ^. meta . eff) ~ rowToType handled_eff) :
-          Simp (expected_body_ty ~ (body ^. meta . ty)) :
-          Simp (rowToType (body ^. meta . eff) ~> Open out_eff :⊙ handled_eff) :
-          body_constr <> handler_constr <> eff_op_constrs <> trace (ppShowList evv_constrs) evv_constrs {- <> (Simp <$> op_constrs) -}
+          Core.NewPrompt marker_var (Core.Prompt (Core.var marker_var) handler_core handler_body)
+        , cs
         )
     Handler _ (HandleClause clauses (Clause ret_name ret_arg ret_unused ret_body)) -> do
       expected_eff <- fresh
       out_eff <- fresh
       alpha <- fresh
+      evv_core_ty <- fresh
+      Scheme _ _ evv_ty <- asks (\(ctx :: Ctx) -> fromJust $ ctx !? Core.evv)
       (ret, ret_body_core, ret_constr) <- local (Map.insert ret_arg (monoScheme $ VarTy alpha)) $ generateConstraints ret_body
       let ret_ty = FunTy (VarTy alpha) (Closed Map.empty) (ret ^. meta . ty)
-      let ret_core = Core.Lam (Core.CoreV ret_arg (Core.CoreVar $ Core.coreTyTv alpha)) ret_body_core
+      let ret_core =
+            Core.lam 
+              [ Core.CoreV ret_arg (Core.CoreVar (Core.coreTyTv alpha))
+              ] ret_body_core
       (clauses, prod_ty_fields, clause_cores, clause_constrs) <-
         unzip4
           <$> forM
             clauses
             ( \(Clause name x resume clause_body) -> do
-                (tout, out) <- (,) <$> fresh <*> fresh
+                out <- fresh
+                EffCtx _ eff_by_sigs <- ask
+                (op_constrs, _, op_sig) <-
+                      case eff_by_sigs !? name of
+                        Just (_, _, scheme) -> instantiate scheme
+                        Nothing -> error ("Unexpected operation in handler: " ++ unpack name)
+                let (op_arg, _, op_ret) = expectFunTy op_sig
+                let resume_ty = FunTy (VarTy evv_core_ty) (Closed Map.empty) $ FunTy op_ret (Open out_eff) (VarTy out)
                 (clause, clause_core, clause_constr) <-
-                  local (bind resume (FunTy (VarTy tout) (Open out_eff) (VarTy out)) . bind x (VarTy tout)) $ generateConstraints clause_body
+                  local (bind Core.evv (VarTy evv_core_ty) . bind resume resume_ty . bind x op_arg) $ generateConstraints clause_body
+                --_ <- trace (unpack name ++ ": " ++ ppShow clause_body ++ "\n" ++ ppShowList clause_constr) (return ())
                 return
                   ( Clause name x resume clause
-                  , (name, FunTy (VarTy tout) (Open expected_eff) (clause ^. meta . ty))
-                  , Core.Lam (Core.CoreV x (Core.fromType (VarTy tout))) $ Core.Lam (Core.CoreV resume (Core.fromType $ FunTy (VarTy tout) (Open out_eff) (VarTy out))) clause_core
+                  , (name, {-FunTy (VarTy evv_core_ty) (Closed Map.empty) $-} FunTy op_arg (Open expected_eff) $ FunTy (FunTy op_ret (Open expected_eff) (VarTy out)) (Open expected_eff) (VarTy out))
+                  , Core.lam 
+                      [ Core.CoreV Core.evv (CoreVar (coreTyTv evv_core_ty))
+                      , Core.CoreV x (Core.fromType op_arg)
+                      , Core.CoreV resume (Core.fromType resume_ty)
+                      ] clause_core
                   , Simp (VarTy out ~ (ret ^. meta . ty)) :
                     Simp (VarTy out ~ (clause ^. meta . ty)) : -- Clause type and return type must agree
                     -- Replicate this in the Handle operation
                     --Simp (op_ty ~ FunTy (VarTy tin) handled_eff (VarTy tout)) : -- Operation needs to be a function that handles our effect
                     Simp (VarTy out_eff ~ rowToType (clause ^. meta . eff)) : -- Each clause can pass on unhandled effects from handler body
-                    clause_constr -- Ambient constraints from recursive calls
+                    clause_constr <> op_constrs -- Ambient constraints from recursive calls
                   )
             )
 
@@ -375,8 +399,13 @@ generateConstraints term =
       return
         ( Handler (Infer (ProdTy $ RowTy handler_row) (Open expected_eff)) (HandleClause clauses (Clause ret_name ret_arg ret_unused ret))
         , Core.Product (ret_core : NonEmpty.toList clause_cores)
-        , ret_constr <> mconcat (NonEmpty.toList clause_constrs)
+        , Simp (VarTy evv_core_ty ~ evv_ty) : ret_constr <> mconcat (NonEmpty.toList clause_constrs)
         )
+
+
+expectFunTy :: Type -> (Type, InternalRow, Type)
+expectFunTy (FunTy arg eff ret) = (arg, eff, ret)
+expectFunTy ty = error ("Expected a FunTy, found: " ++ ppShow ty)
 
 firstEffectOf :: Type -> Maybe InternalRow
 firstEffectOf (FunTy _ eff _) = Just eff
@@ -624,7 +653,7 @@ canonicalize op = go [] []
   go canon residuals [] = return (canon, residuals)
   go canon residuals work = do
     (new_canon, new_residuals, remaining_work) <- partitionResults work
-    --_ <- trace ("canon: " ++ ppShowList new_canon ++ "\nresidue: " ++ ppShowList new_residuals ++ "\nremaining: " ++ ppShowList (remaining_work []) ++ "\n") $ return ()
+    _ <- trace ("canon: " ++ ppShowList new_canon ++ "\nresidue: " ++ ppShowList new_residuals ++ "\nremaining: " ++ ppShowList (remaining_work []) ++ "\n") $ return ()
     go (new_canon <> canon) (new_residuals <> residuals) (remaining_work [])
 
   partitionResults = foldrM (\constr acc -> binResult acc <$> op constr) ([], [], id)
@@ -642,11 +671,11 @@ solve unifiers phi given wanted
     ((fresh_unifiers, subst), (canon, _)) <- runState ([], mempty) (canonicalize canon is)
     return $ Just (unifiers <> fresh_unifiers, subst <> phi, canon <> inert_canon, wanted)
   | (i : interacts, inert_canon) <- interactions wanted = do
-    --_ <- trace ("interactions:\n" ++ ppShowList (i : interacts)) $ return ()
+    _ <- trace ("interactions:\n" ++ ppShowList (i : interacts)) $ return ()
     let is = nub $ foldMap interact (i : interacts)
     ((fresh_unifiers, subst), (canon, remainder)) <- runState ([], mempty) (canonicalize canon is)
     modify (remainder ++)
-    --_ <- trace ("output:\n" ++ ppShowList (sortBy (\(Ct a _) (Ct b _) -> compare a b) (canon <> inert_canon))) $ return ()
+    _ <- trace ("output:\n" ++ ppShowList (sortBy (\(Ct a _) (Ct b _) -> compare a b) (canon <> inert_canon))) $ return ()
     return $ Just (unifiers <> fresh_unifiers, subst <> phi, given, canon <> inert_canon)
   | (i : interacts, inert_wanted) <- simplifications given wanted = do
     let is = simplify <$> i : interacts
@@ -657,12 +686,12 @@ solve _ _ _ _ = return Nothing
 
 simples :: (Has (Fresh TVar) sig m, Has (Throw TyErr) sig m) => [TVar] -> [Q] -> [Q] -> m ([TVar], Subst, [CanonCt], ([CanonCt], [Q]))
 simples unifiers noncanon_given noncanon_wanted = do
-  --_ <- trace ("wanted:\n" ++ ppShowList (sort noncanon_wanted)) $ return ()
+  _ <- trace ("wanted:\n" ++ ppShowList (sort noncanon_wanted)) $ return ()
   ((canon_unifiers, subst), ((given, _), (wanted, wanted_residue))) <- runState ([], mempty) $ do
     given <- canonicalize canon noncanon_given
     wanted <- canonicalize canon noncanon_wanted
     return (given, wanted)
-  --_ <- trace ("canonical:\n" ++ ppShowList wanted ++ "\nresidue:\n" ++ ppShowList wanted_residue) $ return ()
+  _ <- trace ("canonical:\n" ++ ppShowList wanted ++ "\nresidue:\n" ++ ppShowList wanted_residue) $ return ()
   (residue, (unifiers, subst, given, wanted)) <- runState wanted_residue $ go 10000 (unifiers <> canon_unifiers) subst given wanted
   return (unifiers, subst, given, (wanted, residue))
  where
@@ -749,7 +778,7 @@ solveConstraints unifiers given constrs = do
             then error "Expected empty residue for implication constraint"
             else return subst
       )
-  _ <- trace ("residue: " ++ ppShowList residue) $ return ()
+  --_ <- trace ("residue: " ++ ppShowList residue) $ return ()
   return (foldr (<>) subst impl_substs, residue)
  where
   (simpls, impls) = partitionEithers (view constraintEither <$> constrs)
@@ -774,7 +803,7 @@ liftEv :: Core.Core -> Core.Core
 liftEv core = foldr Core.Lam core unbound
  where
   -- Ignore evv variables because they're generated
-  unbound = Set.filter (\(Core.CoreV v _) -> v /= Core.evv) (Core.coreUnboundVars core)
+  unbound = Set.filter (\(Core.CoreV v _) -> v /= Core.evv && v /= Core.marker) (Core.coreUnboundVars core)
 
 stateEff = Eff "State" effCoreTy (monoScheme <$> ops)
   where
@@ -799,7 +828,7 @@ defaultEffCtx =
     ]
 
 generateEvidenceForSolved :: TVarSet -> Map Var Q -> (Map Var Core.Core, [Q])
-generateEvidenceForSolved liveEffects = Map.foldrWithKey generateEvidence (Map.empty, [])
+generateEvidenceForSolved _ = Map.foldrWithKey generateEvidence (Map.empty, [])
  where
   generateEvidence v q = 
     case q of
@@ -832,9 +861,9 @@ inferTerm term = do
               ("Typed Term:\n" ++ ppShow typed_term ++ "\nSubst:\n" ++ ppShowList (TVarSet.toList liveEffects) ++ "\n" ++ ppShow subst ++ "\n")
               (term, zonk subst $ wrap scheme $ liftEv (Core.varSubst ev_map core_term), scheme)
   case res of
-    Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err)
+    Left (err :: TyErr) -> error ("Failed to infer a type: " ++ show err ++ "\n\n" ++ unpack (Core.prettyRender core_term))
     Right (_, (subst, [])) -> return $ generalizeAndLiftEv subst
-    Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ ppShowList qs ++ "\nSubst: " ++ ppShow subst ++ "\n\nType: " ++ ppShow typed_term)
+    Right (_, (subst, qs)) -> error ("Remaining Qs: " ++ ppShowList qs ++ "\nSubst: " ++ ppShow subst ++ "\n\nType: " ++ unpack (Core.prettyRender core_term))
  where
   empty_ev_map = Map.empty :: Map Var Q
   maxVar = maxTermVar term
@@ -870,7 +899,7 @@ prettyInferTerm term = putStrLn $ ppShow infer ++ "\n\n" ++ unpack (Core.prettyR
 prettyInfer :: Prog () -> IO ()
 prettyInfer prog = putStrLn $ ppShowList defs ++ "\n\n" ++ unpack (prettyDefs (Core.simplify <$> cores)) ++  "\n\n" ++ ppShowList schemes {- "\n" ++ ppShowList (universeOn traverse cores >>= toListOf (Core.coreVars .  Core.coreVarTy)) ++ -}
  where
-  prettyDefs [core] = Core.prettyRender core
+  prettyDefs [core] = Text.concat [Core.prettyRender core, "\n\n", Text.pack (show core)]
   prettyDefs cores = Text.intercalate "\n\n" (Core.prettyRender <$> cores)
   (Prog defs _, cores, schemes) = infer prog
 
@@ -923,7 +952,7 @@ exampleProgSmolEff :: Prog ()
 exampleProgSmolEff = Prog defs [stateEff]
  where
   defs =
-    [Def (V 0) $ abs [V 10] $ handle "State" (handler clauses ret) (perform "get" unit)]
+    [Def (V 0) $ abs [V 10] $ handle "State" (handler clauses ret) $ perform "get" unit]
 
   resume = V 1
   x = V 2
