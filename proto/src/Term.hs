@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Term where
 
@@ -16,9 +17,22 @@ import Data.List ((\\))
 import Type
 import Prettyprinter
 import qualified Data.Foldable as Foldable
+import Data.Text (Text)
+import qualified Prettyprinter as Pretty
+import Pretty
 
 newtype Var = V Int
   deriving (Ord, Eq, Num, Enum, Show, Read, Bounded)
+
+namedVar :: Var -> Maybe Text
+namedVar (V (-1)) = Just "evv"
+namedVar (V (-2)) = Just "marker"
+namedVar (V (-3)) = Just "op_arg"
+namedVar (V (-4)) = Just "k"
+namedVar _ = Nothing
+
+prettyV :: Var -> Doc SyntaxHighlight
+prettyV v = maybe (Pretty.parens $ pretty v) (annotate NamedVariable . pretty) (namedVar v)
 
 instance Pretty Var where
   pretty = viaShow

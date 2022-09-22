@@ -7,6 +7,7 @@ module Core where
 
 import Data.Map.Strict ((!?))
 import qualified Data.Map.Strict as Map
+import Pretty
 
 import Control.Lens
 import Data.Maybe (fromMaybe)
@@ -47,10 +48,10 @@ data CoreVar = CoreV Var CoreType
 
 
 prettyVar :: CoreVar -> Doc SyntaxHighlight
-prettyVar cv@(CoreV _ ty) = "(" <> shortVar cv <+> ":" <+> prettyTy ty <> ")"
+prettyVar (CoreV v ty) = "(" <> prettyV v <+> ":" <+> prettyTy ty <> ")"
 
 shortVar :: CoreVar -> Doc SyntaxHighlight
-shortVar (CoreV v _) = maybe (Pretty.parens $ pretty v) (annotate NamedVariable . pretty) (namedVar v)
+shortVar (CoreV v _) = prettyV v
 
 coreVarTy :: Lens' CoreVar CoreType
 coreVarTy =
@@ -164,7 +165,7 @@ data Core
   | Product [Core]
   | Project Int Core
   | NewPrompt CoreVar Core
-  | Prompt { prompt_marker :: Core, prompt_handler :: Core, prompt_body :: Core  }
+  | Prompt { prompt_marker :: Core, prompt_body :: Core  }
   | Yield { yield_marker :: Core, yield_value :: Core }
   deriving (Show, Read)
 
@@ -178,27 +179,15 @@ instance Plated Core where
       TyApp forall ty -> TyApp <$> f forall <*> pure ty
       Product elems -> Product <$> traverse f elems
       Project idx product -> Project idx <$> f product
-      Prompt marker handler body -> Prompt <$> f marker <*> f handler <*> f body
+      Prompt marker body -> Prompt <$> f marker <*> f body
       Yield marker value -> Yield <$> f marker <*> f value
-      core -> pure core
+      Core.Var var -> pure (Core.Var var)
+      Lit lit -> pure (Lit lit)
 
 -- Global core specific variables that users won't see
 evv = V (-1)
 marker = V (-2)
 
-namedVar :: Var -> Maybe Text
-namedVar (V (-1)) = Just "evv"
-namedVar (V (-2)) = Just "marker"
-namedVar (V (-3)) = Just "op_arg"
-namedVar (V (-4)) = Just "k"
-namedVar _ = Nothing
-
-
-data SyntaxHighlight
-  = Keyword
-  | Literal
-  | TypeVariable
-  | NamedVariable
 
 isSingleDoc :: Core -> Bool
 -- Var technically isn't a single doc but we treat it as such because parens are handled by var printing logic
@@ -210,14 +199,20 @@ isSingleDoc (Product elems)
 isSingleDoc (Project _ _) = True
 isSingleDoc _ = False
 
-prettyCore :: Core -> Doc SyntaxHighlight
-prettyCore = go
+data Typed = Typed | Typeless
+
+prettyCore = prettyCore' Typed
+prettyCoreUntyped = prettyCore' Typeless
+
+prettyCore' :: Typed -> Core -> Doc SyntaxHighlight
+prettyCore' typed = go
   where
     go core = 
       case core of
         Core.Var var -> shortVar var -- shortVar var 
         Lit lit -> annotate Literal (pretty lit)
-        Lam x core -> annotate Keyword "fun" <+> align (group (prettyVar x <> line <> go core))
+        Lam x (Core.Var y) | x == y -> annotate Keyword "id"
+        Lam x core -> annotate Keyword "fun" <+> align (group (lamVar x <> line <> go core))
         Core.App (Lam x lets) defn ->
           let (defns_tail, body) = collectLets lets
               defns = (x, defn) : defns_tail
@@ -233,15 +228,10 @@ prettyCore = go
           | otherwise -> "Product" <+> align (list (go <$> elems))
         Project indx core -> go core <> "[" <> pretty indx <> "]"
         NewPrompt x body -> align (annotate Keyword "let" <+> group (prettyVar x <+> "=" <+> annotate Literal "NewPrompt") <> line <> group (annotate Keyword " in" <+> go body))
-        Prompt marker handler body -> "Prompt" <+> record [("prompt_marker", go marker), ("prompt_handler", go handler), ("prompt_body", go body)]
-        Yield marker value -> "Yield" <+> record [("yield_marker", go marker), ("yield_value", go value)]
+        Prompt marker body -> "Prompt" <+> Pretty.record [("prompt_marker", go marker), ("prompt_body", go body)]
+        Yield marker value -> "Yield" <+> Pretty.record [("yield_marker", go marker), ("yield_value", go value)]
 
-    record :: [(Text, Doc ann)] -> Doc ann
-    record fields = align . group . encloseSep "{ " "}" ", " $ fmap prettyField fields
-
-    prettyField (field_name, field) = group (hang 4 (pretty field_name <+> "=" <> line <> field))
-
-    prettyDefn (x, defn) = group (align (prettyVar x <+> "=" <> line <> go defn))
+    prettyDefn (x, defn) = group (align (lamVar x <+> "=" <> nest 4 (line <> go defn)))
 
     parens core = 
       if isSingleDoc core
@@ -253,20 +243,13 @@ prettyCore = go
 
     collectSpine spine (Core.App fn arg) = collectSpine (arg:spine) fn
     collectSpine spine head = (head, spine)
+
+    lamVar = case typed of { Typed -> prettyVar; Typeless -> shortVar }
+      
   
 
 prettyRender :: Core -> Text
-prettyRender = Terminal.renderStrict . reAnnotateS toAnsi . layoutSmart layoutOpts . prettyCore
-  where
-    layoutOpts = LayoutOptions (AvailablePerLine 100 1.0)
-
-    toAnsi :: SyntaxHighlight -> Terminal.AnsiStyle
-    toAnsi =
-      \case
-        Keyword -> Terminal.color Terminal.Red
-        Literal -> Terminal.color Terminal.Cyan
-        NamedVariable -> Terminal.color Terminal.Green <> Terminal.underlined
-        TypeVariable -> Terminal.color Terminal.Magenta <> Terminal.italicized
+prettyRender = Pretty.prettyRender . prettyCoreUntyped
 
 coreVars :: Traversal' Core CoreVar
 coreVars f core =
@@ -368,12 +351,25 @@ var = Core.Var
 
 lam args body = foldr Core.Lam body args
 
+local var defn body = Core.App (Core.Lam var body) defn
+
 simplify :: Core -> Core
 simplify = transform
   (\case
-    --Core.App (Lam (CoreV x _) body) arg -> simplify $ varSubst (Map.singleton x arg) body
+    -- Simplify id x => x
+    Core.App (Lam x (Core.Var y)) arg 
+      | x == y -> simplify arg
+    --Core.App (Lam _ (Product [])) _ -> Product [] -- Unit cannot be simplified further
+    Core.App (Lam (CoreV x _) body) arg 
+      | isValue arg -> simplify $ varSubst (Map.singleton x (simplify arg)) (simplify body)
     Project idx (Product elems) ->
       if idx < length elems
         then simplify $ elems !! idx
         else error $ show elems ++ " does not contain index " ++ show idx
     core -> core)
+  where
+    isValue (Core.Var _) = True
+    isValue (Lit _) = True
+    isValue (Lam _ _) = True
+    isValue (Product elems) = all isValue elems
+    isValue _ = False

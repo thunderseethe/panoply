@@ -278,14 +278,20 @@ generateConstraints term =
       (val, val_core, val_constrs) <- generateConstraints val_
 
       -- Figure out how to get the type of evv from context here
+      (ctx :: Ctx) <- ask
+      let evv_core_ty = Core.fromType $
+            case ctx !? Core.evv of
+              Just (Scheme _ _ ty) -> ty
+              Nothing -> error "evv undefined"
       (lookup_term, lookup_handler_in_evv, lookup_constrs) <- generateConstraints $ unlabel (prj R (var Core.evv)) eff_name
       _ <- trace (ppShow $ lookup_term ^. meta . ty) (return ())
 
       let local_var = Core.CoreV (V (-3)) (Core.fromType $ lookup_term ^. meta . ty)
       -- Figure out how to type this honestly, I think it involves answer types?
       k_ty <- fresh
+      throwaway_var <- fresh
       let k_var = Core.CoreV (V (-4)) (Core.fromType $ FunTy ret_ty (Closed (eff_name |> core_ty)) (VarTy k_ty))
-      let handler = Core.Lam k_var $ Core.App (Core.App (Core.Project core_indx (Core.Project 1 (Core.var local_var))) val_core) (Core.var k_var)
+      let handler = Core.Lam k_var $ Core.App (Core.App (Core.App (Core.Project core_indx (Core.Project 1 (Core.var local_var))) (Core.Var $ Core.CoreV Core.evv evv_core_ty)) val_core) (Core.Lam (Core.CoreV throwaway_var evv_core_ty) (Core.var k_var))
       return
         ( Perform (Infer (VarTy k_ty) (Closed (eff_name |> core_ty))) op val
         , -- We need to look up our marker from evidence vector
@@ -347,7 +353,7 @@ generateConstraints term =
       return
         ( Handle (Infer handle_out_ty (Open out_eff)) lbl handler body
         , -- TODO: insert into the evidence vector
-          Core.NewPrompt marker_var (Core.Prompt (Core.var marker_var) handler_core handler_body)
+          Core.NewPrompt marker_var (Core.Prompt (Core.var marker_var) handler_body)
         , cs
         )
     Handler _ (HandleClause clauses (Clause ret_name ret_arg ret_unused ret_body)) -> do
@@ -892,7 +898,7 @@ inferDefs es (Def name term : tail) = do
   return (addDef (Def name infer_term) prog, core : cores, scheme : schemes)
 
 prettyInferTerm :: Term () -> IO ()
-prettyInferTerm term = putStrLn $ ppShow infer ++ "\n\n" ++ unpack (Core.prettyRender core) ++ "\n\n" ++ ppShow scheme ++ "\n"
+prettyInferTerm term = putStrLn $ ppShow infer ++ "\n\n" ++ unpack (Core.prettyRender . Core.simplify $ core) ++ "\n" ++ show (Core.simplify core) ++ "\n\n" ++ ppShow scheme ++ "\n"
  where
   (infer, core, scheme) = runIdentity $ runReader defaultEffCtx $ runReader emptyCtx $ inferTerm term
 

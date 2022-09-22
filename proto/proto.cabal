@@ -25,11 +25,13 @@ library
     exposed-modules: OutsideIn
 
     other-modules:
+      CC.Prompt
       Constraint
       Core
       Example
       Fresh
       Interpret
+      Pretty
       Program
       Term
       Type
@@ -45,7 +47,6 @@ library
     build-depends:    
         base >= 4.15,
         containers ^>= 0.6,
-        CC-delcont ^>= 0.2.1.0,
         fused-effects ^>= 1.1,
         lens ^>= 5.1,
         mtl ^>= 2.2,
