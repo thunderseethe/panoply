@@ -45,10 +45,11 @@ instance (Functor f, SubstApp t) => SubstApp (f t) where
   apply subst = fmap (apply subst)
 
 instance SubstApp Type where
-  apply (Subst map) =
+  apply subst@(Subst map) =
     transform
       ( \case
           VarTy var -> fromMaybe (VarTy var) (Map.lookup var map)
+          FunTy arg eff ret -> FunTy arg (apply subst eff) ret
           ty -> ty)
 
 instance SubstApp InternalRow where

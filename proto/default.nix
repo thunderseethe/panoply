@@ -4,5 +4,5 @@ nixpkgs.haskell.packages.${compiler}.developPackage {
   withHoogle = true;
   modifier = drv:
     nixpkgs.haskell.lib.addBuildTools drv (with nixpkgs.haskellPackages;
-      [ cabal-install hoogle ghc nixpkgs.haskell-language-server ]);
+      [ cabal-install hoogle ghc haskell-language-server ]);
 }

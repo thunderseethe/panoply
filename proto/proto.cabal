@@ -25,9 +25,13 @@ library
     exposed-modules: OutsideIn
 
     other-modules:
+      CC.Prompt
       Constraint
       Core
+      Example
       Fresh
+      Interpret
+      Pretty
       Program
       Term
       Type
@@ -45,8 +49,11 @@ library
         containers ^>= 0.6,
         fused-effects ^>= 1.1,
         lens ^>= 5.1,
+        mtl ^>= 2.2,
         pretty-show ^>= 1.10,
         prettyprinter ^>= 1.7,
+        prettyprinter-ansi-terminal ^>= 1.1,
+        raw-strings-qq ^>= 1.1,
         text >= 2.0,
         transformers ^>= 0.5
     ghc-options: -W
