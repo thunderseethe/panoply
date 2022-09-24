@@ -1,6 +1,9 @@
 //! This module defines errors from the name resolution pass.
 
-use crate::span::{SpanOf, Spanned};
+use crate::{
+    id::ModuleId,
+    span::{SpanOf, Spanned},
+};
 
 use super::{Citation, Diagnostic};
 
@@ -16,6 +19,8 @@ pub enum NameResolutionError<'i> {
     },
     /// A reference to a name that isn't defined.
     NotFound(SpanOf<&'i str>),
+    /// A module used as a term.
+    ModuleTerm(SpanOf<ModuleId>),
 }
 
 impl<'i> Diagnostic for NameResolutionError<'i> {
@@ -23,6 +28,7 @@ impl<'i> Diagnostic for NameResolutionError<'i> {
         match self {
             NameResolutionError::Duplicate { .. } => "name-resolution-duplicate-definition",
             NameResolutionError::NotFound(..) => "name-resolution-name-not-found",
+            NameResolutionError::ModuleTerm(..) => "name-resolution-module-as-term",
         }
     }
 
@@ -36,6 +42,10 @@ impl<'i> Diagnostic for NameResolutionError<'i> {
                 span: name.span(),
                 message: format!("Unknown symbol '{}'", name.value),
             },
+            NameResolutionError::ModuleTerm(module) => Citation {
+                span: module.span(),
+                message: format!("Module \'{:?}\' used as a term", module.value),
+            },
         }
     }
 
@@ -46,6 +56,7 @@ impl<'i> Diagnostic for NameResolutionError<'i> {
                 message: "Original definition here".to_owned(),
             }],
             NameResolutionError::NotFound(..) => Vec::new(),
+            NameResolutionError::ModuleTerm(..) => Vec::new(),
         }
     }
 }

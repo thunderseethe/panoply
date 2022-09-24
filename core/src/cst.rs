@@ -254,6 +254,18 @@ pub enum Item<'a, 'i, N> {
     },
 }
 
+impl<'a, 'i, N> Item<'a, 'i, N> {
+    /// Returns the name of the item.
+    pub fn name(&self) -> SpanOf<N>
+    where
+        N: Clone,
+    {
+        match self {
+            Item::Term { name, .. } => name.clone(),
+        }
+    }
+}
+
 impl<'a, 'i, N> Spanned for Item<'a, 'i, N> {
     fn span(&self) -> Span {
         match self {

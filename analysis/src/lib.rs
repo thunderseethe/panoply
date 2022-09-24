@@ -1,3 +1,5 @@
+pub mod base;
+pub mod modules;
 pub mod names;
 pub mod resolve;
 
