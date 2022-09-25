@@ -12,7 +12,6 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe
 
-import Data.Functor.Classes (Show1 (liftShowsPrec))
 import Data.List ((\\))
 import Type
 import Prettyprinter
@@ -29,6 +28,8 @@ namedVar (V (-1)) = Just "evv"
 namedVar (V (-2)) = Just "marker"
 namedVar (V (-3)) = Just "op_arg"
 namedVar (V (-4)) = Just "k"
+namedVar (V (-5)) = Just "left"
+namedVar (V (-6)) = Just "right"
 namedVar _ = Nothing
 
 prettyV :: Var -> Doc SyntaxHighlight
@@ -41,6 +42,7 @@ data Dir = L | R
   deriving (Show)
 
 data Clause meta = Clause {_op :: Label, _arg :: Var, _resume :: Var, _body :: Term meta}
+  deriving (Show)
 
 instance Functor Clause where
   fmap f (Clause op arg resume body) = Clause op arg resume (f <$> body)
@@ -48,25 +50,14 @@ instance Functor Clause where
 instance Foldable Clause where
   foldr f seed (Clause _ _ _ body) = foldr f seed body
 
-instance Show1 Clause where
-  liftShowsPrec show showList p (Clause op arg resume body) = showsPrec p op . (' ' :) . showsPrec p arg . (' ' :) . showsPrec p resume . (" = " ++) . liftShowsPrec show showList p body
-
-instance (Show meta) => Show (Clause meta) where
-  showsPrec = liftShowsPrec showsPrec showList
-
 data HandleClause meta = HandleClause {clauses :: NonEmpty (Clause meta), ret_clause :: Clause meta}
+  deriving (Show)
 
 instance Functor HandleClause where
   fmap f (HandleClause clauses ret_clause) = HandleClause (fmap f <$> clauses) (f <$> ret_clause)
 
 instance Foldable HandleClause where
   foldr f seed (HandleClause clauses ret) = foldr (flip (foldr f)) (foldr f seed ret) clauses
-
-instance Show1 HandleClause where
-  liftShowsPrec show showList p (HandleClause clauses ret) = ("{ " ++) . foldr (\clause fn -> liftShowsPrec show showList p clause . (", " ++) . fn) (liftShowsPrec show showList p ret) clauses . (" }" ++)
-
-instance (Show meta) => Show (HandleClause meta) where
-  showsPrec = liftShowsPrec showsPrec showList
 
 {- Our lambda calc + int to allow for a meaningful base type in examples -}
 data Term meta
@@ -84,6 +75,10 @@ data Term meta
     Concat meta (Term meta) (Term meta)
   | -- Record projection (elim)
     Prj meta Dir (Term meta)
+  | -- Sum branching (elim)
+    Branch meta (Term meta) (Term meta)
+  | -- Sum injection (intro)
+    Inj meta Dir (Term meta)
   | -- Lambda Abstraction
     Abs { abs_meta :: meta, abs_args :: NonEmpty Var, abs_body :: Term meta }
   | -- Application
@@ -109,6 +104,8 @@ meta = lens get set
       Unlabel m _ _ -> m
       Concat m _ _ -> m
       Prj m _ _ -> m
+      Branch m _ _ -> m
+      Inj m _ _ -> m
       Abs m _ _ -> m
       App m _ _ -> m
       Handle m _ _ _ -> m
@@ -125,6 +122,8 @@ meta' f =
     Unlabel m term lbl -> Unlabel <$> f m <*> meta' f term <*> pure lbl
     Concat m left right -> Concat <$> f m <*> meta' f left <*> meta' f right
     Prj m d term -> Prj <$> f m <*> pure d <*> meta' f term
+    Branch m left right -> Branch <$> f m <*> meta' f left <*> meta' f right
+    Inj m dir term -> Inj <$> f m <*> pure dir <*> meta' f term
     Abs m x body -> Abs <$> f m <*> pure x <*> meta' f body
     App m fn arg -> App <$> f m <*> meta' f fn <*> traverse (meta' f) arg
     Handle m lbl handler term -> Handle <$> f m <*> pure lbl <*> meta' f handler <*> meta' f term
@@ -134,7 +133,7 @@ meta' f =
 voidAnn :: Term meta -> Term ()
 voidAnn = over meta' (const ())
 
-instance Show1 Term where
+{-instance Show1 Term where
   liftShowsPrec show showList p = go
    where
     parens p f = if p > 10 then ('(' :) . f . (')' :) else f
@@ -151,17 +150,19 @@ instance Show1 Term where
         App m fn arg -> go fn . (" [" ++) . foldr (\item acc -> item . (',' :) . acc) (']' :) (go <$> arg) . (" :: " ++) . (' ' :) . show p m
         Handle m eff handler term -> ("handle<" ++) . showsPrec p eff . ("> " ++) . go handler . (' ' :) . go term . (' ' :) . show p m
         Handler _ clauses -> liftShowsPrec show showList p clauses
-        Perform m op val -> ("perform " ++) . showsPrec p op . (' ' :) . go val . (" :: " ++) . (' ' :) . show p m
+        Perform m op val -> ("perform " ++) . showsPrec p op . (' ' :) . go val . (" :: " ++) . (' ' :) . show p m-}
 
 instance Functor Term where
   fmap f =
     \case
       Label m lbl term -> Label (f m) lbl (f <$> term)
       Unlabel m term lbl -> Unlabel (f m) (f <$> term) lbl
-      Prj m dir term -> Prj (f m) dir (f <$> term)
       Abs m v term -> Abs (f m) v (f <$> term)
       App m fn arg -> App (f m) (f <$> fn) (fmap f <$> arg)
       Concat m left right -> Concat (f m) (f <$> left) (f <$> right)
+      Prj m dir term -> Prj (f m) dir (f <$> term)
+      Branch m left right -> Branch (f m) (f <$> left) (f <$> right)
+      Inj m dir term -> Inj (f m) dir (f <$> term)
       Handle m eff handler term -> Handle (f m) eff (f <$> handler) (f <$> term)
       Handler m clauses -> Handler (f m) (f <$> clauses)
       Var m x -> Var (f m) x
@@ -174,10 +175,12 @@ instance Foldable Term where
     \case
       Label m _ term -> f m <> foldMap f term
       Unlabel m term _ -> f m <> foldMap f term
-      Prj m _ term -> f m <> foldMap f term
       Abs m _ term -> f m <> foldMap f term
       App m fn arg -> f m <> foldMap f fn <> foldMap (foldMap f) arg
       Concat m left right -> f m <> foldMap f left <> foldMap f right
+      Prj m _ term -> f m <> foldMap f term
+      Branch m left right -> f m <> foldMap f left <> foldMap f right
+      Inj m _ term -> f m <> foldMap f term
       Handle m _ handler term -> f m <> foldMap f handler <> foldMap f term
       Handler m clauses -> f m <> foldMap f clauses
       Var m _ -> f m
@@ -190,10 +193,12 @@ instance Traversable Term where
     \case
       Label m lbl term -> Label <$> f m <*> pure lbl <*> traverse f term
       Unlabel m term lbl -> Unlabel <$> f m <*> traverse f term <*> pure lbl
-      Prj m dir term -> Prj <$> f m <*> pure dir <*> traverse f term
       Abs m v term -> Abs <$> f m <*> pure v <*> traverse f term
       App m fn arg -> App <$> f m <*> traverse f fn <*> traverse (traverse f) arg
       Concat m left right -> Concat <$> f m <*> traverse f left <*> traverse f right
+      Prj m dir term -> Prj <$> f m <*> pure dir <*> traverse f term
+      Branch m left right -> Branch <$> f m <*> traverse f left <*> traverse f right
+      Inj m dir term -> Inj <$> f m <*> pure dir <*> traverse f term
       Handle m eff handler term -> Handle <$> f m <*> pure eff <*> traverse f handler <*> traverse f term
       Handler m clauses -> Handler <$> f m <*> handleClauseTerms (traverse f) clauses
       Var m x -> Var <$> f m <*> pure x
@@ -207,7 +212,9 @@ instance Plated (Term meta) where
       Label m lbl term -> Label m lbl <$> f term
       Unlabel m term lbl -> Unlabel m <$> f term <*> pure lbl
       Prj m dir term -> Prj m dir <$> f term
+      Inj m dir term -> Inj m dir <$> f term
       Concat m left right -> Concat m <$> f left <*> f right
+      Branch m left right -> Branch m <$> f left <*> f right
       Abs m v term -> Abs m v <$> f term
       App m fn arg -> App m <$> f fn <*> traverse f arg
       Handle m eff handler term -> Handle m eff <$> f handler <*> f term

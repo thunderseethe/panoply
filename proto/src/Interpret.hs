@@ -19,13 +19,17 @@ import Pretty
 import Prettyprinter
 import qualified Prettyprinter.Render.Terminal as Terminal
 import qualified Data.Text.IO
-import Debug.Trace
+import Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
+import Data.Foldable
+import Data.Maybe
 
 
 data Value
   = ValLit Core.Literal
   | ValLam CoreVar Core
   | ValStruct [Value]
+  | ValTag Int Value
   | ValPrompt (Prompt.Prompt () Value)
   | ValCont Stack
   deriving (Show)
@@ -38,6 +42,7 @@ prettyVal val =
     ValStruct vals 
       | null vals -> annotate Literal "{}"
       | otherwise -> group (align ("{" <+> vsep (punctuate "," (prettyVal <$> vals)) <> line <> "}"))
+    ValTag tag val -> group (align ("<" <+> annotate Literal (pretty tag) <+> ">" <> parens (prettyVal val)))
     ValPrompt prompt -> Prompt.prettyPrompt prompt
     ValCont stack -> group (prettyStack stack)
 
@@ -51,6 +56,9 @@ data EvalCtx
   | ValueYieldFrame Core 
   | ProductFrame (DiffList Value) [Core]
   | ProjectFrame Int 
+  | CaseScrutineeFrame (Seq Core)
+  | CaseBranchFrame Value
+  | TagFrame Int
 
 instance Show EvalCtx where
   showsPrec d eval_ctx = showParen (d > app_prec) $ 
@@ -62,6 +70,9 @@ instance Show EvalCtx where
         ValueYieldFrame core -> showString "ValueYieldFrame " . showsPrec (app_prec + 1) core
         ProductFrame vals cores -> showString "ProductFrame " . showsPrec (app_prec + 1) (vals []) . showsPrec (app_prec + 1) cores
         ProjectFrame indx -> showString "ProjectFrame " . showsPrec (app_prec + 1) indx
+        CaseScrutineeFrame branches -> showString "CaseScrutineeFrame " . showsPrec (app_prec + 1) branches
+        CaseBranchFrame scrutinee -> showString "CaseBranchFrame " . showsPrec (app_prec + 1) scrutinee
+        TagFrame tag -> showString "TagFrame " . showsPrec (app_prec + 1) tag
     where
       app_prec = 10
 
@@ -82,6 +93,9 @@ prettyFrame = foldr wrapEvalCtx (annotate Literal "☐")
               vs = prettyVal <$> vals []
            in braces . group . align . vsep$ punctuate comma (vs ++ (doc : cs))
         ProjectFrame indx -> doc <> brackets (annotate Literal $ pretty indx)
+        CaseScrutineeFrame branches -> "Case" <+> doc <+> group (align (list (toList (prettyCore <$> branches))))
+        CaseBranchFrame scrutinee -> group . align . parens $ doc <> nest 4 (line <> prettyVal scrutinee)
+        TagFrame tag -> angles (annotate Literal $ pretty tag) <> parens doc
 
 prettyCurFrame :: Frame -> Doc SyntaxHighlight
 prettyCurFrame = group . align . vsep . punctuate " · " . fmap prettyEvalCtx . reverse
@@ -99,6 +113,9 @@ prettyCurFrame = group . align . vsep . punctuate " · " . fmap prettyEvalCtx . 
               vs = prettyVal <$> vals []
            in braces . group . align . vsep$ punctuate comma (vs ++ (box : cs))
         ProjectFrame indx -> box <> brackets (annotate Literal $ pretty indx)
+        CaseScrutineeFrame branches -> "Case" <+> box <+> group (align (list (toList (prettyCore <$> branches))))
+        CaseBranchFrame scrutinee -> group . align . parens $ box <> nest 4 (line <> prettyVal scrutinee)
+        TagFrame tag -> angles (annotate Literal $ pretty tag) <> parens box
 
 -- | Push a frame "on top" of another frame.
 -- | Replace the hole within the frame with this new frame
@@ -155,10 +172,8 @@ prettyMachine (Machine stack prompt cur_frame cur_env) =
     , "Current Env:" <+> prettyEnv cur_env
     ])
 
-
 initialMachine :: Machine
-initialMachine = Machine EmptyStack 0 [] Map.empty
-
+initialMachine = Machine EmptyStack 0 [] (Map.singleton Core.evv (ValStruct []))
 
 makeLenses ''Machine
 
@@ -194,6 +209,13 @@ eval (Step core) =
     -- These are actually wrong, we need to try and "pop" the stack whenever we reach this state
     Lit lit -> unwind (ValLit lit)
     Lam x body -> unwind (ValLam x body)
+    Case scrutinee branches -> do
+      modify (cur_frame %~ push (CaseScrutineeFrame branches))
+      step scrutinee
+    -- We can ignore coproduct type during runtime
+    Coproduct _ tag elem -> do
+      modify (cur_frame %~ push (TagFrame tag))
+      step elem
 
     Product elems -> do
       (vals, tail) <- findProductFocus elems
@@ -228,7 +250,7 @@ eval (Step core) =
       step fn
 
     TyApp (TyLam (CoreTV a _) body) ty -> step $ transform (over (Core.coreVars . Core.coreVarTy) (apply (a |-> toType ty))) body
-    TyApp {} -> error "Stuck: TyApp"
+    c@(TyApp {}) -> error $ "Stuck: TypApp " ++ show c
     TyLam {} -> error "Stuck: TyLam" 
   where
     step = return . Step
@@ -246,18 +268,7 @@ eval (Step core) =
             FnAppFrame arg -> do
               modify (cur_frame %~ push (ArgAppFrame val))
               step arg
-            ArgAppFrame fn -> do
-              case fn of 
-                ValLam (CoreV x _) body -> do
-                  modify (cur_env %~ Map.insert x val)
-                  step body
-                ValCont kont -> do
-                  -- Not sure this is correct
-                  -- Currently this removes the current stack frame
-                  -- We might want to save the current stack frame instead?
-                  modify (stack %~ pushStack kont)
-                  unwind val
-                _ -> error "Stuck: non-function value applied as function"
+            ArgAppFrame fn -> call fn val
             EvalPromptFrame body -> do
               let prompt = 
                     case val of 
@@ -283,16 +294,44 @@ eval (Step core) =
             ProductFrame vals remaining -> do
               (new_vals, cores) <- findProductFocus remaining
               case cores of 
-                [] -> unwind . ValStruct . vals . new_vals $ []
+                [] -> unwind . ValStruct . new_vals . vals $ []
                 core:cores -> do
                   -- Push the rest of the product evaluation as a frame
-                  modify (cur_frame %~ push (ProductFrame (vals . new_vals) cores))
+                  modify (cur_frame %~ push (ProductFrame (new_vals . vals) cores))
                   -- Return new focal point as our next eval step
                   step core
             ProjectFrame indx -> 
               case val of 
                 ValStruct elems -> unwind (elems !! indx)
                 _ -> error "Stuck: non-struct value passed to Project"
+            CaseScrutineeFrame branches -> do
+              let (tag, x) = 
+                    case val of
+                      ValTag tag x -> (tag, x)
+                      _ -> error "Stuck: non-tagged value passed to Case"
+              let branch = fromMaybe (error $ "Stuck: expected branch " ++ show x ++ " to exist, but it does not") $ Seq.lookup tag branches
+              -- We're basically evaluating the `case x of branches` to `branch x` but shortcircuting the evaluation we've already done
+              modify (cur_frame %~ push (CaseBranchFrame x))
+              step branch
+            -- In theory we could reuse our function applications to do this logic
+            -- But it would require swapping our eval order from fn -> arg, to arg -> fn
+            CaseBranchFrame scrutinee -> call val scrutinee
+            TagFrame tag -> unwind (ValTag tag val)
+    
+    call fn arg =
+      case fn of
+        ValLam (CoreV x _) body -> do
+          modify (cur_env %~ Map.insert x arg)
+          step body
+        ValCont kont -> do
+          -- Not sure this is correct
+          -- Currently this removes the current stack frame
+          -- We might want to save the current stack frame instead?
+          modify (stack %~ pushStack kont)
+          unwind arg
+        val -> error $ "Stuck: non-function value applied as function " ++ show val
+
+
                                           
     new_stack_frame = do
       frame <- swap cur_frame [] 

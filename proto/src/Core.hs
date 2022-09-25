@@ -7,20 +7,23 @@ module Core where
 
 import Data.Map.Strict ((!?))
 import qualified Data.Map.Strict as Map
+import Data.Sequence (Seq, (><))
+import qualified Data.Sequence as Seq
 import Pretty
 
 import Control.Lens
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import qualified Data.Set as Set
 import GHC.Stack
 import Prettyprinter
 import qualified Prettyprinter as Pretty
-import qualified Prettyprinter.Render.Terminal as Terminal
 import Subst
 import Term
 import Type
-import Data.Text (Text, pack)
 import Data.Bifunctor (Bifunctor(first))
+import Data.Foldable
+import Data.Text (Text, pack)
+import Debug.Trace
 
 data Literal = I Int
   deriving (Show, Read)
@@ -73,6 +76,7 @@ data CoreType
   | CoreLit LiteralTy
   | CoreFun CoreType InternalRow CoreType
   | CoreProduct [CoreType]
+  | CoreCoproduct [CoreType]
   | CoreForall TypeVar CoreType
   deriving (Show, Read, Eq, Ord)
 
@@ -85,6 +89,7 @@ instance Pretty CoreType where
         | Map.null eff -> pretty arg <+> "->" <+> pretty ret
       CoreFun arg eff ret -> pretty arg <+> "-{" <> pretty eff <> "}->" <+> pretty ret
       CoreProduct tys -> "{" <+> hcat (punctuate ("," <> space) (pretty <$> tys)) <+> "}"
+      CoreCoproduct tys -> "<" <+> hcat (punctuate ("," <> space) (pretty <$> tys)) <+> ">"
       CoreForall tyvar ty -> "∀" <+> pretty tyvar <+> "." <+> pretty ty
 
 prettyTy :: CoreType -> Doc SyntaxHighlight
@@ -100,6 +105,7 @@ prettyTy = go
         CoreFun arg (Open eff) ret -> go arg <+> "-{" <> pretty eff <> "}->" <+> go ret
         CoreFun arg (Closed row) ret -> go arg <+> "-{" <> hsep (punctuate comma (pretty <$> Map.keys row)) <> "}->" <+> go ret
         CoreProduct tys -> "{" <> hcat (punctuate ("," <> space) (go <$> tys)) <> "}"
+        CoreCoproduct tys -> "<" <> hcat (punctuate ("," <> space) (go <$> tys)) <> ">"
         CoreForall tyvar ty -> "∀" <+> pretty tyvar <+> "." <+> go ty
 
 instance Plated CoreType where
@@ -107,7 +113,8 @@ instance Plated CoreType where
     case core_ty of
       CoreFun arg eff ret -> CoreFun <$> f arg <*> pure eff <*> f ret
       CoreProduct tys -> CoreProduct <$> traverse f tys
-      CoreForall tv typ -> CoreForall tv <$> f typ
+      CoreCoproduct tys -> CoreCoproduct <$> traverse f tys
+      CoreForall tv ty -> CoreForall tv <$> f ty
       ty -> pure ty
 
 instance SubstApp CoreType where
@@ -119,15 +126,7 @@ instance SubstApp CoreType where
       )
 
 fromType :: HasCallStack => Type -> CoreType
-fromType ty =
-  case ty of
-    VarTy tv -> CoreVar (coreTyTv tv)
-    Type.IntTy -> CoreLit Core.IntTy
-    RowTy _ -> error "Can't translate this as is"
-    ProdTy (RowTy row) -> CoreProduct (fromType <$> Map.elems row)
-    ProdTy (VarTy tv) -> CoreVar (coreRowTv tv)
-    ProdTy _ -> error "Invalid product type"
-    FunTy arg eff ret -> CoreFun (fromType arg) eff (fromType ret)
+fromType = fromJust . fromTypeSafe
 
 fromTypeSafe :: Type -> Maybe CoreType
 fromTypeSafe ty =
@@ -140,7 +139,10 @@ fromTypeSafe ty =
       | otherwise -> Nothing
     ProdTy (RowTy row) -> Just $ CoreProduct (fromType <$> Map.elems row)
     ProdTy (VarTy tv) -> Just $ CoreVar (coreRowTv tv)
-    ProdTy _ -> error "Invalid product type"
+    ProdTy _ -> Nothing 
+    SumTy (RowTy row) -> Just $ CoreCoproduct (fromType . snd <$> Map.toAscList row)
+    SumTy (VarTy tv) -> Just $ CoreVar (coreRowTv tv)
+    SumTy _ -> Nothing
     FunTy arg eff ret -> Just $ CoreFun (fromType arg) eff (fromType ret)
 
 toType :: CoreType -> Type
@@ -152,8 +154,8 @@ toType ty =
     CoreFun arg eff ret -> FunTy (toType arg) eff (toType ret)
     -- We make up names for our row type that will put them in the same order when we go back to  core
     CoreProduct elems -> ProdTy (RowTy (Map.fromList $ zip (pack . show <$> [0..]) (toType <$> elems)))
+    CoreCoproduct elems -> SumTy (RowTy (Map.fromList $ zip (pack .show <$> [0..]) (toType <$> elems)))
     CoreForall _ _ -> error "idk what to do  here"
-
 
 data Core
   = Var CoreVar
@@ -164,6 +166,8 @@ data Core
   | TyApp Core CoreType
   | Product [Core]
   | Project Int Core
+  | Coproduct CoreType Int Core
+  | Case {- scrutinee -} Core {- branches -}(Seq Core)
   | NewPrompt CoreVar Core
   | Prompt { prompt_marker :: Core, prompt_body :: Core  }
   | Yield { yield_marker :: Core, yield_value :: Core }
@@ -179,6 +183,8 @@ instance Plated Core where
       TyApp forall ty -> TyApp <$> f forall <*> pure ty
       Product elems -> Product <$> traverse f elems
       Project idx product -> Project idx <$> f product
+      Case scrutinee branches -> Case <$> f scrutinee <*> traverse f branches
+      Coproduct ty tag elem -> Coproduct ty tag <$> f elem
       Prompt marker body -> Prompt <$> f marker <*> f body
       Yield marker value -> Yield <$> f marker <*> f value
       Core.Var var -> pure (Core.Var var)
@@ -220,13 +226,15 @@ prettyCore' typed = go
         Core.App fn arg -> 
           let (head, spine) = collectSpine [arg] fn
            in parens head <> align (group (line <> vsep (parens <$> spine)))
-           --"App" <> align (group (line <> parens fn <> line <> parens arg))
         TyLam x core -> annotate Keyword "ty_fun" <+> align (group (pretty x <> line <> go core))
-        TyApp forall ty -> "TyApp" <+> go forall <+> pretty ty
+        TyApp forall ty -> Pretty.parens (go forall) <> "⌈" <> pretty ty <> "⌉"
         Product elems
           | Prelude.null elems -> annotate Literal "Unit"
           | otherwise -> "Product" <+> align (list (go <$> elems))
         Project indx core -> go core <> "[" <> pretty indx <> "]"
+        Case scrutinee branches -> 
+          "Case" <+> go scrutinee <+> align (list (toList $ go <$> branches))
+        Coproduct _ tag core -> "Coproduct" <+> annotate Literal (pretty tag) <+> go core
         NewPrompt x body -> align (annotate Keyword "let" <+> group (prettyVar x <+> "=" <+> annotate Literal "NewPrompt") <> line <> group (annotate Keyword " in" <+> go body))
         Prompt marker body -> "Prompt" <+> Pretty.record [("prompt_marker", go marker), ("prompt_body", go body)]
         Yield marker value -> "Yield" <+> Pretty.record [("yield_marker", go marker), ("yield_value", go value)]
@@ -273,28 +281,41 @@ coreUnboundVars core = allVars `Set.difference` boundVars
 rowEvType :: InternalRow -> InternalRow -> InternalRow -> CoreType
 rowEvType left right goal =
   CoreProduct
-    [ CoreFun leftTy (Closed Map.empty) (CoreFun rightTy (Closed Map.empty) goalTy)
-    , CoreProduct []
+    [ CoreFun leftProdTy (Closed Map.empty) (CoreFun rightProdTy (Closed Map.empty) goalProdTy)
+    , let a = CoreTV (TV (-1)) KindType
+          leftBranch = CoreFun leftSumTy (Closed Map.empty) (CoreVar a)
+          rightBranch = CoreFun rightSumTy (Closed Map.empty) (CoreVar a)
+          goalBranch = CoreFun goalSumTy (Closed Map.empty) (CoreVar a)
+       in CoreForall a $ CoreFun leftBranch (Closed Map.empty) (CoreFun rightBranch (Closed Map.empty) goalBranch)
     , CoreProduct
-        [ CoreFun goalTy (Closed Map.empty) leftTy
-        , CoreProduct []
+        [ CoreFun goalProdTy (Closed Map.empty) leftProdTy
+        , CoreFun leftSumTy (Closed Map.empty) goalSumTy
         ]
     , CoreProduct
-        [ CoreFun goalTy (Closed Map.empty) rightTy
-        , CoreProduct []
+        [ CoreFun goalProdTy (Closed Map.empty) rightProdTy
+        , CoreFun rightSumTy (Closed Map.empty) goalSumTy
         ]
     ]
  where
-  leftTy = fromType (ProdTy (rowToType left))
-  rightTy = fromType (ProdTy (rowToType right))
-  goalTy = fromType (ProdTy (rowToType goal))
+  leftProdTy = fromType (ProdTy (rowToType left))
+  rightProdTy = fromType (ProdTy (rowToType right))
+  goalProdTy = fromType (ProdTy (rowToType goal))
+
+  leftSumTy = fromType (SumTy (rowToType left)) 
+  rightSumTy = fromType (SumTy (rowToType right))
+  goalSumTy = fromType (SumTy (rowToType goal))
+
 
 rowEvidence :: Row -> Row -> Row -> Core
-rowEvidence left right goal = Product [Core.concat left right, placeholder, Product [prjL left goal, placeholder], Product [prjR right goal, placeholder]]
- where
-  -- Use unit for the sum type stuff so we still produce evidence with the right structure
-  placeholder = Product []
+rowEvidence left right goal = 
+  Product 
+    [ Core.concat left right
+    , branch left right
+    , Product [prjL left goal, injL left goal]
+    , Product [prjR right goal, injR right goal]
+    ]
 
+prjR :: Row -> Row -> Core
 prjR outRow inRow = Lam inVar out
  where
   inSize = Map.size inRow - 1
@@ -302,12 +323,13 @@ prjR outRow inRow = Lam inVar out
   out =
     case [(inSize - outSize) .. inSize] of
       -- Special case for singleton
-      [_] -> indx' 0 (Core.var inVar)
+      [_] -> indx' inSize (Core.var inVar)
       idxs -> Product (fmap (\i -> indx' i (Core.var inVar)) idxs)
-  inVar = CoreV (V 0) inTy
+  inVar = CoreV (V (-6)) inTy
   indx' = indx inRow
   inTy = fromType (unwrapSingleton inRow)
 
+prjL :: Row -> Row -> Core
 prjL outRow inRow = Lam inVar out
  where
   out =
@@ -315,18 +337,71 @@ prjL outRow inRow = Lam inVar out
       [_] -> indx' 0 (Core.var inVar)
       idxs -> Product (fmap (\i -> indx' i (Core.var inVar)) idxs)
   indx' = indx inRow
-  inVar = CoreV (V 0) inTy
+  inVar = CoreV (V (-5)) inTy
   inTy = fromType (ProdTy (RowTy inRow))
 
 concat :: Row -> Row -> Core
 concat left right = Lam m $ Lam n prod
  where
-  m = CoreV (V 0) leftTy
-  n = CoreV (V 1) rightTy
+  m = CoreV (V (-5)) leftTy
+  n = CoreV (V (-6)) rightTy
   prod = if length splat == 1 then head splat else Product splat
   splat = fmap (\i -> indx left i (Core.var m)) [0 .. (Map.size left - 1)] ++ fmap (\i -> indx right i (Core.var n)) [0 .. (Map.size right - 1)]
   leftTy = fromType (unwrapSingleton left)
   rightTy = fromType (unwrapSingleton right)
+
+injL :: Row -> Row -> Core
+injL inRow outRow = Lam m out
+  where
+    m = CoreV (V (-5)) left_ty
+    left_ty@(CoreCoproduct tys) = fromType (SumTy (RowTy inRow))
+    goal_ty = fromType (SumTy (RowTy outRow))
+    out = 
+      case [0..(Map.size inRow - 1)] of
+        [_] -> inj goal_ty outRow 0 (Core.Var m)
+        indxs -> Case (Core.Var m) (Seq.fromList (injCase (inj goal_ty outRow) tys <$> indxs))--(Seq.fromList (branch_case <$> indxs))
+
+injR :: Row -> Row -> Core
+injR inRow outRow = Lam n out
+  where
+    n = CoreV (V (-6)) right_ty
+    inSize = Map.size inRow - 1
+    outSize = Map.size outRow - 1
+    right_ty@(CoreCoproduct tys) = fromType (SumTy (RowTy inRow))
+    goal_ty = fromType (SumTy (RowTy outRow))
+    out =
+      case [(outSize - inSize)..outSize] of
+        [_] -> inj goal_ty outRow outSize (Core.Var n)
+        indxs -> Case (Core.Var n) (Seq.fromList (injCase (inj goal_ty outRow) tys <$> indxs))
+
+branch :: Row -> Row -> Core
+branch left right = TyLam a $ Lam f $ Lam g coprod
+  where
+    f = CoreV (V $ -5) (CoreFun left_ty (Closed Map.empty) (CoreVar a))
+    left_ty@(CoreCoproduct left_tys) = fromType (SumTy (RowTy left))
+    g = CoreV (V $ -6) (CoreFun right_ty (Closed Map.empty) (CoreVar a))
+    right_ty@(CoreCoproduct right_tys) = fromType (SumTy (RowTy right))
+    goal_tys = left_tys ++ right_tys
+    goal_ty = CoreCoproduct goal_tys
+    a = CoreTV (TV $ -1) KindType
+    left_size = Map.size left - 1
+    right_size = Map.size right - 1
+    coprod = let z = CoreV (V $ -7) (CoreCoproduct goal_tys)
+              in Lam z $ Case (Core.var z) (Seq.fromList (left_case <$> [0..left_size]) >< Seq.fromList (right_case <$> [0..right_size]))
+    left_case i = Lam (branchVar left_tys i) $ Core.App (Core.Var f) (inj goal_ty left i (Core.Var $ branchVar left_tys i))
+    right_case i = Lam (branchVar right_tys i) $ Core.App (Core.Var g) (inj goal_ty right i (Core.Var $ branchVar right_tys i))
+
+injCase inj tys i = Lam (branchVar tys i) (inj i (Core.Var $ branchVar tys i))
+
+branchVar tys i = CoreV (V (-8)) (
+  if i < length tys 
+     then tys !! i
+     else error $ "Index " ++ show i ++ " not found in " ++ show tys)
+
+inj ty row = 
+  case Map.size row of
+    1 -> \_ ty -> ty
+    _ -> Coproduct ty
 
 indx row =
   case Map.size row of
@@ -338,7 +413,6 @@ unwrapSingleton row =
     1 -> head $ Map.elems row
     _ -> ProdTy (RowTy row)
 
-
 varSubst :: Map.Map Var Core.Core -> Core.Core -> Core.Core
 varSubst env =
   transform
@@ -347,15 +421,37 @@ varSubst env =
         core -> core
     )
 
+tySubst :: Map.Map TVar CoreType -> Core -> Core
+tySubst env =
+  transform 
+    (\case
+      Core.Var (CoreV x ty) -> Core.Var (CoreV x (sub ty))
+      TyApp forall ty -> TyApp forall (sub ty)
+      core -> core)
+  where
+    sub ty = 
+      case ty of 
+        CoreVar (CoreTV tv _) -> fromMaybe ty (env !? tv)
+        ty -> ty
+
 var = Core.Var
 
 lam args body = foldr Core.Lam body args
 
 local var defn body = Core.App (Core.Lam var body) defn
 
+zonk :: Subst -> Core.Core -> Core.Core
+zonk subst =
+  transform
+    (\case
+      Core.Var (CoreV x ty) -> Core.Var (CoreV x (apply subst ty))
+      TyApp forall ty -> TyApp forall (apply subst ty)
+      core -> core)
+
 simplify :: Core -> Core
 simplify = transform
   (\case
+    TyApp (TyLam (CoreTV x _) body) ty -> simplify $ tySubst (Map.singleton x ty) body
     -- Simplify id x => x
     Core.App (Lam x (Core.Var y)) arg 
       | x == y -> simplify arg

@@ -22,7 +22,7 @@ maintainer:         thunderseethe.dev@gmail.com
 extra-source-files: CHANGELOG.md
 
 library
-    exposed-modules: OutsideIn
+    exposed-modules: Main
 
     other-modules:
       CC.Prompt
@@ -31,6 +31,7 @@ library
       Example
       Fresh
       Interpret
+      OutsideIn
       Pretty
       Program
       Term

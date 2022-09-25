@@ -9,7 +9,7 @@ import Control.Lens
 import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Text (Text, unpack)
+import Data.Text (Text)
 import Prettyprinter
 
 type Label = Text
@@ -21,7 +21,7 @@ instance (Traversable t, TypeOf a) => TypeOf (t a) where
   typeOf f = traverse (typeOf f)
 
 newtype TVar = TV { unTV :: Int }
-  deriving (Show, Read, Ord, Eq, Num, Enum, Bounded)
+  deriving (Read, Ord, Eq, Num, Enum, Bounded)
 
 typeVarNames :: [String]
 typeVarNames = go 1 base
@@ -31,9 +31,21 @@ typeVarNames = go 1 base
   go n [] = go (n + 1) ((++ replicate n '\'') <$> base)
   go n (name : tail) = name : go n tail
 
+instance Show TVar where
+  show (TV i) = 
+    if i >= 0
+       then typeVarNames !! i
+       else case i of
+              (-1) -> "branch_type"
+              _ -> error "unnammed type var"
 
 instance Pretty TVar where
-  pretty (TV i) = pretty (typeVarNames !! i)
+  pretty (TV i) = pretty (
+    if i >= 0
+       then typeVarNames !! i
+       else case i of
+              (-1) -> "branch_type"
+              _ -> error "unnammed type var")
 
 instance Plated TVar where
   plate _ (TV i) = pure (TV i)
@@ -45,6 +57,7 @@ data Type
   | IntTy
   | RowTy Row
   | ProdTy Type
+  | SumTy Type
   | FunTy Type InternalRow Type
   deriving (Show, Read, Eq, Ord)
 
@@ -90,6 +103,8 @@ instance Pretty Type where
       RowTy row -> hcat $ punctuate ("," <> space) ((\(lbl, ty) -> pretty lbl <+> "|>" <+> pretty ty) <$> Map.toList row)
       ProdTy (RowTy row) | Map.null row -> "{}"
       ProdTy ty -> "{" <+> pretty ty <+> "}"
+      SumTy (RowTy row) | Map.null row -> "<>"
+      SumTy ty -> "<" <+> pretty ty <+> ">"
       FunTy arg eff ret -> pretty arg <+> "-{" <> pretty eff <> "}->" <+> pretty ret
 
 parens p =
@@ -105,6 +120,7 @@ instance Plated Type where
       FunTy arg eff ret -> FunTy <$> f arg <*> pure eff <*> f ret
       RowTy row -> RowTy <$> traverse f row
       ProdTy ty -> ProdTy <$> f ty
+      SumTy ty -> SumTy <$> f ty
       ty -> pure ty
 
 instance TypeOf Type where
