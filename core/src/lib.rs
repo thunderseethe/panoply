@@ -1,9 +1,9 @@
 pub mod cst;
 pub mod diagnostic;
 mod display_iter;
-pub mod handle;
 pub mod id;
 pub mod loc;
+pub mod memory;
 pub mod nst;
 pub mod span;
 pub mod token;
