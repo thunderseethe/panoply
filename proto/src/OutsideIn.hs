@@ -38,7 +38,7 @@ import Control.Carrier.Reader (runReader)
 import Control.Carrier.State.Strict (runState)
 import Control.Carrier.Throw.Either (runThrow)
 import Control.Effect.State (State, get, modify)
-import Control.Effect.Throw (Throw, throwError) 
+import Control.Effect.Throw (Throw, throwError)
 import Control.Monad (forM)
 import Data.Bifunctor (Bifunctor (first, second))
 import Data.Either (partitionEithers)
@@ -54,6 +54,7 @@ import Constraint
 import Control.Lens.Plated
 import Core (CoreType (..), coreRowTv, coreTyTv)
 import qualified Core
+import Core.Builtin
 import Data.Functor ((<&>))
 import Data.Text (unpack)
 import qualified Data.Text as Text
@@ -230,7 +231,7 @@ generateConstraints term =
       let evv = Core.CoreV Core.evv (Core.fromType evv_ty)
       _ <- trace (show (left ^. meta . ty) ++ "  " ++ show (right ^. meta . ty)) (return ())
       return
-        ( Branch (Infer (FunTy evv_ty (Open out_eff) $ FunTy (SumTy $ VarTy out) (Open out_eff) (VarTy a)) (Open out_eff)) left right
+        ( Branch (Infer (FunTy (SumTy $ VarTy out) (Open out_eff) (VarTy a)) (Open out_eff)) left right
         , Core.Lam evv $ Core.App (Core.App (Core.TyApp branch (CoreVar $ Core.coreTyTv a)) (Core.App left_core (Core.var evv))) (Core.App right_core (Core.var evv))
         , Simp (left ^. meta . ty ~ FunTy (SumTy (VarTy left_var)) (left ^. meta . eff) (VarTy a)) :
           Simp (right ^. meta . ty ~ FunTy (SumTy (VarTy right_var)) (right ^. meta . eff) (VarTy a)) :
@@ -284,13 +285,13 @@ generateConstraints term =
             Scheme _ _ evv_ty <- asks (\(ctx :: Ctx) -> fromJust $ ctx !? Core.evv)
             (fn, fn_core, fn_constr) <- generateConstraints fn
             (args, arg_cores, arg_constrs) <- unzip3 <$> traverse generateConstraints arg
-            let expected_arg_ty = foldr (\arg_ty ret -> FunTy arg_ty (fn ^. meta . eff) ret) (VarTy alpha) (evv_ty <| (view (meta . ty) <$> args))
+            let expected_arg_ty = foldr (\arg_ty ret -> FunTy arg_ty (fn ^. meta . eff) ret) (VarTy alpha) (view (meta . ty) <$> args)
             (arg_eff, expected_eff_constrs) <- args_eff args
             return
               ( App (Infer (VarTy alpha) (Open out_eff)) fn args
               , foldl' Core.App (Core.App fn_core (Core.var $ Core.CoreV Core.evv (Core.fromType evv_ty))) arg_cores
               , Simp (VarTy out_eff ~> (fn ^. meta . eff) :⊙ arg_eff) :
-                Simp (fn ^. meta . ty ~ expected_arg_ty) :
+                (\c -> trace ("app constraints: " ++ show c) c) (Simp (fn ^. meta . ty ~ expected_arg_ty)) :
                 (Simp <$> expected_eff_constrs) <> fn_constr <> mconcat (NonEmpty.toList arg_constrs)
               )
     Abs _ xs body -> do
@@ -303,7 +304,7 @@ generateConstraints term =
         ( Abs (Infer fn_ty (Open out_eff)) xs body
         , -- Wrap any lambdas with an extra parameter for evidence vector
           Core.Lam (Core.CoreV Core.evv (CoreVar $ coreTyTv evv_ty)) $ foldr (\(x, alpha) body -> Core.Lam (Core.CoreV x (CoreVar $ coreTyTv alpha)) body) body_core arg_tys
-        , Simp (VarTy evv_ty ~ ProdTy (VarTy out_eff)) : Simp (VarTy out_eff ~ rowToType (body ^. meta . eff)) : constr
+        , trace ("fn type: " ++ show fn_ty) (Simp (VarTy evv_ty ~ ProdTy (VarTy out_eff)) : Simp (VarTy out_eff ~ rowToType (body ^. meta . eff)) : constr)
         )
     Perform _ op val_ -> do
       EffCtx _ sigs <- ask
@@ -570,9 +571,9 @@ canon q =
         let (b_goal, a_goal) = Map.partitionWithKey (\k _ -> Map.member k b_row) goal
          in return $ Work [VarTy a_tv ~ RowTy a_goal, RowTy b_row ~ RowTy b_goal]
     RowTy goal :<~> Open a_tv :⊙ Open b_tv
-      -- Special case, if our goal is empty it's clear how to solve towo open variables
+      -- Special case, if our goal is empty it's clear how to solve two open variables
       | Map.null goal -> return $ Work [RowTy Map.empty ~ VarTy a_tv, RowTy Map.empty ~ VarTy b_tv]
-      | otherwise -> return $ Residual q -- error ("Should this be allowed? " ++ show r)
+      | otherwise -> return $ Done (RowCt goal a_tv b_tv)
     IntTy :<~> ct@(_ :⊙ _) -> return $ Residual (IntTy ~> ct)
     ProdTy ty :<~> ct@(_ :⊙ _) -> return $ Residual (ProdTy ty ~> ct)
     SumTy ty :<~> ct@(_ :⊙ _) -> return $ Residual (SumTy ty ~> ct)
@@ -590,13 +591,14 @@ canon q =
 {- A canonical constraint.
    This is a tvar lhs equal to a type that does not contain tvar -}
 data CanonCt
-  = -- tvar ~ ct
-    Ct TVar Ct
+  = Ct TVar Ct
+  | RowCt Row TVar TVar
   deriving (Eq)
 
 instance Show CanonCt where
   showsPrec p (Ct tv (T ty)) = showsPrec p tv . (" ~= " ++) . showsPrec p ty
   showsPrec p (Ct tv ct) = showsPrec p tv . (" ~= " ++) . showsPrec p ct
+  showsPrec p (RowCt row left right) = showsRow p row . (" ~= " ++) . showsPrec p left . (" :⊙ " ++) . showsPrec p right
 
 {- binary interaction between two constraints from the same set (wanted or given) -}
 interact :: Interaction -> [Q]
@@ -625,16 +627,16 @@ simplify i =
 -- InteractOccurs a Int (Within b (a -{}-> r)) ~~> [b ~ Int -{}-> r]
 data Occurs
   = Within TVar Type
-  | RowLeft TVar InternalRow InternalRow
-  | RowRight TVar InternalRow InternalRow
+  | RowLeft InternalRow InternalRow InternalRow
+  | RowRight InternalRow InternalRow InternalRow
   deriving (Eq, Show)
 
 applyOccurs :: Subst -> Occurs -> Q
 applyOccurs subst =
   \case
     Within tv ty -> VarTy tv ~ apply subst ty
-    RowLeft ty left right -> VarTy ty ~> apply subst left :⊙ right
-    RowRight tv left right -> VarTy tv ~> left :⊙ apply subst right
+    RowLeft row left right -> rowToType row ~> apply subst left :⊙ right
+    RowRight row left right -> rowToType row ~> left :⊙ apply subst right
 
 data Interaction
   = -- The canonical constraints are for the same tvar
@@ -669,14 +671,20 @@ interactions canons = selectInteractions canons
           (Ct a_tv (T a_ty), Ct b_tv (b_left :⊙ b_right))
             | a_tv == b_tv -> filteredCanons $ InteractEq a_tv a_ty b_tv (b_left :⊙ b_right)
           (Ct a_tv (T a_ty), Ct b_goal (b_left :⊙ b_right))
-            | rowOccurs a_tv b_left -> filteredCanons $ InteractOccurs a_tv a_ty (RowLeft b_goal b_left b_right)
-            | rowOccurs a_tv b_right -> filteredCanons $ InteractOccurs a_tv a_ty (RowRight b_goal b_left b_right)
+            | rowOccurs a_tv b_left -> filteredCanons $ InteractOccurs a_tv a_ty (RowLeft (Open b_goal) b_left b_right)
+            | rowOccurs a_tv b_right -> filteredCanons $ InteractOccurs a_tv a_ty (RowRight (Open b_goal) b_left b_right)
           -- Symmetrical cases
           (Ct a_tv (a_left :⊙ a_right), Ct b_tv (T b_ty))
             | a_tv == b_tv -> filteredCanons $ InteractEq b_tv b_ty a_tv (a_left :⊙ a_right)
           (Ct a_goal (a_left :⊙ a_right), Ct b_tv (T b_ty))
-            | rowOccurs b_tv a_left -> filteredCanons $ InteractOccurs b_tv b_ty (RowLeft a_goal a_left a_right)
-            | rowOccurs b_tv a_right -> filteredCanons $ InteractOccurs b_tv b_ty (RowRight a_goal a_left a_right)
+            | rowOccurs b_tv a_left -> filteredCanons $ InteractOccurs b_tv b_ty (RowLeft (Open a_goal) a_left a_right)
+            | rowOccurs b_tv a_right -> filteredCanons $ InteractOccurs b_tv b_ty (RowRight (Open a_goal) a_left a_right)
+          (RowCt a_row a_left a_right, Ct b_tv (T b_ty))
+            | b_tv == a_left -> filteredCanons $ InteractOccurs b_tv b_ty (RowLeft (Closed a_row) (Open a_left) (Open a_right))
+            | b_tv == a_right -> filteredCanons $ InteractOccurs b_tv b_ty (RowRight (Closed a_row) (Open a_left) (Open a_right))
+          (Ct a_tv (T a_ty), RowCt b_row b_left b_right)
+            | a_tv == b_left -> filteredCanons $ InteractOccurs a_tv a_ty (RowLeft (Closed b_row) (Open b_left) (Open b_right))
+            | a_tv == b_right -> filteredCanons $ InteractOccurs a_tv a_ty (RowRight (Closed b_row) (Open b_left) (Open b_right))
           (_, _) -> (canons, Nothing)
 
 simplifications :: [CanonCt] -> [CanonCt] -> ([Interaction], [CanonCt])
@@ -688,8 +696,8 @@ simplifications given wanted = second nub . partitionEithers $ mkInteraction <$>
     | occurs given_tv wanted_ty = Left (InteractOccurs given_tv given_ty (Within wanted_tv wanted_ty))
   mkInteraction (Ct given_tv (T given_ty), Ct wanted_tv (wanted_left :⊙ wanted_right))
     | given_tv == wanted_tv = Left $ InteractEq given_tv given_ty wanted_tv (wanted_left :⊙ wanted_right)
-    | rowOccurs given_tv wanted_left = Left $ InteractOccurs given_tv given_ty (RowLeft wanted_tv wanted_left wanted_right)
-    | rowOccurs given_tv wanted_right = Left $ InteractOccurs given_tv given_ty (RowRight wanted_tv wanted_left wanted_right)
+    | rowOccurs given_tv wanted_left = Left $ InteractOccurs given_tv given_ty (RowLeft (Open wanted_tv) wanted_left wanted_right)
+    | rowOccurs given_tv wanted_right = Left $ InteractOccurs given_tv given_ty (RowRight (Open wanted_tv) wanted_left wanted_right)
   -- Order is important here as our input is (given, wanted). Which asks does it even make sense for this case to occur?
   mkInteraction (_, wanted) = Right wanted
 
@@ -729,7 +737,7 @@ solve unifiers phi given wanted
     let is = nub $ foldMap interact (i : interacts)
     ((fresh_unifiers, subst), (canon, remainder)) <- runState ([], mempty) (canonicalize canon is)
     modify (remainder ++)
-    _ <- trace ("output:\n" ++ ppShowList (sortBy (\(Ct a _) (Ct b _) -> compare a b) (canon <> inert_canon))) $ return ()
+    _ <- trace ("output:\n" ++ ppShowList (sortBy canonOrder (canon <> inert_canon))) $ return ()
     return $ Just (unifiers <> fresh_unifiers, subst <> phi, given, canon <> inert_canon)
   | (i : interacts, inert_wanted) <- simplifications given wanted = do
     let is = simplify <$> i : interacts
@@ -737,6 +745,12 @@ solve unifiers phi given wanted
     modify (remainder ++)
     return $ Just (unifiers <> fresh_unifiers, subst <> phi, given, canon <> inert_wanted)
 solve _ _ _ _ = return Nothing
+
+canonOrder :: CanonCt -> CanonCt -> Ordering
+canonOrder (RowCt {}) (Ct {}) = GT
+canonOrder (Ct {}) (RowCt {}) = LT
+canonOrder (Ct a _) (Ct b _) = compare a b
+canonOrder (RowCt a _ _) (RowCt b _ _) = compare a b
 
 simples :: (Has (Fresh TVar) sig m, Has (Throw TyErr) sig m) => [TVar] -> [Q] -> [Q] -> m ([TVar], Subst, [CanonCt], ([CanonCt], [Q]))
 simples unifiers noncanon_given noncanon_wanted = do
@@ -812,6 +826,7 @@ solveSimplConstraints ctx_unifiers given wanted = do
               case q of
                 Ct tv (T ty) -> [(tv, apply subst ty)]
                 Ct _ (_ :⊙ _) -> []
+                RowCt {} -> []
          in Subst . LazyMap.fromList . mconcat $ q_to_pairs theta <$> q_wanted
   return (theta, over typeOf (apply theta) q_residue)
  where
@@ -819,6 +834,7 @@ solveSimplConstraints ctx_unifiers given wanted = do
     case q of
       Ct tv (T ty) -> Ct tv (T (apply subst ty))
       Ct tv (left :⊙ right) -> Ct tv (apply subst left :⊙ apply subst right)
+      RowCt {} -> error "this shouldn't happen"
 
 solveConstraints :: (Has (Reader [Q]) sig m, Has (Throw TyErr) sig m, Has (Fresh TVar) sig m) => [TVar] -> [Q] -> [Constraint] -> m (Subst, [Q])
 solveConstraints unifiers given constrs = do
@@ -850,10 +866,7 @@ wrap (Scheme bound qs _) core =
 
 {- Walk term and treat any unbound variables as evidence and wrap final term in a new lambda to bind evidence -}
 liftEv :: Core.Core -> Core.Core
-liftEv core = foldr Core.Lam core unbound
- where
-  -- Ignore evv variables because they're generated
-  unbound = Set.filter (\(Core.CoreV v _) -> v /= Core.evv && v /= Core.marker) (Core.coreUnboundVars core)
+liftEv core = foldr Core.Lam core (Core.coreUnboundVars core)
 
 stateEff = Eff "State" effCoreTy (monoScheme <$> ops)
  where
@@ -887,7 +900,6 @@ generateEvidenceForSolved _ = Map.foldrWithKey generateEvidence (Map.empty, [])
       -- Sovle 1 open  rows
       RowTy goal :<~> Closed left :⊙ Open _ -> _1 %~ Map.insert v (Core.rowEvidence left (solvePartialRow goal left) goal)
       RowTy goal :<~> Open _ :⊙ Closed right -> _1 %~ Map.insert v (Core.rowEvidence (solvePartialRow goal right) right goal)
-
       -- Anything else we can't solve and needs to be lifted as an evidence param
       _ -> _2 %~ (q :)
 
@@ -915,7 +927,7 @@ inferTerm term = do
   empty_ev_map = Map.empty :: Map Var Q
   maxVar = maxTermVar term
 
-inferSingTerm term  = run . runReader emptyEffCtx . runReader (Map.singleton Core.evv (monoScheme unitTy)) $ inferTerm term
+inferSingTerm term = run . runReader emptyEffCtx . runReader (Map.insert Core.evv (monoScheme unitTy) builtinCtx) $ inferTerm term
 
 referenced :: Term Infer -> TVarSet
 referenced term = TVarSet.fromList $ do
@@ -926,7 +938,7 @@ referenced term = TVarSet.fromList $ do
     Open eff -> [eff]
 
 infer :: Prog () -> (Prog Infer, [Core.Core], [Scheme])
-infer (Prog defs effs) = snd . runIdentity . runReader effCtx . runState emptyCtx $ inferDefs effs defs
+infer (Prog defs effs) = snd . runIdentity . runReader effCtx . runState builtinCtx $ inferDefs effs defs
  where
   effCtx = mkEffCtx effs
 
@@ -965,6 +977,60 @@ exampleInt = abs [f, g] $ var f <@> int 0 <@> (var g <@> int 11)
   f = V 0
   g = V 1
 
+examplePrim :: Term ()
+examplePrim = app (var Core.add) [int 10, int 5]
+
+exampleBoolPrim :: Term ()
+exampleBoolPrim =
+  Branch
+    ()
+    (abs [x] (abs [y] (int 47) <@> unlabel (var x) "False"))
+    (abs [x] (abs [y] (int 32) <@> unlabel (var x) "True"))
+    <@> app (var Core.lt) [int 0, int 5]
+ where
+  x = V 0
+  y = V 1
+
+exampleProperState :: Prog ()
+exampleProperState = Prog {terms=[main], effects=[state]}
+  where
+    main = Def {def_name=V 10, def_term=body}
+    body = handle "State" (handler clauses ret) 
+      (letChain 
+        [(V 3, perform "get" unit)
+        ,(V 4, perform "put" (app (var Core.add) [var (V 3), int 1]))
+        ,(V 5, perform "get" unit)
+        ] (var (V 5))) <@> int 5
+
+    x = V 0
+    resume = V 1
+    s = V 2
+
+    clauses = NonEmpty.fromList 
+      [ Clause {_op = "get", _arg=x, _resume=resume, _body=abs [s] (app (var resume) [var s, var s])}
+      , Clause {_op = "put", _arg=x, _resume=resume, _body=abs [s] (app (var resume) [var x, var s])}]
+
+    ret = Clause {_op="return", _arg=x, _resume=resume, _body=abs [s] (record [label "value" (var x), label "state" (var s)])}
+
+    state = Eff 
+      { eff_name = "State"
+      , eff_handler_ty = effCoreTy
+      , eff_ops = monoScheme <$> ops
+      }
+
+    effCoreTy = ProdTy (RowTy (Map.fromList [("marker", IntTy), ("handler", handlerTy)]))
+    handlerTy = ProdTy (RowTy (eraseCoreTy <$> ops))
+    -- To break cycle erase core ty for handlers in handler ty
+    eraseCoreTy (FunTy arg (Closed eff) ret) = FunTy arg (Closed (unitTy <$ eff)) ret
+    eraseCoreTy _ = error "eraseCoreTy: impossible"
+
+    ops =
+      Map.fromList
+        [ ("get", FunTy unitTy (Closed ("State" |> effCoreTy)) IntTy)
+        , ("put", FunTy IntTy (Closed ("State" |> effCoreTy)) unitTy)
+        ]
+
+
 exampleRow :: Term ()
 exampleRow =
   abs [rho] (unlabel (prj L (var rho)) "x")
@@ -972,13 +1038,14 @@ exampleRow =
   rho = V 0
 
 exampleSum :: Term ()
-exampleSum = 
-  Branch () 
-    (abs [x] (unlabel (var x) "False")) 
-    (abs [x] (unlabel (var x) "True")) 
-  <@> Inj () R (label "True" (int 1))
-  where 
-    x = V 0
+exampleSum =
+  Branch
+    ()
+    (abs [x] (unlabel (var x) "False"))
+    (abs [x] (unlabel (var x) "True"))
+    <@> Inj () R (label "True" (int 1))
+ where
+  x = V 0
 
 exampleProdLit :: Term ()
 exampleProdLit = record [label "x" f, label "w" (int 0), label "y" (int 4), label "z" (int 1)]

@@ -84,16 +84,6 @@ lbl |> ty = Map.singleton lbl ty
 showsRow :: Int -> Row -> ShowS
 showsRow p row s = foldr (\f s -> f s) s $ intersperse (", " ++) $ (\(lbl, ty) -> showsPrec p lbl . (" |> " ++) . showsPrec p ty) <$> Map.toList row
 
-  {-instance Show Type where
-  showsPrec p (VarTy tv) = showsPrec p tv
-  showsPrec _ IntTy = ("IntTy" ++)
-  showsPrec _ (RowTy row) | Map.null row = ("() " ++)
-  showsPrec p (RowTy row) = showsRow p row
-  showsPrec _ (ProdTy (RowTy row)) | Map.null row = ("{}" ++)
-  showsPrec p (ProdTy ty) = ('{' :) . showsPrec p ty . ('}' :)
-  showsPrec p (FunTy arg (Open eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . showsPrec p eff . ("}-> " ++) . showsPrec 9 ret)
-  showsPrec p (FunTy arg (Closed eff) ret) = Type.parens p (showsPrec 11 arg . (" -{" ++) . Map.foldrWithKey' (\lbl ty fn -> (unpack lbl ++) . (" |> " ++) . showsPrec 10 ty . (", " ++) . fn) id eff . ("}-> " ++) . showsPrec 9 ret)-}
-
 instance Pretty Type where
   pretty =
     \case

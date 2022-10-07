@@ -12,8 +12,15 @@ import Debug.Trace
 checkAndExec :: Term () -> Value
 checkAndExec term = trace ("\n" ++ unpack (Pretty.prettyRender (prettyCore core)) ++ "\n") $ interpret core
   where
-    core = {-Core.simplify-} c
+    core = Core.simplify c
     (_, c, _) = inferSingTerm term
+
+steps :: Int -> Term () -> IO ()
+steps n term = prettySteps n core
+  where
+    core = Core.simplify c
+    (_, c, _) = inferSingTerm term
+
 
 prettyCheckAndExec = Data.Text.IO.putStrLn . Pretty.prettyRender . prettyVal . checkAndExec
 

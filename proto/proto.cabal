@@ -28,6 +28,7 @@ library
       CC.Prompt
       Constraint
       Core
+      Core.Builtin
       Example
       Fresh
       Interpret

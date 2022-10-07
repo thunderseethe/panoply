@@ -23,7 +23,6 @@ import Type
 import Data.Bifunctor (Bifunctor(first))
 import Data.Foldable
 import Data.Text (Text, pack)
-import Debug.Trace
 
 data Literal = I Int
   deriving (Show, Read)
@@ -157,6 +156,40 @@ toType ty =
     CoreCoproduct elems -> SumTy (RowTy (Map.fromList $ zip (pack .show <$> [0..]) (toType <$> elems)))
     CoreForall _ _ -> error "idk what to do  here"
 
+-- We do not want to allow arbitrary computation within primitives
+-- We'll wrap primitives in a helper function that will handle evaluating expressions to values before constructing a primitive out of them
+-- So primitives should take variables (which eval to values at runtime), or literals if we can constant fold a call to the helper function
+data PrimArg
+  = PrimVar CoreVar
+  | PrimVal Literal
+  deriving (Show, Read)
+
+toCore :: PrimArg -> Core
+toCore (PrimVar var) = Core.Var var
+toCore (PrimVal lit) = Lit lit
+
+data BinOp
+  = IntAdd
+  | IntLt
+  deriving (Show, Read)
+
+data PrimOp
+  = BinOp BinOp PrimArg PrimArg
+  deriving (Show, Read)
+
+prettyPrimitive :: PrimOp -> Doc SyntaxHighlight
+prettyPrimitive prim = 
+  case prim of
+    BinOp op arg_left arg_right -> prettyPrimArg arg_left <+> prettyBinOp op <+> prettyPrimArg arg_right
+
+prettyBinOp :: BinOp -> Doc SyntaxHighlight
+prettyBinOp IntAdd = annotate Keyword "+"
+prettyBinOp IntLt = annotate Keyword "<"
+
+prettyPrimArg :: PrimArg -> Doc SyntaxHighlight
+prettyPrimArg (PrimVar var) = shortVar var
+prettyPrimArg (PrimVal lit) = annotate Literal (pretty lit)
+
 data Core
   = Var CoreVar
   | Lit Literal
@@ -169,8 +202,9 @@ data Core
   | Coproduct CoreType Int Core
   | Case {- scrutinee -} Core {- branches -}(Seq Core)
   | NewPrompt CoreVar Core
-  | Prompt { prompt_marker :: Core, prompt_body :: Core  }
+  | Prompt { prompt_marker :: Core, prompt_body :: Core }
   | Yield { yield_marker :: Core, yield_value :: Core }
+  | Primitive PrimOp
   deriving (Show, Read)
 
 instance Plated Core where
@@ -189,11 +223,13 @@ instance Plated Core where
       Yield marker value -> Yield <$> f marker <*> f value
       Core.Var var -> pure (Core.Var var)
       Lit lit -> pure (Lit lit)
+      Primitive op -> pure (Primitive op)
 
 -- Global core specific variables that users won't see
 evv = V (-1)
 marker = V (-2)
-
+add = V (-9)
+lt = V (-10)
 
 isSingleDoc :: Core -> Bool
 -- Var technically isn't a single doc but we treat it as such because parens are handled by var printing logic
@@ -238,6 +274,7 @@ prettyCore' typed = go
         NewPrompt x body -> align (annotate Keyword "let" <+> group (prettyVar x <+> "=" <+> annotate Literal "NewPrompt") <> line <> group (annotate Keyword " in" <+> go body))
         Prompt marker body -> "Prompt" <+> Pretty.record [("prompt_marker", go marker), ("prompt_body", go body)]
         Yield marker value -> "Yield" <+> Pretty.record [("yield_marker", go marker), ("yield_value", go value)]
+        Primitive op -> prettyPrimitive op
 
     prettyDefn (x, defn) = group (align (lamVar x <+> "=" <> nest 4 (line <> go defn)))
 
@@ -252,8 +289,7 @@ prettyCore' typed = go
     collectSpine spine (Core.App fn arg) = collectSpine (arg:spine) fn
     collectSpine spine head = (head, spine)
 
-    lamVar = case typed of { Typed -> prettyVar; Typeless -> shortVar }
-      
+    lamVar = case typed of { Typed -> prettyVar; Typeless -> shortVar } 
   
 
 prettyRender :: Core -> Text
@@ -273,10 +309,10 @@ coreBoundVars f core =
     c -> pure c
 
 coreUnboundVars :: Core -> Set.Set CoreVar
-coreUnboundVars core = allVars `Set.difference` boundVars
+coreUnboundVars core = Set.fromList . Map.elems $ Map.withoutKeys allVars boundVars
  where
-  allVars = foldrOf (cosmos . coreVars) Set.insert Set.empty core
-  boundVars = foldrOf (cosmos . coreBoundVars) Set.insert Set.empty core
+  allVars = foldrOf (cosmos . coreVars) (\core_var@(CoreV v _) -> Map.insert v core_var) Map.empty core
+  boundVars = Set.union (Set.fromList [Core.evv, Core.marker, Core.add, Core.lt]) $ foldrOf (cosmos . coreBoundVars) (\(CoreV v _) -> Set.insert v) Set.empty core
 
 rowEvType :: InternalRow -> InternalRow -> InternalRow -> CoreType
 rowEvType left right goal =

@@ -19,6 +19,7 @@ import qualified Data.Foldable as Foldable
 import Data.Text (Text)
 import qualified Prettyprinter as Pretty
 import Pretty
+import Prelude hiding (abs)
 
 newtype Var = V Int
   deriving (Ord, Eq, Num, Enum, Show, Read, Bounded)
@@ -30,6 +31,10 @@ namedVar (V (-3)) = Just "op_arg"
 namedVar (V (-4)) = Just "k"
 namedVar (V (-5)) = Just "left"
 namedVar (V (-6)) = Just "right"
+namedVar (V (-7)) = Just "z"
+namedVar (V (-8)) = Just "x"
+namedVar (V (-9)) = Just "(+)"
+namedVar (V (-10)) = Just "(<)"
 namedVar _ = Nothing
 
 prettyV :: Var -> Doc SyntaxHighlight
@@ -242,6 +247,9 @@ maxTermVar = fromMaybe (V $ -1) . maximumOf (cosmos . termVar)
 {- Smart Constructors -}
 abs :: [Var] -> Term () -> Term ()
 abs vars = Abs () (NonEmpty.fromList vars)
+
+letChain :: (Foldable t) => t (Var, Term ()) -> Term () -> Term () 
+letChain defns body = foldr (\(x, defn) body -> abs [x] body <@> defn) body defns
 
 var :: Var -> Term ()
 var = Var ()
