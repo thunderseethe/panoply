@@ -95,42 +95,6 @@ where
     })
 }
 
-/// Resolves the given pattern, accumulating bindings into `names`.
-///
-/// Note that this currently cannot return `None`, although it can emit errors.
-pub fn resolve_pattern<'a, 's, E>(
-    arena: &'a Bump,
-    names: &mut Names<'_, '_, 's>,
-    pattern: &cst::Pattern<'_, 's>,
-    vars: &mut IdGen<VarId, SpanOf<RefHandle<'s, str>>>,
-    errors: &mut E,
-) -> Option<&'a nst::Pattern<'a, 's>>
-where
-    E: DiagnosticSink<NameResolutionError<'s>>,
-{
-    Some(arena.alloc(match pattern {
-        cst::Pattern::ProductRow(pr) => {
-            nst::Pattern::ProductRow(resolve_product_row(arena, pr, |target| {
-                resolve_pattern(arena, names, target, vars, errors)
-            })?)
-        }
-        cst::Pattern::SumRow(sr) => nst::Pattern::SumRow(resolve_sum_row(sr, |target| {
-            resolve_pattern(arena, names, target, vars, errors)
-        })?),
-        cst::Pattern::Whole(var) => nst::Pattern::Whole(var.span_map(|var| {
-            let id = vars.push(*var);
-            if let Some(orig) = names.insert(var.value, id) {
-                errors.add(NameResolutionError::Duplicate {
-                    name: var.value,
-                    original: vars[orig].span(),
-                    duplicate: var.span(),
-                })
-            }
-            id
-        })),
-    }))
-}
-
 // The possible meanings of a `DotAccess` term.
 #[derive(Debug)]
 enum DotResolution<'a, 's> {
@@ -152,275 +116,6 @@ impl<'a, 's> DotResolution<'a, 's> {
     }
 }
 
-// Resolves nested `DotAccess` terms.
-fn resolve_nested_dots<'a, 's, E>(
-    arena: &'a Bump,
-    names: &Names<'_, '_, 's>,
-    base: &cst::Term<'_, 's>,
-    dot: Span,
-    field: SpanOf<RefHandle<'s, str>>,
-    vars: &mut IdGen<VarId, SpanOf<RefHandle<'s, str>>>,
-    errors: &mut E,
-) -> Option<DotResolution<'a, 's>>
-where
-    E: DiagnosticSink<NameResolutionError<'s>>,
-{
-    Some(match base {
-        // (base2 . field2) . field
-        cst::Term::DotAccess {
-            base: base2,
-            dot: dot2,
-            field: field2,
-        } => match resolve_nested_dots(arena, names, base2, *dot2, *field2, vars, errors)? {
-            // m . field
-            DotResolution::Module(m) => match names.get_in(m, field.value).if_none(|| {
-                errors.add(NameResolutionError::NotFoundIn {
-                    module: m,
-                    name: field,
-                })
-            })? {
-                Member::Module(m2) => DotResolution::Module(m2),
-                Member::Item(i) => DotResolution::Item(m, i),
-            },
-            // (m.i) . field
-            DotResolution::Item(m, i) => DotResolution::FieldAccess {
-                base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
-                dot,
-                field,
-            },
-            // (base2n . field2n) . field
-            DotResolution::FieldAccess {
-                base: base2n,
-                dot: dot2n,
-                field: field2n,
-            } => DotResolution::FieldAccess {
-                base: arena.alloc(nst::Term::FieldAccess {
-                    base: base2n,
-                    dot: dot2n,
-                    field: field2n,
-                }),
-                dot,
-                field,
-            },
-        },
-        // n . field
-        cst::Term::SymbolRef(n) => {
-            match names
-                .get(n.value)
-                .if_none(|| errors.add(NameResolutionError::NotFound(*n)))?
-            {
-                Name::Module(m) => DotResolution::from_member(
-                    m,
-                    names.get_in(m, field.value).if_none(|| {
-                        errors.add(NameResolutionError::NotFoundIn {
-                            module: m,
-                            name: field,
-                        })
-                    })?,
-                ),
-                Name::Item(m, i) => DotResolution::FieldAccess {
-                    base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
-                    dot,
-                    field,
-                },
-                Name::Variable(v) => DotResolution::FieldAccess {
-                    base: arena.alloc(nst::Term::VariableRef(base.span().of(v))),
-                    dot,
-                    field,
-                },
-            }
-        }
-        // (expr) . field
-        _ => DotResolution::FieldAccess {
-            base: resolve_term(arena, names, base, vars, errors)?,
-            dot,
-            field,
-        },
-    })
-}
-
-/// Resolves the given term, reporting errors to `errors`.
-pub fn resolve_term<'a, 's, E>(
-    arena: &'a Bump,
-    names: &Names<'_, '_, 's>,
-    term: &cst::Term<'_, 's>,
-    vars: &mut IdGen<VarId, SpanOf<RefHandle<'s, str>>>,
-    errors: &mut E,
-) -> Option<&'a nst::Term<'a, 's>>
-where
-    E: DiagnosticSink<NameResolutionError<'s>>,
-{
-    Some(
-        arena.alloc(match term {
-            cst::Term::Binding {
-                var,
-                eq,
-                value,
-                semi,
-                expr,
-            } => {
-                let id = vars.push(*var);
-                let value = resolve_term(arena, names, value, vars, errors);
-
-                let mut scope = names.subscope();
-                if let Some(orig) = scope.insert(var.value, id) {
-                    errors.add(NameResolutionError::Duplicate {
-                        name: var.value,
-                        original: vars[orig].span(),
-                        duplicate: var.span(),
-                    })
-                }
-                let expr = resolve_term(arena, &mut scope, expr, vars, errors);
-
-                nst::Term::Binding {
-                    var: var.span().of(id),
-                    eq: *eq,
-                    value: value?,
-                    semi: *semi,
-                    expr: expr?,
-                }
-            }
-            cst::Term::Handle {
-                with,
-                handler,
-                do_,
-                expr,
-            } => {
-                let handler = resolve_term(arena, names, handler, vars, errors);
-                let expr = resolve_term(arena, names, expr, vars, errors);
-                nst::Term::Handle {
-                    with: *with,
-                    handler: handler?,
-                    do_: *do_,
-                    expr: expr?,
-                }
-            }
-            cst::Term::Abstraction {
-                lbar,
-                arg,
-                rbar,
-                body,
-            } => {
-                let mut scope = names.subscope();
-                let id = vars.push(*arg);
-                if let Some(orig) = scope.insert(arg.value, id) {
-                    errors.add(NameResolutionError::Duplicate {
-                        name: arg.value,
-                        original: vars[orig].span(),
-                        duplicate: arg.span(),
-                    })
-                }
-                nst::Term::Abstraction {
-                    lbar: *lbar,
-                    arg: arg.span().of(id),
-                    rbar: *rbar,
-                    body: resolve_term(arena, &mut scope, body, vars, errors)?,
-                }
-            }
-            cst::Term::Application {
-                func,
-                lpar,
-                arg,
-                rpar,
-            } => {
-                let func = resolve_term(arena, names, func, vars, errors);
-                let arg = resolve_term(arena, names, arg, vars, errors);
-                nst::Term::Application {
-                    func: func?,
-                    lpar: *lpar,
-                    arg: arg?,
-                    rpar: *rpar,
-                }
-            }
-            cst::Term::ProductRow(pr) => {
-                nst::Term::ProductRow(resolve_product_row(arena, pr, |target| {
-                    resolve_term(arena, names, target, vars, errors)
-                })?)
-            }
-            cst::Term::SumRow(sr) => nst::Term::SumRow(resolve_sum_row(sr, |target| {
-                resolve_term(arena, names, target, vars, errors)
-            })?),
-            t @ cst::Term::DotAccess { base, dot, field } => {
-                match resolve_nested_dots(arena, names, base, *dot, *field, vars, errors)? {
-                    DotResolution::Module(m) => {
-                        errors.add(NameResolutionError::ModuleTerm(t.span().of(m)));
-                        None?
-                    }
-                    DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
-                    DotResolution::FieldAccess { base, dot, field } => {
-                        nst::Term::FieldAccess { base, dot, field }
-                    }
-                }
-            }
-            cst::Term::Match {
-                match_,
-                langle,
-                cases,
-                rangle,
-            } => nst::Term::Match {
-                match_: *match_,
-                langle: *langle,
-                cases: resolve_separated(arena, cases, |field| {
-                    let mut scope = names.subscope();
-                    let pattern = resolve_pattern(arena, &mut scope, field.label, vars, errors);
-                    let target = resolve_term(arena, &mut scope, field.target, vars, errors);
-                    Some(Field {
-                        label: pattern?,
-                        sep: field.sep,
-                        target: target?,
-                    })
-                })?,
-                rangle: *rangle,
-            },
-            cst::Term::SymbolRef(var) => {
-                match names
-                    .get(var.value)
-                    .if_none(|| errors.add(NameResolutionError::NotFound(*var)))?
-                {
-                    Name::Module(m) => {
-                        errors.add(NameResolutionError::ModuleTerm(var.span().of(m)));
-                        None?
-                    }
-                    Name::Item(m, i) => nst::Term::ItemRef(var.span().of((m, i))),
-                    Name::Variable(v) => nst::Term::VariableRef(var.span().of(v)),
-                }
-            }
-            cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
-                lpar: *lpar,
-                term: resolve_term(arena, names, term, vars, errors)?,
-                rpar: *rpar,
-            },
-        }),
-    )
-}
-
-/// Resolves the given item, reporting errors to `errors`.
-pub fn resolve_item<'a, 's, E>(
-    arena: &'a Bump,
-    names: &BaseNames<'_, 's>,
-    id: ItemId,
-    item: &cst::Item<'_, 's>,
-    vars: &mut IdGen<VarId, SpanOf<RefHandle<'s, str>>>,
-    errors: &mut E,
-) -> Option<nst::Item<'a, 's>>
-where
-    E: DiagnosticSink<NameResolutionError<'s>>,
-{
-    Some(match item {
-        cst::Item::Term { name, eq, value } => nst::Item::Term {
-            name: name.span().of(id),
-            eq: *eq,
-            value: arena.alloc(resolve_term(
-                arena,
-                &Names::new(names),
-                value,
-                vars,
-                errors,
-            )?),
-        },
-    })
-}
-
 /// The result of resolving an item.
 #[derive(Debug)]
 pub enum ItemResolution<'a, 's> {
@@ -428,6 +123,7 @@ pub enum ItemResolution<'a, 's> {
     Failed(SpanOf<RefHandle<'s, str>>),
 }
 
+/// Data generated by resolving a module.
 #[derive(Debug)]
 pub struct ModuleResolution<'a, 's> {
     pub items: Box<Ids<ItemId, SpanOf<RefHandle<'s, str>>>>,
@@ -436,58 +132,383 @@ pub struct ModuleResolution<'a, 's> {
     pub resolved_items: Vec<ItemResolution<'a, 's>>,
 }
 
-/// Resolves the given module, reporting errors to `errors`.
-pub fn resolve_module<'a, 's, E>(
+/// Context for resolving names in a module.
+#[derive(Debug)]
+pub struct Resolver<'a, 'e, 's, E> {
     arena: &'a Bump,
-    this: ModuleId,
-    mtree: &ModuleTree<'_, 's>,
-    items: &[cst::Item<'_, 's>],
-    errors: &mut E,
-) -> ModuleResolution<'a, 's>
+    vars: IdGen<VarId, SpanOf<RefHandle<'s, str>>>,
+    errors: &'e mut E,
+}
+
+impl<'a, 'e, 's, E> Resolver<'a, 'e, 's, E> {
+    /// Constructs a new `Resolver` that allocates into the given arena and reports errors to the
+    /// given sink.
+    pub fn new(arena: &'a Bump, errors: &'e mut E) -> Resolver<'a, 'e, 's, E> {
+        Resolver {
+            arena,
+            vars: IdGen::new(),
+            errors,
+        }
+    }
+
+    /// Consumes the `Resolver` and returns its variable table.
+    pub fn into_vars(self) -> Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>> {
+        self.vars.into_boxed_ids()
+    }
+}
+
+impl<'a, 'e, 's, E> Resolver<'a, 'e, 's, E>
 where
     E: DiagnosticSink<NameResolutionError<'s>>,
 {
-    let its = items.iter().map(cst::Item::name).collect();
+    /// Resolves the given pattern, accumulating bindings into `names`.
+    ///
+    /// Note that this currently cannot return `None`, although it can emit errors.
+    pub fn resolve_pattern(
+        &mut self,
+        pattern: &cst::Pattern<'_, 's>,
+        names: &mut Names<'_, '_, 's>,
+    ) -> Option<&'a nst::Pattern<'a, 's>>
+    where
+        E: DiagnosticSink<NameResolutionError<'s>>,
+    {
+        Some(self.arena.alloc(match pattern {
+            cst::Pattern::ProductRow(pr) => {
+                nst::Pattern::ProductRow(resolve_product_row(self.arena, pr, |target| {
+                    self.resolve_pattern(target, names)
+                })?)
+            }
+            cst::Pattern::SumRow(sr) => nst::Pattern::SumRow(resolve_sum_row(sr, |target| {
+                self.resolve_pattern(target, names)
+            })?),
+            cst::Pattern::Whole(var) => nst::Pattern::Whole(var.span_map(|var| {
+                let id = self.vars.push(*var);
+                if let Some(orig) = names.insert(var.value, id) {
+                    self.errors.add(NameResolutionError::Duplicate {
+                        name: var.value,
+                        original: self.vars[orig].span(),
+                        duplicate: var.span(),
+                    })
+                }
+                id
+            })),
+        }))
+    }
 
-    // Collect top-level names first so they can reference each other in `letrec` fashion. We'll do
-    // recursion checking later.
-    let inames = {
-        let mut inames: HashMap<RefHandle<'s, str>, SpanOf<usize>> = HashMap::new();
-        for (i, item) in items.iter().enumerate() {
-            match inames.entry(item.name().value) {
-                Entry::Occupied(o) => errors.add(NameResolutionError::Duplicate {
-                    name: *o.key(),
-                    original: o.get().span(),
-                    duplicate: item.name().span(),
-                }),
-                Entry::Vacant(v) => {
-                    v.insert(item.name().span().of(i));
+    // Resolves nested `DotAccess` terms.
+    fn resolve_nested_dots(
+        &mut self,
+        base: &cst::Term<'_, 's>,
+        dot: Span,
+        field: SpanOf<RefHandle<'s, str>>,
+        names: &Names<'_, '_, 's>,
+    ) -> Option<DotResolution<'a, 's>>
+    where
+        E: DiagnosticSink<NameResolutionError<'s>>,
+    {
+        Some(match base {
+            // (base2 . field2) . field
+            cst::Term::DotAccess {
+                base: base2,
+                dot: dot2,
+                field: field2,
+            } => match self.resolve_nested_dots(base2, *dot2, *field2, names)? {
+                // m . field
+                DotResolution::Module(m) => {
+                    match names.get_in(m, field.value).if_none(|| {
+                        self.errors.add(NameResolutionError::NotFoundIn {
+                            module: m,
+                            name: field,
+                        })
+                    })? {
+                        Member::Module(m2) => DotResolution::Module(m2),
+                        Member::Item(i) => DotResolution::Item(m, i),
+                    }
+                }
+                // (m.i) . field
+                DotResolution::Item(m, i) => DotResolution::FieldAccess {
+                    base: self.arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
+                    dot,
+                    field,
+                },
+                // (base2n . field2n) . field
+                DotResolution::FieldAccess {
+                    base: base2n,
+                    dot: dot2n,
+                    field: field2n,
+                } => DotResolution::FieldAccess {
+                    base: self.arena.alloc(nst::Term::FieldAccess {
+                        base: base2n,
+                        dot: dot2n,
+                        field: field2n,
+                    }),
+                    dot,
+                    field,
+                },
+            },
+            // n . field
+            cst::Term::SymbolRef(n) => {
+                match names
+                    .get(n.value)
+                    .if_none(|| self.errors.add(NameResolutionError::NotFound(*n)))?
+                {
+                    Name::Module(m) => DotResolution::from_member(
+                        m,
+                        names.get_in(m, field.value).if_none(|| {
+                            self.errors.add(NameResolutionError::NotFoundIn {
+                                module: m,
+                                name: field,
+                            })
+                        })?,
+                    ),
+                    Name::Item(m, i) => DotResolution::FieldAccess {
+                        base: self.arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
+                        dot,
+                        field,
+                    },
+                    Name::Variable(v) => DotResolution::FieldAccess {
+                        base: self.arena.alloc(nst::Term::VariableRef(base.span().of(v))),
+                        dot,
+                        field,
+                    },
                 }
             }
-        }
-        inames
-            .into_iter()
-            .map(|(n, is)| (n, ItemId(is.value)))
-            .collect()
-    };
-
-    let base = BaseNames::new(this, mtree, &inames);
-    let mut vars = IdGen::new();
-    let res = items
-        .iter()
-        .enumerate()
-        .map(
-            |(i, item)| match resolve_item(arena, &base, ItemId(i), item, &mut vars, errors) {
-                Some(it) => ItemResolution::Succeeded(it),
-                None => ItemResolution::Failed(item.name()),
+            // (expr) . field
+            _ => DotResolution::FieldAccess {
+                base: self.resolve_term(base, names)?,
+                dot,
+                field,
             },
+        })
+    }
+
+    /// Resolves the given term.
+    pub fn resolve_term(
+        &mut self,
+        term: &cst::Term<'_, 's>,
+        names: &Names<'_, '_, 's>,
+    ) -> Option<&'a nst::Term<'a, 's>>
+    where
+        E: DiagnosticSink<NameResolutionError<'s>>,
+    {
+        Some(
+            self.arena.alloc(match term {
+                cst::Term::Binding {
+                    var,
+                    eq,
+                    value,
+                    semi,
+                    expr,
+                } => {
+                    let id = self.vars.push(*var);
+                    let value = self.resolve_term(value, names);
+
+                    let mut scope = names.subscope();
+                    if let Some(orig) = scope.insert(var.value, id) {
+                        self.errors.add(NameResolutionError::Duplicate {
+                            name: var.value,
+                            original: self.vars[orig].span(),
+                            duplicate: var.span(),
+                        })
+                    }
+                    let expr = self.resolve_term(expr, &mut scope);
+
+                    nst::Term::Binding {
+                        var: var.span().of(id),
+                        eq: *eq,
+                        value: value?,
+                        semi: *semi,
+                        expr: expr?,
+                    }
+                }
+                cst::Term::Handle {
+                    with,
+                    handler,
+                    do_,
+                    expr,
+                } => {
+                    let handler = self.resolve_term(handler, names);
+                    let expr = self.resolve_term(expr, names);
+                    nst::Term::Handle {
+                        with: *with,
+                        handler: handler?,
+                        do_: *do_,
+                        expr: expr?,
+                    }
+                }
+                cst::Term::Abstraction {
+                    lbar,
+                    arg,
+                    rbar,
+                    body,
+                } => {
+                    let mut scope = names.subscope();
+                    let id = self.vars.push(*arg);
+                    if let Some(orig) = scope.insert(arg.value, id) {
+                        self.errors.add(NameResolutionError::Duplicate {
+                            name: arg.value,
+                            original: self.vars[orig].span(),
+                            duplicate: arg.span(),
+                        })
+                    }
+                    nst::Term::Abstraction {
+                        lbar: *lbar,
+                        arg: arg.span().of(id),
+                        rbar: *rbar,
+                        body: self.resolve_term(body, &mut scope)?,
+                    }
+                }
+                cst::Term::Application {
+                    func,
+                    lpar,
+                    arg,
+                    rpar,
+                } => {
+                    let func = self.resolve_term(func, names);
+                    let arg = self.resolve_term(arg, names);
+                    nst::Term::Application {
+                        func: func?,
+                        lpar: *lpar,
+                        arg: arg?,
+                        rpar: *rpar,
+                    }
+                }
+                cst::Term::ProductRow(pr) => {
+                    nst::Term::ProductRow(resolve_product_row(self.arena, pr, |target| {
+                        self.resolve_term(target, names)
+                    })?)
+                }
+                cst::Term::SumRow(sr) => nst::Term::SumRow(resolve_sum_row(sr, |target| {
+                    self.resolve_term(target, names)
+                })?),
+                t @ cst::Term::DotAccess { base, dot, field } => {
+                    match self.resolve_nested_dots(base, *dot, *field, names)? {
+                        DotResolution::Module(m) => {
+                            self.errors
+                                .add(NameResolutionError::ModuleTerm(t.span().of(m)));
+                            None?
+                        }
+                        DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
+                        DotResolution::FieldAccess { base, dot, field } => {
+                            nst::Term::FieldAccess { base, dot, field }
+                        }
+                    }
+                }
+                cst::Term::Match {
+                    match_,
+                    langle,
+                    cases,
+                    rangle,
+                } => nst::Term::Match {
+                    match_: *match_,
+                    langle: *langle,
+                    cases: resolve_separated(self.arena, cases, |field| {
+                        let mut scope = names.subscope();
+                        let pattern = self.resolve_pattern(field.label, &mut scope);
+                        let target = self.resolve_term(field.target, &mut scope);
+                        Some(Field {
+                            label: pattern?,
+                            sep: field.sep,
+                            target: target?,
+                        })
+                    })?,
+                    rangle: *rangle,
+                },
+                cst::Term::SymbolRef(var) => {
+                    match names
+                        .get(var.value)
+                        .if_none(|| self.errors.add(NameResolutionError::NotFound(*var)))?
+                    {
+                        Name::Module(m) => {
+                            self.errors
+                                .add(NameResolutionError::ModuleTerm(var.span().of(m)));
+                            None?
+                        }
+                        Name::Item(m, i) => nst::Term::ItemRef(var.span().of((m, i))),
+                        Name::Variable(v) => nst::Term::VariableRef(var.span().of(v)),
+                    }
+                }
+                cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
+                    lpar: *lpar,
+                    term: self.resolve_term(term, names)?,
+                    rpar: *rpar,
+                },
+            }),
         )
-        .collect();
-    ModuleResolution {
-        items: its,
-        vars: vars.into_boxed_ids(),
-        item_names: inames,
-        resolved_items: res,
+    }
+
+    /// Resolves the given item.
+    pub fn resolve_item(
+        &mut self,
+        id: ItemId,
+        item: &cst::Item<'_, 's>,
+        names: &BaseNames<'_, 's>,
+    ) -> Option<nst::Item<'a, 's>>
+    where
+        E: DiagnosticSink<NameResolutionError<'s>>,
+    {
+        Some(match item {
+            cst::Item::Term { name, eq, value } => nst::Item::Term {
+                name: name.span().of(id),
+                eq: *eq,
+                value: self
+                    .arena
+                    .alloc(self.resolve_term(value, &Names::new(names))?),
+            },
+        })
+    }
+
+    /// Resolves the given module.
+    pub fn resolve_module(
+        mut self,
+        this: ModuleId,
+        mtree: &ModuleTree<'_, 's>,
+        items: &[cst::Item<'_, 's>],
+    ) -> ModuleResolution<'a, 's>
+    where
+        E: DiagnosticSink<NameResolutionError<'s>>,
+    {
+        let its = items.iter().map(cst::Item::name).collect();
+
+        // Collect top-level names first so they can reference each other in `letrec` fashion. We'll do
+        // recursion checking later.
+        let inames = {
+            let mut inames: HashMap<RefHandle<'s, str>, SpanOf<usize>> = HashMap::new();
+            for (i, item) in items.iter().enumerate() {
+                match inames.entry(item.name().value) {
+                    Entry::Occupied(o) => self.errors.add(NameResolutionError::Duplicate {
+                        name: *o.key(),
+                        original: o.get().span(),
+                        duplicate: item.name().span(),
+                    }),
+                    Entry::Vacant(v) => {
+                        v.insert(item.name().span().of(i));
+                    }
+                }
+            }
+            inames
+                .into_iter()
+                .map(|(n, is)| (n, ItemId(is.value)))
+                .collect()
+        };
+
+        let base = BaseNames::new(this, mtree, &inames);
+        let res = items
+            .iter()
+            .enumerate()
+            .map(
+                |(i, item)| match self.resolve_item(ItemId(i), item, &base) {
+                    Some(it) => ItemResolution::Succeeded(it),
+                    None => ItemResolution::Failed(item.name()),
+                },
+            )
+            .collect();
+        ModuleResolution {
+            items: its,
+            vars: self.vars.into_boxed_ids(),
+            item_names: inames,
+            resolved_items: res,
+        }
     }
 }
 
@@ -498,7 +519,7 @@ mod tests {
     use aiahr_core::{
         diagnostic::nameres::NameResolutionError,
         field, h,
-        id::{IdGen, Ids, ItemId, ModuleId, VarId},
+        id::{Ids, ItemId, ModuleId, VarId},
         id_field,
         memory::{
             arena::BumpArena,
@@ -520,7 +541,7 @@ mod tests {
 
     use crate::{base::BaseNames, modules::ModuleTree, names::Names};
 
-    use super::{resolve_module, resolve_term, ItemResolution};
+    use super::{ItemResolution, Resolver};
 
     fn parse_resolve_term<'a, 's, S>(
         arena: &'a Bump,
@@ -541,11 +562,10 @@ mod tests {
         let inames = HashMap::new();
         let mtree = ModuleTree::new();
         let base = BaseNames::new(ModuleId(0), &mtree, &inames);
-        let mut vars = IdGen::new();
-        let names = Names::new(&base);
 
-        let resolved = resolve_term(arena, &names, unresolved, &mut vars, &mut errors);
-        (resolved, vars.into_boxed_ids(), errors)
+        let mut resolver = Resolver::new(arena, &mut errors);
+        let resolved = resolver.resolve_term(unresolved, &Names::new(&base));
+        (resolved, resolver.into_vars(), errors)
     }
 
     fn parse_resolve_module<'a, 's, S>(
@@ -564,12 +584,11 @@ mod tests {
         let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
         let unresolved = aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap();
         let mut errors = Vec::new();
-        let resolved = resolve_module(
-            arena,
+
+        let resolved = Resolver::new(arena, &mut errors).resolve_module(
             ModuleId(0),
             &ModuleTree::new(),
             unresolved,
-            &mut errors,
         );
         (
             resolved.resolved_items,
