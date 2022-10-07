@@ -8,7 +8,7 @@ use crate::{
 use aiahr_core::{
     cst::{self, Field, IdField, ProductRow, Separated, SumRow},
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
-    id::{ItemId, ModuleId},
+    id::{Ids, ItemId, ModuleId, VarId},
     memory::handle::RefHandle,
     nst,
     span::{Span, SpanOf, Spanned},
@@ -374,8 +374,8 @@ pub enum ItemResolution<'a, 's> {
 
 #[derive(Debug)]
 pub struct ModuleResolution<'a, 's> {
-    pub items: Vec<SpanOf<RefHandle<'s, str>>>,
-    pub vars: Vec<SpanOf<RefHandle<'s, str>>>,
+    pub items: Box<Ids<ItemId, SpanOf<RefHandle<'s, str>>>>,
+    pub vars: Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>>,
     pub item_names: HashMap<RefHandle<'s, str>, ItemId>,
     pub resolved_items: Vec<ItemResolution<'a, 's>>,
 }
@@ -441,7 +441,7 @@ mod tests {
     use aiahr_core::{
         diagnostic::nameres::NameResolutionError,
         field, h,
-        id::ModuleId,
+        id::{Ids, ItemId, ModuleId, VarId},
         id_field,
         memory::{
             arena::BumpArena,
@@ -471,7 +471,7 @@ mod tests {
         input: &str,
     ) -> (
         Option<&'a nst::Term<'a, 's>>,
-        Vec<SpanOf<RefHandle<'s, str>>>,
+        Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>>,
         Vec<NameResolutionError<'s>>,
     )
     where
@@ -496,8 +496,8 @@ mod tests {
         input: &str,
     ) -> (
         Vec<ItemResolution<'a, 's>>,
-        Vec<SpanOf<RefHandle<'s, str>>>,
-        Vec<SpanOf<RefHandle<'s, str>>>,
+        Box<Ids<ItemId, SpanOf<RefHandle<'s, str>>>>,
+        Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>>,
         Vec<NameResolutionError<'s>>,
     )
     where
@@ -533,8 +533,8 @@ mod tests {
                 nterm_prod!(),
                 nterm_local!(y, nterm_prod!(), nterm_var!(x1))
             )) => {
-                assert_eq!(vars[x.0].value.0, "x");
-                assert_eq!(vars[y.0].value.0, "y");
+                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(vars[y].value.0, "y");
                 assert_eq!(x1, x);
             }
         );
@@ -552,8 +552,8 @@ mod tests {
                 nterm_prod!(),
                 nterm_local!(x_in, nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x_out.0].value.0, "x");
-                assert_eq!(vars[x_in.0].value.0, "x");
+                assert_eq!(vars[x_out].value.0, "x");
+                assert_eq!(vars[x_in].value.0, "x");
                 assert_eq!(x1, x_out);
                 assert_eq!(x2, x_in);
             }
@@ -587,7 +587,7 @@ mod tests {
                 nterm_prod!(),
                 nterm_with!(nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -623,8 +623,8 @@ mod tests {
                     nterm_app!(nterm_var!(y1), nterm_var!(x1))
                 )
             )) => {
-                assert_eq!(vars[x.0].value.0, "x");
-                assert_eq!(vars[y.0].value.0, "y");
+                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(vars[y].value.0, "y");
                 assert_eq!(x1, x);
                 assert_eq!(y1, y);
             }
@@ -645,8 +645,8 @@ mod tests {
                     nterm_app!(nterm_var!(x1), nterm_var!(x2))
                 )
             )) => {
-                assert_eq!(vars[x_out.0].value.0, "x");
-                assert_eq!(vars[x_in.0].value.0, "x");
+                assert_eq!(vars[x_out].value.0, "x");
+                assert_eq!(vars[x_in].value.0, "x");
                 assert_eq!(x1, x_in);
                 assert_eq!(x2, x_in);
             }
@@ -664,7 +664,7 @@ mod tests {
                 x,
                 nterm_app!(nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -702,7 +702,7 @@ mod tests {
                     nterm_prod!(id_field!("x", nterm_var!(x2)))
                 ),
             ))) => {
-                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -732,7 +732,7 @@ mod tests {
         let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| <a = x>");
         assert_matches!(term,
             Some(nterm_abs!(x, nterm_sum!(id_field!("a", nterm_var!(x1))))) => {
-                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[x].value.0, "x");
                 assert_eq!(x1, x);
             }
         );
@@ -762,8 +762,8 @@ mod tests {
                     "x"
                 )
             )) => {
-                assert_eq!(vars[id.0].value.0, "id");
-                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[id].value.0, "id");
+                assert_eq!(vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(id1, id);
             }
@@ -791,8 +791,8 @@ mod tests {
                 field!(npat_prod!(id_field!("a", npat_var!(x))), nterm_var!(x1)),
                 field!(npat_var!(y), nterm_var!(y1))
             )) => {
-                assert_eq!(vars[x.0].value.0, "x");
-                assert_eq!(vars[y.0].value.0, "y");
+                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(vars[y].value.0, "y");
                 assert_eq!(x1, x);
                 assert_eq!(y1, y);
             }
@@ -814,6 +814,7 @@ mod tests {
                 NameResolutionError::NotFound(span_of!(h!("z")))
             ]
         );
+
         let (term, vars, errs) =
             parse_resolve_term(&arena, &interner, "match <{a = x, b = x} => x(x)>");
         assert_matches!(
@@ -825,8 +826,8 @@ mod tests {
                 ),
                 nterm_app!(nterm_var!(x1), nterm_var!(x2))
             ))) => {
-                assert_eq!(vars[x.0].value.0, "x");
-                assert_eq!(vars[x_again.0].value.0, "x");
+                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(vars[x_again].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -837,7 +838,7 @@ mod tests {
                 original: SpanOf { value: h!("x"), end, ..},
                 duplicate: SpanOf { value: h!("x"), start, ..},
             }] => {
-                assert!(end.byte < start.byte);
+                assert!(end.byte < start.byte, "{} < {}", end.byte, start.byte);
             }
         )
     }
@@ -850,9 +851,9 @@ mod tests {
             parse_resolve_term(&arena, &interner, "x = {}; |x| match <x => x>");
         assert_matches!(term,
             Some(nterm_local!(x_top, nterm_prod!(), nterm_abs!(x_mid, nterm_match!(field!(npat_var!(x_bot), nterm_var!(x1)))))) => {
-                assert_eq!(vars[x_top.0].value.0, "x");
-                assert_eq!(vars[x_mid.0].value.0, "x");
-                assert_eq!(vars[x_bot.0].value.0, "x");
+                assert_eq!(vars[x_top].value.0, "x");
+                assert_eq!(vars[x_mid].value.0, "x");
+                assert_eq!(vars[x_bot].value.0, "x");
                 assert_eq!(x1, x_bot);
             }
         );
@@ -870,8 +871,8 @@ mod tests {
                 ItemResolution::Succeeded(nitem_term!(foo, nterm_item!(mbar, bar1))),
                 ItemResolution::Succeeded(nitem_term!(bar, nterm_item!(mfoo, foo1)))
             ] => {
-                assert_eq!(items[foo.0].value.0, "foo");
-                assert_eq!(items[bar.0].value.0, "bar");
+                assert_eq!(items[foo].value.0, "foo");
+                assert_eq!(items[bar].value.0, "bar");
                 assert_eq!(mbar, ModuleId(0));
                 assert_eq!(mfoo, ModuleId(0));
                 assert_eq!(bar1, bar);

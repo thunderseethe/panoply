@@ -132,20 +132,24 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
             Some(sl) => ManuallyDrop::into_inner(sl.0),
             None => self.base().make_id(name),
         };
-        match &mut self.0 {
+        let maybe_orig = match &mut self.0 {
             // TODO: we can do better than panicking here
             Data::Base(..) => panic!("Cannot insert names into the base Names layer"),
             Data::Scope { ref mut locals, .. } => {
-                if let Some((&orig, _)) = locals.get_key_value(&name.value) {
-                    errors.add(NameResolutionError::Duplicate {
-                        original: self.base().var(id).unwrap().span().of(orig),
-                        duplicate: name,
-                    });
+                if let Some((_, orig)) = locals.get_key_value(&name.value) {
+                    Some(*orig)
                 } else {
                     locals.insert(name.value, id);
+                    None
                 }
-                name.span().of(id)
             }
+        };
+        if let Some(orig) = maybe_orig {
+            errors.add(NameResolutionError::Duplicate {
+                original: self.base().var(orig).unwrap(),
+                duplicate: name,
+            });
         }
+        name.span().of(id)
     }
 }
