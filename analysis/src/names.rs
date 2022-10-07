@@ -21,7 +21,7 @@ pub enum Name {
 enum Data<'n, 'a, 's> {
     Base(&'n BaseNames<'a, 's>),
     Scope {
-        locals: HashMap<RefHandle<'s, str>, SpanOf<VarId>>,
+        locals: HashMap<RefHandle<'s, str>, VarId>,
         next: &'n Names<'n, 'a, 's>,
     },
 }
@@ -84,9 +84,7 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
                     Member::Module(m) => Name::Module(m),
                     Member::Item(i) => Name::Item(self.this(), i),
                 }),
-                Data::Scope { locals, .. } => locals
-                    .get(&name.value)
-                    .map(|v| Name::Variable(v.value.clone())),
+                Data::Scope { locals, .. } => locals.get(&name.value).map(|v| Name::Variable(*v)),
             })
             .map(|n| name.span().of(n));
         if out.is_none() {
@@ -138,16 +136,15 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
             // TODO: we can do better than panicking here
             Data::Base(..) => panic!("Cannot insert names into the base Names layer"),
             Data::Scope { ref mut locals, .. } => {
-                let out = name.span().of(id);
-                if let Some((&orig, v)) = locals.get_key_value(&name.value) {
+                if let Some((&orig, _)) = locals.get_key_value(&name.value) {
                     errors.add(NameResolutionError::Duplicate {
-                        original: v.span().of(orig),
+                        original: self.base().var(id).unwrap().span().of(orig),
                         duplicate: name,
                     });
                 } else {
-                    locals.insert(name.value, out);
+                    locals.insert(name.value, id);
                 }
-                out
+                name.span().of(id)
             }
         }
     }

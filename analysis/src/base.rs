@@ -61,6 +61,11 @@ impl<'a, 's> BaseNames<'a, 's> {
         VarId(id)
     }
 
+    /// Returns the name and location of a variable.
+    pub fn var(&self, id: VarId) -> Option<SpanOf<RefHandle<'s, str>>> {
+        self.vars.borrow().get(id.0).copied()
+    }
+
     /// Consumes this object and returns the variable vector.
     pub fn into_vars(self) -> Vec<SpanOf<RefHandle<'s, str>>> {
         RefCell::into_inner(self.vars)
