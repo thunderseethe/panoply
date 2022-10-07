@@ -1,9 +1,8 @@
-use std::{cell::RefCell, collections::HashMap};
+use std::collections::HashMap;
 
 use aiahr_core::{
-    id::{IdGen, Ids, ItemId, ModuleId, VarId},
+    id::{ItemId, ModuleId},
     memory::handle::RefHandle,
-    span::SpanOf,
 };
 
 use crate::modules::{Member, ModuleTree};
@@ -15,8 +14,6 @@ pub struct BaseNames<'a, 's> {
     this: ModuleId,
     modules: &'a ModuleTree<'a, 's>,
     inames: &'a HashMap<RefHandle<'s, str>, ItemId>,
-    // TODO: see if we can get rid of RefCell here and just use static analysis
-    vars: RefCell<IdGen<VarId, SpanOf<RefHandle<'s, str>>>>,
 }
 
 impl<'a, 's> BaseNames<'a, 's> {
@@ -30,7 +27,6 @@ impl<'a, 's> BaseNames<'a, 's> {
             this,
             modules,
             inames,
-            vars: RefCell::new(IdGen::new()),
         }
     }
 
@@ -51,20 +47,5 @@ impl<'a, 's> BaseNames<'a, 's> {
     /// Gets the given member in the module.
     pub fn get_in(&self, module: ModuleId, name: RefHandle<'s, str>) -> Option<Member> {
         self.modules.get_in(module, name)
-    }
-
-    /// Creates an ID for a variable.
-    pub fn make_id(&self, name: SpanOf<RefHandle<'s, str>>) -> VarId {
-        RefCell::borrow_mut(&self.vars).push(name)
-    }
-
-    /// Returns the name and location of a variable.
-    pub fn var(&self, id: VarId) -> Option<SpanOf<RefHandle<'s, str>>> {
-        self.vars.borrow().get(id).copied()
-    }
-
-    /// Consumes this object and returns the variable vector.
-    pub fn into_vars(self) -> Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>> {
-        RefCell::into_inner(self.vars).into_boxed_ids()
     }
 }
