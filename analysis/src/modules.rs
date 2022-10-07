@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
-use aiahr_core::id::{ItemId, ModuleId};
+use aiahr_core::{
+    id::{ItemId, ModuleId},
+    memory::handle::RefHandle,
+};
 
 #[derive(Debug)]
-enum ModuleKind<'a, 'i> {
+enum ModuleKind<'a, 's> {
     #[allow(dead_code)]
-    Dir(HashMap<&'i str, ModuleId>),
-    Leaf(&'a HashMap<&'i str, ItemId>),
+    Dir(HashMap<RefHandle<'s, str>, ModuleId>),
+    Leaf(&'a HashMap<RefHandle<'s, str>, ItemId>),
 }
 
 /// A member of a module.
@@ -18,14 +21,14 @@ pub enum Member {
 
 /// A tree of modules and their members.
 #[derive(Debug)]
-pub struct ModuleTree<'a, 'i> {
-    packages: HashMap<&'i str, ModuleId>,
-    modules: HashMap<ModuleId, ModuleKind<'a, 'i>>,
+pub struct ModuleTree<'a, 's> {
+    packages: HashMap<RefHandle<'s, str>, ModuleId>,
+    modules: HashMap<ModuleId, ModuleKind<'a, 's>>,
 }
 
-impl<'a, 'i> ModuleTree<'a, 'i> {
+impl<'a, 's> ModuleTree<'a, 's> {
     /// Returns an empty module tree.
-    pub fn new() -> ModuleTree<'a, 'i> {
+    pub fn new() -> ModuleTree<'a, 's> {
         ModuleTree {
             packages: HashMap::new(),
             modules: HashMap::new(),
@@ -34,7 +37,7 @@ impl<'a, 'i> ModuleTree<'a, 'i> {
 
     /// Adds a top-level item listing for the given module. May only be called once per module, and
     /// only for leaf modules.
-    pub fn add_items(&mut self, module: ModuleId, items: &'a HashMap<&'i str, ItemId>) {
+    pub fn add_items(&mut self, module: ModuleId, items: &'a HashMap<RefHandle<'s, str>, ItemId>) {
         if self.modules.contains_key(&module) {
             // TODO: we can do better than panicking
             panic!("Module {:?} has already been processed", module);
@@ -43,15 +46,15 @@ impl<'a, 'i> ModuleTree<'a, 'i> {
     }
 
     /// Gets the root module associated with the given package name.
-    pub fn get_package(&self, name: &str) -> Option<ModuleId> {
-        self.packages.get(name).copied()
+    pub fn get_package(&self, name: RefHandle<'s, str>) -> Option<ModuleId> {
+        self.packages.get(&name).copied()
     }
 
     /// Gets the given member in the module.
-    pub fn get_in(&self, module: ModuleId, name: &str) -> Option<Member> {
+    pub fn get_in(&self, module: ModuleId, name: RefHandle<'s, str>) -> Option<Member> {
         self.modules.get(&module).and_then(|kind| match kind {
-            ModuleKind::Dir(dir) => dir.get(name).copied().map(Member::Module),
-            ModuleKind::Leaf(items) => items.get(name).copied().map(Member::Item),
+            ModuleKind::Dir(dir) => dir.get(&name).copied().map(Member::Module),
+            ModuleKind::Leaf(items) => items.get(&name).copied().map(Member::Item),
         })
     }
 }

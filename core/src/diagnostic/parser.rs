@@ -8,21 +8,21 @@ use super::{Citation, Diagnostic};
 
 /// A parsing error.
 #[derive(Debug, Clone)]
-pub enum ParseError<'i> {
+pub enum ParseError<'s> {
     /// An unexpected token. `None` tokens indicate EOF.
     WrongToken {
         /// Where the wrong token was found.
         span: Span,
         /// The token that was found.
-        got: Option<Token<'i>>,
+        got: Option<Token<'s>>,
         /// The tokens that were expected instead.
-        want_any: Vec<Option<Token<'i>>>,
+        want_any: Vec<Option<Token<'s>>>,
     },
 }
 
-struct TokenOrEOFByName<'i>(Option<Token<'i>>);
+struct TokenOrEOFByName<'s>(Option<Token<'s>>);
 
-impl<'i> Display for TokenOrEOFByName<'i> {
+impl<'s> Display for TokenOrEOFByName<'s> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(t) = self.0 {
             write!(f, "'{}'", t.name())
@@ -32,7 +32,7 @@ impl<'i> Display for TokenOrEOFByName<'i> {
     }
 }
 
-impl<'i> Diagnostic for ParseError<'i> {
+impl<'s> Diagnostic for ParseError<'s> {
     fn name(&self) -> &'static str {
         match self {
             ParseError::WrongToken { .. } => "parser-wrong-token",
@@ -62,16 +62,16 @@ impl<'i> Diagnostic for ParseError<'i> {
 }
 
 #[derive(Debug)]
-pub struct ParseErrors<'i>(LinkedList<ParseError<'i>>);
+pub struct ParseErrors<'s>(LinkedList<ParseError<'s>>);
 
-impl<'i> chumsky::Error<Token<'i>> for ParseErrors<'i> {
+impl<'s> chumsky::Error<Token<'s>> for ParseErrors<'s> {
     type Span = Span;
     type Label = ();
 
-    fn expected_input_found<Iter: IntoIterator<Item = Option<Token<'i>>>>(
+    fn expected_input_found<Iter: IntoIterator<Item = Option<Token<'s>>>>(
         span: Self::Span,
         expected: Iter,
-        found: Option<Token<'i>>,
+        found: Option<Token<'s>>,
     ) -> Self {
         ParseErrors(LinkedList::from([ParseError::WrongToken {
             span,

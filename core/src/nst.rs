@@ -1,60 +1,79 @@
 use crate::{
-    cst::{Field, Pattern, ProductRow, Separated, SumRow},
+    cst::{Field, ProductRow, Separated, SumRow},
     id::{ItemId, ModuleId, VarId},
+    memory::handle::RefHandle,
     span::{Span, SpanOf, Spanned},
 };
 
+/// A pattern with names resolved.
+#[derive(Clone, Copy, Debug)]
+pub enum Pattern<'a, 's> {
+    ProductRow(ProductRow<'a, 's, &'a Pattern<'a, 's>>),
+    SumRow(SumRow<'s, &'a Pattern<'a, 's>>),
+    Whole(SpanOf<VarId>),
+}
+
+impl<'a, 's> Spanned for Pattern<'a, 's> {
+    fn span(&self) -> Span {
+        match self {
+            Pattern::ProductRow(p) => p.span(),
+            Pattern::SumRow(s) => s.span(),
+            Pattern::Whole(v) => v.span(),
+        }
+    }
+}
+
 /// An Aiahr term with names resolved.
 #[derive(Clone, Copy, Debug)]
-pub enum Term<'a, 'i> {
+pub enum Term<'a, 's> {
     Binding {
         var: SpanOf<VarId>,
         eq: Span,
-        value: &'a Term<'a, 'i>,
+        value: &'a Term<'a, 's>,
         semi: Span,
-        expr: &'a Term<'a, 'i>,
+        expr: &'a Term<'a, 's>,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a, 'i>,
+        handler: &'a Term<'a, 's>,
         do_: Span,
-        expr: &'a Term<'a, 'i>,
+        expr: &'a Term<'a, 's>,
     },
     Abstraction {
         lbar: Span,
         arg: SpanOf<VarId>,
         rbar: Span,
-        body: &'a Term<'a, 'i>,
+        body: &'a Term<'a, 's>,
     },
     Application {
-        func: &'a Term<'a, 'i>,
+        func: &'a Term<'a, 's>,
         lpar: Span,
-        arg: &'a Term<'a, 'i>,
+        arg: &'a Term<'a, 's>,
         rpar: Span,
     },
-    ProductRow(ProductRow<'a, 'i, &'a Term<'a, 'i>>),
-    SumRow(SumRow<'i, &'a Term<'a, 'i>>),
+    ProductRow(ProductRow<'a, 's, &'a Term<'a, 's>>),
+    SumRow(SumRow<'s, &'a Term<'a, 's>>),
     FieldAccess {
-        base: &'a Term<'a, 'i>,
+        base: &'a Term<'a, 's>,
         dot: Span,
-        field: SpanOf<&'i str>,
+        field: SpanOf<RefHandle<'s, str>>,
     },
     Match {
         match_: Span,
         langle: Span,
-        cases: Separated<'a, Field<&'a Pattern<'a, 'i, VarId>, &'a Term<'a, 'i>>>,
+        cases: Separated<'a, Field<&'a Pattern<'a, 's>, &'a Term<'a, 's>>>,
         rangle: Span,
     },
     ItemRef(SpanOf<(ModuleId, ItemId)>),
     VariableRef(SpanOf<VarId>),
     Parenthesized {
         lpar: Span,
-        term: &'a Term<'a, 'i>,
+        term: &'a Term<'a, 's>,
         rpar: Span,
     },
 }
 
-impl<'a, 'i> Spanned for Term<'a, 'i> {
+impl<'a, 's> Spanned for Term<'a, 's> {
     fn span(&self) -> Span {
         match self {
             Term::Binding { var, expr, .. } => Span {
@@ -95,15 +114,15 @@ impl<'a, 'i> Spanned for Term<'a, 'i> {
 
 /// A top-level item in an Aiahr source file with names resolved.
 #[derive(Clone, Copy, Debug)]
-pub enum Item<'a, 'i> {
+pub enum Item<'a, 's> {
     Term {
         name: SpanOf<ItemId>,
         eq: Span,
-        value: &'a Term<'a, 'i>,
+        value: &'a Term<'a, 's>,
     },
 }
 
-impl<'a, 'i> Spanned for Item<'a, 'i> {
+impl<'a, 's> Spanned for Item<'a, 's> {
     fn span(&self) -> Span {
         match self {
             Item::Term { name, value, .. } => Span {
@@ -112,6 +131,27 @@ impl<'a, 'i> Spanned for Item<'a, 'i> {
             },
         }
     }
+}
+
+#[macro_export]
+macro_rules! npat_prod {
+    ($($fields:pat),* $(,)?) => {
+        &$crate::nst::Pattern::ProductRow($crate::prod!($($fields,)+))
+    };
+}
+
+#[macro_export]
+macro_rules! npat_sum {
+    ($field:pat) => {
+        &$crate::nst::Pattern::SumRow($crate::sum!($field))
+    };
+}
+
+#[macro_export]
+macro_rules! npat_var {
+    ($var:pat) => {
+        &$crate::nst::Pattern::Whole($crate::span_of!($var))
+    };
 }
 
 #[macro_export]
@@ -181,7 +221,7 @@ macro_rules! nterm_dot {
     ($base:pat, $field:pat) => {
         &$crate::nst::Term::FieldAccess {
             base: $base,
-            field: $crate::span_of!($field),
+            field: $crate::span_of!($crate::h!($field)),
             ..
         }
     };

@@ -6,25 +6,25 @@ use super::{
 
 /// Any Aiahr compilation error.
 #[derive(Debug)]
-pub enum AiahrcError<'i> {
+pub enum AiahrcError<'s> {
     LexError(LexError),
-    NameResolutionError(NameResolutionError<'i>),
-    ParseError(ParseError<'i>),
+    NameResolutionError(NameResolutionError<'s>),
+    ParseError(ParseError<'s>),
 }
 
-impl<'i> From<NameResolutionError<'i>> for AiahrcError<'i> {
-    fn from(err: NameResolutionError<'i>) -> Self {
+impl<'s> From<NameResolutionError<'s>> for AiahrcError<'s> {
+    fn from(err: NameResolutionError<'s>) -> Self {
         AiahrcError::NameResolutionError(err)
     }
 }
 
-impl<'i> From<ParseError<'i>> for AiahrcError<'i> {
-    fn from(err: ParseError<'i>) -> Self {
+impl<'s> From<ParseError<'s>> for AiahrcError<'s> {
+    fn from(err: ParseError<'s>) -> Self {
         AiahrcError::ParseError(err)
     }
 }
 
-impl<'i> Diagnostic for AiahrcError<'i> {
+impl<'s> Diagnostic for AiahrcError<'s> {
     fn name(&self) -> &'static str {
         match self {
             AiahrcError::LexError(err) => err.name(),

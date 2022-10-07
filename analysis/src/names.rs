@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt::Debug, iter, mem::ManuallyDrop};
 use aiahr_core::{
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     id::{ItemId, ModuleId, VarId},
+    memory::handle::RefHandle,
     span::{SpanOf, Spanned},
 };
 
@@ -17,11 +18,11 @@ pub enum Name {
 }
 
 #[derive(Debug)]
-enum Data<'n, 'a, 'i> {
-    Base(&'n BaseNames<'a, 'i>),
+enum Data<'n, 'a, 's> {
+    Base(&'n BaseNames<'a, 's>),
     Scope {
-        locals: HashMap<&'i str, SpanOf<VarId>>,
-        next: &'n Names<'n, 'a, 'i>,
+        locals: HashMap<RefHandle<'s, str>, SpanOf<VarId>>,
+        next: &'n Names<'n, 'a, 's>,
     },
 }
 
@@ -32,17 +33,17 @@ pub struct VarSlot(ManuallyDrop<VarId>);
 
 /// The names visible from a given context in a module. Supports shadowing.
 #[derive(Debug)]
-pub struct Names<'n, 'a, 'i>(Data<'n, 'a, 'i>);
+pub struct Names<'n, 'a, 's>(Data<'n, 'a, 's>);
 
-impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
+impl<'n, 'a, 's> Names<'n, 'a, 's> {
     /// Returns a new [`Names`] with the given base.
-    pub fn new(base: &'n BaseNames<'a, 'i>) -> Names<'n, 'a, 'i> {
+    pub fn new(base: &'n BaseNames<'a, 's>) -> Names<'n, 'a, 's> {
         Names(Data::Base(base))
     }
 
     /// Returns a new subscope of `self`. Names added to the returned object will shadow those in
     /// `self`.
-    pub fn subscope<'m>(&'m self) -> Names<'m, 'a, 'i> {
+    pub fn subscope<'m>(&'m self) -> Names<'m, 'a, 's> {
         Names(Data::Scope {
             locals: HashMap::new(),
             next: self,
@@ -50,7 +51,7 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
     }
 
     // The `BaseNames` at the root of this object.
-    fn base(&self) -> &BaseNames<'a, 'i> {
+    fn base(&self) -> &BaseNames<'a, 's> {
         match &self.0 {
             Data::Base(b) => b,
             Data::Scope { next, .. } => next.base(),
@@ -58,7 +59,7 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
     }
 
     // An iterator over the layers of names, from front to back.
-    fn layers(&self) -> impl Iterator<Item = &Data<'n, 'a, 'i>> {
+    fn layers(&self) -> impl Iterator<Item = &Data<'n, 'a, 's>> {
         iter::successors(Some(self), |names| match &names.0 {
             Data::Base { .. } => None,
             Data::Scope { next, .. } => Some(next),
@@ -72,9 +73,9 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
     }
 
     /// Resolves the given name, or reports an error to `errors`.
-    pub fn get<E>(&self, name: SpanOf<&'i str>, errors: &mut E) -> Option<SpanOf<Name>>
+    pub fn get<E>(&self, name: SpanOf<RefHandle<'s, str>>, errors: &mut E) -> Option<SpanOf<Name>>
     where
-        E: DiagnosticSink<NameResolutionError<'i>>,
+        E: DiagnosticSink<NameResolutionError<'s>>,
     {
         let out = self
             .layers()
@@ -84,7 +85,7 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
                     Member::Item(i) => Name::Item(self.this(), i),
                 }),
                 Data::Scope { locals, .. } => locals
-                    .get(name.value)
+                    .get(&name.value)
                     .map(|v| Name::Variable(v.value.clone())),
             })
             .map(|n| name.span().of(n));
@@ -98,11 +99,11 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
     pub fn get_in<E>(
         &self,
         module: ModuleId,
-        name: SpanOf<&'i str>,
+        name: SpanOf<RefHandle<'s, str>>,
         errors: &mut E,
     ) -> Option<Member>
     where
-        E: DiagnosticSink<NameResolutionError<'i>>,
+        E: DiagnosticSink<NameResolutionError<'s>>,
     {
         let out = self.base().get_in(module, name.value);
         if out.is_none() {
@@ -112,7 +113,7 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
     }
 
     /// Reserves an ID for the given variable.
-    pub fn reserve(&self, name: SpanOf<&'i str>) -> VarSlot {
+    pub fn reserve(&self, name: SpanOf<RefHandle<'s, str>>) -> VarSlot {
         VarSlot(ManuallyDrop::new(self.base().make_id(name)))
     }
 
@@ -120,12 +121,15 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
     /// ID of the variable.
     ///
     /// If `slot` is given, uses the provided slot for the variable.
-    pub fn insert<E: DiagnosticSink<NameResolutionError<'i>>>(
+    pub fn insert<E>(
         &mut self,
-        name: SpanOf<&'i str>,
+        name: SpanOf<RefHandle<'s, str>>,
         slot: Option<VarSlot>,
         errors: &mut E,
-    ) -> SpanOf<VarId> {
+    ) -> SpanOf<VarId>
+    where
+        E: DiagnosticSink<NameResolutionError<'s>>,
+    {
         let id = match slot {
             Some(sl) => ManuallyDrop::into_inner(sl.0),
             None => self.base().make_id(name),
@@ -135,7 +139,7 @@ impl<'n, 'a, 'i> Names<'n, 'a, 'i> {
             Data::Base(..) => panic!("Cannot insert names into the base Names layer"),
             Data::Scope { ref mut locals, .. } => {
                 let out = name.span().of(id);
-                if let Some((&orig, v)) = locals.get_key_value(name.value) {
+                if let Some((&orig, v)) = locals.get_key_value(&name.value) {
                     errors.add(NameResolutionError::Duplicate {
                         original: v.span().of(orig),
                         duplicate: name,

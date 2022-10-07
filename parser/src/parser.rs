@@ -2,6 +2,7 @@ use aiahr_core::{
     cst::{Field, IdField, Item, Pattern, ProductRow, Separated, SumRow, Term},
     diagnostic::parser::ParseErrors,
     loc::Loc,
+    memory::handle::RefHandle,
     span::{Span, SpanOf, Spanned},
     token::Token,
 };
@@ -14,13 +15,14 @@ use chumsky::{
 use crate::expr::{postfix, prefix};
 
 // Returns a spanned parser that matches just the given token and returns ().
-fn lit<'i>(token: Token<'i>) -> impl Clone + Parser<Token<'i>, Span, Error = ParseErrors<'i>> {
+fn lit<'s>(token: Token<'s>) -> impl Clone + Parser<Token<'s>, Span, Error = ParseErrors<'s>> {
     just(token).map_with_span(|_, span| span)
 }
 
 // Returns a spanned parser that matches any `Token::Identifier` and unwraps it to the contained
 // `&str`.
-fn ident<'i>() -> impl Clone + Parser<Token<'i>, SpanOf<&'i str>, Error = ParseErrors<'i>> {
+fn ident<'s>() -> impl Clone + Parser<Token<'s>, SpanOf<RefHandle<'s, str>>, Error = ParseErrors<'s>>
+{
     select! {
         Token::Identifier(id) => id,
     }
@@ -28,19 +30,19 @@ fn ident<'i>() -> impl Clone + Parser<Token<'i>, SpanOf<&'i str>, Error = ParseE
 }
 
 // Returns a parser for either `parser` or the empty string.
-fn option<'i, T>(
-    parser: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, Option<T>, Error = ParseErrors<'i>> {
+fn option<'s, T>(
+    parser: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, Option<T>, Error = ParseErrors<'s>> {
     choice((parser.map(Some), empty().map(|_| None)))
 }
 
 // Returns a parser for one or more `T` values separated by `sep`, representing the sequence with
 // `Separated<T>`.
-fn separated<'a, 'i, T: 'a>(
+fn separated<'a, 's, T: 'a>(
     arena: &'a Bump,
-    elem: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-    sep: impl Clone + Parser<Token<'i>, Span, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, Separated<'a, T>, Error = ParseErrors<'i>> {
+    elem: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
+    sep: impl Clone + Parser<Token<'s>, Span, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, Separated<'a, T>, Error = ParseErrors<'s>> {
     elem.clone()
         .then(sep.clone().then(elem).repeated())
         .then(choice((sep.map(Some), empty().map(|_| None))))
@@ -52,11 +54,11 @@ fn separated<'a, 'i, T: 'a>(
 }
 
 // Returns a parser for a field with a label, separator, and target.
-fn field<'i, L, T>(
-    label: impl Clone + Parser<Token<'i>, L, Error = ParseErrors<'i>>,
-    sep: Token<'i>,
-    target: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, Field<L, T>, Error = ParseErrors<'i>> {
+fn field<'s, L, T>(
+    label: impl Clone + Parser<Token<'s>, L, Error = ParseErrors<'s>>,
+    sep: Token<'s>,
+    target: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, Field<L, T>, Error = ParseErrors<'s>> {
     label
         .then(lit(sep))
         .then(target)
@@ -64,18 +66,18 @@ fn field<'i, L, T>(
 }
 
 // Returns a parser for a field with an identifier label, separator, and target.
-fn id_field<'i, T>(
-    sep: Token<'i>,
-    target: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, IdField<'i, T>, Error = ParseErrors<'i>> {
+fn id_field<'s, T>(
+    sep: Token<'s>,
+    target: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, IdField<'s, T>, Error = ParseErrors<'s>> {
     field(ident(), sep, target)
 }
 
 // Returns a parser for a product row with terms in `term`.
-fn product_row<'a, 'i: 'a, T: 'a>(
+fn product_row<'a, 's: 'a, T: 'a>(
     arena: &'a Bump,
-    term: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, ProductRow<'a, 'i, T>, Error = ParseErrors<'i>> {
+    term: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, ProductRow<'a, 's, T>, Error = ParseErrors<'s>> {
     lit(Token::LBrace)
         .then(option(separated(
             arena,
@@ -91,9 +93,9 @@ fn product_row<'a, 'i: 'a, T: 'a>(
 }
 
 // Returns a parser for a sum row with terms in `term`.
-fn sum_row<'i, T>(
-    term: impl Clone + Parser<Token<'i>, T, Error = ParseErrors<'i>>,
-) -> impl Clone + Parser<Token<'i>, SumRow<'i, T>, Error = ParseErrors<'i>> {
+fn sum_row<'s, T>(
+    term: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, SumRow<'s, T>, Error = ParseErrors<'s>> {
     lit(Token::LAngle)
         .then(id_field(Token::Equal, term.clone()))
         .then(lit(Token::RAngle))
@@ -105,9 +107,9 @@ fn sum_row<'i, T>(
 }
 
 /// Returns a parser for a pattern.
-pub fn pattern<'a, 'i: 'a>(
+pub fn pattern<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'i>, &'a Pattern<'a, 'i, &'i str>, Error = ParseErrors<'i>> {
+) -> impl Clone + Parser<Token<'s>, &'a Pattern<'a, 's>, Error = ParseErrors<'s>> {
     recursive(|pattern| {
         choice((
             product_row(arena, pattern.clone()).map(|p| arena.alloc(Pattern::ProductRow(p)) as &_),
@@ -117,27 +119,27 @@ pub fn pattern<'a, 'i: 'a>(
     })
 }
 
-enum TermPrefix<'a, 'i, N> {
+enum TermPrefix<'a, 's> {
     Binding {
-        var: SpanOf<N>,
+        var: SpanOf<RefHandle<'s, str>>,
         eq: Span,
-        value: &'a Term<'a, 'i, N>,
+        value: &'a Term<'a, 's>,
         semi: Span,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a, 'i, N>,
+        handler: &'a Term<'a, 's>,
         do_: Span,
     },
     Abstraction {
         lbar: Span,
-        arg: SpanOf<N>,
+        arg: SpanOf<RefHandle<'s, str>>,
         rbar: Span,
     },
 }
 
-impl<'a, 'i, N> TermPrefix<'a, 'i, N> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i, N>) -> &'a Term<'a, 'i, N> {
+impl<'a, 's> TermPrefix<'a, 's> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 's>) -> &'a Term<'a, 's> {
         match self {
             TermPrefix::Binding {
                 var,
@@ -167,20 +169,20 @@ impl<'a, 'i, N> TermPrefix<'a, 'i, N> {
     }
 }
 
-enum TermPostfix<'a, 'i, N> {
+enum TermPostfix<'a, 's> {
     Application {
         lpar: Span,
-        arg: &'a Term<'a, 'i, N>,
+        arg: &'a Term<'a, 's>,
         rpar: Span,
     },
     DotAccess {
         dot: Span,
-        field: SpanOf<&'i str>,
+        field: SpanOf<RefHandle<'s, str>>,
     },
 }
 
-impl<'a, 'i, N> TermPostfix<'a, 'i, N> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 'i, N>) -> &'a Term<'a, 'i, N> {
+impl<'a, 's> TermPostfix<'a, 's> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 's>) -> &'a Term<'a, 's> {
         match self {
             TermPostfix::Application { lpar, arg, rpar } => arena.alloc(Term::Application {
                 func: t,
@@ -198,9 +200,9 @@ impl<'a, 'i, N> TermPostfix<'a, 'i, N> {
 }
 
 /// Returns a parser for terms.
-pub fn term<'a, 'i: 'a>(
+pub fn term<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Parser<Token<'i>, &'a Term<'a, 'i, &'i str>, Error = ParseErrors<'i>> {
+) -> impl Parser<Token<'s>, &'a Term<'a, 's>, Error = ParseErrors<'s>> {
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -298,9 +300,9 @@ pub fn term<'a, 'i: 'a>(
 }
 
 /// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
-pub fn aiahr_parser<'a, 'i: 'a>(
+pub fn aiahr_parser<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Parser<Token<'i>, &'a [Item<'a, 'i, &'i str>], Error = ParseErrors<'i>> {
+) -> impl Parser<Token<'s>, &'a [Item<'a, 's>], Error = ParseErrors<'s>> {
     let term = ident()
         .then(lit(Token::Equal))
         .then(term(arena))
@@ -313,13 +315,13 @@ pub fn aiahr_parser<'a, 'i: 'a>(
 }
 
 /// Converts lexer output to a stream readable by a Chumsky parser.
-pub fn to_stream<'i, I>(
+pub fn to_stream<'s, I>(
     tokens: I,
     end_of_input: Loc,
-) -> Stream<'i, Token<'i>, Span, Box<dyn Iterator<Item = (Token<'i>, Span)> + 'i>>
+) -> Stream<'s, Token<'s>, Span, Box<dyn Iterator<Item = (Token<'s>, Span)> + 's>>
 where
-    I: IntoIterator<Item = SpanOf<Token<'i>>>,
-    I::IntoIter: 'i,
+    I: IntoIterator<Item = SpanOf<Token<'s>>>,
+    I::IntoIter: 's,
 {
     // TODO: figure out what the `eoi` parameter is actually used for.
     Stream::from_iter(
@@ -332,8 +334,13 @@ where
 mod tests {
     use aiahr_core::{
         cst::{Item, Term},
-        field, id_field, item_term, pat_prod, pat_sum, pat_var, term_abs, term_app, term_dot,
-        term_local, term_match, term_paren, term_prod, term_sum, term_sym, term_with,
+        field, id_field, item_term,
+        memory::{
+            arena::BumpArena,
+            intern::{InternerByRef, SyncInterner},
+        },
+        pat_prod, pat_sum, pat_var, term_abs, term_app, term_dot, term_local, term_match,
+        term_paren, term_prod, term_sum, term_sym, term_with,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
@@ -343,33 +350,43 @@ mod tests {
 
     use super::{aiahr_parser, term, to_stream};
 
-    fn parse_term_unwrap<'a, 'i: 'a>(arena: &'a Bump, input: &'i str) -> &'a Term<'a, 'i, &'i str> {
-        let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
+    fn parse_term_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
+        arena: &'a Bump,
+        interner: &'s S,
+        input: &str,
+    ) -> &'a Term<'a, 's> {
+        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
         term(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
     }
 
-    fn parse_file_unwrap<'a, 'i: 'a>(
+    fn parse_file_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
         arena: &'a Bump,
-        input: &'i str,
-    ) -> &'a [Item<'a, 'i, &'i str>] {
-        let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
+        interner: &'s S,
+        input: &str,
+    ) -> &'a [Item<'a, 's>] {
+        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
         aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
 
     #[test]
     fn test_undelimted_closure_fails() {
         let arena = Bump::new();
-        let (tokens, eoi) = aiahr_lexer().lex("|x whoops(x)").unwrap();
+        let interner = SyncInterner::new(BumpArena::new());
+        let (tokens, eoi) = aiahr_lexer(&interner).lex("|x whoops(x)").unwrap();
         assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 
     #[test]
     fn test_app_precedence() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "(|x| |w| w)(y)(z)"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "(|x| |w| w)(y)(z)"
+            ),
             term_app!(
                 term_app!(
                     term_paren!(term_abs!("x", term_abs!("w", term_sym!("w")))),
@@ -383,7 +400,11 @@ mod tests {
     #[test]
     fn test_with_do() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "with h do a(b)"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "with h do a(b)"
+            ),
             term_with!(term_sym!("h"), term_app!(term_sym!("a"), term_sym!("b")))
         );
     }
@@ -391,7 +412,11 @@ mod tests {
     #[test]
     fn test_mixing_prefixes() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "|x| y = |z| y(z); w = x(y); w"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "|x| y = |z| y(z); w = x(y); w"
+            ),
             term_abs!(
                 "x",
                 term_local!(
@@ -410,7 +435,11 @@ mod tests {
     #[test]
     fn test_basic_lambdas() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "|x| |y| z = x(y); z"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "|x| |y| z = x(y); z"
+            ),
             term_abs!(
                 "x",
                 term_abs!(
@@ -427,9 +456,16 @@ mod tests {
 
     #[test]
     fn test_product_rows() {
-        assert_matches!(parse_term_unwrap(&Bump::new(), "{}"), term_prod!());
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "{x = a, y = |t| t}"),
+            parse_term_unwrap(&Bump::new(), &SyncInterner::new(BumpArena::new()), "{}"),
+            term_prod!()
+        );
+        assert_matches!(
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x = a, y = |t| t}"
+            ),
             term_prod!(
                 id_field!("x", term_sym!("a")),
                 id_field!("y", term_abs!("t", term_sym!("t"))),
@@ -440,7 +476,11 @@ mod tests {
     #[test]
     fn test_product_rows_precedence() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "{x = |t| t}({y = |t| u})"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x = |t| t}({y = |t| u})"
+            ),
             term_app!(
                 term_prod!(id_field!("x", term_abs!("t", term_sym!("t")))),
                 term_prod!(id_field!("y", term_abs!("t", term_sym!("u"))))
@@ -451,7 +491,11 @@ mod tests {
     #[test]
     fn test_field_access() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "{x = a, y = b}.x"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x = a, y = b}.x"
+            ),
             term_dot!(
                 term_prod!(
                     id_field!("x", term_sym!("a")),
@@ -465,7 +509,7 @@ mod tests {
     #[test]
     fn test_combined_postfixes() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "a.x(b)"),
+            parse_term_unwrap(&Bump::new(), &SyncInterner::new(BumpArena::new()), "a.x(b)"),
             term_app!(term_dot!(term_sym!("a"), "x"), term_sym!("b"))
         );
     }
@@ -473,7 +517,11 @@ mod tests {
     #[test]
     fn test_sum_rows() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "<x = |t| t>"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "<x = |t| t>"
+            ),
             term_sum!(id_field!("x", term_abs!("t", term_sym!("t"))))
         );
     }
@@ -481,7 +529,11 @@ mod tests {
     #[test]
     fn test_matches() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), "match < {x = a} => a, <y = b> => b, c => c >"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "match < {x = a} => a, <y = b> => b, c => c >"
+            ),
             term_match!(
                 field!(pat_prod!(id_field!("x", pat_var!("a"))), term_sym!("a")),
                 field!(pat_sum!(id_field!("y", pat_var!("b"))), term_sym!("b")),
@@ -493,7 +545,11 @@ mod tests {
     #[test]
     fn test_term_items() {
         assert_matches!(
-            parse_file_unwrap(&Bump::new(), "x = a\ny = |b| b\nz = t = x; t"),
+            parse_file_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "x = a\ny = |b| b\nz = t = x; t"
+            ),
             &[
                 item_term!("x", term_sym!("a")),
                 item_term!("y", term_abs!("b", term_sym!("b"))),

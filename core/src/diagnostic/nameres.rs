@@ -2,6 +2,7 @@
 
 use crate::{
     id::ModuleId,
+    memory::handle::RefHandle,
     span::{SpanOf, Spanned},
 };
 
@@ -9,21 +10,21 @@ use super::{Citation, Diagnostic};
 
 /// A name resolution error.
 #[derive(Debug)]
-pub enum NameResolutionError<'i> {
+pub enum NameResolutionError<'s> {
     /// A duplicate name in the same layer, where the new name is not allowed to shadow the old one.
     Duplicate {
         /// The original name.
-        original: SpanOf<&'i str>,
+        original: SpanOf<RefHandle<'s, str>>,
         /// The duplicate.
-        duplicate: SpanOf<&'i str>,
+        duplicate: SpanOf<RefHandle<'s, str>>,
     },
     /// A reference to a name that isn't defined.
-    NotFound(SpanOf<&'i str>),
+    NotFound(SpanOf<RefHandle<'s, str>>),
     /// A module used as a term.
     ModuleTerm(SpanOf<ModuleId>),
 }
 
-impl<'i> Diagnostic for NameResolutionError<'i> {
+impl<'s> Diagnostic for NameResolutionError<'s> {
     fn name(&self) -> &'static str {
         match self {
             NameResolutionError::Duplicate { .. } => "name-resolution-duplicate-definition",
@@ -36,11 +37,11 @@ impl<'i> Diagnostic for NameResolutionError<'i> {
         match self {
             NameResolutionError::Duplicate { duplicate, .. } => Citation {
                 span: duplicate.span(),
-                message: format!("Duplicate definition of symbol '{}'", duplicate.value),
+                message: format!("Duplicate definition of symbol '{}'", duplicate.value.0),
             },
             NameResolutionError::NotFound(name) => Citation {
                 span: name.span(),
-                message: format!("Unknown symbol '{}'", name.value),
+                message: format!("Unknown symbol '{}'", name.value.0),
             },
             NameResolutionError::ModuleTerm(module) => Citation {
                 span: module.span(),

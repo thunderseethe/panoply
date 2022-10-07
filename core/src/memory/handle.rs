@@ -92,3 +92,10 @@ pub type RcHandle<T> = Handle<Rc<T>>;
 
 /// See `Handle` for further info.
 pub type ArcHandle<T> = Handle<Arc<T>>;
+
+#[macro_export]
+macro_rules! h {
+    ($ptr:pat) => {
+        $crate::memory::handle::Handle($ptr)
+    };
+}

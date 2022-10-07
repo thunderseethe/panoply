@@ -6,16 +6,17 @@ use crate::{
     names::{Name, Names},
 };
 use aiahr_core::{
-    cst::{self, Field, IdField, Pattern, ProductRow, Separated, SumRow},
+    cst::{self, Field, IdField, ProductRow, Separated, SumRow},
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
-    id::{ItemId, ModuleId, VarId},
+    id::{ItemId, ModuleId},
+    memory::handle::RefHandle,
     nst,
     span::{Span, SpanOf, Spanned},
 };
 use bumpalo::Bump;
 
 // Allocates the items in `iter` on the given arena, but only if they are all `Some(..)`.
-fn alloc_all<'a, 'i, T, I>(arena: &'a Bump, iter: I) -> Option<&'a [T]>
+fn alloc_all<'a, T, I>(arena: &'a Bump, iter: I) -> Option<&'a [T]>
 where
     I: Iterator<Item = Option<T>>,
 {
@@ -46,7 +47,7 @@ where
 }
 
 // Tries to map the given function over the target.
-fn resolve_id_field<'i, A, B, F>(field: &IdField<'i, A>, f: F) -> Option<IdField<'i, B>>
+fn resolve_id_field<'s, A, B, F>(field: &IdField<'s, A>, f: F) -> Option<IdField<'s, B>>
 where
     F: FnOnce(&A) -> Option<B>,
 {
@@ -58,11 +59,11 @@ where
 }
 
 // Tries to map the given function over the targets of `prod`.
-fn resolve_product_row<'a, 'i, A, B, F>(
+fn resolve_product_row<'a, 's, A, B, F>(
     arena: &'a Bump,
-    prod: &ProductRow<'_, 'i, A>,
+    prod: &ProductRow<'_, 's, A>,
     f: F,
-) -> Option<ProductRow<'a, 'i, B>>
+) -> Option<ProductRow<'a, 's, B>>
 where
     F: FnMut(&A) -> Option<B>,
 {
@@ -82,7 +83,7 @@ where
 }
 
 // Tries to map the given function over the target of `sum`.
-fn resolve_sum_row<'i, A, B, F>(sum: &SumRow<'i, A>, f: F) -> Option<SumRow<'i, B>>
+fn resolve_sum_row<'s, A, B, F>(sum: &SumRow<'s, A>, f: F) -> Option<SumRow<'s, B>>
 where
     F: FnOnce(&A) -> Option<B>,
 {
@@ -96,40 +97,42 @@ where
 /// Resolves the given pattern, accumulating bindings into `names`.
 ///
 /// Note that this currently cannot return `None`, although it can emit errors.
-pub fn resolve_pattern<'a, 'i, E>(
+pub fn resolve_pattern<'a, 's, E>(
     arena: &'a Bump,
-    names: &mut Names<'_, '_, 'i>,
-    pattern: &Pattern<'_, 'i, &'i str>,
+    names: &mut Names<'_, '_, 's>,
+    pattern: &cst::Pattern<'_, 's>,
     errors: &mut E,
-) -> Option<&'a Pattern<'a, 'i, VarId>>
+) -> Option<&'a nst::Pattern<'a, 's>>
 where
-    E: DiagnosticSink<NameResolutionError<'i>>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
 {
     Some(arena.alloc(match pattern {
-        Pattern::ProductRow(pr) => Pattern::ProductRow(resolve_product_row(arena, pr, |target| {
+        cst::Pattern::ProductRow(pr) => {
+            nst::Pattern::ProductRow(resolve_product_row(arena, pr, |target| {
+                resolve_pattern(arena, names, target, errors)
+            })?)
+        }
+        cst::Pattern::SumRow(sr) => nst::Pattern::SumRow(resolve_sum_row(sr, |target| {
             resolve_pattern(arena, names, target, errors)
         })?),
-        Pattern::SumRow(sr) => Pattern::SumRow(resolve_sum_row(sr, |target| {
-            resolve_pattern(arena, names, target, errors)
-        })?),
-        Pattern::Whole(var) => Pattern::Whole(names.insert(*var, None, errors)),
+        cst::Pattern::Whole(var) => nst::Pattern::Whole(names.insert(*var, None, errors)),
     }))
 }
 
 // The possible meanings of a `DotAccess` term.
 #[derive(Debug)]
-enum DotResolution<'a, 'i> {
+enum DotResolution<'a, 's> {
     Module(ModuleId),
     Item(ModuleId, ItemId),
     FieldAccess {
-        base: &'a nst::Term<'a, 'i>,
+        base: &'a nst::Term<'a, 's>,
         dot: Span,
-        field: SpanOf<&'i str>,
+        field: SpanOf<RefHandle<'s, str>>,
     },
 }
 
-impl<'a, 'i> DotResolution<'a, 'i> {
-    fn from_member(parent: ModuleId, memb: Member) -> DotResolution<'a, 'i> {
+impl<'a, 's> DotResolution<'a, 's> {
+    fn from_member(parent: ModuleId, memb: Member) -> DotResolution<'a, 's> {
         match memb {
             Member::Module(m) => DotResolution::Module(m),
             Member::Item(i) => DotResolution::Item(parent, i),
@@ -138,16 +141,16 @@ impl<'a, 'i> DotResolution<'a, 'i> {
 }
 
 // Resolves nested `DotAccess` terms.
-fn resolve_nested_dots<'a, 'i, E>(
+fn resolve_nested_dots<'a, 's, E>(
     arena: &'a Bump,
-    names: &Names<'_, '_, 'i>,
-    base: &cst::Term<'_, 'i, &'i str>,
+    names: &Names<'_, '_, 's>,
+    base: &cst::Term<'_, 's>,
     dot: Span,
-    field: SpanOf<&'i str>,
+    field: SpanOf<RefHandle<'s, str>>,
     errors: &mut E,
-) -> Option<DotResolution<'a, 'i>>
+) -> Option<DotResolution<'a, 's>>
 where
-    E: DiagnosticSink<NameResolutionError<'i>>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
 {
     Some(match base {
         // (base2 . field2) . field
@@ -206,14 +209,14 @@ where
 }
 
 /// Resolves the given term, reporting errors to `errors`.
-pub fn resolve_term<'a, 'i, E>(
+pub fn resolve_term<'a, 's, E>(
     arena: &'a Bump,
-    names: &Names<'_, '_, 'i>,
-    term: &cst::Term<'_, 'i, &'i str>,
+    names: &Names<'_, '_, 's>,
+    term: &cst::Term<'_, 's>,
     errors: &mut E,
-) -> Option<&'a nst::Term<'a, 'i>>
+) -> Option<&'a nst::Term<'a, 's>>
 where
-    E: DiagnosticSink<NameResolutionError<'i>>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
 {
     Some(arena.alloc(match term {
         cst::Term::Binding {
@@ -343,15 +346,15 @@ where
 }
 
 /// Resolves the given item, reporting errors to `errors`.
-pub fn resolve_item<'a, 'i, E>(
+pub fn resolve_item<'a, 's, E>(
     arena: &'a Bump,
-    names: &BaseNames<'_, 'i>,
+    names: &BaseNames<'_, 's>,
     id: ItemId,
-    item: &cst::Item<'_, 'i, &'i str>,
+    item: &cst::Item<'_, 's>,
     errors: &mut E,
-) -> Option<nst::Item<'a, 'i>>
+) -> Option<nst::Item<'a, 's>>
 where
-    E: DiagnosticSink<NameResolutionError<'i>>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
 {
     Some(match item {
         cst::Item::Term { name, eq, value } => nst::Item::Term {
@@ -364,40 +367,40 @@ where
 
 /// The result of resolving an item.
 #[derive(Debug)]
-pub enum ItemResolution<'a, 'i> {
-    Succeeded(nst::Item<'a, 'i>),
-    Failed(SpanOf<&'i str>),
+pub enum ItemResolution<'a, 's> {
+    Succeeded(nst::Item<'a, 's>),
+    Failed(SpanOf<RefHandle<'s, str>>),
 }
 
 #[derive(Debug)]
-pub struct ModuleResolution<'a, 'i> {
-    pub items: Vec<SpanOf<&'i str>>,
-    pub vars: Vec<SpanOf<&'i str>>,
-    pub item_names: HashMap<&'i str, ItemId>,
-    pub resolved_items: Vec<ItemResolution<'a, 'i>>,
+pub struct ModuleResolution<'a, 's> {
+    pub items: Vec<SpanOf<RefHandle<'s, str>>>,
+    pub vars: Vec<SpanOf<RefHandle<'s, str>>>,
+    pub item_names: HashMap<RefHandle<'s, str>, ItemId>,
+    pub resolved_items: Vec<ItemResolution<'a, 's>>,
 }
 
 /// Resolves the given module, reporting errors to `errors`.
-pub fn resolve_module<'a, 'i, E>(
+pub fn resolve_module<'a, 's, E>(
     arena: &'a Bump,
     this: ModuleId,
-    mtree: &ModuleTree<'_, 'i>,
-    items: &[cst::Item<'_, 'i, &'i str>],
+    mtree: &ModuleTree<'_, 's>,
+    items: &[cst::Item<'_, 's>],
     errors: &mut E,
-) -> ModuleResolution<'a, 'i>
+) -> ModuleResolution<'a, 's>
 where
-    E: DiagnosticSink<NameResolutionError<'i>>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
 {
     let its = items.iter().map(cst::Item::name).collect();
 
     // Collect top-level names first so they can reference each other in `letrec` fashion. We'll do
     // recursion checking later.
     let inames = {
-        let mut inames: HashMap<&str, SpanOf<usize>> = HashMap::new();
+        let mut inames: HashMap<RefHandle<'s, str>, SpanOf<usize>> = HashMap::new();
         for (i, item) in items.iter().enumerate() {
             match inames.entry(item.name().value) {
                 Entry::Occupied(o) => errors.add(NameResolutionError::Duplicate {
-                    original: o.get().span().of(o.key()),
+                    original: o.get().span().of(*o.key()),
                     duplicate: item.name(),
                 }),
                 Entry::Vacant(v) => {
@@ -436,9 +439,19 @@ mod tests {
     use std::collections::HashMap;
 
     use aiahr_core::{
-        diagnostic::nameres::NameResolutionError, field, id::ModuleId, id_field, nitem_term, nst,
-        nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match, nterm_prod,
-        nterm_sum, nterm_var, nterm_with, pat_prod, pat_var, span::SpanOf, span_of,
+        diagnostic::nameres::NameResolutionError,
+        field, h,
+        id::ModuleId,
+        id_field,
+        memory::{
+            arena::BumpArena,
+            handle::RefHandle,
+            intern::{InternerByRef, SyncInterner},
+        },
+        nitem_term, npat_prod, npat_var, nst, nterm_abs, nterm_app, nterm_dot, nterm_item,
+        nterm_local, nterm_match, nterm_prod, nterm_sum, nterm_var, nterm_with,
+        span::SpanOf,
+        span_of,
     };
     use aiahr_parser::{
         lexer::aiahr_lexer,
@@ -452,15 +465,19 @@ mod tests {
 
     use super::{resolve_module, resolve_term, ItemResolution};
 
-    fn parse_resolve_term<'a, 'i>(
+    fn parse_resolve_term<'a, 's, S>(
         arena: &'a Bump,
-        input: &'i str,
+        interner: &'s S,
+        input: &str,
     ) -> (
-        Option<&'a nst::Term<'a, 'i>>,
-        Vec<SpanOf<&'i str>>,
-        Vec<NameResolutionError<'i>>,
-    ) {
-        let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
+        Option<&'a nst::Term<'a, 's>>,
+        Vec<SpanOf<RefHandle<'s, str>>>,
+        Vec<NameResolutionError<'s>>,
+    )
+    where
+        S: InternerByRef<str>,
+    {
+        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
         let unresolved = term(arena).parse(to_stream(tokens, eoi)).unwrap();
         let mut errors = Vec::new();
 
@@ -473,16 +490,20 @@ mod tests {
         (resolved, base.into_vars(), errors)
     }
 
-    fn parse_resolve_module<'a, 'i>(
+    fn parse_resolve_module<'a, 's, S>(
         arena: &'a Bump,
-        input: &'i str,
+        interner: &'s S,
+        input: &str,
     ) -> (
-        Vec<ItemResolution<'a, 'i>>,
-        Vec<SpanOf<&'i str>>,
-        Vec<SpanOf<&'i str>>,
-        Vec<NameResolutionError<'i>>,
-    ) {
-        let (tokens, eoi) = aiahr_lexer().lex(input).unwrap();
+        Vec<ItemResolution<'a, 's>>,
+        Vec<SpanOf<RefHandle<'s, str>>>,
+        Vec<SpanOf<RefHandle<'s, str>>>,
+        Vec<NameResolutionError<'s>>,
+    )
+    where
+        S: InternerByRef<str>,
+    {
+        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
         let unresolved = aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap();
         let mut errors = Vec::new();
         let resolved = resolve_module(
@@ -503,7 +524,8 @@ mod tests {
     #[test]
     fn test_local_binding() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "x = {}; y = {}; x");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "x = {}; y = {}; x");
         assert_matches!(
             term,
             Some(nterm_local!(
@@ -511,8 +533,8 @@ mod tests {
                 nterm_prod!(),
                 nterm_local!(y, nterm_prod!(), nterm_var!(x1))
             )) => {
-                assert_eq!(vars[x.0].value, "x");
-                assert_eq!(vars[y.0].value, "y");
+                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[y.0].value.0, "y");
                 assert_eq!(x1, x);
             }
         );
@@ -522,15 +544,16 @@ mod tests {
     #[test]
     fn test_local_binding_shadowing() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "x = {}; x = x; x");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "x = {}; x = x; x");
         assert_matches!(term,
             Some(nterm_local!(
                 x_out,
                 nterm_prod!(),
                 nterm_local!(x_in, nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x_out.0].value, "x");
-                assert_eq!(vars[x_in.0].value, "x");
+                assert_eq!(vars[x_out.0].value.0, "x");
+                assert_eq!(vars[x_in.0].value.0, "x");
                 assert_eq!(x1, x_out);
                 assert_eq!(x2, x_in);
             }
@@ -541,13 +564,14 @@ mod tests {
     #[test]
     fn test_local_binding_errors() {
         let arena = Bump::new();
-        let (term, _, errs) = parse_resolve_term(&arena, "x = y; z");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, _, errs) = parse_resolve_term(&arena, &interner, "x = y; z");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
             [
-                NameResolutionError::NotFound(span_of!("y")),
-                NameResolutionError::NotFound(span_of!("z"))
+                NameResolutionError::NotFound(span_of!(h!("y"))),
+                NameResolutionError::NotFound(span_of!(h!("z")))
             ]
         );
     }
@@ -555,14 +579,15 @@ mod tests {
     #[test]
     fn test_handler() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "x = {}; with x do x");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "x = {}; with x do x");
         assert_matches!(term,
             Some(nterm_local!(
                 x,
                 nterm_prod!(),
                 nterm_with!(nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x.0].value, "x");
+                assert_eq!(vars[x.0].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -573,13 +598,14 @@ mod tests {
     #[test]
     fn test_handler_errors() {
         let arena = Bump::new();
-        let (term, _, errs) = parse_resolve_term(&arena, "with h do x");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, _, errs) = parse_resolve_term(&arena, &interner, "with h do x");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
             [
-                NameResolutionError::NotFound(span_of!("h")),
-                NameResolutionError::NotFound(span_of!("x"))
+                NameResolutionError::NotFound(span_of!(h!("h"))),
+                NameResolutionError::NotFound(span_of!(h!("x")))
             ]
         );
     }
@@ -587,7 +613,8 @@ mod tests {
     #[test]
     fn test_abstraction() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "|x| |y| y(x)");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| |y| y(x)");
         assert_matches!(term,
             Some(nterm_abs!(
                 x,
@@ -596,8 +623,8 @@ mod tests {
                     nterm_app!(nterm_var!(y1), nterm_var!(x1))
                 )
             )) => {
-                assert_eq!(vars[x.0].value, "x");
-                assert_eq!(vars[y.0].value, "y");
+                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[y.0].value.0, "y");
                 assert_eq!(x1, x);
                 assert_eq!(y1, y);
             }
@@ -608,7 +635,8 @@ mod tests {
     #[test]
     fn test_abstraction_shadowing() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "|x| |x| x(x)");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| |x| x(x)");
         assert_matches!(term,
             Some(nterm_abs!(
                 x_out,
@@ -617,8 +645,8 @@ mod tests {
                     nterm_app!(nterm_var!(x1), nterm_var!(x2))
                 )
             )) => {
-                assert_eq!(vars[x_out.0].value, "x");
-                assert_eq!(vars[x_in.0].value, "x");
+                assert_eq!(vars[x_out.0].value.0, "x");
+                assert_eq!(vars[x_in.0].value.0, "x");
                 assert_eq!(x1, x_in);
                 assert_eq!(x2, x_in);
             }
@@ -629,13 +657,14 @@ mod tests {
     #[test]
     fn test_application() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "|x| x(x)");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| x(x)");
         assert_matches!(term,
             Some(nterm_abs!(
                 x,
                 nterm_app!(nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x.0].value, "x");
+                assert_eq!(vars[x.0].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -646,13 +675,14 @@ mod tests {
     #[test]
     fn test_application_errors() {
         let arena = Bump::new();
-        let (term, _, errs) = parse_resolve_term(&arena, "f(x)");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, _, errs) = parse_resolve_term(&arena, &interner, "f(x)");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
             [
-                NameResolutionError::NotFound(span_of!("f")),
-                NameResolutionError::NotFound(span_of!("x"))
+                NameResolutionError::NotFound(span_of!(h!("f"))),
+                NameResolutionError::NotFound(span_of!(h!("x")))
             ]
         );
     }
@@ -660,7 +690,9 @@ mod tests {
     #[test]
     fn test_product_row() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "x = {}; {a = x, b = {x = x}}");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) =
+            parse_resolve_term(&arena, &interner, "x = {}; {a = x, b = {x = x}}");
         assert_matches!(term,
             Some(nterm_local!(x, nterm_prod!(),
                 nterm_prod!(
@@ -670,7 +702,7 @@ mod tests {
                     nterm_prod!(id_field!("x", nterm_var!(x2)))
                 ),
             ))) => {
-                assert_eq!(vars[x.0].value, "x");
+                assert_eq!(vars[x.0].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -681,13 +713,14 @@ mod tests {
     #[test]
     fn test_product_row_errors() {
         let arena = Bump::new();
-        let (term, _, errs) = parse_resolve_term(&arena, "{x = y, z = x}");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, _, errs) = parse_resolve_term(&arena, &interner, "{x = y, z = x}");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
             [
-                NameResolutionError::NotFound(span_of!("y")),
-                NameResolutionError::NotFound(span_of!("x"))
+                NameResolutionError::NotFound(span_of!(h!("y"))),
+                NameResolutionError::NotFound(span_of!(h!("x")))
             ]
         );
     }
@@ -695,10 +728,11 @@ mod tests {
     #[test]
     fn test_sum_row() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "|x| <a = x>");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| <a = x>");
         assert_matches!(term,
             Some(nterm_abs!(x, nterm_sum!(id_field!("a", nterm_var!(x1))))) => {
-                assert_eq!(vars[x.0].value, "x");
+                assert_eq!(vars[x.0].value.0, "x");
                 assert_eq!(x1, x);
             }
         );
@@ -708,15 +742,17 @@ mod tests {
     #[test]
     fn test_sum_row_errors() {
         let arena = Bump::new();
-        let (term, _, errs) = parse_resolve_term(&arena, "<x = x>");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, _, errs) = parse_resolve_term(&arena, &interner, "<x = x>");
         assert_matches!(term, None);
-        assert_matches!(errs[..], [NameResolutionError::NotFound(span_of!("x"))]);
+        assert_matches!(errs[..], [NameResolutionError::NotFound(span_of!(h!("x")))]);
     }
 
     #[test]
     fn test_dot_access() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "id = |x| x; {x = id}.x");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "id = |x| x; {x = id}.x");
         assert_matches!(term,
             Some(nterm_local!(
                 id,
@@ -726,8 +762,8 @@ mod tests {
                     "x"
                 )
             )) => {
-                assert_eq!(vars[id.0].value, "id");
-                assert_eq!(vars[x.0].value, "x");
+                assert_eq!(vars[id.0].value.0, "id");
+                assert_eq!(vars[x.0].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(id1, id);
             }
@@ -738,22 +774,25 @@ mod tests {
     #[test]
     fn test_dot_access_errors() {
         let arena = Bump::new();
-        let (term, _, errs) = parse_resolve_term(&arena, "x.a");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, _, errs) = parse_resolve_term(&arena, &interner, "x.a");
         assert_matches!(term, None);
-        assert_matches!(errs[..], [NameResolutionError::NotFound(span_of!("x"))]);
+        assert_matches!(errs[..], [NameResolutionError::NotFound(span_of!(h!("x")))]);
     }
 
     #[test]
     fn test_match() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "match <{a = x} => x, y => y>");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) =
+            parse_resolve_term(&arena, &interner, "match <{a = x} => x, y => y>");
         assert_matches!(term,
             Some(nterm_match!(
-                field!(pat_prod!(id_field!("a", pat_var!(x))), nterm_var!(x1)),
-                field!(pat_var!(y), nterm_var!(y1))
+                field!(npat_prod!(id_field!("a", npat_var!(x))), nterm_var!(x1)),
+                field!(npat_var!(y), nterm_var!(y1))
             )) => {
-                assert_eq!(vars[x.0].value, "x");
-                assert_eq!(vars[y.0].value, "y");
+                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[y.0].value.0, "y");
                 assert_eq!(x1, x);
                 assert_eq!(y1, y);
             }
@@ -764,27 +803,30 @@ mod tests {
     #[test]
     fn test_match_errors() {
         let arena = Bump::new();
-        let (term, _, errs) = parse_resolve_term(&arena, "match <{a = x} => f(x), {} => z>");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, _, errs) =
+            parse_resolve_term(&arena, &interner, "match <{a = x} => f(x), {} => z>");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
             [
-                NameResolutionError::NotFound(span_of!("f")),
-                NameResolutionError::NotFound(span_of!("z"))
+                NameResolutionError::NotFound(span_of!(h!("f"))),
+                NameResolutionError::NotFound(span_of!(h!("z")))
             ]
         );
-        let (term, vars, errs) = parse_resolve_term(&arena, "match <{a = x, b = x} => x(x)>");
+        let (term, vars, errs) =
+            parse_resolve_term(&arena, &interner, "match <{a = x, b = x} => x(x)>");
         assert_matches!(
             term,
             Some(nterm_match!(field!(
-                pat_prod!(
-                    id_field!("a", pat_var!(x)),
-                    id_field!("b", pat_var!(x_again))
+                npat_prod!(
+                    id_field!("a", npat_var!(x)),
+                    id_field!("b", npat_var!(x_again))
                 ),
                 nterm_app!(nterm_var!(x1), nterm_var!(x2))
             ))) => {
-                assert_eq!(vars[x.0].value, "x");
-                assert_eq!(vars[x_again.0].value, "x");
+                assert_eq!(vars[x.0].value.0, "x");
+                assert_eq!(vars[x_again.0].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
@@ -792,8 +834,8 @@ mod tests {
         assert_matches!(
             errs[..],
             [NameResolutionError::Duplicate {
-                original: SpanOf { value: "x", end, ..},
-                duplicate: SpanOf { value: "x", start, ..},
+                original: SpanOf { value: h!("x"), end, ..},
+                duplicate: SpanOf { value: h!("x"), start, ..},
             }] => {
                 assert!(end.byte < start.byte);
             }
@@ -803,12 +845,14 @@ mod tests {
     #[test]
     fn test_mixed_shadowing() {
         let arena = Bump::new();
-        let (term, vars, errs) = parse_resolve_term(&arena, "x = {}; |x| match <x => x>");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, vars, errs) =
+            parse_resolve_term(&arena, &interner, "x = {}; |x| match <x => x>");
         assert_matches!(term,
-            Some(nterm_local!(x_top, nterm_prod!(), nterm_abs!(x_mid, nterm_match!(field!(pat_var!(x_bot), nterm_var!(x1)))))) => {
-                assert_eq!(vars[x_top.0].value, "x");
-                assert_eq!(vars[x_mid.0].value, "x");
-                assert_eq!(vars[x_bot.0].value, "x");
+            Some(nterm_local!(x_top, nterm_prod!(), nterm_abs!(x_mid, nterm_match!(field!(npat_var!(x_bot), nterm_var!(x1)))))) => {
+                assert_eq!(vars[x_top.0].value.0, "x");
+                assert_eq!(vars[x_mid.0].value.0, "x");
+                assert_eq!(vars[x_bot.0].value.0, "x");
                 assert_eq!(x1, x_bot);
             }
         );
@@ -818,15 +862,16 @@ mod tests {
     #[test]
     fn test_top_level_letrec() {
         let arena = Bump::new();
-        let (res, items, _, errs) = parse_resolve_module(&arena, "foo = bar\nbar = foo");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (res, items, _, errs) = parse_resolve_module(&arena, &interner, "foo = bar\nbar = foo");
         assert_matches!(
             res[..],
             [
                 ItemResolution::Succeeded(nitem_term!(foo, nterm_item!(mbar, bar1))),
                 ItemResolution::Succeeded(nitem_term!(bar, nterm_item!(mfoo, foo1)))
             ] => {
-                assert_eq!(items[foo.0].value, "foo");
-                assert_eq!(items[bar.0].value, "bar");
+                assert_eq!(items[foo.0].value.0, "foo");
+                assert_eq!(items[bar.0].value.0, "bar");
                 assert_eq!(mbar, ModuleId(0));
                 assert_eq!(mfoo, ModuleId(0));
                 assert_eq!(bar1, bar);
@@ -839,19 +884,20 @@ mod tests {
     #[test]
     fn test_top_level_errors() {
         let arena = Bump::new();
-        let (res, _, _, errs) = parse_resolve_module(&arena, "foo = x\nbar = y");
+        let interner = SyncInterner::new(BumpArena::new());
+        let (res, _, _, errs) = parse_resolve_module(&arena, &interner, "foo = x\nbar = y");
         assert_matches!(
             res[..],
             [
-                ItemResolution::Failed(span_of!("foo")),
-                ItemResolution::Failed(span_of!("bar")),
+                ItemResolution::Failed(span_of!(h!("foo"))),
+                ItemResolution::Failed(span_of!(h!("bar"))),
             ]
         );
         assert_matches!(
             errs[..],
             [
-                NameResolutionError::NotFound(span_of!("x")),
-                NameResolutionError::NotFound(span_of!("y"))
+                NameResolutionError::NotFound(span_of!(h!("x"))),
+                NameResolutionError::NotFound(span_of!(h!("y")))
             ]
         );
     }
