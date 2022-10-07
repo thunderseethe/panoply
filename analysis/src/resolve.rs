@@ -115,7 +115,10 @@ where
         cst::Pattern::SumRow(sr) => nst::Pattern::SumRow(resolve_sum_row(sr, |target| {
             resolve_pattern(arena, names, target, errors)
         })?),
-        cst::Pattern::Whole(var) => nst::Pattern::Whole(names.insert(*var, None, errors)),
+        cst::Pattern::Whole(var) => {
+            let slot = names.reserve(*var);
+            nst::Pattern::Whole(names.insert(*var, slot, errors))
+        }
     }))
 }
 
@@ -230,7 +233,7 @@ where
             let value = resolve_term(arena, names, value, errors);
 
             let mut scope = names.subscope();
-            let id = scope.insert(*var, Some(slot), errors);
+            let id = scope.insert(*var, slot, errors);
             let expr = resolve_term(arena, &mut scope, expr, errors);
 
             nst::Term::Binding {
@@ -263,7 +266,8 @@ where
             body,
         } => {
             let mut scope = names.subscope();
-            let id = scope.insert(*arg, None, errors);
+            let slot = scope.reserve(*arg);
+            let id = scope.insert(*arg, slot, errors);
             nst::Term::Abstraction {
                 lbar: *lbar,
                 arg: id,

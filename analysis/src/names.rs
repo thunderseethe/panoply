@@ -122,16 +122,13 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
     pub fn insert<E>(
         &mut self,
         name: SpanOf<RefHandle<'s, str>>,
-        slot: Option<VarSlot>,
+        slot: VarSlot,
         errors: &mut E,
     ) -> SpanOf<VarId>
     where
         E: DiagnosticSink<NameResolutionError<'s>>,
     {
-        let id = match slot {
-            Some(sl) => ManuallyDrop::into_inner(sl.0),
-            None => self.base().make_id(name),
-        };
+        let id = ManuallyDrop::into_inner(slot.0);
         let maybe_orig = match &mut self.0 {
             // TODO: we can do better than panicking here
             Data::Base(..) => panic!("Cannot insert names into the base Names layer"),
