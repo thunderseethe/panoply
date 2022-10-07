@@ -1,7 +1,9 @@
 use std::{
+    iter::{Enumerate, Map},
     marker::PhantomData,
     mem::transmute,
     ops::{Deref, Index},
+    slice::Iter,
 };
 
 /// An ID type that wraps a `usize`. Used to assign unique IDs to objects based on their index in an
@@ -68,11 +70,13 @@ where
     pub unsafe fn get_unchecked(&self, index: I) -> &T {
         self.slice.get_unchecked(index.raw())
     }
-}
 
-impl<I, T> FromIterator<T> for Box<Ids<I, T>> {
-    fn from_iter<J: IntoIterator<Item = T>>(iter: J) -> Self {
-        Ids::from_boxed_raw(iter.into_iter().collect())
+    /// As `[T]::iter().enumerate()`, but the indices are in `I`.
+    pub fn iter_enumerate(&self) -> Map<Enumerate<Iter<'_, T>>, fn((usize, &T)) -> (I, &T)> {
+        self.slice
+            .iter()
+            .enumerate()
+            .map(|(i, x)| (I::from_raw(i), x))
     }
 }
 
@@ -160,12 +164,6 @@ impl<I, T> Deref for IdGen<I, T> {
 
     fn deref(&self) -> &Self::Target {
         Ids::from_raw(&self.vec)
-    }
-}
-
-impl<I, T> FromIterator<T> for IdGen<I, T> {
-    fn from_iter<J: IntoIterator<Item = T>>(iter: J) -> Self {
-        IdGen::from_raw(iter.into_iter().collect())
     }
 }
 
