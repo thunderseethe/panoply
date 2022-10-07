@@ -122,7 +122,7 @@ pub struct ModuleResolution<'a, 's> {
     pub items: Box<Ids<ItemId, SpanOf<RefHandle<'s, str>>>>,
     pub vars: Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>>,
     pub item_names: HashMap<RefHandle<'s, str>, ItemId>,
-    pub resolved_items: Box<[Option<nst::Item<'a, 's>>]>,
+    pub resolved_items: &'a [Option<nst::Item<'a, 's>>],
 }
 
 /// Context for resolving names in a module.
@@ -485,11 +485,11 @@ where
         );
 
         let base = BaseNames::new(this, mtree, &inames);
-        let res = its
-            .iter_enumerate()
-            .zip(items.iter())
-            .map(|((id, _), item)| self.resolve_item(id, item, &base))
-            .collect();
+        let res = self.arena.alloc_slice_fill_iter(
+            its.iter_enumerate()
+                .zip(items.iter())
+                .map(|((id, _), item)| self.resolve_item(id, item, &base)),
+        );
         ModuleResolution {
             items: its.into_boxed_ids(),
             vars: self.vars.into_boxed_ids(),
@@ -560,7 +560,7 @@ mod tests {
         interner: &'s S,
         input: &str,
     ) -> (
-        Box<[Option<nst::Item<'a, 's>>]>,
+        &'a [Option<nst::Item<'a, 's>>],
         Box<Ids<ItemId, SpanOf<RefHandle<'s, str>>>>,
         Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>>,
         Vec<NameResolutionError<'s>>,
