@@ -1,7 +1,6 @@
 use std::{collections::HashMap, fmt::Debug, iter, mem::ManuallyDrop};
 
 use aiahr_core::{
-    diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     id::{ItemId, ModuleId, VarId},
     memory::handle::RefHandle,
     span::{SpanOf, Spanned},
@@ -72,13 +71,9 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
         self.base().this()
     }
 
-    /// Resolves the given name, or reports an error to `errors`.
-    pub fn get<E>(&self, name: SpanOf<RefHandle<'s, str>>, errors: &mut E) -> Option<SpanOf<Name>>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>,
-    {
-        let out = self
-            .layers()
+    /// Resolves the given name.
+    pub fn get(&self, name: SpanOf<RefHandle<'s, str>>) -> Option<SpanOf<Name>> {
+        self.layers()
             .find_map(|layer| match layer {
                 Data::Base(base) => base.get(name.value).map(|memb| match memb {
                     Member::Module(m) => Name::Module(m),
@@ -86,28 +81,12 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
                 }),
                 Data::Scope { locals, .. } => locals.get(&name.value).map(|v| Name::Variable(*v)),
             })
-            .map(|n| name.span().of(n));
-        if out.is_none() {
-            errors.add(NameResolutionError::NotFound(name));
-        }
-        out
+            .map(|n| name.span().of(n))
     }
 
-    /// Resolves the given name as a member of the given module, or reports an error to `errors`.
-    pub fn get_in<E>(
-        &self,
-        module: ModuleId,
-        name: SpanOf<RefHandle<'s, str>>,
-        errors: &mut E,
-    ) -> Option<Member>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>,
-    {
-        let out = self.base().get_in(module, name.value);
-        if out.is_none() {
-            errors.add(NameResolutionError::NotFound(name));
-        }
-        out
+    /// Resolves the given name as a member of the given module.
+    pub fn get_in(&self, module: ModuleId, name: SpanOf<RefHandle<'s, str>>) -> Option<Member> {
+        self.base().get_in(module, name.value)
     }
 
     /// Reserves an ID for the given variable.
@@ -115,21 +94,16 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
         VarSlot(ManuallyDrop::new(self.base().make_id(name)))
     }
 
-    /// Inserts the new variable into the current scope, or reports a `Duplicate` error. Returns the
-    /// ID of the variable.
-    ///
-    /// If `slot` is given, uses the provided slot for the variable.
-    pub fn insert<E>(
+    /// Inserts the new variable into the current scope at the given slot. Returns the ID of the new
+    /// variable, and the ID of the original variable if the name is a duplicate in the current
+    /// scope.
+    pub fn insert(
         &mut self,
         name: SpanOf<RefHandle<'s, str>>,
         slot: VarSlot,
-        errors: &mut E,
-    ) -> SpanOf<VarId>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>,
-    {
+    ) -> (SpanOf<VarId>, Option<SpanOf<VarId>>) {
         let id = ManuallyDrop::into_inner(slot.0);
-        let maybe_orig = match &mut self.0 {
+        let orig = match &mut self.0 {
             // TODO: we can do better than panicking here
             Data::Base(..) => panic!("Cannot insert names into the base Names layer"),
             Data::Scope { ref mut locals, .. } => {
@@ -141,12 +115,9 @@ impl<'n, 'a, 's> Names<'n, 'a, 's> {
                 }
             }
         };
-        if let Some(orig) = maybe_orig {
-            errors.add(NameResolutionError::Duplicate {
-                original: self.base().var(orig).unwrap(),
-                duplicate: name,
-            });
-        }
-        name.span().of(id)
+        (
+            name.span().of(id),
+            orig.map(|oid| self.base().var(oid).unwrap().span().of(oid)),
+        )
     }
 }

@@ -9,6 +9,7 @@ use aiahr_core::{
     cst::{self, Field, IdField, ProductRow, Separated, SumRow},
     diagnostic::{nameres::NameResolutionError, DiagnosticSink},
     id::{Ids, ItemId, ModuleId, VarId},
+    if_none::IfNone,
     memory::handle::RefHandle,
     nst,
     span::{Span, SpanOf, Spanned},
@@ -117,7 +118,15 @@ where
         })?),
         cst::Pattern::Whole(var) => {
             let slot = names.reserve(*var);
-            nst::Pattern::Whole(names.insert(*var, slot, errors))
+            let (id, orig) = names.insert(*var, slot);
+            if let Some(orig) = orig {
+                errors.add(NameResolutionError::Duplicate {
+                    name: var.value,
+                    original: orig.span(),
+                    duplicate: var.span(),
+                })
+            }
+            nst::Pattern::Whole(id)
         }
     }))
 }
@@ -163,7 +172,12 @@ where
             field: field2,
         } => match resolve_nested_dots(arena, names, base2, *dot2, *field2, errors)? {
             // m . field
-            DotResolution::Module(m) => match names.get_in(m, field, errors)? {
+            DotResolution::Module(m) => match names.get_in(m, field).if_none(|| {
+                errors.add(NameResolutionError::NotFoundIn {
+                    module: m,
+                    name: field,
+                })
+            })? {
                 Member::Module(m2) => DotResolution::Module(m2),
                 Member::Item(i) => DotResolution::Item(m, i),
             },
@@ -189,19 +203,33 @@ where
             },
         },
         // n . field
-        cst::Term::SymbolRef(n) => match names.get(*n, errors)?.value {
-            Name::Module(m) => DotResolution::from_member(m, names.get_in(m, field, errors)?),
-            Name::Item(m, i) => DotResolution::FieldAccess {
-                base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
-                dot,
-                field,
-            },
-            Name::Variable(v) => DotResolution::FieldAccess {
-                base: arena.alloc(nst::Term::VariableRef(base.span().of(v))),
-                dot,
-                field,
-            },
-        },
+        cst::Term::SymbolRef(n) => {
+            match names
+                .get(*n)
+                .if_none(|| errors.add(NameResolutionError::NotFound(*n)))?
+                .value
+            {
+                Name::Module(m) => DotResolution::from_member(
+                    m,
+                    names.get_in(m, field).if_none(|| {
+                        errors.add(NameResolutionError::NotFoundIn {
+                            module: m,
+                            name: field,
+                        })
+                    })?,
+                ),
+                Name::Item(m, i) => DotResolution::FieldAccess {
+                    base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
+                    dot,
+                    field,
+                },
+                Name::Variable(v) => DotResolution::FieldAccess {
+                    base: arena.alloc(nst::Term::VariableRef(base.span().of(v))),
+                    dot,
+                    field,
+                },
+            }
+        }
         // (expr) . field
         _ => DotResolution::FieldAccess {
             base: resolve_term(arena, names, base, errors)?,
@@ -233,7 +261,14 @@ where
             let value = resolve_term(arena, names, value, errors);
 
             let mut scope = names.subscope();
-            let id = scope.insert(*var, slot, errors);
+            let (id, orig) = scope.insert(*var, slot);
+            if let Some(orig) = orig {
+                errors.add(NameResolutionError::Duplicate {
+                    name: var.value,
+                    original: orig.span(),
+                    duplicate: var.span(),
+                })
+            }
             let expr = resolve_term(arena, &mut scope, expr, errors);
 
             nst::Term::Binding {
@@ -267,7 +302,14 @@ where
         } => {
             let mut scope = names.subscope();
             let slot = scope.reserve(*arg);
-            let id = scope.insert(*arg, slot, errors);
+            let (id, orig) = scope.insert(*arg, slot);
+            if let Some(orig) = orig {
+                errors.add(NameResolutionError::Duplicate {
+                    name: arg.value,
+                    original: orig.span(),
+                    duplicate: arg.span(),
+                })
+            }
             nst::Term::Abstraction {
                 lbar: *lbar,
                 arg: id,
@@ -331,7 +373,9 @@ where
             rangle: *rangle,
         },
         cst::Term::SymbolRef(var) => {
-            let name = names.get(*var, errors)?;
+            let name = names
+                .get(*var)
+                .if_none(|| errors.add(NameResolutionError::NotFound(*var)))?;
             match name.value {
                 Name::Module(m) => {
                     errors.add(NameResolutionError::ModuleTerm(name.span().of(m)));
@@ -404,8 +448,9 @@ where
         for (i, item) in items.iter().enumerate() {
             match inames.entry(item.name().value) {
                 Entry::Occupied(o) => errors.add(NameResolutionError::Duplicate {
-                    original: o.get().span().of(*o.key()),
-                    duplicate: item.name(),
+                    name: *o.key(),
+                    original: o.get().span(),
+                    duplicate: item.name().span(),
                 }),
                 Entry::Vacant(v) => {
                     v.insert(item.name().span().of(i));
@@ -454,7 +499,7 @@ mod tests {
         },
         nitem_term, npat_prod, npat_var, nst, nterm_abs, nterm_app, nterm_dot, nterm_item,
         nterm_local, nterm_match, nterm_prod, nterm_sum, nterm_var, nterm_with,
-        span::SpanOf,
+        span::{Span, SpanOf},
         span_of,
     };
     use aiahr_parser::{
@@ -839,8 +884,9 @@ mod tests {
         assert_matches!(
             errs[..],
             [NameResolutionError::Duplicate {
-                original: SpanOf { value: h!("x"), end, ..},
-                duplicate: SpanOf { value: h!("x"), start, ..},
+                name: h!("x"),
+                original: Span { end, ..},
+                duplicate: Span { start, ..},
             }] => {
                 assert!(end.byte < start.byte, "{} < {}", end.byte, start.byte);
             }
