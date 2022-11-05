@@ -7,6 +7,7 @@ import qualified Data.Map.Strict as Map
 import Type
 import Subst
 import Control.Applicative (Applicative(liftA2))
+import Prettyprinter
 
 -- This is a helper datatype that enumerates things that might appear in an equality constraint
 data Ct
@@ -24,6 +25,10 @@ ctTVars f =
   \case
     T ty -> T <$> typeVars f ty
     left :⊙ right -> liftA2 (:⊙) (internalRowTVars f left) (internalRowTVars f right)
+
+instance Pretty Ct where
+  pretty (T ty) = pretty ty
+  pretty (left :⊙ right) = pretty left <+> pretty ":⊙" <+> pretty right
 
 instance TypeOf Ct where
   typeOf f =
@@ -61,6 +66,10 @@ ty ~> ct = ty :<~> ct
 instance Show Q where
   showsPrec p (t1 :<~> T t2) = showsPrec p t1 . (" :~ " ++) . showsPrec p t2
   showsPrec p (t1 :<~> ct) = showsPrec p t1 . (" :~> " ++) . showsPrec p ct
+
+instance Pretty Q where
+  pretty (t1 :<~> T t2) = pretty t1 <+> pretty ":~" <+> pretty t2
+  pretty (t1 :<~> ct) = pretty t1 <+> pretty ":~>" <+> pretty ct
 
 instance SubstApp Q where
   apply subst (ct1 :<~> ct2) = apply subst ct1 :<~> apply subst ct2

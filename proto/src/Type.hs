@@ -136,7 +136,7 @@ data InternalRow
   deriving (Show, Read, Eq, Ord)
 
 instance Pretty InternalRow where
-  pretty (Closed row) = hcat $ punctuate ("," <> space) (fmap (\(lbl, ty) -> pretty lbl <+> "|>" <+> pretty ty) (Map.toAscList row))
+  pretty (Closed row) = Prettyprinter.group . align . vcat $ punctuate "," (fmap (\(lbl, ty) -> pretty lbl <+> "|>" <+> pretty ty) (Map.toAscList row))
   pretty (Open tvar) = pretty tvar
 
 instance TypeOf InternalRow where

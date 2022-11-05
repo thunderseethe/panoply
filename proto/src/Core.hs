@@ -23,6 +23,7 @@ import Type
 import Data.Bifunctor (Bifunctor(first))
 import Data.Foldable
 import Data.Text (Text, pack)
+import Debug.Trace
 
 data Literal = I Int
   deriving (Show, Read)
@@ -73,7 +74,7 @@ coreRowTv tv = CoreTV tv KindRow
 data CoreType
   = CoreVar TypeVar
   | CoreLit LiteralTy
-  | CoreFun CoreType InternalRow CoreType
+  | CoreFun CoreType CoreType
   | CoreProduct [CoreType]
   | CoreCoproduct [CoreType]
   | CoreForall TypeVar CoreType
@@ -84,9 +85,7 @@ instance Pretty CoreType where
     \case
       CoreVar tyvar -> pretty tyvar
       CoreLit lit -> pretty lit
-      CoreFun arg (Closed eff) ret
-        | Map.null eff -> pretty arg <+> "->" <+> pretty ret
-      CoreFun arg eff ret -> pretty arg <+> "-{" <> pretty eff <> "}->" <+> pretty ret
+      CoreFun arg ret -> pretty arg <+> "->" <+> pretty ret
       CoreProduct tys -> "{" <+> hcat (punctuate ("," <> space) (pretty <$> tys)) <+> "}"
       CoreCoproduct tys -> "<" <+> hcat (punctuate ("," <> space) (pretty <$> tys)) <+> ">"
       CoreForall tyvar ty -> "∀" <+> pretty tyvar <+> "." <+> pretty ty
@@ -98,11 +97,7 @@ prettyTy = go
       \case
         CoreVar (CoreTV tyvar _) -> annotate TypeVariable (pretty tyvar)
         CoreLit lit -> annotate Literal (pretty lit)
-        CoreFun arg (Closed eff) ret
-          -- If function is total don't print effect
-          | Map.null eff -> go arg <+> "->" <+> go ret
-        CoreFun arg (Open eff) ret -> go arg <+> "-{" <> pretty eff <> "}->" <+> go ret
-        CoreFun arg (Closed row) ret -> go arg <+> "-{" <> hsep (punctuate comma (pretty <$> Map.keys row)) <> "}->" <+> go ret
+        CoreFun arg ret -> go arg <+> "->" <+> go ret
         CoreProduct tys -> "{" <> hcat (punctuate ("," <> space) (go <$> tys)) <> "}"
         CoreCoproduct tys -> "<" <> hcat (punctuate ("," <> space) (go <$> tys)) <> ">"
         CoreForall tyvar ty -> "∀" <+> pretty tyvar <+> "." <+> go ty
@@ -110,7 +105,7 @@ prettyTy = go
 instance Plated CoreType where
   plate f core_ty =
     case core_ty of
-      CoreFun arg eff ret -> CoreFun <$> f arg <*> pure eff <*> f ret
+      CoreFun arg ret -> CoreFun <$> f arg <*> f ret
       CoreProduct tys -> CoreProduct <$> traverse f tys
       CoreCoproduct tys -> CoreCoproduct <$> traverse f tys
       CoreForall tv ty -> CoreForall tv <$> f ty
@@ -142,7 +137,7 @@ fromTypeSafe ty =
     SumTy (RowTy row) -> Just $ CoreCoproduct (fromType . snd <$> Map.toAscList row)
     SumTy (VarTy tv) -> Just $ CoreVar (coreRowTv tv)
     SumTy _ -> Nothing
-    FunTy arg eff ret -> Just $ CoreFun (fromType arg) eff (fromType ret)
+    FunTy arg _ ret -> Just $ CoreFun (fromType arg) (fromType ret)
 
 toType :: CoreType -> Type
 toType ty = 
@@ -150,7 +145,7 @@ toType ty =
     CoreVar (CoreTV tv KindType) -> VarTy tv
     CoreVar (CoreTV _ KindRow) -> error "idk what to do this yet"
     CoreLit Core.IntTy -> Type.IntTy
-    CoreFun arg eff ret -> FunTy (toType arg) eff (toType ret)
+    CoreFun arg ret -> FunTy (toType arg) (Closed Map.empty) (toType ret)
     -- We make up names for our row type that will put them in the same order when we go back to  core
     CoreProduct elems -> ProdTy (RowTy (Map.fromList $ zip (pack . show <$> [0..]) (toType <$> elems)))
     CoreCoproduct elems -> SumTy (RowTy (Map.fromList $ zip (pack .show <$> [0..]) (toType <$> elems)))
@@ -241,9 +236,9 @@ isSingleDoc (Product elems)
 isSingleDoc (Project _ _) = True
 isSingleDoc _ = False
 
-data Typed = Typed | Typeless
+data Typed = Typed | Typeless 
 
-prettyCore = prettyCore' Typed
+prettyCore = prettyCore' Typeless
 prettyCoreUntyped = prettyCore' Typeless
 
 prettyCore' :: Typed -> Core -> Doc SyntaxHighlight
@@ -317,19 +312,19 @@ coreUnboundVars core = Set.fromList . Map.elems $ Map.withoutKeys allVars boundV
 rowEvType :: InternalRow -> InternalRow -> InternalRow -> CoreType
 rowEvType left right goal =
   CoreProduct
-    [ CoreFun leftProdTy (Closed Map.empty) (CoreFun rightProdTy (Closed Map.empty) goalProdTy)
+    [ CoreFun leftProdTy (CoreFun rightProdTy goalProdTy)
     , let a = CoreTV (TV (-1)) KindType
-          leftBranch = CoreFun leftSumTy (Closed Map.empty) (CoreVar a)
-          rightBranch = CoreFun rightSumTy (Closed Map.empty) (CoreVar a)
-          goalBranch = CoreFun goalSumTy (Closed Map.empty) (CoreVar a)
-       in CoreForall a $ CoreFun leftBranch (Closed Map.empty) (CoreFun rightBranch (Closed Map.empty) goalBranch)
+          leftBranch = CoreFun leftSumTy (CoreVar a)
+          rightBranch = CoreFun rightSumTy (CoreVar a)
+          goalBranch = CoreFun goalSumTy (CoreVar a)
+       in CoreForall a $ CoreFun leftBranch (CoreFun rightBranch goalBranch)
     , CoreProduct
-        [ CoreFun goalProdTy (Closed Map.empty) leftProdTy
-        , CoreFun leftSumTy (Closed Map.empty) goalSumTy
+        [ CoreFun goalProdTy leftProdTy
+        , CoreFun leftSumTy goalSumTy
         ]
     , CoreProduct
-        [ CoreFun goalProdTy (Closed Map.empty) rightProdTy
-        , CoreFun rightSumTy (Closed Map.empty) goalSumTy
+        [ CoreFun goalProdTy rightProdTy
+        , CoreFun rightSumTy goalSumTy
         ]
     ]
  where
@@ -342,7 +337,7 @@ rowEvType left right goal =
   goalSumTy = fromType (SumTy (rowToType goal))
 
 
-rowEvidence :: Row -> Row -> Row -> Core
+rowEvidence :: HasCallStack => Row -> Row -> Row -> Core
 rowEvidence left right goal = 
   Product 
     [ Core.concat left right
@@ -386,7 +381,7 @@ concat left right = Lam m $ Lam n prod
   leftTy = fromType (unwrapSingleton left)
   rightTy = fromType (unwrapSingleton right)
 
-injL :: Row -> Row -> Core
+injL :: HasCallStack => Row -> Row -> Core
 injL inRow outRow = Lam m out
   where
     m = CoreV (V (-5)) left_ty
@@ -395,27 +390,27 @@ injL inRow outRow = Lam m out
     out = 
       case [0..(Map.size inRow - 1)] of
         [_] -> inj goal_ty outRow 0 (Core.Var m)
-        indxs -> Case (Core.Var m) (Seq.fromList (injCase (inj goal_ty outRow) tys <$> indxs))--(Seq.fromList (branch_case <$> indxs))
+        indxs -> Case (Core.Var m) (Seq.fromList (injCase (inj goal_ty outRow) (zip indxs tys) <$> indxs))--(Seq.fromList (branch_case <$> indxs))
 
-injR :: Row -> Row -> Core
+injR :: HasCallStack => Row -> Row -> Core
 injR inRow outRow = Lam n out
   where
     n = CoreV (V (-6)) right_ty
-    inSize = Map.size inRow - 1
-    outSize = Map.size outRow - 1
+    inSize = max (Map.size inRow - 1) 0
+    outSize = max (Map.size outRow - 1) 0
     right_ty@(CoreCoproduct tys) = fromType (SumTy (RowTy inRow))
     goal_ty = fromType (SumTy (RowTy outRow))
     out =
       case [(outSize - inSize)..outSize] of
         [_] -> inj goal_ty outRow outSize (Core.Var n)
-        indxs -> Case (Core.Var n) (Seq.fromList (injCase (inj goal_ty outRow) tys <$> indxs))
+        indxs -> Case (Core.Var n) (Seq.fromList $ injCase (inj goal_ty outRow) (zip indxs tys) <$> indxs)
 
-branch :: Row -> Row -> Core
+branch :: HasCallStack => Row -> Row -> Core
 branch left right = TyLam a $ Lam f $ Lam g coprod
   where
-    f = CoreV (V $ -5) (CoreFun left_ty (Closed Map.empty) (CoreVar a))
+    f = CoreV (V $ -5) (CoreFun left_ty (CoreVar a))
     left_ty@(CoreCoproduct left_tys) = fromType (SumTy (RowTy left))
-    g = CoreV (V $ -6) (CoreFun right_ty (Closed Map.empty) (CoreVar a))
+    g = CoreV (V $ -6) (CoreFun right_ty (CoreVar a))
     right_ty@(CoreCoproduct right_tys) = fromType (SumTy (RowTy right))
     goal_tys = left_tys ++ right_tys
     goal_ty = CoreCoproduct goal_tys
@@ -424,15 +419,16 @@ branch left right = TyLam a $ Lam f $ Lam g coprod
     right_size = Map.size right - 1
     coprod = let z = CoreV (V $ -7) (CoreCoproduct goal_tys)
               in Lam z $ Case (Core.var z) (Seq.fromList (left_case <$> [0..left_size]) >< Seq.fromList (right_case <$> [0..right_size]))
-    left_case i = Lam (branchVar left_tys i) $ Core.App (Core.Var f) (inj goal_ty left i (Core.Var $ branchVar left_tys i))
-    right_case i = Lam (branchVar right_tys i) $ Core.App (Core.Var g) (inj goal_ty right i (Core.Var $ branchVar right_tys i))
+    left_case i = Lam (branchVar (zip [0..] left_tys) i) $ Core.App (Core.Var f) (inj goal_ty left i (Core.Var $ branchVar (zip [0..] left_tys) i))
+    right_case i = Lam (branchVar (zip [0..] right_tys) i) $ Core.App (Core.Var g) (inj goal_ty right i (Core.Var $ branchVar (zip [0..] right_tys) i))
 
+injCase :: HasCallStack => (Int -> Core -> Core) -> [(Int, CoreType)] -> Int -> Core
 injCase inj tys i = Lam (branchVar tys i) (inj i (Core.Var $ branchVar tys i))
 
-branchVar tys i = CoreV (V (-8)) (
-  if i < length tys 
-     then tys !! i
-     else error $ "Index " ++ show i ++ " not found in " ++ show tys)
+branchVar :: HasCallStack => [(Int, CoreType)] -> Int -> CoreVar
+branchVar tys i = CoreV (V (-8)) branch_ty
+  where
+    branch_ty = fromMaybe (error $ "Index " ++ show i ++ " not found in " ++ show tys) (Prelude.lookup i tys)
 
 inj ty row = 
   case Map.size row of
@@ -480,6 +476,7 @@ zonk :: Subst -> Core.Core -> Core.Core
 zonk subst =
   transform
     (\case
+      Core.Lam (CoreV x ty) body -> Core.Lam (CoreV x (apply subst ty)) body
       Core.Var (CoreV x ty) -> Core.Var (CoreV x (apply subst ty))
       TyApp forall ty -> TyApp forall (apply subst ty)
       core -> core)
@@ -487,13 +484,13 @@ zonk subst =
 simplify :: Core -> Core
 simplify = transform
   (\case
-    TyApp (TyLam (CoreTV x _) body) ty -> simplify $ tySubst (Map.singleton x ty) body
+    --TyApp (TyLam (CoreTV x _) body) ty -> simplify $ tySubst (Map.singleton x ty) body
     -- Simplify id x => x
-    Core.App (Lam x (Core.Var y)) arg 
-      | x == y -> simplify arg
+    --Core.App (Lam x (Core.Var y)) arg 
+    -- | x == y -> simplify arg
     --Core.App (Lam _ (Product [])) _ -> Product [] -- Unit cannot be simplified further
-    Core.App (Lam (CoreV x _) body) arg 
-      | isValue arg -> simplify $ varSubst (Map.singleton x (simplify arg)) (simplify body)
+    --Core.App (Lam (CoreV x _) body) arg 
+    -- | isValue arg -> simplify $ varSubst (Map.singleton x (simplify arg)) (simplify body)
     Project idx (Product elems) ->
       if idx < length elems
         then simplify $ elems !! idx
@@ -504,4 +501,5 @@ simplify = transform
     isValue (Lit _) = True
     isValue (Lam _ _) = True
     isValue (Product elems) = all isValue elems
+    isValue (Coproduct _ _ elem) = isValue elem
     isValue _ = False

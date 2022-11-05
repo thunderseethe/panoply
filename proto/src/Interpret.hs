@@ -4,12 +4,14 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Interpret where
 
 import Term (Var, prettyV)
 import Core
 import Data.Map.Strict (Map, (!?))
 import qualified Data.Map.Strict as Map
+import qualified Data.Set as Set
 import Control.Lens
 import Control.Effect.State
 import qualified CC.Prompt as Prompt
@@ -25,11 +27,12 @@ import Data.Foldable
 import Data.Maybe
 import Core.Builtin
 import Debug.Trace
+import Text.Show.Pretty (ppShow)
 
 
 data Value
   = ValLit Core.Literal
-  | ValLam CoreVar Core
+  | ValLam Env CoreVar Core
   | ValStruct [Value]
   | ValTag Int Value
   | ValPrompt (Prompt.Prompt () Value)
@@ -46,7 +49,9 @@ prettyVal :: Value -> Doc SyntaxHighlight
 prettyVal val =
   case val of
     ValLit lit -> annotate Literal (pretty lit)
-    ValLam x body -> prettyCore (Lam x body)
+    ValLam env x body 
+      | Map.null env -> prettyCore (Lam x body)
+      | otherwise -> annotate Keyword "fun" <+> prettyClosureEnv env <+> align (group (prettyVar x <> line <> prettyCore body)) --group (align (prettyClosureEnv env <+> Prettyprinter.parens (prettyCore (Lam x body))))
     ValStruct vals
       | null vals -> annotate Literal "{}"
       | otherwise -> group (align ("{" <+> vsep (punctuate "," (prettyVal <$> vals)) <> line <> "}"))
@@ -88,9 +93,9 @@ instance Show EvalCtx where
 type Frame = [EvalCtx]
 
 prettyFrame :: Frame -> Doc SyntaxHighlight
-prettyFrame = foldr wrapEvalCtx (annotate Literal "☐")
+prettyFrame = foldl wrapEvalCtx (annotate Literal "☐")
   where
-    wrapEvalCtx eval_ctx doc =
+    wrapEvalCtx doc eval_ctx =
       case eval_ctx of
         FnAppFrame core -> group . align . parens $ doc <> nest 4 (line <> prettyCore core)
         ArgAppFrame val -> group . align . parens $ prettyVal val <> nest 4 (line <> doc)
@@ -120,7 +125,8 @@ prettyCurFrame = group . align . vsep . punctuate " · " . fmap prettyEvalCtx . 
         ProductFrame vals cores ->
           let cs = prettyCore <$> cores
               vs = prettyVal <$> vals []
-           in braces . group . align . vsep$ punctuate comma (vs ++ (box : cs))
+
+           in trace (show vs) $ braces . group . align . vsep$ punctuate comma (vs ++ (box : cs))
         ProjectFrame indx -> box <> brackets (annotate Literal $ pretty indx)
         CaseScrutineeFrame branches -> "Case" <+> box <+> group (align (list (toList (prettyCore <$> branches))))
         CaseBranchFrame scrutinee -> group . align . parens $ box <> nest 4 (line <> prettyVal scrutinee)
@@ -132,6 +138,11 @@ push :: EvalCtx -> Frame -> Frame
 push = (:)
 
 type Env = Map Var Value
+
+prettyClosureEnv :: Env -> Doc SyntaxHighlight
+prettyClosureEnv = braces . group . align . vsep . punctuate (flatAlt line comma) . fmap prettyEntry . Map.toList
+  where
+    prettyEntry (var, _) = prettyV var
 
 prettyEnv :: Env -> Doc SyntaxHighlight
 prettyEnv = braces . group . align . vsep . punctuate (flatAlt line comma) . fmap prettyEntry . Map.toList
@@ -147,7 +158,7 @@ data Stack
 prettyStack :: Stack -> Doc SyntaxHighlight
 prettyStack EmptyStack = mempty
 prettyStack (PushPrompt prompt stack) = align ("Prompt:" <+> Prompt.prettyPrompt prompt <> line <> prettyStack stack)
-prettyStack (PushFrame (env, frame) stack) = group (align ("Frame: " <> nest 4 (line <> prettyEnv env <> line <> prettyFrame frame <> line <> line <> prettyStack stack)))
+prettyStack (PushFrame (env, frame) stack) = group (align ("Frame: " <> nest 4 (line <> prettyClosureEnv env <> line <> prettyFrame frame <> line <> line <> prettyStack stack)))
 
 pushStack :: Stack -> Stack -> Stack
 pushStack src dest = go src
@@ -155,6 +166,17 @@ pushStack src dest = go src
     go EmptyStack = dest
     go (PushPrompt prompt stack) = PushPrompt prompt (go stack)
     go (PushFrame frame stack) = PushFrame frame (go stack)
+
+lookupStack :: Var -> Stack -> Maybe Value
+lookupStack var = go
+  where
+    go = \case
+      EmptyStack -> Nothing
+      PushPrompt _ s -> go s
+      PushFrame (env, frame) s -> 
+        case env !? var of
+          Just val -> Just val
+          Nothing -> go s
 
 splitStack :: Prompt.Prompt () Value -> Stack -> (Stack, Stack)
 splitStack needle_prompt = go id
@@ -164,9 +186,8 @@ splitStack needle_prompt = go id
     go diffstack (PushPrompt prompt stack) =
       case Prompt.eqPrompt needle_prompt prompt of
         Prompt.NEQ -> go (PushPrompt prompt . diffstack) stack
-        -- Install prompt in both stacks
-        -- At the bottom of the substack, but at the top of the remaining stack
-        Prompt.EQU -> (diffstack . PushPrompt prompt $ EmptyStack, PushPrompt prompt stack)
+        -- Install prompt in the substack for any effects that arise from continuation
+        Prompt.EQU -> (diffstack (PushPrompt prompt EmptyStack), PushPrompt prompt stack)
 
 data Machine = Machine { _stack :: Stack, _prompt :: Int, _cur_frame :: Frame, _cur_env :: Env }
   deriving (Show)
@@ -177,8 +198,8 @@ prettyMachine (Machine stack prompt cur_frame cur_env) =
     [ "Stack:"
     , prettyStack stack <> line
     , "Next Prompt:" <+> annotate Literal (pretty prompt)
-    , "Current Frame:" <+> prettyCurFrame cur_frame
     , "Current Env:" <+> prettyEnv cur_env
+    , annotate DebugInfo "Current Frame:" <+> prettyCurFrame cur_frame
     ])
 
 initialMachine :: Machine
@@ -186,10 +207,9 @@ initialMachine = Machine EmptyStack 0 [] env
   where
     env = Map.fromList
       [ (Core.evv, ValStruct [])
-      , (Core.add, ValLam (CoreV Core.evv (CoreProduct [])) intAdd) -- we cheat here by ascribing evv with type {}, but we never query the type at runtime
-      , (Core.lt, ValLam (CoreV Core.evv (CoreProduct [])) intLt)
+      , (Core.add, ValLam Map.empty (CoreV Core.evv (CoreProduct [])) intAdd) -- we cheat here by ascribing evv with type {}, but we never query the type at runtime
+      , (Core.lt, ValLam Map.empty (CoreV Core.evv (CoreProduct [])) intLt)
       ]
-
 
 makeLenses ''Machine
 
@@ -220,11 +240,15 @@ eval (Step core) =
     Var (CoreV x _) -> do
       env <- gets (view cur_env)
       case env !? x of
-        Nothing -> error ("Stuck: Undefined var " ++ show x)
         Just val -> unwind val
+        Nothing -> lookup_in_stack x--error ("Stuck: Undefined var " ++ show x)
     -- These are actually wrong, we need to try and "pop" the stack whenever we reach this state
     Lit lit -> unwind (ValLit lit)
-    Lam x body -> unwind (ValLam x body)
+    Lam x body -> do
+      let unbound = coreUnboundVars (Lam x body)
+      env <- gets (view cur_env)
+      let captures = Map.restrictKeys env (Set.map (\(CoreV v _) -> v) unbound)
+      unwind (ValLam captures x body)
     Case scrutinee branches -> do
       modify (cur_frame %~ push (CaseScrutineeFrame branches))
       step scrutinee
@@ -234,13 +258,12 @@ eval (Step core) =
       step elem
 
     Product elems -> do
-      (vals, tail) <- findProductFocus elems
-      case tail of
-        [] -> unwind . ValStruct . vals $ []
+      case elems of 
+        [] -> unwind (ValStruct []) -- Empty product is unit
         core:cores -> do
           -- Push the rest of the product evaluation as a frame
-          modify (cur_frame %~ push (ProductFrame vals cores))
-          -- Return new focal point as our next eval step
+          modify (cur_frame %~ push (ProductFrame {-values difflist-} id cores))
+          -- Return the first product element as our new step
           step core
 
     Project indx core -> do
@@ -281,7 +304,7 @@ eval (Step core) =
 
 
     TyApp (TyLam (CoreTV a _) body) ty -> step $ transform (over (Core.coreVars . Core.coreVarTy) (apply (a |-> toType ty))) body
-    c@(TyApp body _) -> step body --error $ "Stuck: TypApp " ++ show c
+    TyApp body _ -> step body --error $ "Stuck: TypApp " ++ show c
     TyLam {} -> error "Stuck: TyLam"
   where
     step = return . Step
@@ -327,19 +350,21 @@ eval (Step core) =
               let prompt = expectPrompt "Stuck: non-prompt passed to Yield as marker" val
               new_stack_frame
               (sub_stack, new_stack) <- gets (splitStack prompt . view stack)
+              --_ <- trace ("sub stack: " ++ show sub_stack) $ return ()
               case fn of
-                ValLam (CoreV kont _) body -> do
+                ValLam env (CoreV kont _) body -> do
                   modify (stack .~ new_stack)
-                  modify (cur_env %~ Map.insert kont (ValCont sub_stack))
+                  modify (cur_env %~ Map.insert kont (ValCont sub_stack) . Map.union env)
                   step body
                 _ -> error "Stuck: Non-lambda passed as value to Yield"
             ProductFrame vals remaining -> do
-              (new_vals, cores) <- findProductFocus remaining
-              case cores of
-                [] -> unwind . ValStruct . new_vals . vals $ []
+              --(new_vals, cores) <- findProductFocus remaining
+              --_ <- trace (show (new_vals [], cores)) $ return ()
+              case remaining of
+                [] -> unwind . ValStruct . vals . (val :) $ []
                 core:cores -> do
                   -- Push the rest of the product evaluation as a frame
-                  modify (cur_frame %~ push (ProductFrame (new_vals . vals) cores))
+                  modify (cur_frame %~ push (ProductFrame (vals . (val :)) cores))
                   -- Return new focal point as our next eval step
                   step core
             ProjectFrame indx ->
@@ -350,7 +375,7 @@ eval (Step core) =
               let (tag, x) =
                     case val of
                       ValTag tag x -> (tag, x)
-                      _ -> error $ "Stuck: non-tagged value passed to Case"
+                      _ -> error "Stuck: non-tagged value passed to Case"
               let branch = fromMaybe (error $ "Stuck: expected branch " ++ show x ++ " to exist, but it does not") $ Seq.lookup tag branches
               -- We're basically evaluating the `case x of branches` to `branch x` but shortcircuting the evaluation we've already done
               modify (cur_frame %~ push (CaseBranchFrame x))
@@ -362,14 +387,15 @@ eval (Step core) =
 
     call fn arg =
       case fn of
-        ValLam (CoreV x _) body -> do
-          modify (cur_env %~ Map.insert x arg)
+        ValLam env (CoreV x _) body -> do
+          modify (cur_env %~ Map.insert x arg . Map.union env)
           step body
         ValCont kont -> do
           -- Not sure this is correct
-          -- Currently this removes the current stack frame
-          -- We might want to save the current stack frame instead?
+          new_stack_frame
           modify (stack %~ pushStack kont)
+          --s <- gets (view stack)
+          --_ <- trace (ppShow s) $ return ()
           unwind arg
         val -> error $ "Stuck: non-function value applied as function " ++ show val
 
@@ -380,8 +406,14 @@ eval (Step core) =
       -- we don't clean up the env because we want to keep variables up the stack in environment down the stack
       -- when we pop this will be cleaned up correctly either way so this saves us having to walk the stack to find things
       -- inefficent space-wise, but convenient
-      env <- gets (view cur_env)
+      env <- swap cur_env Map.empty
       modify (stack %~ PushFrame (env, frame))
+
+    lookup_in_stack var = do
+      s <- gets (view stack)
+      case lookupStack var s of
+        Nothing -> error ("Stuck: undefined var " ++ show var)
+        Just val -> unwind val
 
     swap :: (Has (State s) sig m) => Lens' s a -> a -> m a
     swap lens new = do
@@ -405,6 +437,9 @@ eval (Step core) =
           modify (cur_env .~ env)
           unwind val
 
+            
+ 
+
 fromDone :: (Core -> Value) -> Res -> Value
 fromDone toVal (Step core) = toVal core
 fromDone _ (Done val) = val
@@ -426,7 +461,7 @@ interpret prog = snd . run . runState initialMachine $ go (Step prog)
         Done val -> return val
 
 
-prettySteps n = Data.Text.IO.putStrLn . render . prettyOut . steps n
+prettySteps core n = Data.Text.IO.putStrLn . render . prettyOut $ steps n core
   where
     prettyOut (machine, res) = prettyMachine machine <> line <> line <> "Result:" <+> prettyRes res
 
@@ -441,9 +476,10 @@ prettySteps n = Data.Text.IO.putStrLn . render . prettyOut . steps n
         Literal -> Terminal.color Terminal.Cyan
         NamedVariable -> Terminal.color Terminal.Green <> Terminal.underlined
         TypeVariable -> Terminal.color Terminal.Magenta <> Terminal.italicized
+        DebugInfo -> Terminal.color Terminal.Blue <> Terminal.bold
 
 expectPrompt _ (ValPrompt p) = p
 expectPrompt msg _ = error msg
 
-expectLam _ (ValLam x body) = (x, body)
+expectLam _ (ValLam env x body) = (env, x, body)
 expectLam msg _ = error msg

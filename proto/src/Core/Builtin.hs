@@ -5,7 +5,7 @@ module Core.Builtin where
 import Term
 import Constraint
 import Core
-import Type (InternalRow(..), Type(FunTy, SumTy, RowTy, VarTy), unitTy, TVar (TV))
+import Type (InternalRow(..), Type(FunTy, SumTy, RowTy, VarTy, ProdTy), unitTy, TVar (TV))
 import qualified Type
 
 import qualified Data.Map.Strict as Map
@@ -31,4 +31,5 @@ builtinCtx :: Map Var Scheme
 builtinCtx = Map.fromList
   [ (V (-9), Scheme [] [] (FunTy Type.IntTy (Closed Map.empty) (FunTy Type.IntTy (Closed Map.empty) Type.IntTy)))
   , (V (-10), Scheme [] [] (FunTy Type.IntTy (Closed Map.empty) (FunTy Type.IntTy (Closed Map.empty) boolTy)))
+  , (Core.evv, Scheme [] [] (ProdTy (RowTy Map.empty)))
   ]

@@ -28,7 +28,7 @@ namedVar :: Var -> Maybe Text
 namedVar (V (-1)) = Just "evv"
 namedVar (V (-2)) = Just "marker"
 namedVar (V (-3)) = Just "op_arg"
-namedVar (V (-4)) = Just "k"
+namedVar (V (-4)) = Just "resume"
 namedVar (V (-5)) = Just "left"
 namedVar (V (-6)) = Just "right"
 namedVar (V (-7)) = Just "z"

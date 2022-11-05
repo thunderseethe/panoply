@@ -9,9 +9,15 @@ import qualified Data.Map.Merge.Strict as Map
 import Type
 import Control.Lens (transform)
 import Data.Maybe (fromMaybe)
+import Prettyprinter
 
 
 newtype Subst = Subst (Map TVar Type)
+
+instance Pretty Subst where
+  pretty (Subst map) = list (field <$> Map.toList map)
+    where
+      field (tvar, ty) = group (align (pretty tvar <+> pretty ":=" <+> pretty ty))
 
 instance Show Subst where
   -- pointfree, more like... pointless

@@ -11,6 +11,7 @@ data SyntaxHighlight
   | Literal
   | TypeVariable
   | NamedVariable
+  | DebugInfo
 
 prettyRender :: Doc SyntaxHighlight -> Text
 prettyRender = Terminal.renderStrict . reAnnotateS toAnsi . layoutSmart layoutOpts
@@ -24,6 +25,7 @@ prettyRender = Terminal.renderStrict . reAnnotateS toAnsi . layoutSmart layoutOp
         Literal -> Terminal.color Terminal.Cyan
         NamedVariable -> Terminal.color Terminal.Green <> Terminal.underlined
         TypeVariable -> Terminal.color Terminal.Magenta <> Terminal.italicized
+        DebugInfo -> Terminal.color Terminal.Blue <> Terminal.bold
         
 record :: [(Text, Doc ann)] -> Doc ann
 record fields = align . group . encloseSep "{ " "}" ", " $ fmap prettyField fields

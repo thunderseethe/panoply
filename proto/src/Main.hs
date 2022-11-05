@@ -15,11 +15,21 @@ checkAndExec term = trace ("\n" ++ unpack (Pretty.prettyRender (prettyCore core)
     core = Core.simplify c
     (_, c, _) = inferSingTerm term
 
-steps :: Int -> Term () -> IO ()
-steps n term = prettySteps n core
+steps term = prettySteps core
   where
     core = Core.simplify c
     (_, c, _) = inferSingTerm term
+
+stepsProg prog = prettySteps core
+  where 
+    core = Core.simplify (Core.App c (Core.Product [])) 
+    (_, c:_, _) = infer prog
+
+core = compileSingProg exampleProperState
+
+compileSingProg prog = Core.simplify c
+  where
+    (_, c:_, _) = infer prog
 
 
 prettyCheckAndExec = Data.Text.IO.putStrLn . Pretty.prettyRender . prettyVal . checkAndExec
