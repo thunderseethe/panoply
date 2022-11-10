@@ -433,7 +433,8 @@ generateConstraints = go True
           return
             ( Handle (Infer handle_out_ty (Open out_eff)) lbl handler body
             , -- TODO: insert into the evidence vector
-              Core.NewPrompt marker_var (Core.Prompt (Core.var marker_var) handler_body)
+              -- It's important we eat an evv here because this behaves like a funciton even though it isn't compiled as a function
+              Core.Lam (Core.CoreV Core.evv (Core.CoreLit Core.IntTy)) $ Core.NewPrompt marker_var (Core.Prompt (Core.var marker_var) handler_body)
             , cs
             )
         Handler _ (HandleClause clauses (Clause ret_name ret_arg ret_unused ret_body)) -> do
@@ -465,7 +466,7 @@ generateConstraints = go True
                     _ <- trace ("resume_ty: " ++ show resume_ty) $ return ()
                     -- we handle passing evv explicitly below so don't do it in clause
                     (clause, clause_core, clause_constr) <-
-                      local (bind Core.evv (VarTy evv_core_ty) . bind resume resume_ty . bind x op_arg) $ {-internal_compile-} go pass_evv clause_body
+                      local (bind Core.evv (VarTy evv_core_ty) . bind resume resume_ty . bind x op_arg) $ internal_compile {-go pass_evv-} clause_body
                     return
                       ( Clause name x resume clause
                       , (name, FunTy op_arg (Open expected_eff) $ FunTy (FunTy op_ret (Open expected_eff) (VarTy out)) (Open expected_eff) (VarTy out))

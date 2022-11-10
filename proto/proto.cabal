@@ -22,7 +22,11 @@ maintainer:         thunderseethe.dev@gmail.com
 extra-source-files: CHANGELOG.md
 
 library
-    exposed-modules: Main
+    exposed-modules: 
+      Main
+      OutsideIn
+      Term
+      Type
 
     other-modules:
       CC.Prompt
@@ -32,11 +36,8 @@ library
       Example
       Fresh
       Interpret
-      OutsideIn
       Pretty
       Program
-      Term
-      Type
       TVarSet
       Subst
       Generalize
@@ -50,6 +51,7 @@ library
         base >= 4.15,
         containers ^>= 0.6,
         fused-effects ^>= 1.1,
+        genvalidity ^>= 1.1,
         lens ^>= 5.1,
         mtl ^>= 2.2,
         pretty-show ^>= 1.10,
@@ -61,3 +63,18 @@ library
     ghc-options: -W
     hs-source-dirs:   src
     default-language: Haskell2010
+
+test-suite tests
+  type: detailed-0.9
+  test-module: Tests
+  build-depends:
+    proto,
+    base ^>= 4.15,
+    Cabal ^>=3.8,
+    containers ^>= 0.6,
+    genvalidity ^>= 1.1,
+    lens ^>= 5.1,
+    QuickCheck ^>= 2.14,
+  hs-source-dirs: test
+  ghc-options: -W
+  default-language: Haskell2010
