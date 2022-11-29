@@ -104,7 +104,9 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
     Lexer::new(
         vec![
             // Keywords
+            literal("where", Token::KwWhere),
             literal("match", Token::KwMatch),
+            literal("effect", Token::KwEffect),
             literal("with", Token::KwWith),
             literal("do", Token::KwDo),
             // Identifier
@@ -115,13 +117,17 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
             // Punctuation
             literal("=", Token::Equal),
             literal("|", Token::VerticalBar),
+            literal("->", Token::SmallArrow),
             literal("=>", Token::BigArrow),
             literal("(", Token::LParen),
             literal(")", Token::RParen),
+            literal("[", Token::LBracket),
+            literal("]", Token::RBracket),
             literal("{", Token::LBrace),
             literal("}", Token::RBrace),
             literal("<", Token::LAngle),
             literal(">", Token::RAngle),
+            literal(":", Token::Colon),
             literal(";", Token::Semicolon),
             literal(",", Token::Comma),
             literal(".", Token::Dot),
@@ -135,3 +141,11 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
     )
     .unwrap()
 }
+
+/*
+
+effect Get[E, T] {
+    get() -> [E] T
+}
+
+ */

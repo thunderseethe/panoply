@@ -142,7 +142,65 @@ impl<'s, T> Spanned for SumRow<'s, T> {
     }
 }
 
-/// A pattern over terms of type `T`.
+/// A non-empty row with concrete fields in `C`.
+#[derive(Clone, Copy, Debug)]
+pub enum Row<'a, 's, C> {
+    Concrete(Separated<'a, C>),
+    Variable(Separated<'a, SpanOf<RefHandle<'s, str>>>),
+    Mixed {
+        concrete: Separated<'a, C>,
+        vbar: Span,
+        variables: Separated<'a, SpanOf<RefHandle<'s, str>>>,
+    },
+}
+
+impl<'a, 's, C: Spanned> Spanned for Row<'a, 's, C> {
+    fn span(&self) -> Span {
+        match self {
+            Row::Concrete(c) => c.span(),
+            Row::Variable(v) => v.span(),
+            Row::Mixed {
+                concrete,
+                variables,
+                ..
+            } => Span {
+                start: concrete.start(),
+                end: variables.end(),
+            },
+        }
+    }
+}
+
+/// A row of types.
+pub type TypeRow<'a, 's> = Row<'a, 's, IdField<'s, &'a Type<'a, 's>>>;
+
+/// An unqualified Aiahr type.
+#[derive(Clone, Copy, Debug)]
+pub enum Type<'a, 's> {
+    Named(SpanOf<RefHandle<'s, str>>),
+    Sum {
+        langle: Span,
+        variants: TypeRow<'a, 's>,
+        rangle: Span,
+    },
+    Product {
+        lbrace: Span,
+        fields: Option<TypeRow<'a, 's>>,
+        rbrace: Span,
+    },
+    Function {
+        domain: &'a Type<'a, 's>,
+        arrow: Span,
+        codomain: &'a Type<'a, 's>,
+    },
+    Parenthesized {
+        lpar: Span,
+        type_: &'a Type<'a, 's>,
+        rpar: Span,
+    },
+}
+
+/// An Aiahr pattern.
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern<'a, 's> {
     ProductRow(ProductRow<'a, 's, &'a Pattern<'a, 's>>),
@@ -328,6 +386,79 @@ macro_rules! prod {
 macro_rules! sum {
     ($field:pat) => {
         $crate::cst::SumRow { field: $field, .. }
+    };
+}
+
+#[macro_export]
+macro_rules! row_concrete {
+    ($($fields:pat),+ $(,)?) => {
+        $crate::cst::Row::Concrete($crate::separated!($($fields),+))
+    };
+}
+
+#[macro_export]
+macro_rules! row_variable {
+    ($($vars:pat),+ $(,)?) => {
+        $crate::cst::Row::Variable($crate::separated!($($crate::span_of!($crate::h!($vars))),+))
+    };
+}
+
+#[macro_export]
+macro_rules! row_mixed {
+    (($($fields:pat),+ $(,)?), ($($vars:pat),+ $(,)?)) => {
+        $crate::cst::Row::Mixed {
+            concrete: $crate::separated!($($fields),+),
+            variables: $crate::separated!($($crate::span_of!($crate::h!($vars))),+),
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! type_named {
+    ($name:pat) => {
+        &$crate::cst::Type::Named($crate::span_of!($crate::h!($name)))
+    };
+}
+
+#[macro_export]
+macro_rules! type_sum {
+    ($variants:pat) => {
+        &$crate::cst::Type::Sum {
+            variants: $variants,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! type_prod {
+    ($fields:pat) => {
+        &$crate::cst::Type::Product {
+            fields: Some($fields),
+            ..
+        }
+    };
+    () => {
+        &$crate::cst::Type::Product { fields: None, .. }
+    };
+}
+
+#[macro_export]
+macro_rules! type_func {
+    ($dom:pat, $cod:pat) => {
+        &$crate::cst::Type::Function {
+            domain: $dom,
+            codomain: $cod,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! type_par {
+    ($ty:pat) => {
+        &$crate::cst::Type::Parenthesized { type_: $ty, .. }
     };
 }
 

@@ -1,5 +1,5 @@
 use aiahr_core::{
-    cst::{Field, IdField, Item, Pattern, ProductRow, Separated, SumRow, Term},
+    cst::{Field, IdField, Item, Pattern, ProductRow, Row, Separated, SumRow, Term, Type},
     diagnostic::parser::ParseErrors,
     loc::Loc,
     memory::handle::RefHandle,
@@ -12,7 +12,7 @@ use chumsky::{
     select, Parser, Stream,
 };
 
-use crate::expr::{postfix, prefix};
+use crate::expr::{infixr1, postfix, prefix};
 
 // Returns a spanned parser that matches just the given token and returns ().
 fn lit<'s>(token: Token<'s>) -> impl Clone + Parser<Token<'s>, Span, Error = ParseErrors<'s>> {
@@ -104,6 +104,87 @@ fn sum_row<'s, T>(
             field,
             rangle,
         })
+}
+
+// Returns a parser for a non-empty row of `C` in an explicit type.
+fn row<'a, 's: 'a, C: 'a>(
+    arena: &'a Bump,
+    field: impl Clone + Parser<Token<'s>, C, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, Row<'a, 's, C>, Error = ParseErrors<'s>> {
+    let concrete = separated(arena, field, lit(Token::Comma));
+    let variables = separated(arena, ident(), lit(Token::Comma));
+    choice((
+        concrete
+            .clone()
+            .then(option(lit(Token::VerticalBar).then(variables.clone())))
+            .map(|(concrete, maybe_vars)| match maybe_vars {
+                Some((vbar, variables)) => Row::Mixed {
+                    concrete,
+                    vbar,
+                    variables,
+                },
+                None => Row::Concrete(concrete),
+            }),
+        variables.map(Row::Variable),
+    ))
+}
+
+/// Returns a parser for an Aiahr (mono-)type.
+pub fn type_<'a, 's: 'a>(
+    arena: &'a Bump,
+) -> impl Clone + Parser<Token<'s>, &'a Type<'a, 's>, Error = ParseErrors<'s>> {
+    recursive(|type_| {
+        let type_row = row(arena, id_field(Token::Colon, type_.clone()));
+
+        // Named type.
+        let named = ident().map(|n| arena.alloc(Type::Named(n)) as &_);
+
+        // Sum type.
+        let sum = lit(Token::LAngle)
+            .then(type_row.clone())
+            .then(lit(Token::RAngle))
+            .map(|((langle, variants), rangle)| {
+                arena.alloc(Type::Sum {
+                    langle,
+                    variants,
+                    rangle,
+                }) as &_
+            });
+
+        // Product type.
+        let prod = lit(Token::LBrace)
+            .then(option(type_row))
+            .then(lit(Token::RBrace))
+            .map(|((lbrace, fields), rbrace)| {
+                arena.alloc(Type::Product {
+                    lbrace,
+                    fields,
+                    rbrace,
+                }) as &_
+            });
+
+        // Parenthesized type.
+        let paren =
+            lit(Token::LParen)
+                .then(type_)
+                .then(lit(Token::RParen))
+                .map(|((lpar, type_), rpar)| {
+                    arena.alloc(Type::Parenthesized { lpar, type_, rpar }) as &_
+                });
+
+        // Function type.
+        infixr1(
+            choice((named, sum, prod, paren)),
+            lit(Token::SmallArrow),
+            |domain, arrow, codomain| {
+                arena.alloc(Type::Function {
+                    domain,
+                    arrow,
+                    codomain,
+                }) as &_
+            },
+        )
+    })
 }
 
 /// Returns a parser for a pattern.
@@ -333,14 +414,15 @@ where
 #[cfg(test)]
 mod tests {
     use aiahr_core::{
-        cst::{Item, Term},
+        cst::{Item, Term, Type},
         field, id_field, item_term,
         memory::{
             arena::BumpArena,
             intern::{InternerByRef, SyncInterner},
         },
-        pat_prod, pat_sum, pat_var, term_abs, term_app, term_dot, term_local, term_match,
-        term_paren, term_prod, term_sum, term_sym, term_with,
+        pat_prod, pat_sum, pat_var, row_concrete, row_mixed, row_variable, term_abs, term_app,
+        term_dot, term_local, term_match, term_paren, term_prod, term_sum, term_sym, term_with,
+        type_func, type_named, type_par, type_prod, type_sum,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
@@ -348,7 +430,19 @@ mod tests {
 
     use crate::lexer::aiahr_lexer;
 
-    use super::{aiahr_parser, term, to_stream};
+    use super::{aiahr_parser, term, to_stream, type_};
+
+    fn parse_type_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
+        arena: &'a Bump,
+        interner: &'s S,
+        input: &str,
+    ) -> &'a Type<'a, 's> {
+        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
+        type_(arena)
+            .then_ignore(end())
+            .parse(to_stream(tokens, eoi))
+            .unwrap()
+    }
 
     fn parse_term_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
         arena: &'a Bump,
@@ -369,6 +463,101 @@ mod tests {
     ) -> &'a [Item<'a, 's>] {
         let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
         aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
+    }
+
+    #[test]
+    fn test_sum_types() {
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "<x: A, y: B>"
+            ),
+            type_sum!(row_concrete!(
+                id_field!("x", type_named!("A")),
+                id_field!("y", type_named!("B"))
+            ))
+        );
+        assert_matches!(
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(BumpArena::new()), "<A, B>"),
+            type_sum!(row_variable!("A", "B"))
+        );
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "<x: A | B>"
+            ),
+            type_sum!(row_mixed!((id_field!("x", type_named!("A"))), ("B")))
+        );
+    }
+
+    #[test]
+    fn test_product_types() {
+        assert_matches!(
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(BumpArena::new()), "{}"),
+            type_prod!()
+        );
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x: A, y: B}"
+            ),
+            type_prod!(row_concrete!(
+                id_field!("x", type_named!("A")),
+                id_field!("y", type_named!("B"))
+            ))
+        );
+        assert_matches!(
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(BumpArena::new()), "{A, B}"),
+            type_prod!(row_variable!("A", "B"))
+        );
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x: A | B}"
+            ),
+            type_prod!(row_mixed!((id_field!("x", type_named!("A"))), ("B")))
+        );
+    }
+
+    #[test]
+    fn test_function_types() {
+        // Make sure this example tests right-associativity.
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "(A -> B) -> A -> (B -> C)"
+            ),
+            type_func!(
+                type_par!(type_func!(type_named!("A"), type_named!("B"))),
+                type_func!(
+                    type_named!("A"),
+                    type_par!(type_func!(type_named!("B"), type_named!("C")))
+                )
+            )
+        );
+    }
+
+    #[test]
+    fn test_mixed_types() {
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x: A} -> <f: B -> A | C>"
+            ),
+            type_func!(
+                type_prod!(row_concrete!(id_field!("x", type_named!("A")))),
+                type_sum!(row_mixed!(
+                    (id_field!("f", type_func!(type_named!("B"), type_named!("A")))),
+                    ("C")
+                ))
+            )
+        );
     }
 
     #[test]
