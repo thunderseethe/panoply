@@ -37,7 +37,11 @@ instance Show TVar where
        then typeVarNames !! i
        else case i of
               (-1) -> "branch_type"
-              _ -> error "unnammed type var"
+              (-2) -> "state_eff"
+              (-3) -> "state_handler"
+              (-4) -> "reader_eff"
+              (-5) -> "reader_handler"
+              i -> error $ "unnammed type var " ++ show i
 
 instance Pretty TVar where
   pretty (TV i) = pretty (
@@ -45,7 +49,11 @@ instance Pretty TVar where
        then typeVarNames !! i
        else case i of
               (-1) -> "branch_type"
-              _ -> error "unnammed type var")
+              (-2) -> "state_eff"
+              (-3) -> "state_handler"
+              (-4) -> "reader_eff"
+              (-5) -> "reader_handler"
+              i -> error $ "unnammed type var " ++ show i)
 
 instance Plated TVar where
   plate _ (TV i) = pure (TV i)

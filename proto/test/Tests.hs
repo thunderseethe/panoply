@@ -21,6 +21,7 @@ typeCheckTests =
   [ Test int_tc 
   , Test unit_tc
   , Test label_tc
+  , Test unlabel_label_id_tc
   ]
   where
     test_instance name run = inst
@@ -52,13 +53,9 @@ typeCheckTests =
           RowTy m | m == Map.fromList [("point", IntTy)] -> Pass
           ty -> Fail ("Expected a labelled type, found:" ++ show ty)
 
-  {-unlabel_label_id_tc = test_instance "Unlabel <-> Label Identity" $ do
-      res <- quickCheckResult (\lbl term -> 
-        let (a, _, _) = inferSingTerm term  
-            (b, _, _) = inferSingTerm (unlabel (label lbl term) lbl)
-         in (a ^. meta . ty) == (b ^. meta . ty))
-      return . Finished $ case res of
-        Success {} -> Pass-}
-
-
-
+    unlabel_label_id_tc = test_instance "Unlabel <-> Label Identity" $ do
+      let lbl = "asdfgh"
+      let (infer, _, _) = inferSingTerm (unlabel (label lbl (int 2)) lbl)
+      return . Finished $ case infer ^. meta . ty of
+        IntTy -> Pass
+        ty -> Fail ("Expected IntTy, found: " ++ show ty)

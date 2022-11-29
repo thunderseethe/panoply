@@ -97,6 +97,10 @@ instance SubstApp Constraint where
   apply subst (Simp q) = Simp (apply subst q)
   apply subst (Impl imp) = Impl (apply subst imp)
 
+instance Pretty Constraint where
+  pretty (Simp q) = pretty q
+  pretty _ = undefined
+
 constraintEither :: Iso' Constraint (Either Q Implication)
 constraintEither = iso to from
  where

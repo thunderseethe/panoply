@@ -98,7 +98,7 @@ prettyTy = go
         CoreVar (CoreTV tyvar _) -> annotate TypeVariable (pretty tyvar)
         CoreLit lit -> annotate Literal (pretty lit)
         CoreFun arg ret -> go arg <+> "->" <+> go ret
-        CoreProduct tys -> "{" <> hcat (punctuate ("," <> space) (go <$> tys)) <> "}"
+        CoreProduct tys -> braces . hcat . punctuate ("," <> space) $ go <$> tys
         CoreCoproduct tys -> "<" <> hcat (punctuate ("," <> space) (go <$> tys)) <> ">"
         CoreForall tyvar ty -> "∀" <+> pretty tyvar <+> "." <+> go ty
 
@@ -238,7 +238,7 @@ isSingleDoc _ = False
 
 data Typed = Typed | Typeless 
 
-prettyCore = prettyCore' Typeless
+prettyCore = prettyCore' Typed
 prettyCoreUntyped = prettyCore' Typeless
 
 prettyCore' :: Typed -> Core -> Doc SyntaxHighlight
@@ -288,7 +288,7 @@ prettyCore' typed = go
   
 
 prettyRender :: Core -> Text
-prettyRender = Pretty.prettyRender . prettyCoreUntyped
+prettyRender = Pretty.prettyRender . prettyCore
 
 coreVars :: Traversal' Core CoreVar
 coreVars f core =
@@ -484,13 +484,13 @@ zonk subst =
 simplify :: Core -> Core
 simplify = transform
   (\case
-    --TyApp (TyLam (CoreTV x _) body) ty -> simplify $ tySubst (Map.singleton x ty) body
+    TyApp (TyLam (CoreTV x _) body) ty -> simplify $ tySubst (Map.singleton x ty) body
     -- Simplify id x => x
-    --Core.App (Lam x (Core.Var y)) arg 
-    -- | x == y -> simplify arg
-    --Core.App (Lam _ (Product [])) _ -> Product [] -- Unit cannot be simplified further
-    --Core.App (Lam (CoreV x _) body) arg 
-    -- | isValue arg -> simplify $ varSubst (Map.singleton x (simplify arg)) (simplify body)
+    Core.App (Lam x (Core.Var y)) arg 
+     | x == y -> simplify arg
+    Core.App (Lam _ (Product [])) _ -> Product [] -- Unit cannot be simplified further
+    Core.App (Lam (CoreV x _) body) arg 
+     | isValue arg -> simplify $ varSubst (Map.singleton x (simplify arg)) (simplify body)
     Project idx (Product elems) ->
       if idx < length elems
         then simplify $ elems !! idx

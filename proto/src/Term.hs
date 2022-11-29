@@ -2,6 +2,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric #-}
 
 module Term where
 
@@ -20,6 +21,7 @@ import Data.Text (Text)
 import qualified Prettyprinter as Pretty
 import Pretty
 import Prelude hiding (abs)
+import GHC.Generics
 
 newtype Var = V Int
   deriving (Ord, Eq, Num, Enum, Show, Read, Bounded)
@@ -95,6 +97,7 @@ data Term meta
   | -- Effect Perform Operation
     Perform { perform_meta :: meta, perform_op :: Label, perform_val :: Term meta }
   deriving (Show)
+
 
 meta :: Lens' (Term meta) meta
 meta = lens get set
@@ -250,6 +253,8 @@ abs vars = Abs () (NonEmpty.fromList vars)
 
 letChain :: (Foldable t) => t (Var, Term ()) -> Term () -> Term () 
 letChain defns body = foldr (\(x, defn) body -> abs [x] body <@> defn) body defns
+
+letTerm defn = letChain [defn]
 
 var :: Var -> Term ()
 var = Var ()

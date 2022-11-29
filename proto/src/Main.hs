@@ -8,6 +8,8 @@ import Interpret
 import Data.Text
 import Data.Text.IO
 import Debug.Trace
+import Control.Lens
+import Program
 
 checkAndExec :: Term () -> Value
 checkAndExec term = trace ("\n" ++ unpack (Pretty.prettyRender (prettyCore core)) ++ "\n") $ interpret core
@@ -25,11 +27,12 @@ stepsProg prog = prettySteps core
     core = Core.simplify (Core.App c (Core.Product [])) 
     (_, c:_, _) = infer prog
 
-core = compileSingProg exampleProperState
+core = compileSingProg exampleMVPMultiEffect --exampleMultipleEffects --exampleProperState
 
-compileSingProg prog = Core.simplify c
+compileSingProg prog = trace (show (t ^. meta . eff)) $ Core.simplify c
   where
-    (_, c:_, _) = infer prog
+    -- C'mon now
+    (Prog [Def _ t] _, c:_, _) = infer prog
 
 
 prettyCheckAndExec = Data.Text.IO.putStrLn . Pretty.prettyRender . prettyVal . checkAndExec
