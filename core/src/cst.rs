@@ -32,7 +32,7 @@ impl<'a, T: Spanned> Spanned for Separated<'a, T> {
             end: self
                 .comma
                 .or(self.elems.last().map(|e| e.0))
-                .unwrap_or(self.first.span())
+                .unwrap_or_else(|| self.first.span())
                 .end(),
         }
     }
@@ -98,10 +98,7 @@ pub struct Field<L, T> {
 
 impl<L: Spanned, T: Spanned> Spanned for Field<L, T> {
     fn span(&self) -> Span {
-        Span {
-            start: self.label.start(),
-            end: self.target.end(),
-        }
+        Span::join(&self.label, &self.target)
     }
 }
 
@@ -118,10 +115,7 @@ pub struct ProductRow<'a, 's, T> {
 
 impl<'a, 's, T> Spanned for ProductRow<'a, 's, T> {
     fn span(&self) -> Span {
-        Span {
-            start: self.lbrace.start(),
-            end: self.rbrace.end(),
-        }
+        Span::join(&self.lbrace, &self.rbrace)
     }
 }
 
@@ -135,10 +129,7 @@ pub struct SumRow<'s, T> {
 
 impl<'s, T> Spanned for SumRow<'s, T> {
     fn span(&self) -> Span {
-        Span {
-            start: self.langle.start(),
-            end: self.rangle.end(),
-        }
+        Span::join(&self.langle, &self.rangle)
     }
 }
 
@@ -163,10 +154,7 @@ impl<'a, 's, C: Spanned> Spanned for Row<'a, 's, C> {
                 concrete,
                 variables,
                 ..
-            } => Span {
-                start: concrete.start(),
-                end: variables.end(),
-            },
+            } => Span::join(concrete, variables),
         }
     }
 }
@@ -200,6 +188,20 @@ pub enum Type<'a, 's> {
     },
 }
 
+impl<'a, 's> Spanned for Type<'a, 's> {
+    fn span(&self) -> Span {
+        match self {
+            Type::Named(n) => n.span(),
+            Type::Sum { langle, rangle, .. } => Span::join(langle, rangle),
+            Type::Product { lbrace, rbrace, .. } => Span::join(lbrace, rbrace),
+            Type::Function {
+                domain, codomain, ..
+            } => Span::join(domain, codomain),
+            Type::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+        }
+    }
+}
+
 /// An atomic row for use in a type constraint.
 #[derive(Clone, Copy, Debug)]
 pub enum RowAtom<'a, 's> {
@@ -209,6 +211,15 @@ pub enum RowAtom<'a, 's> {
         rpar: Span,
     },
     Variable(SpanOf<RefHandle<'s, str>>),
+}
+
+impl<'a, 's> Spanned for RowAtom<'a, 's> {
+    fn span(&self) -> Span {
+        match self {
+            RowAtom::Concrete { lpar, rpar, .. } => Span::join(lpar, rpar),
+            RowAtom::Variable(v) => v.span(),
+        }
+    }
 }
 
 /// A row expression for use in a type constraint, given as a combination of atoms.
@@ -229,6 +240,15 @@ pub enum Constraint<'a, 's> {
     },
 }
 
+impl<'a, 's> Spanned for Constraint<'a, 's> {
+    fn span(&self) -> Span {
+        match self {
+            Constraint::Subrow { lhs, rhs, .. } => Span::join(lhs, rhs),
+            Constraint::Equals { lhs, rhs, .. } => Span::join(lhs, rhs),
+        }
+    }
+}
+
 /// A qualification for a type.
 #[derive(Clone, Copy, Debug)]
 pub struct Qualification<'a, 's> {
@@ -236,11 +256,30 @@ pub struct Qualification<'a, 's> {
     pub arrow: Span,
 }
 
+impl<'a, 's> Spanned for Qualification<'a, 's> {
+    fn span(&self) -> Span {
+        Span::join(&self.constraints, &self.arrow)
+    }
+}
+
 /// A polymorphic Aiahr type.
 #[derive(Clone, Copy, Debug)]
 pub struct Scheme<'a, 's> {
     pub qualification: Option<Qualification<'a, 's>>,
     pub type_: &'a Type<'a, 's>,
+}
+
+impl<'a, 's> Spanned for Scheme<'a, 's> {
+    fn span(&self) -> Span {
+        Span {
+            start: self
+                .qualification
+                .map(|q| q.span())
+                .unwrap_or_else(|| self.type_.span())
+                .start(),
+            end: self.type_.end(),
+        }
+    }
 }
 
 /// An Aiahr pattern.
@@ -313,37 +352,16 @@ pub enum Term<'a, 's> {
 impl<'a, 's> Spanned for Term<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Term::Binding { var, expr, .. } => Span {
-                start: var.start(),
-                end: expr.end(),
-            },
-            Term::Handle { with, expr, .. } => Span {
-                start: with.start(),
-                end: expr.end(),
-            },
-            Term::Abstraction { lbar, body, .. } => Span {
-                start: lbar.start(),
-                end: body.end(),
-            },
-            Term::Application { func, rpar, .. } => Span {
-                start: func.start(),
-                end: rpar.end(),
-            },
+            Term::Binding { var, expr, .. } => Span::join(var, expr),
+            Term::Handle { with, expr, .. } => Span::join(with, expr),
+            Term::Abstraction { lbar, body, .. } => Span::join(lbar, body),
+            Term::Application { func, rpar, .. } => Span::join(func, rpar),
             Term::ProductRow(p) => p.span(),
             Term::SumRow(s) => s.span(),
-            Term::DotAccess { base, field, .. } => Span {
-                start: base.start(),
-                end: field.end(),
-            },
-            Term::Match { match_, rangle, .. } => Span {
-                start: match_.start(),
-                end: rangle.end(),
-            },
+            Term::DotAccess { base, field, .. } => Span::join(base, field),
+            Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
             Term::SymbolRef(v) => v.span(),
-            Term::Parenthesized { lpar, rpar, .. } => Span {
-                start: lpar.start(),
-                end: rpar.end(),
-            },
+            Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
         }
     }
 }
@@ -370,10 +388,7 @@ impl<'a, 's> Item<'a, 's> {
 impl<'a, 's> Spanned for Item<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Item::Term { name, value, .. } => Span {
-                start: name.start(),
-                end: value.end(),
-            },
+            Item::Term { name, value, .. } => Span::join(name, value),
         }
     }
 }

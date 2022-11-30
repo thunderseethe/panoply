@@ -18,6 +18,19 @@ impl Span {
         }
     }
 
+    /// Returns the smallest span containing the left and right spans, where `left` must entirely
+    /// precede `right`.
+    pub fn join<L, R>(left: &L, right: &R) -> Span
+    where
+        L: Spanned,
+        R: Spanned,
+    {
+        Span {
+            start: left.start(),
+            end: right.end(),
+        }
+    }
+
     /// Returns `self` but with the given value.
     pub fn of<T>(&self, value: T) -> SpanOf<T> {
         SpanOf {

@@ -76,38 +76,17 @@ pub enum Term<'a, 's> {
 impl<'a, 's> Spanned for Term<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Term::Binding { var, expr, .. } => Span {
-                start: var.start(),
-                end: expr.end(),
-            },
-            Term::Handle { with, expr, .. } => Span {
-                start: with.start(),
-                end: expr.end(),
-            },
-            Term::Abstraction { lbar, body, .. } => Span {
-                start: lbar.start(),
-                end: body.end(),
-            },
-            Term::Application { func, rpar, .. } => Span {
-                start: func.start(),
-                end: rpar.end(),
-            },
+            Term::Binding { var, expr, .. } => Span::join(var, expr),
+            Term::Handle { with, expr, .. } => Span::join(with, expr),
+            Term::Abstraction { lbar, body, .. } => Span::join(lbar, body),
+            Term::Application { func, rpar, .. } => Span::join(func, rpar),
             Term::ProductRow(p) => p.span(),
             Term::SumRow(s) => s.span(),
-            Term::FieldAccess { base, field, .. } => Span {
-                start: base.start(),
-                end: field.end(),
-            },
-            Term::Match { match_, rangle, .. } => Span {
-                start: match_.start(),
-                end: rangle.end(),
-            },
+            Term::FieldAccess { base, field, .. } => Span::join(base, field),
+            Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
             Term::ItemRef(i) => i.span(),
             Term::VariableRef(v) => v.span(),
-            Term::Parenthesized { lpar, rpar, .. } => Span {
-                start: lpar.start(),
-                end: rpar.end(),
-            },
+            Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
         }
     }
 }
@@ -125,10 +104,7 @@ pub enum Item<'a, 's> {
 impl<'a, 's> Spanned for Item<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Item::Term { name, value, .. } => Span {
-                start: name.start(),
-                end: value.end(),
-            },
+            Item::Term { name, value, .. } => Span::join(name, value),
         }
     }
 }
