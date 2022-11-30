@@ -104,7 +104,6 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
     Lexer::new(
         vec![
             // Keywords
-            literal("where", Token::KwWhere),
             literal("match", Token::KwMatch),
             literal("effect", Token::KwEffect),
             literal("with", Token::KwWith),
@@ -115,6 +114,7 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
                 whole(|s| Token::Identifier(s)),
             ),
             // Punctuation
+            literal("+", Token::Plus),
             literal("=", Token::Equal),
             literal("|", Token::VerticalBar),
             literal("->", Token::SmallArrow),
@@ -143,6 +143,8 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
 }
 
 /*
+
+getfoo : z1 + z2 = z3, (foo: a) < z3 => {z1} -> {z2} -> a
 
 effect Get[E, T] {
     get() -> [E] T

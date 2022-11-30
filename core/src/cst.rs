@@ -200,6 +200,49 @@ pub enum Type<'a, 's> {
     },
 }
 
+/// An atomic row for use in a type constraint.
+#[derive(Clone, Copy, Debug)]
+pub enum RowAtom<'a, 's> {
+    Concrete {
+        lpar: Span,
+        fields: Separated<'a, IdField<'s, &'a Type<'a, 's>>>,
+        rpar: Span,
+    },
+    Variable(SpanOf<RefHandle<'s, str>>),
+}
+
+/// A row expression for use in a type constraint, given as a combination of atoms.
+pub type RowExpr<'a, 's> = Separated<'a, RowAtom<'a, 's>>;
+
+/// A type constraint.
+#[derive(Clone, Copy, Debug)]
+pub enum Constraint<'a, 's> {
+    Subrow {
+        lhs: RowExpr<'a, 's>,
+        lt: Span,
+        rhs: RowExpr<'a, 's>,
+    },
+    Equals {
+        lhs: RowExpr<'a, 's>,
+        eq: Span,
+        rhs: RowExpr<'a, 's>,
+    },
+}
+
+/// A qualification for a type.
+#[derive(Clone, Copy, Debug)]
+pub struct Qualification<'a, 's> {
+    pub constraints: Separated<'a, Constraint<'a, 's>>,
+    pub arrow: Span,
+}
+
+/// A polymorphic Aiahr type.
+#[derive(Clone, Copy, Debug)]
+pub struct Scheme<'a, 's> {
+    pub qualification: Option<Qualification<'a, 's>>,
+    pub type_: &'a Type<'a, 's>,
+}
+
 /// An Aiahr pattern.
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern<'a, 's> {
@@ -459,6 +502,55 @@ macro_rules! type_func {
 macro_rules! type_par {
     ($ty:pat) => {
         &$crate::cst::Type::Parenthesized { type_: $ty, .. }
+    };
+}
+
+#[macro_export]
+macro_rules! rwx_concrete {
+    ($($fields:pat),+ $(,)?) => {
+        $crate::cst::RowAtom::Concrete {
+            fields: $crate::separated!($($fields),+),
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! rwx_variable {
+    ($var:pat) => {
+        $crate::cst::RowAtom::Variable($crate::span_of!($crate::h!($var)))
+    };
+}
+
+#[macro_export]
+macro_rules! ct_subrow {
+    (($($lhs:pat),+ $(,)?), ($($rhs:pat),+ $(,)?)) => {
+        $crate::cst::Constraint::Subrow {
+            lhs: $crate::separated!($($lhs),+),
+            rhs: $crate::separated!($($rhs),+),
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! ct_equals {
+    (($($lhs:pat),+ $(,)?), ($($rhs:pat),+ $(,)?)) => {
+        $crate::cst::Constraint::Equals {
+            lhs: $crate::separated!($($lhs),+),
+            rhs: $crate::separated!($($rhs),+),
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! qual {
+    ($($cts:pat),+ $(,)?) => {
+        $crate::cst::Qualification {
+            constraints: $crate::separated!($($cts),+),
+            ..
+        }
     };
 }
 

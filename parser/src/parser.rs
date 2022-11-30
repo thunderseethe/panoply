@@ -1,5 +1,8 @@
 use aiahr_core::{
-    cst::{Field, IdField, Item, Pattern, ProductRow, Row, Separated, SumRow, Term, Type},
+    cst::{
+        Constraint, Field, IdField, Item, Pattern, ProductRow, Qualification, Row, RowAtom,
+        RowExpr, Scheme, Separated, SumRow, Term, Type,
+    },
     diagnostic::parser::ParseErrors,
     loc::Loc,
     memory::handle::RefHandle,
@@ -184,6 +187,74 @@ pub fn type_<'a, 's: 'a>(
                 }) as &_
             },
         )
+    })
+}
+
+// Returns a parser for a row expression.
+fn row_expr<'a, 's: 'a>(
+    arena: &'a Bump,
+) -> impl Clone + Parser<Token<'s>, RowExpr<'a, 's>, Error = ParseErrors<'s>> {
+    separated(
+        arena,
+        choice((
+            lit(Token::LParen)
+                .then(separated(
+                    arena,
+                    id_field(Token::Colon, type_(arena)),
+                    lit(Token::Comma),
+                ))
+                .then(lit(Token::RParen))
+                .map(|((lpar, fields), rpar)| RowAtom::Concrete { lpar, fields, rpar }),
+            ident().map(RowAtom::Variable),
+        )),
+        lit(Token::Plus),
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConstraintKind {
+    Subrow,
+    Equals,
+}
+
+// Returns a parser for a type constraint.
+fn constraint<'a, 's: 'a>(
+    arena: &'a Bump,
+) -> impl Clone + Parser<Token<'s>, Constraint<'a, 's>, Error = ParseErrors<'s>> {
+    let row = row_expr(arena);
+    row.clone()
+        .then(choice((
+            lit(Token::LAngle).map(|s| s.of(ConstraintKind::Subrow)),
+            lit(Token::Equal).map(|s| s.of(ConstraintKind::Equals)),
+        )))
+        .then(row)
+        .map(|((lhs, sep), rhs)| match sep.value {
+            ConstraintKind::Subrow => Constraint::Subrow {
+                lhs,
+                lt: sep.span(),
+                rhs,
+            },
+            ConstraintKind::Equals => Constraint::Equals {
+                lhs,
+                eq: sep.span(),
+                rhs,
+            },
+        })
+}
+
+/// Returns a parser for a scheme (polymorphic type).
+pub fn scheme<'a, 's: 'a>(
+    arena: &'a Bump,
+) -> impl Clone + Parser<Token<'s>, Scheme<'a, 's>, Error = ParseErrors<'s>> {
+    option(
+        separated(arena, constraint(arena), lit(Token::Comma))
+            .then(lit(Token::BigArrow))
+            .map(|(constraints, arrow)| Qualification { constraints, arrow }),
+    )
+    .then(type_(arena))
+    .map(|(qualification, type_)| Scheme {
+        qualification,
+        type_,
     })
 }
 
@@ -414,15 +485,15 @@ where
 #[cfg(test)]
 mod tests {
     use aiahr_core::{
-        cst::{Item, Term, Type},
-        field, id_field, item_term,
+        cst::{Item, Scheme, Term, Type},
+        ct_equals, ct_subrow, field, id_field, item_term,
         memory::{
             arena::BumpArena,
             intern::{InternerByRef, SyncInterner},
         },
-        pat_prod, pat_sum, pat_var, row_concrete, row_mixed, row_variable, term_abs, term_app,
-        term_dot, term_local, term_match, term_paren, term_prod, term_sum, term_sym, term_with,
-        type_func, type_named, type_par, type_prod, type_sum,
+        pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed, row_variable, rwx_concrete,
+        rwx_variable, term_abs, term_app, term_dot, term_local, term_match, term_paren, term_prod,
+        term_sum, term_sym, term_with, type_func, type_named, type_par, type_prod, type_sum,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
@@ -430,7 +501,7 @@ mod tests {
 
     use crate::lexer::aiahr_lexer;
 
-    use super::{aiahr_parser, term, to_stream, type_};
+    use super::{aiahr_parser, scheme, term, to_stream, type_};
 
     fn parse_type_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
         arena: &'a Bump,
@@ -439,6 +510,18 @@ mod tests {
     ) -> &'a Type<'a, 's> {
         let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
         type_(arena)
+            .then_ignore(end())
+            .parse(to_stream(tokens, eoi))
+            .unwrap()
+    }
+
+    fn parse_scheme_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
+        arena: &'a Bump,
+        interner: &'s S,
+        input: &str,
+    ) -> Scheme<'a, 's> {
+        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
+        scheme(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
@@ -557,6 +640,96 @@ mod tests {
                     ("C")
                 ))
             )
+        );
+    }
+
+    #[test]
+    fn test_unqualified_schemes() {
+        assert_matches!(
+            parse_scheme_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x: A} -> <f: B -> A | C>"
+            ),
+            Scheme {
+                qualification: None,
+                type_: type_func!(
+                    type_prod!(row_concrete!(id_field!("x", type_named!("A")))),
+                    type_sum!(row_mixed!(
+                        (id_field!("f", type_func!(type_named!("B"), type_named!("A")))),
+                        ("C")
+                    ))
+                )
+            }
+        );
+    }
+
+    #[test]
+    fn test_subrow_schemes() {
+        assert_matches!(
+            parse_scheme_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "(x: A) < Z => {Z} -> A"
+            ),
+            Scheme {
+                qualification: Some(qual!(ct_subrow!(
+                    (rwx_concrete!(id_field!("x", type_named!("A"))),),
+                    (rwx_variable!("Z"),)
+                ))),
+                type_: type_func!(type_prod!(row_variable!("Z")), type_named!("A"))
+            }
+        );
+    }
+
+    #[test]
+    fn test_equals_schemes() {
+        assert_matches!(
+            parse_scheme_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "X + (y: A) = Z => {X} -> A -> {Z}"
+            ),
+            Scheme {
+                qualification: Some(qual!(ct_equals!(
+                    (
+                        rwx_variable!("X"),
+                        rwx_concrete!(id_field!("y", type_named!("A")))
+                    ),
+                    (rwx_variable!("Z"),)
+                ))),
+                type_: type_func!(
+                    type_prod!(row_variable!("X")),
+                    type_func!(type_named!("A"), type_prod!(row_variable!("Z")))
+                ),
+            }
+        );
+    }
+
+    #[test]
+    fn test_mixed_schemes() {
+        assert_matches!(
+            parse_scheme_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "X + Y = Z, (a: A) < Z => {X} -> {Y} -> A"
+            ),
+            Scheme {
+                qualification: Some(qual!(
+                    ct_equals!(
+                        (rwx_variable!("X"), rwx_variable!("Y")),
+                        (rwx_variable!("Z"),)
+                    ),
+                    ct_subrow!(
+                        (rwx_concrete!(id_field!("a", type_named!("A"))),),
+                        (rwx_variable!("Z"),)
+                    )
+                )),
+                type_: type_func!(
+                    type_prod!(row_variable!("X")),
+                    type_func!(type_prod!(row_variable!("Y")), type_named!("A"))
+                ),
+            }
         );
     }
 
