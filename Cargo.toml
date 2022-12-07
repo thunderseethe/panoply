@@ -3,4 +3,5 @@ members = [
     "analysis",
     "core",
     "parser",
+    "desugar",
 ]

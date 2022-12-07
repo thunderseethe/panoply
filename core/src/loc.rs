@@ -4,7 +4,7 @@ use std::{marker::PhantomData, str::CharIndices};
 ///
 /// All source texts have a "one past the end" location which corresponds to a cursor after the last
 /// character.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Loc {
     /// A 0-indexed byte offset into the source text. Must point to the start of a valid unicode
     /// character (i.e., scalar value).

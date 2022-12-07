@@ -9,6 +9,7 @@ edition = "2021"
 bumpalo = "3.10"
 bumpalo-herd = "0.1.2"
 chumsky = "0.8"
+rustc-hash = "1.1.0"
 
 [dependencies.dashmap]
 version = "5.4"

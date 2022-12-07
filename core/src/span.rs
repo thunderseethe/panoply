@@ -3,7 +3,7 @@ use std::{fmt::Debug, ops::Range};
 use crate::loc::Loc;
 
 /// A span of a source text.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: Loc,
     pub end: Loc,
