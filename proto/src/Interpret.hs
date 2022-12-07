@@ -50,8 +50,8 @@ prettyVal val =
   case val of
     ValLit lit -> annotate Literal (pretty lit)
     ValLam env x body 
-      | Map.null env -> prettyCore (Lam x body)
-      | otherwise -> annotate Keyword "fun" <+> prettyClosureEnv env <+> align (group (prettyVar x <> line <> prettyCore body)) --group (align (prettyClosureEnv env <+> Prettyprinter.parens (prettyCore (Lam x body))))
+      | Map.null env -> prettyCoreUntyped (Lam x body)
+      | otherwise -> annotate Keyword "fun" <+> prettyClosureEnv env <+> align (group (prettyVar x <> line <> prettyCoreUntyped body)) --group (align (prettyClosureEnv env <+> Prettyprinter.parens (prettyCore (Lam x body))))
     ValStruct vals
       | null vals -> annotate Literal "{}"
       | otherwise -> group (align ("{" <+> vsep (punctuate "," (prettyVal <$> vals)) <> line <> "}"))
@@ -97,17 +97,17 @@ prettyFrame = foldl wrapEvalCtx (annotate Literal "☐")
   where
     wrapEvalCtx doc eval_ctx =
       case eval_ctx of
-        FnAppFrame core -> group . align . parens $ doc <> nest 4 (line <> prettyCore core)
+        FnAppFrame core -> group . align . parens $ doc <> nest 4 (line <> prettyCoreUntyped core)
         ArgAppFrame val -> group . align . parens $ prettyVal val <> nest 4 (line <> doc)
-        EvalPromptFrame core -> "Prompt" <+> record [("prompt_marker", doc), ("prompt_body", prettyCore core)]
+        EvalPromptFrame core -> "Prompt" <+> record [("prompt_marker", doc), ("prompt_body", prettyCoreUntyped core)]
         PromptYieldFrame val -> "Yield" <+> record [("yield_marker", doc), ("yield_value", prettyVal val)]
-        ValueYieldFrame core -> "Yield" <+> record [("yield_marker", prettyCore core), ("yield_value", doc)]
+        ValueYieldFrame core -> "Yield" <+> record [("yield_marker", prettyCoreUntyped core), ("yield_value", doc)]
         ProductFrame vals cores ->
-          let cs = prettyCore <$> cores
+          let cs = prettyCoreUntyped <$> cores
               vs = prettyVal <$> vals []
            in braces . group . align . vsep$ punctuate comma (vs ++ (doc : cs))
         ProjectFrame indx -> doc <> brackets (annotate Literal $ pretty indx)
-        CaseScrutineeFrame branches -> "Case" <+> doc <+> group (align (list (toList (prettyCore <$> branches))))
+        CaseScrutineeFrame branches -> "Case" <+> doc <+> group (align (list (toList (prettyCoreUntyped <$> branches))))
         CaseBranchFrame scrutinee -> group . align . parens $ doc <> nest 4 (line <> prettyVal scrutinee)
         TagFrame tag -> angles (annotate Literal $ pretty tag) <> parens doc
 
@@ -117,18 +117,18 @@ prettyCurFrame = group . align . vsep . punctuate " · " . fmap prettyEvalCtx . 
     box = annotate Literal "☐"
     prettyEvalCtx eval_ctx =
       case eval_ctx of
-        FnAppFrame core -> group . align . parens $ box <> nest 4 (line <> prettyCore core)
+        FnAppFrame core -> group . align . parens $ box <> nest 4 (line <> prettyCoreUntyped core)
         ArgAppFrame val -> group . align . parens $ prettyVal val <> nest 4 (line <> box)
-        EvalPromptFrame core -> "Prompt" <+> record [("prompt_marker", box), ("prompt_body", prettyCore core)]
+        EvalPromptFrame core -> "Prompt" <+> record [("prompt_marker", box), ("prompt_body", prettyCoreUntyped core)]
         PromptYieldFrame val -> "Yield" <+> record [("yield_marker", box), ("yield_value", prettyVal val)]
-        ValueYieldFrame core -> "Yield" <+> record [("yield_marker", prettyCore core), ("yield_value", box)]
+        ValueYieldFrame core -> "Yield" <+> record [("yield_marker", prettyCoreUntyped core), ("yield_value", box)]
         ProductFrame vals cores ->
-          let cs = prettyCore <$> cores
+          let cs = prettyCoreUntyped <$> cores
               vs = prettyVal <$> vals []
 
            in trace (show vs) $ braces . group . align . vsep$ punctuate comma (vs ++ (box : cs))
         ProjectFrame indx -> box <> brackets (annotate Literal $ pretty indx)
-        CaseScrutineeFrame branches -> "Case" <+> box <+> group (align (list (toList (prettyCore <$> branches))))
+        CaseScrutineeFrame branches -> "Case" <+> box <+> group (align (list (toList (prettyCoreUntyped <$> branches))))
         CaseBranchFrame scrutinee -> group . align . parens $ box <> nest 4 (line <> prettyVal scrutinee)
         TagFrame tag -> angles (annotate Literal $ pretty tag) <> parens box
 
@@ -220,7 +220,7 @@ data Res
 
 prettyRes :: Res -> Doc SyntaxHighlight
 prettyRes (Done val) = prettyVal val
-prettyRes (Step core) = prettyCore core
+prettyRes (Step core) = prettyCoreUntyped core
 
 findProductFocus :: (Has (State Machine) sig m) => [Core] -> m (DiffList Value, [Core])
 findProductFocus = go id
@@ -241,8 +241,7 @@ eval (Step core) =
       env <- gets (view cur_env)
       case env !? x of
         Just val -> unwind val
-        Nothing -> lookup_in_stack x--error ("Stuck: Undefined var " ++ show x)
-    -- These are actually wrong, we need to try and "pop" the stack whenever we reach this state
+        Nothing -> lookup_in_stack x
     Lit lit -> unwind (ValLit lit)
     Lam x body -> do
       let unbound = coreUnboundVars (Lam x body)
@@ -349,6 +348,7 @@ eval (Step core) =
             PromptYieldFrame fn -> do
               let prompt = expectPrompt "Stuck: non-prompt passed to Yield as marker" val
               new_stack_frame
+              trace ("Split on Prompt: " ++ show prompt) $ return ()
               (sub_stack, new_stack) <- gets (splitStack prompt . view stack)
               --_ <- trace ("sub stack: " ++ show sub_stack) $ return ()
               case fn of

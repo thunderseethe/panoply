@@ -24,6 +24,7 @@ import Data.Bifunctor (Bifunctor(first))
 import Data.Foldable
 import Data.Text (Text, pack)
 import Debug.Trace
+import qualified Data.Map.Merge.Strict as Map
 
 data Literal = I Int
   deriving (Show, Read)
@@ -369,17 +370,27 @@ prjL outRow inRow = Lam inVar out
       idxs -> Product (fmap (\i -> indx' i (Core.var inVar)) idxs)
   indx' = indx inRow
   inVar = CoreV (V (-5)) inTy
-  inTy = fromType (ProdTy (RowTy inRow))
+  inTy = fromType (unwrapSingleton inRow)
 
 concat :: Row -> Row -> Core
 concat left right = Lam m $ Lam n prod
  where
+  leftTy = fromType (unwrapSingleton left)
+  rightTy = fromType (unwrapSingleton right)
   m = CoreV (V (-5)) leftTy
   n = CoreV (V (-6)) rightTy
   prod = if length splat == 1 then head splat else Product splat
-  splat = fmap (\i -> indx left i (Core.var m)) [0 .. (Map.size left - 1)] ++ fmap (\i -> indx right i (Core.var n)) [0 .. (Map.size right - 1)]
-  leftTy = fromType (unwrapSingleton left)
-  rightTy = fromType (unwrapSingleton right)
+  splat = Map.elems (calcOutputMap left right) --fmap (\i -> indx left i (Core.var m)) [0 .. (Map.size left - 1)] ++ fmap (\i -> indx right i (Core.var n)) [0 .. (Map.size right - 1)]
+  calcOutputMap left right = 
+    Map.merge 
+      (Map.mapMissing (\_ (i, _) -> indx left i (Core.var m))) 
+      (Map.mapMissing (\_ (i, _) -> indx right i (Core.var n)))
+      -- Priortise right key when overlap occurs
+      (Map.zipWithMatched (\_ _ (right_i, _) -> indx right right_i (Core.var n)))
+      (enumerateMap left) (enumerateMap right)
+  
+enumerateMap :: Map.Map k a -> Map.Map k (Int, a)
+enumerateMap = snd . Map.mapAccum (\indx val -> (indx + 1, (indx, val))) 0
 
 injL :: HasCallStack => Row -> Row -> Core
 injL inRow outRow = Lam m out

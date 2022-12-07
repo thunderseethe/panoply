@@ -27,12 +27,11 @@ stepsProg prog = prettySteps core
     core = Core.simplify (Core.App c (Core.Product [])) 
     (_, c:_, _) = infer prog
 
-core = compileSingProg exampleMVPMultiEffect --exampleMultipleEffects --exampleProperState
+core = compileSingProg exampleMVPMultiEffect
 
-compileSingProg prog = trace (show (t ^. meta . eff)) $ Core.simplify c
+compileSingProg prog = Core.simplify c
   where
-    -- C'mon now
-    (Prog [Def _ t] _, c:_, _) = infer prog
+    (_, c:_, _) = infer prog
 
 
 prettyCheckAndExec = Data.Text.IO.putStrLn . Pretty.prettyRender . prettyVal . checkAndExec

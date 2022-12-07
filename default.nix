@@ -5,7 +5,10 @@ pkgs.mkShell {
     cargo
     cargo-expand
     glibc
+    rustfmt
     rust-analyzer
     rustc
+    clippy
   ];
+  RUST_BACKTRACE = 1;
 } 
