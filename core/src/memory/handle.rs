@@ -40,9 +40,9 @@ impl<T: ?Sized> Pointer for Arc<T> {
 ///
 /// In particular, this means that:
 ///
-///     * `Debug` only shows the pointer value
-///     * `Eq`, `Ord`, `PartialEq`, and `PartialOrd` compare pointer values
-///     * `Hash` is computed using the pointer value
+/// * `Debug` only shows the pointer value
+/// * `Eq`, `Ord`, `PartialEq`, and `PartialOrd` compare pointer values
+/// * `Hash` is computed using the pointer value
 ///
 /// These are useful semantics for, e.g., representing variable references. The same variable name
 /// may be bound multiple times in disjoint expressions, but each reference refers to a specific
