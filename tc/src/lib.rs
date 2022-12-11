@@ -3,7 +3,7 @@ use std::{collections::hash_map::Entry, fmt::Debug, ops::Index};
 use aiahr_core::{
     ast::{Ast, Term, Term::*},
     define_ids,
-    id::{Id, VarId},
+    id::{Id, IdGen, VarId},
 };
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
@@ -31,45 +31,75 @@ impl AsRef<TcUnifierVar> for TcUnifierVar {
     }
 }
 
-#[derive(Default, PartialEq, Eq)]
-struct UnifierSubst<'ty> {
-    unifiers: Vec<Option<&'ty UnifierType<'ty>>>, //Vec<Option<&'ty UnifierType<'ty>>>,
+trait InsertType<'ty> {
+    fn insert(&mut self, id: TcUnifierVar, ty: &'ty UnifierType<'ty>);
 }
-impl<'ty> Debug for UnifierSubst<'ty> {
+
+/// Acts as a dense map from TcUnifierVar to T.
+/// Abstracts over the two kinds of substitutions we have. UnifierSubst which may not have types
+/// for all unifiers, and GeneralizedSubst which must have types for all unifiers.
+#[derive(PartialEq, Eq, Clone)]
+struct SubstInternal<T> {
+    dense_map: Vec<T>,
+}
+impl<T> Default for SubstInternal<T> {
+    fn default() -> Self {
+        SubstInternal { dense_map: vec![] }
+    }
+}
+impl<T: Debug> Debug for SubstInternal<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_map()
             .entries(
-                self.unifiers
+                self.dense_map
                     .iter()
                     .enumerate()
-                    .map(|(i, ty)| (TcUnifierVar(i), ty)),
+                    .map(|(raw, ty)| (TcUnifierVar::from_raw(raw), ty)),
             )
             .finish()
+    }
+}
+impl<T> Index<TcUnifierVar> for SubstInternal<T> {
+    type Output = T;
+
+    fn index(&self, index: TcUnifierVar) -> &Self::Output {
+        &self.dense_map[index.0]
+    }
+}
+
+/// An internal substituion, MAY have types for all unifiers
+type UnifierSubst<'ty> = SubstInternal<Option<&'ty UnifierType<'ty>>>;
+
+/// A completed substitution, MUST have types for all unifiers.
+/// This is the substitution returned from `solve_constraints`.
+type GeneralizedSubst<'ty> = SubstInternal<&'ty UnifierType<'ty>>;
+
+impl<'ty> InsertType<'ty> for UnifierSubst<'ty> {
+    fn insert(&mut self, id: TcUnifierVar, ty: &'ty UnifierType<'ty>) {
+        let indx = id.0;
+        if indx >= self.dense_map.len() {
+            self.dense_map
+                .extend(std::iter::repeat(None).take(indx - self.dense_map.len() + 1))
+        }
+        self.dense_map[indx].replace(ty);
+    }
+}
+impl<'ty> InsertType<'ty> for GeneralizedSubst<'ty> {
+    // For generalized we just panic if you try to set a unifier that doesn't exist yet
+    fn insert(&mut self, id: TcUnifierVar, ty: &'ty UnifierType<'ty>) {
+        self.dense_map[id.0] = ty;
     }
 }
 
 impl<'ty> UnifierSubst<'ty> {
     fn fresh_unifier(&mut self) -> TcUnifierVar {
-        let raw = self.unifiers.len();
-        self.unifiers.push(None);
+        let raw = self.dense_map.len();
+        self.dense_map.push(None);
         TcUnifierVar::from_raw(raw)
     }
 
     fn get(&self, unifier_var: TcUnifierVar) -> Option<&'ty UnifierType<'ty>> {
-        self.unifiers.get(unifier_var.0).and_then(|ty| ty.clone())
-    }
-
-    fn insert<Var: AsRef<TcUnifierVar>>(
-        &mut self,
-        unifier_var: Var,
-        ty: &'ty UnifierType<'ty>,
-    ) -> Option<&'ty UnifierType<'ty>> {
-        let indx = unifier_var.as_ref().0;
-        if indx >= self.unifiers.len() {
-            self.unifiers
-                .extend(std::iter::repeat(None).take(indx - self.unifiers.len() + 1))
-        }
-        self.unifiers[indx].replace(ty)
+        self.dense_map.get(unifier_var.0).and_then(|ty| ty.clone())
     }
 
     fn iter<'a>(&'a self) -> impl Iterator<Item = (TcUnifierVar, &'ty UnifierType<'ty>)> + 'a {
@@ -79,7 +109,7 @@ impl<'ty> UnifierSubst<'ty> {
     fn raw_iter<'a>(
         &'a self,
     ) -> impl Iterator<Item = (TcUnifierVar, Option<&'ty UnifierType<'ty>>)> + 'a {
-        self.unifiers
+        self.dense_map
             .iter()
             .enumerate()
             .map(|(i, opt)| (TcUnifierVar::from_raw(i), opt.clone()))
@@ -88,38 +118,31 @@ impl<'ty> UnifierSubst<'ty> {
     fn iter_mut<'a>(
         &'a mut self,
     ) -> impl Iterator<Item = (TcUnifierVar, &mut &'ty UnifierType<'ty>)> {
-        self.unifiers
+        self.dense_map
             .iter_mut()
             .enumerate()
             .filter_map(|(i, opt_ty)| opt_ty.as_mut().map(|ty| (TcUnifierVar::from_raw(i), ty)))
     }
-}
-
-impl<'ty> FromIterator<&'ty UnifierType<'ty>> for UnifierSubst<'ty> {
-    fn from_iter<T: IntoIterator<Item = &'ty UnifierType<'ty>>>(iter: T) -> Self {
-        Self::from_iter(iter.into_iter().map(Some))
+    fn raw_iter_mut<'a>(
+        &'a mut self,
+    ) -> impl Iterator<Item = (TcUnifierVar, &mut Option<&'ty UnifierType<'ty>>)> {
+        self.dense_map
+            .iter_mut()
+            .enumerate()
+            .map(|(id, opt_ty)| (TcUnifierVar::from_raw(id), opt_ty))
     }
 }
-impl<'ty> FromIterator<Option<&'ty UnifierType<'ty>>> for UnifierSubst<'ty> {
-    fn from_iter<T: IntoIterator<Item = Option<&'ty UnifierType<'ty>>>>(iter: T) -> Self {
+
+impl<T> FromIterator<T> for SubstInternal<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         Self {
-            unifiers: iter.into_iter().collect::<Vec<_>>(),
+            dense_map: iter.into_iter().collect(),
         }
     }
 }
-
-impl<'ty> Index<&TcUnifierVar> for UnifierSubst<'ty> {
-    type Output = Option<&'ty UnifierType<'ty>>;
-
-    fn index(&self, index: &TcUnifierVar) -> &Self::Output {
-        &self.unifiers[index.0]
-    }
-}
-impl<'ty> Index<TcUnifierVar> for UnifierSubst<'ty> {
-    type Output = Option<&'ty UnifierType<'ty>>;
-
-    fn index(&self, index: TcUnifierVar) -> &Self::Output {
-        &self.unifiers[index.0]
+impl<'ty> FromIterator<&'ty UnifierType<'ty>> for UnifierSubst<'ty> {
+    fn from_iter<T: IntoIterator<Item = &'ty UnifierType<'ty>>>(iter: T) -> Self {
+        Self::from_iter(iter.into_iter().map(Some))
     }
 }
 
@@ -180,7 +203,7 @@ impl<'ty> UnifierType<'ty> {
     fn zonk<'new_ty>(
         &self,
         ty_arena: &'new_ty Bump,
-        subst: &UnifierSubst<'ty>,
+        subst: &GeneralizedSubst<'ty>,
     ) -> &'new_ty Type<'new_ty, TcVar> {
         // Because we're changing types we basically have to re-alloc every node, so the signature
         // provides the ability to do that in a fresh arena if desired
@@ -188,10 +211,7 @@ impl<'ty> UnifierType<'ty> {
         match self {
             ErrorTy => ty_arena.alloc(ErrorTy),
             IntTy => ty_arena.alloc(IntTy),
-            VarTy(UnifierTypeId::Unifier(uni)) => subst
-                .get(*uni)
-                .map(|ty| ty.zonk(ty_arena, subst))
-                .expect("A unifiers was not set to a type before zonking"),
+            VarTy(UnifierTypeId::Unifier(uni)) => subst[*uni].zonk(ty_arena, subst),
             VarTy(UnifierTypeId::Var(var)) => ty_arena.alloc(VarTy(*var)),
             FunTy(arg, ret) => {
                 ty_arena.alloc(FunTy(arg.zonk(ty_arena, subst), ret.zonk(ty_arena, subst)))
@@ -225,6 +245,7 @@ use Type::*;
 type UnifierType<'ty> = Type<'ty, UnifierTypeId>;
 type UnifierVarId<'ty> = TypedVarId<'ty, UnifierTypeId>;
 
+/// A variable marked with it's type
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct TypedVarId<'ty, TV> {
     var: VarId,
@@ -240,6 +261,8 @@ pub enum Constraint<'ty> {
     Eq(&'ty UnifierType<'ty>, &'ty UnifierType<'ty>),
 }
 
+/// A canonical constraint
+/// A constraint that is in a standard form: type var ~ type
 #[derive(Debug, PartialEq, Eq)]
 enum CanonicalConstraint<'ty> {
     CanonEq {
@@ -248,9 +271,13 @@ enum CanonicalConstraint<'ty> {
     },
 }
 
+/// Result of canoncilization
 enum CanonResult<'ty> {
+    /// A canonical constraint
     Canon(CanonicalConstraint<'ty>),
+    /// More work is needed to canonicalize
     Work(Vec<Constraint<'ty>>),
+    /// Could not canoncicalize, mark as residual
     Residue(Constraint<'ty>),
 }
 
@@ -300,6 +327,7 @@ impl<'ty> Constraint<'ty> {
     }
 }
 
+/// A multiset of canoncial constraints
 type CanonConstraintBag<'ty> = FxHashMap<UnifierTypeId, Vec<&'ty UnifierType<'ty>>>;
 
 /// In place merge the right canon bag into the left canon bag
@@ -308,16 +336,6 @@ fn merge_left<'ty>(canon: &mut CanonConstraintBag<'ty>, new_canon: CanonConstrai
         canon.entry(tvar).or_default().extend(tys);
     }
 }
-
-//type Subst<'ty> = FxHashMap<UnifierTypeId, &'ty UnifierType<'ty>>;
-
-/*macro_rules! subst {
-    ($($id:expr => $ty:expr),*) => {{
-        let mut map = UnifierSubst::;
-        $(map.insert($id, $ty);)*
-        map
-    }};
-}*/
 
 /// Canonical constraints
 fn canonical_constraints<'ty>(
@@ -431,6 +449,7 @@ trait Substitutable<'ty> {
     type Alloc;
     /// The output type after our substitution is applied
     type Output;
+    type Subst: Default + InsertType<'ty>;
 
     /// A variant of apply that only performs one substitution.
     /// Split out as a separate method to allow for more performant implementations.
@@ -440,20 +459,21 @@ trait Substitutable<'ty> {
         key: TcUnifierVar,
         val: &'ty UnifierType<'ty>,
     ) -> Self::Output {
-        let mut unifier_subst = UnifierSubst::default();
+        let mut unifier_subst = Self::Subst::default();
         unifier_subst.insert(key, val);
         self.apply(ty_arena, &unifier_subst)
     }
 
     /// Produce a new Output where all type vars that appear in self have been replaced by their
     /// corresponding values in subst.
-    fn apply(&self, alloc: Self::Alloc, subst: &UnifierSubst<'ty>) -> Self::Output;
+    fn apply(&self, alloc: Self::Alloc, subst: &Self::Subst) -> Self::Output;
 }
 
 /// Replace all occurrences of type variables in self by their corresponding type in subst.
 impl<'ty> Substitutable<'ty> for &'ty UnifierType<'ty> {
     type Alloc = &'ty Bump;
     type Output = &'ty UnifierType<'ty>;
+    type Subst = UnifierSubst<'ty>;
 
     fn apply_oneshot(
         &self,
@@ -490,11 +510,12 @@ impl<'ty> Substitutable<'ty> for &'ty UnifierType<'ty> {
 impl<'ast, 'ty> Substitutable<'ty> for &'ast Term<'ast, UnifierVarId<'ty>> {
     type Alloc = (&'ast Bump, &'ty Bump);
     type Output = &'ast Term<'ast, TypedVarId<'ty, TcVar>>;
+    type Subst = GeneralizedSubst<'ty>;
 
     fn apply(
         &self,
         alloc @ (ast_arena, ty_arena): Self::Alloc,
-        subst: &UnifierSubst<'ty>,
+        subst: &GeneralizedSubst<'ty>,
     ) -> Self::Output {
         // TODO: optimize this to reuse existing allocation if we don't apply a substitution to a
         // term. At the moment this reallocs the entire term which is inefficient
@@ -569,6 +590,8 @@ struct TypeChecker<'ast, 'ty> {
     /// Constraints generated during intial stage of type checking,
     /// to be solved later.
     constraints: Vec<Constraint<'ty>>,
+    /// Supply of fresh type variables for when we generalize our term.
+    type_var_supply: IdGen<TcVar, ()>,
 }
 
 /// Solve constraints generated from Ast during first phase of type checking.
@@ -681,12 +704,11 @@ impl<'ty> ConstraintSolver<'ty> {
             error_ty: &'ty UnifierType<'ty>,
             canon: &mut CanonConstraintBag<'ty>,
             uv: TcUnifierVar,
-        ) -> Result<&'ty UnifierType<'ty>, TypeCheckError<'ty>> {
+        ) -> Result<Option<&'ty UnifierType<'ty>>, TypeCheckError<'ty>> {
             match canon.get(&(uv.into())) {
                 Some(tys) => {
                     if tys.is_empty() {
-                        canon.insert(uv.into(), vec![error_ty]);
-                        return Ok(error_ty);
+                        return Ok(None);
                     }
                     if tys.len() > 1 {
                         return Err(TypeCheckError::UnresolvedTypes(uv, tys.clone()));
@@ -695,17 +717,16 @@ impl<'ty> ConstraintSolver<'ty> {
                         // If our var is mapped to another var chase down that variable,
                         // and save the result for this variable as well.
                         VarTy(UnifierTypeId::Unifier(var)) => {
-                            let ty = resolve_var(error_ty, canon, *var)?;
-                            canon.insert(uv.into(), vec![ty]);
-                            Ok(ty)
+                            let opt_ty = resolve_var(error_ty, canon, *var)?;
+                            if let Some(ty) = opt_ty {
+                                canon.insert(uv.into(), vec![ty]);
+                            }
+                            Ok(opt_ty)
                         }
-                        ty => Ok(ty),
+                        ty => Ok(Some(ty)),
                     }
                 }
-                None => {
-                    canon.insert(uv.into(), vec![error_ty]);
-                    Ok(error_ty)
-                }
+                None => Ok(None),
             }
         }
         let mut subst = UnifierSubst::default();
@@ -719,7 +740,9 @@ impl<'ty> ConstraintSolver<'ty> {
             .collect::<Vec<_>>();
 
         for key in keys {
-            subst.insert(key, resolve_var(self.error_ty, &mut canon, key)?);
+            if let Some(ty) = resolve_var(self.error_ty, &mut canon, key)? {
+                subst.insert(key, ty);
+            }
         }
         Ok(subst)
     }
@@ -735,6 +758,7 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
             errors: vec![],
             unifiers: UnifierSubst::default(),
             constraints: vec![],
+            type_var_supply: IdGen::new(),
         }
     }
 
@@ -761,17 +785,17 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
             // If we're going to infer and equate a type to unifier, we can instead set that
             // unifier equal to the inferred type directly.
             (VarTy(UnifierTypeId::Unifier(unifier_var)), other_ty) => {
-                if let Some(ty) = self.unifiers[unifier_var] {
+                if let Some(ty) = self.unifiers.get(*unifier_var) {
                     self.constraints.push(Constraint::Eq(ty, other_ty));
                 } else {
-                    self.unifiers.insert(unifier_var, other_ty);
+                    self.unifiers.insert(*unifier_var, other_ty);
                 }
             }
             (ty, VarTy(UnifierTypeId::Unifier(unifier_var))) => {
-                if let Some(other_ty) = self.unifiers[unifier_var] {
+                if let Some(other_ty) = self.unifiers.get(*unifier_var) {
                     self.constraints.push(Constraint::Eq(ty, other_ty));
                 } else {
-                    self.unifiers.insert(unifier_var, ty);
+                    self.unifiers.insert(*unifier_var, ty);
                 }
             }
             (ty, other_ty) => {
@@ -894,7 +918,7 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
         }
     }
 
-    fn solve_constraints(&mut self) -> UnifierSubst<'ty> {
+    fn solve_constraints(&mut self) -> GeneralizedSubst<'ty> {
         let solver: ConstraintSolver<'ty> = ConstraintSolver::new(self.ty_arena);
 
         // TODO: We need to represent our unifiers as input constraints
@@ -913,17 +937,35 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
             .collect::<Vec<_>>();
         let (subst, residual, errors) = solver.solve(constrs.into_iter());
 
-        // Update any unifiers that got solved during the process
-        for (_, ty) in self.unifiers.iter_mut() {
-            //unifier.map(|ty| ty.apply(self.ty_arena, &subst));
-            *ty = ty.apply(self.ty_arena, &subst);
+        // Update unifiers that got solved during the process, generalize any unifiers that are free by introducing fresh type variables
+        for (uv, opt_ty) in self.unifiers.raw_iter_mut() {
+            *opt_ty = Some(
+                opt_ty
+                    .map(|ty| ty.apply(self.ty_arena, &subst))
+                    .or(subst.get(uv))
+                    .unwrap_or_else(|| {
+                        let ty_var = self.type_var_supply.push(());
+                        self.ty_arena.alloc(VarTy(UnifierTypeId::Var(ty_var)))
+                    }),
+            )
         }
         self.errors.extend(errors);
         if !residual.is_empty() {
             self.errors
                 .push(TypeCheckError::UnsolvedConstraints(residual));
         }
-        subst
+
+        // During generalization we store all unifiers in self.unifiers. So we can construct a full
+        // generalized subst by assigning a type to each of them
+        GeneralizedSubst::from_iter(self.unifiers.raw_iter().map(|(uv, opt_ty)| {
+            opt_ty
+                .map(|ty| ty.apply(self.ty_arena, &subst))
+                .or(subst.get(uv))
+                .unwrap_or_else(|| {
+                    let ty_var = self.type_var_supply.push(());
+                    self.ty_arena.alloc(VarTy(UnifierTypeId::Var(ty_var)))
+                })
+        }))
     }
 }
 
@@ -941,8 +983,12 @@ pub fn tc_term<'ast, 'ty>(
     Vec<TypeCheckError<'ty>>,
 ) {
     let mut tc = TypeChecker::new(ast_arena, ty_arena);
+
     let (typed_term, ty) = tc.infer(ast.root());
     let subst = tc.solve_constraints();
+
+    println!("{:?}", subst);
+
     let (typed_term, ty) = (
         typed_term.apply((ast_arena, ty_arena), &subst),
         ty.zonk(ty_arena, &subst),
@@ -971,7 +1017,7 @@ mod tests {
         }};
     }
 
-    //#[test]
+    #[test]
     fn test_tc_abs() {
         let arena = Bump::new();
         let untyped_ast = Ast::new(
@@ -988,22 +1034,26 @@ mod tests {
         let (typed_ast, ty, errors) = tc_term(&arena, &arena, untyped_ast);
 
         assert_eq!(errors, vec![], "no type checking errors");
-        assert_eq!(ty, &FunTy(&IntTy, &IntTy), "inferred types match");
+        assert_eq!(
+            ty,
+            &FunTy(&VarTy(TcVar(0)), &FunTy(&VarTy(TcVar(1)), &VarTy(TcVar(0)))),
+            "inferred types match"
+        );
         assert_eq!(
             typed_ast.root(),
             &Abstraction {
                 arg: TypedVarId {
                     var: VarId(0),
-                    ty: &IntTy
+                    ty: &VarTy(TcVar(0))
                 },
                 body: &Abstraction {
                     arg: TypedVarId {
                         var: VarId(1),
-                        ty: &IntTy
+                        ty: &VarTy(TcVar(1))
                     },
                     body: &Variable(TypedVarId {
                         var: VarId(0),
-                        ty: &IntTy
+                        ty: &VarTy(TcVar(0)),
                     })
                 }
             },

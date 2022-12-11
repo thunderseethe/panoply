@@ -17,6 +17,10 @@ impl<'a, Var> Ast<'a, Var> {
     pub fn root(&self) -> &'a Term<'a, Var> {
         self.tree
     }
+    
+    pub fn vars(&self) -> impl Iterator<Item = &'a Var> {
+        self.tree.vars()
+    }
 }
 
 impl<'a, Var: Eq + std::hash::Hash> Ast<'a, Var> {
@@ -38,4 +42,27 @@ pub enum Term<'a, Var> {
         arg: &'a Term<'a, Var>,
     },
     Variable(Var),
+}
+
+impl<'a, Var> Term<'a, Var> {
+    fn vars(&'a self) -> impl Iterator<Item = &'a Var> {
+        TermVars { stack: vec![self] }
+    }
+}
+
+struct TermVars<'a, Var> {
+    stack: Vec<&'a Term<'a, Var>>,
+}
+impl<'a, Var> Iterator for TermVars<'a, Var> {
+    type Item = &'a Var;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stack.pop().and_then(|term| {
+            match term {
+                Term::Abstraction { arg, body } => { self.stack.push(body); Some(arg) },
+                Term::Application { func, arg } => { self.stack.extend([func, arg]); self.next() },
+                Term::Variable(var) => Some(var),
+            }
+        })
+    }
 }
