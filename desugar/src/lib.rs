@@ -12,12 +12,12 @@ use rustc_hash::FxHashMap;
 /// Desugar a NST into an AST.
 /// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
 /// the NST.
-pub fn desugar<'a, 's, 't>(arena: &'t Bump, nst: &'a nst::Term<'a, 's>) -> Ast<'t, VarId> {
-    fn ds<'a, 's, 't>(
-        arena: &'t Bump,
-        spans: &mut FxHashMap<&'t ast::Term<'t, VarId>, Span>,
-        nst: &'a nst::Term<'a, 's>,
-    ) -> &'t ast::Term<'t, VarId> {
+pub fn desugar<'n, 's, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> Ast<'a, VarId> {
+    fn ds<'n, 's, 'a>(
+        arena: &'a Bump,
+        spans: &mut FxHashMap<&'a ast::Term<'a, VarId>, Span>,
+        nst: &'n nst::Term<'n, 's>,
+    ) -> &'a ast::Term<'a, VarId> {
         // TODO: Finish this impl
         // This is a stub of functionality right now. Mostly to act as a gate to what can reach the
         // type checker. Anything not implemented in this function isn't handled by the typechecker

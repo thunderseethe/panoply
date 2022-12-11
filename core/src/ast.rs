@@ -2,35 +2,40 @@ use crate::span::Span;
 use rustc_hash::FxHashMap;
 
 /// Abstract Syntax Tree (AST)
-pub struct Ast<'t, Var> {
+pub struct Ast<'a, Var> {
     // We store spans of the Ast out of band because we won't need them for most operations
-    spans: FxHashMap<&'t Term<'t, Var>, Span>,
-    pub tree: &'t Term<'t, Var>,
+    spans: FxHashMap<&'a Term<'a, Var>, Span>,
+    pub tree: &'a Term<'a, Var>,
 }
 
-impl<'t, Var> Ast<'t, Var> {
-    pub fn new(spans: FxHashMap<&'t Term<'t, Var>, Span>, tree: &'t Term<'t, Var>) -> Self {
+impl<'a, Var> Ast<'a, Var> {
+    pub fn new(spans: FxHashMap<&'a Term<'a, Var>, Span>, tree: &'a Term<'a, Var>) -> Self {
         Self { spans, tree }
+    }
+
+    /// Get the root node of this Ast
+    pub fn root(&self) -> &'a Term<'a, Var> {
+        self.tree
     }
 }
 
-impl<'t, Var: Eq + std::hash::Hash> Ast<'t, Var> {
+impl<'a, Var: Eq + std::hash::Hash> Ast<'a, Var> {
     /// Lookup the span of a node within this Ast
-    pub fn span_of(&self, node: &'t Term<'t, Var>) -> Option<&Span> {
+    pub fn span_of(&self, node: &'a Term<'a, Var>) -> Option<&Span> {
         self.spans.get(node)
     }
 }
 
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Term<'t, Var> {
+pub enum Term<'a, Var> {
     Abstraction {
         arg: Var,
-        body: &'t Term<'t, Var>,
+        body: &'a Term<'a, Var>,
     },
     Application {
-        func: &'t Term<'t, Var>,
-        arg: &'t Term<'t, Var>,
+        func: &'a Term<'a, Var>,
+        arg: &'a Term<'a, Var>,
     },
     Variable(Var),
 }

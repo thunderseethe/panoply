@@ -167,6 +167,7 @@ impl<I, T> Deref for IdGen<I, T> {
     }
 }
 
+#[macro_export]
 macro_rules! define_ids {
     ($($(#[$attr:meta])* $vis:vis $name:ident ;)*) => {
         $($(#[$attr])*
