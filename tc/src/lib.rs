@@ -3,7 +3,7 @@ use std::{collections::hash_map::Entry, fmt::Debug, ops::Index};
 use aiahr_core::{
     ast::{Ast, Term, Term::*},
     define_ids,
-    id::{Id, IdGen, VarId},
+    id::{Id, IdGen, ItemId, ModuleId, VarId},
 };
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
@@ -98,6 +98,12 @@ impl<'ty> UnifierSubst<'ty> {
         TcUnifierVar::from_raw(raw)
     }
 
+    fn fresh_unifier_with(&mut self, val: &'ty UnifierType<'ty>) -> TcUnifierVar {
+        let raw = self.dense_map.len();
+        self.dense_map.push(Some(val));
+        TcUnifierVar::from_raw(raw)
+    }
+
     fn get(&self, unifier_var: TcUnifierVar) -> Option<&'ty UnifierType<'ty>> {
         self.dense_map.get(unifier_var.0).and_then(|ty| ty.clone())
     }
@@ -115,14 +121,6 @@ impl<'ty> UnifierSubst<'ty> {
             .map(|(i, opt)| (TcUnifierVar::from_raw(i), opt.clone()))
     }
 
-    fn iter_mut<'a>(
-        &'a mut self,
-    ) -> impl Iterator<Item = (TcUnifierVar, &mut &'ty UnifierType<'ty>)> {
-        self.dense_map
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(i, opt_ty)| opt_ty.as_mut().map(|ty| (TcUnifierVar::from_raw(i), ty)))
-    }
     fn raw_iter_mut<'a>(
         &'a mut self,
     ) -> impl Iterator<Item = (TcUnifierVar, &mut Option<&'ty UnifierType<'ty>>)> {
@@ -166,6 +164,15 @@ impl From<TcUnifierVar> for UnifierTypeId {
     }
 }
 
+/// A type scheme. This is a type with all it's free type variables bound and it's required
+/// constraints explicitly listed
+struct Scheme<'ty, TV> {
+    vars: IdGen<TV, ()>,
+    constraints: Vec<Constraint<'ty>>,
+    ty: &'ty Type<'ty, TV>,
+}
+
+/// A monomorphic type
 #[derive(Debug, PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 pub enum Type<'ty, TV> {
     /// Marker that signifies an operation produced an error. This exists so that we can try to
@@ -244,6 +251,27 @@ use Type::*;
 
 type UnifierType<'ty> = Type<'ty, UnifierTypeId>;
 type UnifierVarId<'ty> = TypedVarId<'ty, UnifierTypeId>;
+
+impl<'ty> UnifierType<'ty> {
+    /// A variant of apply that only performs one substitution.
+    /// Split out as a separate method to allow for more performant implementations.
+    fn apply_oneshot(
+        &'ty self,
+        ty_arena: &'ty Bump,
+        key: TcUnifierVar,
+        val: &'ty UnifierType<'ty>,
+    ) -> &'ty UnifierType<'ty> {
+        match self {
+            ErrorTy | IntTy => self,
+            VarTy(UnifierTypeId::Unifier(uni)) if uni == &key => val,
+            VarTy(_) => self,
+            FunTy(arg, ret) => ty_arena.alloc(FunTy(
+                arg.apply_oneshot(ty_arena, key, val),
+                ret.apply_oneshot(ty_arena, key, val),
+            )),
+        }
+    }
+}
 
 /// A variable marked with it's type
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -441,62 +469,57 @@ pub enum TypeCheckError<'ty> {
     UnresolvedTypes(TcUnifierVar, Vec<&'ty UnifierType<'ty>>),
     // TODO: Don't leak constraints in the public API here
     UnsolvedConstraints(Vec<Constraint<'ty>>),
+    ItemNotDefined((ModuleId, ItemId)),
 }
 
 /// A trait for applying a substitution to a thing. Often this will be a type, but it might also be an Ast.
-trait Substitutable<'ty> {
+trait Substitutable<'ty, Subst> {
     /// A type to hold allocators apply needs to create any modified nodes
     type Alloc;
     /// The output type after our substitution is applied
     type Output;
-    type Subst: Default + InsertType<'ty>;
-
-    /// A variant of apply that only performs one substitution.
-    /// Split out as a separate method to allow for more performant implementations.
-    fn apply_oneshot(
-        &self,
-        ty_arena: Self::Alloc,
-        key: TcUnifierVar,
-        val: &'ty UnifierType<'ty>,
-    ) -> Self::Output {
-        let mut unifier_subst = Self::Subst::default();
-        unifier_subst.insert(key, val);
-        self.apply(ty_arena, &unifier_subst)
-    }
 
     /// Produce a new Output where all type vars that appear in self have been replaced by their
     /// corresponding values in subst.
-    fn apply(&self, alloc: Self::Alloc, subst: &Self::Subst) -> Self::Output;
+    fn apply(&self, alloc: Self::Alloc, subst: &Subst) -> Self::Output;
 }
 
 /// Replace all occurrences of type variables in self by their corresponding type in subst.
-impl<'ty> Substitutable<'ty> for &'ty UnifierType<'ty> {
+impl<'ty> Substitutable<'ty, UnifierSubst<'ty>> for UnifierType<'ty> {
     type Alloc = &'ty Bump;
     type Output = &'ty UnifierType<'ty>;
-    type Subst = UnifierSubst<'ty>;
-
-    fn apply_oneshot(
-        &self,
-        ty_arena: Self::Alloc,
-        key: TcUnifierVar,
-        val: &'ty UnifierType<'ty>,
-    ) -> Self::Output {
-        match self {
-            ErrorTy | IntTy => self,
-            VarTy(UnifierTypeId::Unifier(uni)) if uni == &key => val,
-            VarTy(_) => self,
-            FunTy(arg, ret) => ty_arena.alloc(FunTy(
-                arg.apply_oneshot(ty_arena, key, val),
-                ret.apply_oneshot(ty_arena, key, val),
-            )),
-        }
-    }
 
     fn apply(&self, ty_arena: Self::Alloc, subst: &UnifierSubst<'ty>) -> Self::Output {
         match self {
-            ErrorTy | IntTy => self,
-            VarTy(UnifierTypeId::Unifier(uni)) => subst.get(*uni).unwrap_or(self),
-            VarTy(_) => self,
+            IntTy | ErrorTy => ty_arena.alloc(*self),
+            VarTy(UnifierTypeId::Unifier(uni)) => {
+                subst.get(*uni).unwrap_or_else(|| ty_arena.alloc(*self))
+            }
+            VarTy(_) => ty_arena.alloc(*self),
+            FunTy(arg, ret) => ty_arena.alloc(FunTy(
+                arg.apply(ty_arena, subst),
+                ret.apply(ty_arena, subst),
+            )),
+        }
+    }
+}
+impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for UnifierType<'ty> {
+    type Alloc = &'ty Bump;
+    type Output = &'ty UnifierType<'ty>;
+
+    fn apply(
+        &self,
+        ty_arena: Self::Alloc,
+        subst: &IdGen<TcVar, &'ty UnifierType<'ty>>,
+    ) -> Self::Output {
+        match self {
+            IntTy => ty_arena.alloc(IntTy),
+            ErrorTy => ty_arena.alloc(ErrorTy),
+            VarTy(UnifierTypeId::Var(var)) => subst
+                .get(*var)
+                .map(|ty| *ty)
+                .unwrap_or_else(|| ty_arena.alloc(VarTy(UnifierTypeId::Var(*var)))),
+            VarTy(var) => ty_arena.alloc(VarTy(*var)),
             FunTy(arg, ret) => ty_arena.alloc(FunTy(
                 arg.apply(ty_arena, subst),
                 ret.apply(ty_arena, subst),
@@ -505,12 +528,54 @@ impl<'ty> Substitutable<'ty> for &'ty UnifierType<'ty> {
     }
 }
 
+impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for Type<'ty, TcVar> {
+    type Alloc = &'ty Bump;
+    type Output = &'ty UnifierType<'ty>;
+
+    fn apply(
+        &self,
+        ty_arena: Self::Alloc,
+        subst: &IdGen<TcVar, &'ty UnifierType<'ty>>,
+    ) -> Self::Output {
+        match self {
+            ErrorTy => ty_arena.alloc(ErrorTy),
+            IntTy => ty_arena.alloc(IntTy),
+            VarTy(var) => subst
+                .get(*var)
+                .map(|ty| *ty)
+                .unwrap_or_else(|| ty_arena.alloc(VarTy(UnifierTypeId::Var(*var)))),
+            FunTy(arg, ret) => ty_arena.alloc(FunTy(
+                arg.apply(ty_arena, subst),
+                ret.apply(ty_arena, subst),
+            )),
+        }
+    }
+}
+
+impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for Constraint<'ty> {
+    type Alloc = &'ty Bump;
+    type Output = Constraint<'ty>;
+
+    fn apply(
+        &self,
+        alloc: Self::Alloc,
+        subst: &IdGen<TcVar, &'ty UnifierType<'ty>>,
+    ) -> Self::Output {
+        match self {
+            Constraint::Eq(left, right) => {
+                Constraint::Eq(left.apply(alloc, subst), right.apply(alloc, subst))
+            }
+        }
+    }
+}
+
 /// Replace all occurrences of type variables in each type in the ast by their corresponding type
 /// in subst.
-impl<'ast, 'ty> Substitutable<'ty> for &'ast Term<'ast, UnifierVarId<'ty>> {
+impl<'ast: 'ty, 'ty> Substitutable<'ty, GeneralizedSubst<'ty>>
+    for &'ast Term<'ast, UnifierVarId<'ty>>
+{
     type Alloc = (&'ast Bump, &'ty Bump);
     type Output = &'ast Term<'ast, TypedVarId<'ty, TcVar>>;
-    type Subst = GeneralizedSubst<'ty>;
 
     fn apply(
         &self,
@@ -538,6 +603,7 @@ impl<'ast, 'ty> Substitutable<'ty> for &'ast Term<'ast, UnifierVarId<'ty>> {
                 var: *var,
                 ty: ty.zonk(ty_arena, subst),
             })),
+            Item(item) => ast_arena.alloc(Item(*item)),
         }
     }
 }
@@ -583,6 +649,8 @@ struct TypeChecker<'ast, 'ty> {
     error_ty: &'ty UnifierType<'ty>,
     /// Store types for local variables.
     local_env: FxHashMap<VarId, &'ty UnifierType<'ty>>,
+    /// Store type schemes for global variables.
+    global_env: FxHashMap<(ModuleId, ItemId), Scheme<'ty, TcVar>>,
     /// List of unifiers and their current mapped types, if any.
     unifiers: UnifierSubst<'ty>, //Vec<Option<&'ty UnifierType<'ty>>>,
     /// List of errors produced during type checking
@@ -755,10 +823,23 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
             ty_arena,
             error_ty: ty_arena.alloc(ErrorTy),
             local_env: FxHashMap::default(),
+            global_env: FxHashMap::default(),
             errors: vec![],
             unifiers: UnifierSubst::default(),
             constraints: vec![],
             type_var_supply: IdGen::new(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_global_env(
+        ast_arena: &'ast Bump,
+        ty_arena: &'ty Bump,
+        global_env: FxHashMap<(ModuleId, ItemId), Scheme<'ty, TcVar>>,
+    ) -> Self {
+        Self {
+            global_env,
+            ..Self::new(ast_arena, ty_arena)
         }
     }
 
@@ -915,6 +996,32 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
                     )
                 }
             }
+            Item(item) => {
+                match self.global_env.get(item) {
+                    None => {
+                        self.errors.push(TypeCheckError::ItemNotDefined(*item));
+                        (self.ast_arena.alloc(Item(*item)), self.error_ty)
+                    }
+                    Some(scheme) => {
+                        // Wrap this up as an instantiate method eventually
+                        let var_to_unifier = scheme.vars.create_from(|ty_var, _| {
+                            let unifier = self.unifiers.fresh_unifier_with(
+                                self.ty_arena.alloc(VarTy(UnifierTypeId::Var(ty_var))),
+                            );
+                            self.ty_arena.alloc(VarTy(UnifierTypeId::Unifier(unifier))) as &_
+                        });
+
+                        let ty = scheme.ty.apply(self.ty_arena, &var_to_unifier);
+                        self.constraints.extend(
+                            scheme
+                                .constraints
+                                .iter()
+                                .map(|constr| constr.apply(self.ty_arena, &var_to_unifier)),
+                        );
+                        (self.ast_arena.alloc(Item(*item)), ty)
+                    }
+                }
+            }
         }
     }
 
@@ -973,7 +1080,7 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
 /// This is a convenience wrapper to instantiate a type checker and run it's pipeline against a
 /// term.
 /// Returns the typed ast and any errors encountered.
-pub fn tc_term<'ast, 'ty>(
+pub fn tc_term<'ast: 'ty, 'ty>(
     ast_arena: &'ast Bump,
     ty_arena: &'ty Bump,
     ast: Ast<'_, VarId>,
@@ -982,16 +1089,25 @@ pub fn tc_term<'ast, 'ty>(
     &'ty Type<'ty, TcVar>,
     Vec<TypeCheckError<'ty>>,
 ) {
-    let mut tc = TypeChecker::new(ast_arena, ty_arena);
+    tc_term_with(TypeChecker::new(ast_arena, ty_arena), ast)
+}
 
+fn tc_term_with<'ast: 'ty, 'ty>(
+    mut tc: TypeChecker<'ast, 'ty>,
+    ast: Ast<'_, VarId>,
+) -> (
+    Ast<'ast, TypedVarId<'ty, TcVar>>,
+    &'ty Type<'ty, TcVar>,
+    Vec<TypeCheckError<'ty>>,
+) {
     let (typed_term, ty) = tc.infer(ast.root());
     let subst = tc.solve_constraints();
 
     println!("{:?}", subst);
 
     let (typed_term, ty) = (
-        typed_term.apply((ast_arena, ty_arena), &subst),
-        ty.zonk(ty_arena, &subst),
+        typed_term.apply((tc.ast_arena, tc.ty_arena), &subst),
+        ty.zonk(tc.ty_arena, &subst),
     );
     // TODO: Use subst to zonk our r|esulting typed_term and type
     // TODO: Figure out how to do Spans
@@ -1059,6 +1175,87 @@ mod tests {
             },
             "typed asts match"
         )
+    }
+
+    #[test]
+    fn test_tc_undefined_var_fails() {
+        let arena = Bump::new();
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(Variable(VarId(0)))
+        );
+
+        let (_, ty, errors) = tc_term(&arena, &arena, untyped_ast);
+
+        assert_eq!(ty, &ErrorTy);
+        assert!(errors.contains(&TypeCheckError::VarNotDefined(VarId(0))))
+    }
+
+    #[test]
+    fn test_tc_undefined_global_fails() {
+        let arena = Bump::new();
+        let item = (ModuleId(0), ItemId(0));
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(Item(item))
+        );
+
+        let (_, ty, errors) = tc_term(&arena, &arena, untyped_ast);
+
+        assert_eq!(ty, &ErrorTy);
+        assert!(errors.contains(&TypeCheckError::ItemNotDefined(item)))
+    }
+
+    #[test]
+    fn test_tc_item() {
+        let arena = Bump::new();
+        let mut vars: IdGen<TcVar, ()> = IdGen::new();
+        let arg = vars.push(());
+        let ret = vars.push(());
+
+        let scheme = Scheme {
+            vars,
+            constraints: vec![],
+            ty: arena.alloc(FunTy(arena.alloc(VarTy(arg)), arena.alloc(VarTy(ret)))),
+        };
+
+        let item = (ModuleId::from_raw(0), ItemId::from_raw(0));
+
+        let global_env = FxHashMap::from_iter([(item, scheme)]);
+
+        let tc = TypeChecker::with_global_env(&arena, &arena, global_env);
+        let (typed_term, ty, errors) = tc_term_with(
+            tc,
+            Ast::new(
+                FxHashMap::default(),
+                arena.alloc(Abstraction {
+                    arg: VarId(0),
+                    body: arena.alloc(Application {
+                        func: arena.alloc(Item(item)),
+                        arg: arena.alloc(Variable(VarId(0))),
+                    }),
+                }),
+            ),
+        );
+
+        assert_eq!(errors, vec![]);
+        assert_eq!(
+            typed_term.root(),
+            &Abstraction {
+                arg: TypedVarId {
+                    var: VarId(0),
+                    ty: &VarTy(arg)
+                },
+                body: &Application {
+                    func: &Item(item),
+                    arg: &Variable(TypedVarId {
+                        var: VarId(0),
+                        ty: &VarTy(arg)
+                    })
+                }
+            }
+        );
+        assert_eq!(ty, &FunTy(&VarTy(arg), &VarTy(ret)));
     }
 
     #[test]

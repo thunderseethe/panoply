@@ -1,3 +1,4 @@
+use crate::id::{ModuleId, ItemId};
 use crate::span::Span;
 use rustc_hash::FxHashMap;
 
@@ -33,15 +34,20 @@ impl<'a, Var: Eq + std::hash::Hash> Ast<'a, Var> {
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Term<'a, Var> {
+    // Function abstraction, a closure, a lambda etc.
     Abstraction {
         arg: Var,
         body: &'a Term<'a, Var>,
     },
+    // Function application
     Application {
         func: &'a Term<'a, Var>,
         arg: &'a Term<'a, Var>,
     },
+    // A local variable binding
     Variable(Var),
+    // A global variable binding
+    Item((ModuleId, ItemId)),
 }
 
 impl<'a, Var> Term<'a, Var> {
@@ -62,6 +68,7 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
                 Term::Abstraction { arg, body } => { self.stack.push(body); Some(arg) },
                 Term::Application { func, arg } => { self.stack.extend([func, arg]); self.next() },
                 Term::Variable(var) => Some(var),
+                Term::Item(_) => self.next(),
             }
         })
     }

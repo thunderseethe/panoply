@@ -24,6 +24,7 @@ pub fn desugar<'n, 's, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> Ast<'
         // yet.
         let ast = match nst {
             nst::Term::VariableRef(var) => arena.alloc(ast::Term::Variable(var.value)) as &_,
+            nst::Term::ItemRef(item) => arena.alloc(ast::Term::Item(item.value)) as &_,
             nst::Term::Binding {
                 var, value, expr, ..
             } => {
@@ -56,7 +57,6 @@ pub fn desugar<'n, 's, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> Ast<'
             nst::Term::SumRow(_) => todo!(),
             nst::Term::FieldAccess { .. } => todo!(),
             nst::Term::Match { .. } => todo!(),
-            nst::Term::ItemRef(_) => todo!(),
         };
         spans.insert(ast, nst.span());
         ast

@@ -157,6 +157,15 @@ where
         self.vec.push(value);
         id
     }
+
+    /// Create a new IdGen from an existing one by mapping existing elements into new ones.
+    pub fn create_from<U>(&self, mut op: impl FnMut(I, &T) -> U) -> IdGen<I, U> {
+        IdGen::from_raw(
+            self.iter_enumerate()
+                .map(|(i, t)| op(i, t))
+                .collect::<Vec<_>>(),
+        )
+    }
 }
 
 impl<I, T> Deref for IdGen<I, T> {
