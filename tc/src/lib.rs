@@ -5,7 +5,7 @@ use std::{
 
 use aiahr_core::{
     ast::{Term, Term::*},
-    id::{IdGen, ItemId, ModuleId, VarId},
+    id::{ItemId, ModuleId, VarId},
     memory::handle::{Handle, RefHandle},
 };
 use bumpalo::Bump;
@@ -13,20 +13,9 @@ use ena::unify::InPlaceUnificationTable;
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHasher};
 
-mod constraint;
-mod subst;
 mod ty;
 
-use constraint::Constraint;
 use ty::{TypeKind::*, *};
-
-/// A type scheme. This is a type with all it's free type variables bound and it's required
-/// constraints explicitly listed
-struct Scheme<'ty, TV> {
-    vars: IdGen<TV, ()>,
-    constraints: Vec<Constraint<&'ty TypeKind<'ty, TV>>>,
-    ty: &'ty TypeKind<'ty, TV>,
-}
 
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]
@@ -34,13 +23,7 @@ pub enum TypeCheckError<'ty> {
     /// A variable we expected to exist with a type, did not
     VarNotDefined(VarId),
     ItemNotDefined((ModuleId, ItemId)),
-    // TODO: Consider whether we should expose the unifier var stuff in errors here or not?
-
-    //UnsolvedTyVariable(UnifierTypeId),
-    //UnresolvedTypes(TcUnifierVar, Vec<&'ty UnifierType<'ty>>),
-    // TODO: Don't leak constraints in the public API here
-    //UnsolvedConstraints(Vec<Constraint<&'ty UnifierType<'ty>>>),
-    TypeMismatch(Ty<'ty, TcUnifierVar<'ty>>, Ty<'ty, TcUnifierVar<'ty>>),
+    TypeMismatch(InferTy<'ty>, InferTy<'ty>),
     OccursCheckFailed(TcUnifierVar<'ty>),
 }
 
@@ -50,66 +33,44 @@ impl<'ty> From<(Ty<'ty, TcUnifierVar<'ty>>, Ty<'ty, TcUnifierVar<'ty>>)> for Typ
     }
 }
 
-/// # A bidirectional damnas-milner type checker.
-///
-/// Type checking a term happens in two main phases: Generating constraints, and solving constraints.
-///
-/// ## Constraint Generation
-/// Constraint generation is done by two mutually recursive methods, infer and check.
-///
-/// * `infer` - generates a type based on the input term and will internally call check to verify
-/// subterms.
-/// * `check` - checks a term against an expected type, recording an error if types cannot match.
-/// If no specific case applies, check will call infer and check the expected type is equal to the
-/// inferred type.
-///
-/// ## Constraint Solving
-/// Once constraint generation is completed we have a typed ast that contains unifiers. We move on
-/// to solving the generated constraints. This is done by `ConstraintSolver` which runs a straight
-/// forward loop to find active pairs and reduce them in the cosntraint graph.
-///
-/// The output of this solution will be a substitution from type variables (include unifier vars)
-/// to their concrete types. Chains of type variables { a := b, b := c, c := int } are flattened to
-/// { a := int, b := int, c : = int }.
-///
-/// We check for any unsolved unifier variables, any unifiers that are free are given fresh type
-/// variables. This will generalize our results when we zonk away all our unifier variables.
-///
-/// ### Zonking (for lack of a better term)
-/// The substitution produced by constraint solving is used for one final step in producing our type
-/// checked term. We must ensure all unifier variables are removed from the typed term and
-/// resulting type. They cannot leak outside the type checker.
-///
-/// This process is referred to as zonking, I won't defend that name. Nor will the people I've
-/// deftly swiped it from. But I will use it to refer to the process that finds unifier variables
-/// in our output and resolves them to the concrete types they are mapped to in our substitution.
-/*struct TypeChecker<'ast, 'ty> {
-    /// The context to allocate typed outputs of
-    ctx: TyCtx<'ast, 'ty>,
-    // convenience allocation so we don't have to realloc ErrorTy everytime we need it
-    error_ty: &'ty UnifierType<'ty>,
-    /// Store types for local variables.
-    local_env: FxHashMap<VarId, &'ty UnifierType<'ty>>,
-    /// Store type schemes for global variables.
-    global_env: FxHashMap<(ModuleId, ItemId), Scheme<'ty, TcVar>>,
-    /// List of unifiers and their current mapped types, if any.
-    unifiers: UnifierSubst<'ty>, //Vec<Option<&'ty UnifierType<'ty>>>,
-    /// List of errors produced during type checking
-    errors: Vec<TypeCheckError<'ty>>,
-    /// Constraints generated during intial stage of type checking,
-    /// to be solved later.
-    constraints: Vec<Constraint<&'ty UnifierType<'ty>>>,
-    /// Supply of fresh type variables for when we generalize our term.
-    type_var_supply: IdGen<TcVar, ()>,
-}*/
+/// A constraint produced during initial type checking.
+/// It will be solved in the second half of type checking to produce a map from Unifier variables
+/// to their types.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Constraint<Ty> {
+    /// Two types must be equal for our term to type check
+    Eq(Ty, Ty),
+}
 
+/// A context for type inference.
+///
+/// Type inference is done in two stages:
+///     1. Constraint generation
+///     2. Unification
+/// During 1. we use a bidirectional type checker to walk our input AST and generate a set of
+/// constraints (and unification variables) that have to be true for the ast to type check. This
+/// stage also produces a mapping from variables in the AST to their types.
+/// 
+/// Once we have this set of constraints we solve them via unification. Unification maintains a
+/// mapping from unification variables to their type. Each constraint is decomposed into a list of
+/// (uni var, type) pairs that are saved in the mapping. At the end of this process we will either
+/// encounter an error (e.g. If we try to unify int and a function type), or we will produce a
+/// substitution from unification variables to types (possibly including type variables).
+///
+/// With this substitution constructed we walk the variable -> type mapping and substitute any
+/// unification variables for their types. This process of unification variable removal is called
+/// `zonking`.
 struct InferCtx<'infer> {
     /// Store types for local variables.
     local_env: FxHashMap<VarId, InferTy<'infer>>,
-    errors: Vec<TypeCheckError<'infer>>,
+    /// Mapping from unification variables to their types (if any).
     unifiers: InPlaceUnificationTable<TcUnifierVar<'infer>>,
+    /// Errors that arise during type checking
+    errors: Vec<TypeCheckError<'infer>>,
 }
 
+/// Check that a unification variable does not appear within the type the unification variable is
+/// mapped to. This prevents unification from solving to a substitution with a cycle.
 struct OccursCheck<'a, 'inf, I> {
     ctx: &'a I,
     var: TcUnifierVar<'inf>,
@@ -136,8 +97,28 @@ where
 }
 
 impl<'infer> InferCtx<'infer> {
+    /// This is the entrypoint to the bidirectional type checker. Since our language uses
+    /// damnas-milner type inference we will always begin type checking with a call to infer.
+    pub fn infer<I>(
+        &mut self,
+        infer_ctx: &I,
+        term: &Term<'_, VarId>,
+    ) -> (
+        Vec<Constraint<InferTy<'infer>>>,
+        FxHashMap<VarId, InferTy<'infer>>,
+        InferTy<'infer>,
+    )
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        let mut constraints = vec![];
+        let mut var_tys = FxHashMap::default();
+        let ty = self._infer(infer_ctx, &mut constraints, &mut var_tys, term);
+        (constraints, var_tys, ty)
+    }
+
     /// Check a term against a given type.
-    /// This method pairs with infer to form a bidirectional type checker
+    /// This method pairs with _infer to form a bidirectional type checker
     fn _check<I>(
         &mut self,
         infer_ctx: &I,
@@ -166,24 +147,6 @@ impl<'infer> InferCtx<'infer> {
                 constraints.push(Constraint::Eq(expected_ty, inferred_ty));
             }
         }
-    }
-
-    pub fn infer<I>(
-        &mut self,
-        infer_ctx: &I,
-        term: &Term<'_, VarId>,
-    ) -> (
-        Vec<Constraint<InferTy<'infer>>>,
-        FxHashMap<VarId, InferTy<'infer>>,
-        InferTy<'infer>,
-    )
-    where
-        I: MkTy<'infer, TcUnifierVar<'infer>>,
-    {
-        let mut constraints = vec![];
-        let mut var_tys = FxHashMap::default();
-        let ty = self._infer(infer_ctx, &mut constraints, &mut var_tys, term);
-        (constraints, var_tys, ty)
     }
 
     /// Infer a type for a term
@@ -259,6 +222,7 @@ impl<'infer> InferCtx<'infer> {
         }
     }
 
+    ///
     fn normalize_ty(&mut self, ty: InferTy<'infer>) -> Option<InferTy<'infer>> {
         match *ty {
             VarTy(var) => self.unifiers.probe_value(var),
@@ -266,6 +230,10 @@ impl<'infer> InferCtx<'infer> {
         }
     }
 
+    /// Unify a variable and a type.
+    /// This checks that the variable is not present in type, throwing an error if varaibles is
+    /// present.
+    /// If not we record that the unification variable is solved to given type.
     fn unify_var_ty<I>(
         &mut self,
         ctx: &I,
@@ -281,6 +249,9 @@ impl<'infer> InferCtx<'infer> {
             .map_err(|(left, right)| TypeCheckError::TypeMismatch(left, right))
     }
 
+    /// This is the main entry point of unificaiton and handles unifying two arbitrary types.
+    /// Each type is substituted by the current substitution to remove as many unification
+    /// variables as possible before unifying.
     fn unify_ty_ty<I>(
         &mut self,
         ctx: &I,
@@ -298,12 +269,14 @@ impl<'infer> InferCtx<'infer> {
             (ErrorTy, _) | (_, ErrorTy) => Err(TypeCheckError::TypeMismatch(left, right)),
 
             // Special case for when two keys meet
+            // Instead of unifiying either variable as a value of the other, we need to record that
+            // the two key's equivalence classes must be the same.
             (VarTy(left_var), VarTy(right_var)) => self
                 .unifiers
                 .unify_var_var(left_var, right_var)
                 .map_err(|e| e.into()),
 
-            // If a key meets a new ty try to set them
+            // If a key meets a new ty record they must be equal
             (_, VarTy(var)) => self.unify_var_ty(ctx, var, left),
             (VarTy(var), _) => self.unify_var_ty(ctx, var, right),
 
@@ -322,6 +295,8 @@ impl<'infer> InferCtx<'infer> {
         }
     }
 
+    /// Solve a list of constraints to a mapping from unifiers to types.
+    /// If there is no solution to the list of constraints we return a relevant error.
     fn solve<I>(
         mut self,
         ctx: &I,
@@ -330,7 +305,6 @@ impl<'infer> InferCtx<'infer> {
     where
         I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
-        // TODO: remove this clone
         for constr in constraints {
             match constr {
                 Constraint::Eq(left, right) => self.unify_ty_ty(ctx.clone(), left, right)?,
@@ -340,6 +314,11 @@ impl<'infer> InferCtx<'infer> {
     }
 }
 
+/// Zonk a thing
+/// This removes all unification variables.
+/// If a unification variables is solved to a type, it is replaced by that type.
+/// If a unification variable has no solution, we replace it by a fresh type variable and record it
+/// as free.
 pub struct Zonker<'a, 'ctx, 'infer> {
     ctx: &'a dyn MkTy<'ctx, TcVar>,
     unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer>>,
@@ -361,9 +340,13 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
                 ty.try_fold_with(self)
             },
             None => {
+                // Our unification variable wasn't solved to a type.
+                // Find the root unification variable and return a type varaible representing that
+                // root.
                 let root = self.unifiers.find(var);
                 let var_indx = self.free_vars.iter()
                     .position(|uv| &root == uv)
+                    // We have not seen this unification variable before, so create a new one.
                     .unwrap_or_else(|| {
                         let next_index = self.free_vars.len();
                         self.free_vars.push(var);
@@ -389,10 +372,16 @@ where
         errors: vec![],
         unifiers: InPlaceUnificationTable::default(),
     };
+
+    // Infer types for all our variables and the root term.
     let (constraints, var_tys, ty) = infer.infer(infer_ctx, term);
+
+    // Solve constraints into the unifiers mapping.
     let mut unifiers = infer
         .solve(infer_ctx, constraints)
         .expect("TODO: error reporting");
+
+    // Zonk the variable -> type mapping and the root term type.
     let mut zoinkies = Zonker {
         ctx: ty_ctx,
         unifiers: &mut unifiers,
@@ -403,6 +392,7 @@ where
         .into_iter()
         .map(|(var, ty)| (var, ty.try_fold_with(&mut zoinkies).unwrap()))
         .collect::<FxHashMap<_, _>>();
+    // TODO: Generalize root type as a scheme
     (zonked_var_tys, zonked_ty)
 }
 
@@ -540,7 +530,6 @@ mod tests {
         );
     }
 
-    
     /*
     #[test]
     fn test_tc_undefined_var_fails() {
@@ -558,21 +547,6 @@ mod tests {
     */
 
     /*
-    #[test]
-    fn test_tc_undefined_global_fails() {
-        let arena = Bump::new();
-        let item = (ModuleId(0), ItemId(0));
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(Item(item))
-        );
-
-        let (_, ty, errors) = tc_term(&arena, &arena, untyped_ast);
-
-        assert_eq!(ty, &ErrorTy);
-        assert!(errors.contains(&TypeCheckError::ItemNotDefined(item)))
-    }
-
     #[test]
     fn test_tc_item() {
         let arena = Bump::new();

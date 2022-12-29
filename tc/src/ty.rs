@@ -1,10 +1,10 @@
-use std::convert::Infallible;
+use std::fmt;
 use std::ops::Deref;
 
 use aiahr_core::define_ids;
 use aiahr_core::id::VarId;
 use aiahr_core::memory::handle::RefHandle;
-use aiahr_core::memory::intern::Interner;
+
 use ena::unify::{UnifyKey, EqUnifyValue};
 
 define_ids!(
@@ -42,29 +42,19 @@ impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
     }
 }
 
+/// A trait for allocators that can make types out of type kinds.
 pub trait MkTy<'ctx, TV> {
     fn mk_ty(&self, kind: TypeKind<'ctx, TV>) -> Ty<'ctx, TV>;
 }
-/*impl<'ctx, I> MkTy<'ctx, TcUnifierVar<'ctx>> for I 
-where
-    I: Interner<TypeKind<'ctx, TcUnifierVar<'ctx>>>,
-{
-    fn mk_ty(&'ctx self, kind: TypeKind<'ctx, TcUnifierVar<'ctx>>) -> Ty<'ctx, TcUnifierVar<'ctx>> {
-        self.intern(kind).into()
-    }
-}
-impl<'ctx, I> MkTy<'ctx, TcVar> for I 
-where
-    I: Interner<TypeKind<'ctx, TcVar>>,
-{
-    fn mk_ty(&'ctx self, kind: TypeKind<'ctx, TcVar>) -> Ty<'ctx, TcVar> {
-        self.intern(kind).into()
-    }
-}*/
 
+/// During inference our type variables are all unification variables.
+/// This is an alias to make those types easy to talk about.
 pub type InferTy<'ctx> = Ty<'ctx, TcUnifierVar<'ctx>>;
 
-/// A monomorphic type
+/// A monomorphic type.
+///
+/// This is just a wrapper around an interned reference to the `TypeKind` which contains the actual
+/// data.
 #[derive(PartialEq, Eq, Hash)]
 pub struct Ty<'ctx, TV>(pub RefHandle<'ctx, TypeKind<'ctx, TV>>);
 
@@ -82,7 +72,6 @@ impl<'ctx, TV> Deref for Ty<'ctx, TV> {
         self.0.deref()
     }
 }
-use std::fmt;
 impl<'ctx, TV: fmt::Debug> fmt::Debug for Ty<'ctx, TV> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Ty").field(&self.0.0).finish()
@@ -97,6 +86,7 @@ impl<'ty, TV> Into<Ty<'ty, TV>> for RefHandle<'ty, TypeKind<'ty, TV>> {
     }
 }
 
+/// Kinds of types
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum TypeKind<'ctx, TV> {
     /// Marker that signifies an operation produced an error. This exists so that we can try to
@@ -151,29 +141,13 @@ pub trait FallibleTypeFold<'ctx>: Sized {
         t.try_default_fold(self)
     }
 
-    fn try_fold_var(&mut self, var: Self::InTypeVar) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> {
-        unimplemented!();
-    }
-}
-
-pub trait TypeFold<'ctx>: FallibleTypeFold<'ctx, Error=Infallible> {
-    fn fold_ty<'a>(&mut self, t: Ty<'a, Self::InTypeVar>) -> Ty<'ctx, Self::TypeVar> {
-        self.try_fold_ty(t).unwrap()
-    }
-
-    fn fold_var(&mut self, var: Self::InTypeVar) -> Ty<'ctx, Self::TypeVar> {
-        self.try_fold_var(var).unwrap()
-    }
+    fn try_fold_var(&mut self, var: Self::InTypeVar) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error>;
 }
 
 pub trait TypeFoldable<'ty>: Sized {
     type TypeVar;
 
     fn try_fold_with<'ast, F: FallibleTypeFold<'ty, InTypeVar=Self::TypeVar>>(self, fold: &mut F) -> Result<Ty<'ty, F::TypeVar>, F::Error>;
-
-    fn fold_with<'ast, F: TypeFold<'ty, InTypeVar=Self::TypeVar>>(self, fold: &mut F) -> Ty<'ty, F::TypeVar> {
-        self.try_fold_with(fold).unwrap()
-    }
 }
 
 impl<'ctx, 'ty, TV: Clone> TypeFoldable<'ctx> for Ty<'ty, TV> {
