@@ -1,62 +1,31 @@
-use std::fmt::Debug;
+use std::{
+    borrow::Borrow,
+    hash::{BuildHasherDefault, Hasher}, convert::Infallible,
+};
 
 use aiahr_core::{
-    ast::{Ast, Term, Term::*},
+    ast::{Term, Term::*},
     id::{IdGen, ItemId, ModuleId, VarId},
+    memory::handle::{Handle, RefHandle},
 };
 use bumpalo::Bump;
-use rustc_hash::FxHashMap;
+use ena::unify::InPlaceUnificationTable;
+use parking_lot::RwLock;
+use rustc_hash::{FxHashMap, FxHasher};
 
 mod constraint;
-mod ty;
 mod subst;
+mod ty;
 
-use constraint::{Constraint, ConstraintSolver};
-use ty::{*, Type::*};
-use subst::{GeneralizedSubst, UnifierSubst, Substitutable, InsertType};
-
+use constraint::Constraint;
+use ty::{TypeKind::*, *};
 
 /// A type scheme. This is a type with all it's free type variables bound and it's required
 /// constraints explicitly listed
 struct Scheme<'ty, TV> {
     vars: IdGen<TV, ()>,
-    constraints: Vec<Constraint<'ty>>,
-    ty: &'ty Type<'ty, TV>,
-}
-
-
-impl<'ty> UnifierType<'ty> {
-    fn unifier_vars(&self) -> impl Iterator<Item = &TcUnifierVar> {
-        self.type_vars().filter_map(|tv| match tv {
-            UnifierTypeId::Unifier(uni) => Some(uni),
-            UnifierTypeId::Var(_) => None,
-        })
-    }
-
-    /// Zonk a type removing all unifier vars and replacing them with their concrete type from the substitution.
-    /// This function will panic if a unifier is encountered but does not have an entry in subst.
-    ///
-    /// Substitution and zonking are very similar but subtly different operations.
-    /// Zonking a type _removes_ all unifiers destructively leaving the type with only references to TcVar.
-    /// Whereas a substitution does not change the variables present in a type.
-    fn zonk<'new_ty>(
-        &self,
-        ty_arena: &'new_ty Bump,
-        subst: &GeneralizedSubst<'ty>,
-    ) -> &'new_ty Type<'new_ty, TcVar> {
-        // Because we're changing types we basically have to re-alloc every node, so the signature
-        // provides the ability to do that in a fresh arena if desired
-        // TODO: Add a unit type and do this. We use IntTy for this purpose for now
-        match self {
-            ErrorTy => ty_arena.alloc(ErrorTy),
-            IntTy => ty_arena.alloc(IntTy),
-            VarTy(UnifierTypeId::Unifier(uni)) => subst[*uni].zonk(ty_arena, subst),
-            VarTy(UnifierTypeId::Var(var)) => ty_arena.alloc(VarTy(*var)),
-            FunTy(arg, ret) => {
-                ty_arena.alloc(FunTy(arg.zonk(ty_arena, subst), ret.zonk(ty_arena, subst)))
-            }
-        }
-    }
+    constraints: Vec<Constraint<&'ty TypeKind<'ty, TV>>>,
+    ty: &'ty TypeKind<'ty, TV>,
 }
 
 /// Errors that may be produced during type checking
@@ -64,12 +33,21 @@ impl<'ty> UnifierType<'ty> {
 pub enum TypeCheckError<'ty> {
     /// A variable we expected to exist with a type, did not
     VarNotDefined(VarId),
-    // TODO: Consider whether we should expose the unifier var stuff in errors here or not?
-    UnsolvedTyVariable(UnifierTypeId),
-    UnresolvedTypes(TcUnifierVar, Vec<&'ty UnifierType<'ty>>),
-    // TODO: Don't leak constraints in the public API here
-    UnsolvedConstraints(Vec<Constraint<'ty>>),
     ItemNotDefined((ModuleId, ItemId)),
+    // TODO: Consider whether we should expose the unifier var stuff in errors here or not?
+
+    //UnsolvedTyVariable(UnifierTypeId),
+    //UnresolvedTypes(TcUnifierVar, Vec<&'ty UnifierType<'ty>>),
+    // TODO: Don't leak constraints in the public API here
+    //UnsolvedConstraints(Vec<Constraint<&'ty UnifierType<'ty>>>),
+    TypeMismatch(Ty<'ty, TcUnifierVar<'ty>>, Ty<'ty, TcUnifierVar<'ty>>),
+    OccursCheckFailed(TcUnifierVar<'ty>),
+}
+
+impl<'ty> From<(Ty<'ty, TcUnifierVar<'ty>>, Ty<'ty, TcUnifierVar<'ty>>)> for TypeCheckError<'ty> {
+    fn from((left, right): (Ty<'ty, TcUnifierVar<'ty>>, Ty<'ty, TcUnifierVar<'ty>>)) -> Self {
+        TypeCheckError::TypeMismatch(left, right)
+    }
 }
 
 /// # A bidirectional damnas-milner type checker.
@@ -105,10 +83,9 @@ pub enum TypeCheckError<'ty> {
 /// This process is referred to as zonking, I won't defend that name. Nor will the people I've
 /// deftly swiped it from. But I will use it to refer to the process that finds unifier variables
 /// in our output and resolves them to the concrete types they are mapped to in our substitution.
-struct TypeChecker<'ast, 'ty> {
-    /// The arena to allocate the resulting typed ast
-    ast_arena: &'ast Bump,
-    ty_arena: &'ty Bump,
+/*struct TypeChecker<'ast, 'ty> {
+    /// The context to allocate typed outputs of
+    ctx: TyCtx<'ast, 'ty>,
     // convenience allocation so we don't have to realloc ErrorTy everytime we need it
     error_ty: &'ty UnifierType<'ty>,
     /// Store types for local variables.
@@ -121,145 +98,120 @@ struct TypeChecker<'ast, 'ty> {
     errors: Vec<TypeCheckError<'ty>>,
     /// Constraints generated during intial stage of type checking,
     /// to be solved later.
-    constraints: Vec<Constraint<'ty>>,
+    constraints: Vec<Constraint<&'ty UnifierType<'ty>>>,
     /// Supply of fresh type variables for when we generalize our term.
     type_var_supply: IdGen<TcVar, ()>,
+}*/
+
+struct InferCtx<'infer> {
+    /// Store types for local variables.
+    local_env: FxHashMap<VarId, InferTy<'infer>>,
+    errors: Vec<TypeCheckError<'infer>>,
+    unifiers: InPlaceUnificationTable<TcUnifierVar<'infer>>,
 }
 
-impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
-    fn new(ast_arena: &'ast Bump, ty_arena: &'ty Bump) -> Self {
-        Self {
-            ast_arena,
-            ty_arena,
-            error_ty: ty_arena.alloc(ErrorTy),
-            local_env: FxHashMap::default(),
-            global_env: FxHashMap::default(),
-            errors: vec![],
-            unifiers: UnifierSubst::default(),
-            constraints: vec![],
-            type_var_supply: IdGen::new(),
+struct OccursCheck<'a, 'inf, I> {
+    ctx: &'a I,
+    var: TcUnifierVar<'inf>,
+}
+impl<'inf, I> FallibleTypeFold<'inf> for OccursCheck<'_, 'inf, I>
+where
+    I: MkTy<'inf, TcUnifierVar<'inf>>,
+{
+    type Error = TypeCheckError<'inf>;
+    type TypeVar = TcUnifierVar<'inf>;
+    type InTypeVar = TcUnifierVar<'inf>;
+
+    fn ctx(&self) -> &dyn MkTy<'inf, TcUnifierVar<'inf>> {
+        self.ctx
+    }
+
+    fn try_fold_var(&mut self, var: Self::TypeVar) -> Result<Ty<'inf, Self::TypeVar>, Self::Error> {
+        if var == self.var {
+            Err(TypeCheckError::OccursCheckFailed(var))
+        } else {
+            Ok(self.ctx.mk_ty(VarTy(var)))
         }
     }
+}
 
-    #[cfg(test)]
-    fn with_global_env(
-        ast_arena: &'ast Bump,
-        ty_arena: &'ty Bump,
-        global_env: FxHashMap<(ModuleId, ItemId), Scheme<'ty, TcVar>>,
-    ) -> Self {
-        Self {
-            global_env,
-            ..Self::new(ast_arena, ty_arena)
-        }
-    }
-
-    /// Allocate a unifier variable as a variable type
-    fn as_type_var(&self, unifier: TcUnifierVar) -> &'ty UnifierType<'ty> {
-        self.ty_arena
-            .alloc(Type::VarTy(UnifierTypeId::Unifier(unifier)))
-    }
-
-    // This helper exists to get around liftimes
-    fn fresh_unifier_var(&mut self) -> &'ty UnifierType<'ty> {
-        // If we try to combine this as
-        // `self.as_type_var(self.fresh_unifier())`
-        // rust think's we're holding an immutable and mutable borrow at the same time so
-        // we need the temp variable.
-        let uv = self.unifiers.fresh_unifier();
-        self.as_type_var(uv)
-    }
-
-    /// Record two types must be equal
-    fn equate_ty(&mut self, ty: &'ty UnifierType<'ty>, other_ty: &'ty UnifierType<'ty>) {
-        match (ty, other_ty) {
-            // Unifier optimization
-            // If we're going to infer and equate a type to unifier, we can instead set that
-            // unifier equal to the inferred type directly.
-            (VarTy(UnifierTypeId::Unifier(unifier_var)), other_ty) => {
-                if let Some(ty) = self.unifiers.get(*unifier_var) {
-                    self.constraints.push(Constraint::Eq(ty, other_ty));
-                } else {
-                    self.unifiers.insert(*unifier_var, other_ty);
-                }
-            }
-            (ty, VarTy(UnifierTypeId::Unifier(unifier_var))) => {
-                if let Some(other_ty) = self.unifiers.get(*unifier_var) {
-                    self.constraints.push(Constraint::Eq(ty, other_ty));
-                } else {
-                    self.unifiers.insert(*unifier_var, ty);
-                }
-            }
-            (ty, other_ty) => {
-                self.constraints.push(Constraint::Eq(other_ty, ty));
-            }
-        }
-    }
-
+impl<'infer> InferCtx<'infer> {
     /// Check a term against a given type.
     /// This method pairs with infer to form a bidirectional type checker
-    fn check(
+    fn _check<I>(
         &mut self,
+        infer_ctx: &I,
+        constraints: &mut Vec<Constraint<InferTy<'infer>>>,
+        var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
         term: &Term<'_, VarId>,
-        expected_ty: &'ty UnifierType<'ty>,
-    ) -> &'ast Term<'ast, UnifierVarId<'ty>> {
-        use Type::*;
-        match (term, expected_ty) {
+        expected_ty: InferTy<'infer>,
+    ) -> ()
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        use TypeKind::*;
+        match (term, *expected_ty) {
             (Abstraction { arg, body }, FunTy(arg_ty, body_ty)) => {
                 // Check an abstraction against a function type by checking the body checks against
                 // the function return type with the function argument type in scope.
                 self.local_env.insert(*arg, arg_ty);
-                let body = self.check(body, body_ty);
+                self._check(infer_ctx, constraints, var_tys, body, body_ty);
                 self.local_env.remove(arg);
-
-                self.ast_arena.alloc(Abstraction {
-                    arg: TypedVarId {
-                        var: *arg,
-                        ty: arg_ty,
-                    },
-                    body,
-                })
             }
             // Bucket case for when we need to check a rule against a type but no case applies
-            (term, expected_ty) => {
+            (term, _) => {
                 // Infer a type for our term and check that the expected type is equal to the
                 // inferred type.
-                let (typed_term, inferred_ty) = self.infer(term);
-                self.equate_ty(expected_ty, inferred_ty);
-                typed_term
+                let inferred_ty = self._infer(infer_ctx, constraints, var_tys, term);
+                constraints.push(Constraint::Eq(expected_ty, inferred_ty));
             }
         }
     }
 
-    /// Infer a type for a term
-    /// This method pairs with check to form a bidirectional type checker
-    fn infer(
+    pub fn infer<I>(
         &mut self,
+        infer_ctx: &I,
         term: &Term<'_, VarId>,
     ) -> (
-        &'ast Term<'ast, UnifierVarId<'ty>>,
-        &'ty Type<'ty, UnifierTypeId>,
-    ) {
+        Vec<Constraint<InferTy<'infer>>>,
+        FxHashMap<VarId, InferTy<'infer>>,
+        InferTy<'infer>,
+    )
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        let mut constraints = vec![];
+        let mut var_tys = FxHashMap::default();
+        let ty = self._infer(infer_ctx, &mut constraints, &mut var_tys, term);
+        (constraints, var_tys, ty)
+    }
+
+    /// Infer a type for a term
+    /// This method pairs with check to form a bidirectional type checker
+    fn _infer<I>(
+        &mut self,
+        infer_ctx: &I,
+        constraints: &mut Vec<Constraint<InferTy<'infer>>>,
+        var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
+        term: &Term<'_, VarId>,
+    ) -> InferTy<'infer>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
         match term {
             // Abstraction inference  is done by creating two new unifiers <arg> and <body>
             // The abstraction body is checked against these fresh type variables
             // The resulting type of the inference is function type <arg> -> <body>
             Abstraction { arg, body } => {
-                let arg_ty = self.fresh_unifier_var();
-                let body_ty = self.fresh_unifier_var();
+                let arg_ty = infer_ctx.mk_ty(VarTy(self.unifiers.new_key(None)));
+                let body_ty = infer_ctx.mk_ty(VarTy(self.unifiers.new_key(None)));
 
+                var_tys.insert(*arg, arg_ty);
                 self.local_env.insert(*arg, arg_ty);
-                let body = self.check(body, body_ty);
+                self._check(infer_ctx, constraints, var_tys, body, body_ty);
                 self.local_env.remove(arg);
 
-                let typed_term = self.ast_arena.alloc(Abstraction {
-                    arg: TypedVarId {
-                        var: *arg,
-                        ty: arg_ty,
-                    },
-                    body,
-                });
-                let ty = self.ty_arena.alloc(Type::FunTy(arg_ty, body_ty));
-                (typed_term, ty)
+                infer_ctx.mk_ty(TypeKind::FunTy(arg_ty, body_ty))
             }
             // Application inference starts by inferring types for the func of the application.
             // We equate this inferred type to a function type, generating fresh unifiers if
@@ -267,168 +219,291 @@ impl<'ast, 'ty> TypeChecker<'ast, 'ty> {
             // We then check the arg of the application against the arg type of the function type
             // The resulting type of this application is the function result type.
             Application { func, arg } => {
-                let (typed_func, fun_ty) = self.infer(func);
+                let fun_ty = self._infer(infer_ctx, constraints, var_tys, func);
                 // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
                 // for arg and ret type.
-                let (arg_ty, ret_ty) = match fun_ty {
-                    FunTy(arg_ty, ret_ty) => (*arg_ty, *ret_ty),
-                    ty => {
-                        let arg_ty = self.fresh_unifier_var();
-                        let ret_ty = self.fresh_unifier_var();
-                        self.equate_ty(ty, self.ty_arena.alloc(FunTy(arg_ty, ret_ty)));
+                let (arg_ty, ret_ty) = match *fun_ty {
+                    FunTy(arg_ty, ret_ty) => (arg_ty, ret_ty),
+                    _ => {
+                        let arg_ty = infer_ctx.clone().mk_ty(VarTy(self.unifiers.new_key(None)));
+                        let ret_ty = infer_ctx.clone().mk_ty(VarTy(self.unifiers.new_key(None)));
+                        constraints.push(Constraint::Eq(
+                            fun_ty,
+                            infer_ctx.mk_ty(FunTy(arg_ty, ret_ty)),
+                        ));
                         (arg_ty, ret_ty)
                     }
                 };
 
-                let typed_arg = self.check(arg, arg_ty);
+                self._check(infer_ctx, constraints, var_tys, arg, arg_ty);
 
-                let typed_app = self.ast_arena.alloc(Application {
-                    func: typed_func,
-                    arg: typed_arg,
-                });
-                (typed_app, ret_ty)
+                ret_ty
             }
             // If the variable is in environemnt return it's type, otherwise return an error.
             Variable(var) => {
-                if let Some(ty) = self.local_env.get(var) {
-                    (
-                        self.ast_arena.alloc(Variable(TypedVarId { var: *var, ty })),
-                        ty,
-                    )
+                if let Some(ty) = self.local_env.get(var).cloned() {
+                    var_tys.insert(*var, ty);
+                    ty
                 } else {
                     self.errors.push(TypeCheckError::VarNotDefined(*var));
-                    (
-                        self.ast_arena.alloc(Variable(TypedVarId {
-                            var: *var,
-                            ty: self.error_ty,
-                        })),
-                        self.error_ty,
-                    )
+                    let err_ty = infer_ctx.mk_ty(ErrorTy);
+                    var_tys.insert(*var, err_ty);
+                    err_ty
                 }
             }
-            Item(item) => {
-                match self.global_env.get(item) {
-                    None => {
-                        self.errors.push(TypeCheckError::ItemNotDefined(*item));
-                        (self.ast_arena.alloc(Item(*item)), self.error_ty)
-                    }
-                    Some(scheme) => {
-                        // Wrap this up as an instantiate method eventually
-                        let var_to_unifier = scheme.vars.create_from(|ty_var, _| {
-                            let unifier = self.unifiers.fresh_unifier_with(
-                                self.ty_arena.alloc(VarTy(UnifierTypeId::Var(ty_var))),
-                            );
-                            self.ty_arena.alloc(VarTy(UnifierTypeId::Unifier(unifier))) as &_
-                        });
+            // TODOs
+            Item(_) => todo!(),
+            Unit => todo!(),
+            Concat { .. } => todo!(),
+            Label { .. } => todo!(),
+        }
+    }
 
-                        let ty = scheme.ty.apply(self.ty_arena, &var_to_unifier);
-                        self.constraints.extend(
-                            scheme
-                                .constraints
-                                .iter()
-                                .map(|constr| constr.apply(self.ty_arena, &var_to_unifier)),
-                        );
-                        (self.ast_arena.alloc(Item(*item)), ty)
-                    }
-                }
+    fn normalize_ty(&mut self, ty: InferTy<'infer>) -> Option<InferTy<'infer>> {
+        match *ty {
+            VarTy(var) => self.unifiers.probe_value(var),
+            _ => None,
+        }
+    }
+
+    fn unify_var_ty<I>(
+        &mut self,
+        ctx: &I,
+        var: TcUnifierVar<'infer>,
+        ty: InferTy<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        let ty_ = ty.try_fold_with(&mut OccursCheck { ctx, var })?;
+        self.unifiers
+            .unify_var_value(var, Some(ty_))
+            .map_err(|(left, right)| TypeCheckError::TypeMismatch(left, right))
+    }
+
+    fn unify_ty_ty<I>(
+        &mut self,
+        ctx: &I,
+        left: InferTy<'infer>,
+        right: InferTy<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        let normal_left = self.normalize_ty(left).unwrap_or(left);
+        let normal_right = self.normalize_ty(right).unwrap_or(right);
+
+        match (*normal_left, *normal_right) {
+            // If an error appears anywhere fail unification
+            (ErrorTy, _) | (_, ErrorTy) => Err(TypeCheckError::TypeMismatch(left, right)),
+
+            // Special case for when two keys meet
+            (VarTy(left_var), VarTy(right_var)) => self
+                .unifiers
+                .unify_var_var(left_var, right_var)
+                .map_err(|e| e.into()),
+
+            // If a key meets a new ty try to set them
+            (_, VarTy(var)) => self.unify_var_ty(ctx, var, left),
+            (VarTy(var), _) => self.unify_var_ty(ctx, var, right),
+
+            // Decompose compound types
+            (FunTy(left_arg, left_ret), FunTy(right_arg, right_ret)) => {
+                self.unify_ty_ty(ctx.clone(), left_arg, right_arg)?;
+                self.unify_ty_ty(ctx, left_ret, right_ret)
+            }
+            // Discharge equal types
+            (IntTy, IntTy) => Ok(()),
+
+            // Type mismatch
+            (IntTy, FunTy(_, _)) | (FunTy(_, _), IntTy) => {
+                Err(TypeCheckError::TypeMismatch(left, right))
             }
         }
     }
 
-    fn solve_constraints(&mut self) -> GeneralizedSubst<'ty> {
-        let solver: ConstraintSolver<'ty> = ConstraintSolver::new(self.ty_arena);
+    fn solve<I>(
+        mut self,
+        ctx: &I,
+        constraints: Vec<Constraint<InferTy<'infer>>>,
+    ) -> Result<InPlaceUnificationTable<TcUnifierVar<'infer>>, TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        // TODO: remove this clone
+        for constr in constraints {
+            match constr {
+                Constraint::Eq(left, right) => self.unify_ty_ty(ctx.clone(), left, right)?,
+            }
+        }
+        Ok(self.unifiers)
+    }
+}
 
-        // TODO: We need to represent our unifiers as input constraints
-        // We currently naively create constraints for unifiers, solve them, and then copy them
-        // back into the unifiers.
-        // But if possible it'd be better to recognize them as unifiers and update them in place as
-        // we solve. However this would complicate interaction finding/solving.
-        let unifier_constrs = self.unifiers.iter().map(|(unifier, ty)| {
-            let unifier_ty = self.ty_arena.alloc(VarTy(unifier.into()));
-            Constraint::Eq(unifier_ty, ty)
-        });
-        let constrs = self
-            .constraints
-            .drain(..)
-            .chain(unifier_constrs)
-            .collect::<Vec<_>>();
-        let (subst, residual, errors) = solver.solve(constrs.into_iter());
+pub struct Zonker<'a, 'ctx, 'infer> {
+    ctx: &'a dyn MkTy<'ctx, TcVar>,
+    unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer>>,
+    free_vars: Vec<TcUnifierVar<'infer>>,
+}
 
-        // Update unifiers that got solved during the process, generalize any unifiers that are free by introducing fresh type variables
-        for (uv, opt_ty) in self.unifiers.raw_iter_mut() {
-            *opt_ty = Some(
-                opt_ty
-                    .map(|ty| ty.apply(self.ty_arena, &subst))
-                    .or(subst.get(uv))
+impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
+    type Error = Infallible;
+    type TypeVar = TcVar;
+    type InTypeVar = TcUnifierVar<'infer>;
+
+    fn ctx(&self) -> &dyn MkTy<'ctx, Self::TypeVar> {
+        self.ctx
+    }
+
+    fn try_fold_var(&mut self, var: Self::InTypeVar) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> { 
+        match self.unifiers.probe_value(var) {
+            Some(ty) => {
+                ty.try_fold_with(self)
+            },
+            None => {
+                let root = self.unifiers.find(var);
+                let var_indx = self.free_vars.iter()
+                    .position(|uv| &root == uv)
                     .unwrap_or_else(|| {
-                        let ty_var = self.type_var_supply.push(());
-                        self.ty_arena.alloc(VarTy(UnifierTypeId::Var(ty_var)))
-                    }),
-            )
+                        let next_index = self.free_vars.len();
+                        self.free_vars.push(var);
+                        next_index
+                    });
+                Ok(self.ctx().mk_ty(VarTy(TcVar(var_indx))))
+            },
         }
-        self.errors.extend(errors);
-        if !residual.is_empty() {
-            self.errors
-                .push(TypeCheckError::UnsolvedConstraints(residual));
-        }
-
-        // During generalization we store all unifiers in self.unifiers. So we can construct a full
-        // generalized subst by assigning a type to each of them
-        GeneralizedSubst::from_iter(self.unifiers.raw_iter().map(|(uv, opt_ty)| {
-            opt_ty
-                .map(|ty| ty.apply(self.ty_arena, &subst))
-                .or(subst.get(uv))
-                .unwrap_or_else(|| {
-                    let ty_var = self.type_var_supply.push(());
-                    self.ty_arena.alloc(VarTy(UnifierTypeId::Var(ty_var)))
-                })
-        }))
     }
 }
 
-/// Type check a term.
-/// This is a convenience wrapper to instantiate a type checker and run it's pipeline against a
-/// term.
-/// Returns the typed ast and any errors encountered.
-pub fn tc_term<'ast: 'ty, 'ty>(
-    ast_arena: &'ast Bump,
-    ty_arena: &'ty Bump,
-    ast: Ast<'_, VarId>,
-) -> (
-    Ast<'ast, TypedVarId<'ty, TcVar>>,
-    &'ty Type<'ty, TcVar>,
-    Vec<TypeCheckError<'ty>>,
-) {
-    tc_term_with(TypeChecker::new(ast_arena, ty_arena), ast)
+pub fn tc_term<'ty, 'infer, I, II>(
+    ty_ctx: &I,
+    infer_ctx: &II,
+    term: &'_ Term<'_, VarId>,
+) -> (FxHashMap<VarId, Ty<'ty, TcVar>>, Ty<'ty, TcVar>)
+where
+    I: MkTy<'ty, TcVar>,
+    II: MkTy<'infer, TcUnifierVar<'infer>>,
+{
+    let mut infer = InferCtx {
+        local_env: FxHashMap::default(),
+        errors: vec![],
+        unifiers: InPlaceUnificationTable::default(),
+    };
+    let (constraints, var_tys, ty) = infer.infer(infer_ctx, term);
+    let mut unifiers = infer
+        .solve(infer_ctx, constraints)
+        .expect("TODO: error reporting");
+    let mut zoinkies = Zonker {
+        ctx: ty_ctx,
+        unifiers: &mut unifiers,
+        free_vars: vec![],
+    };
+    let zonked_ty = ty.try_fold_with(&mut zoinkies).unwrap();
+    let zonked_var_tys = var_tys
+        .into_iter()
+        .map(|(var, ty)| (var, ty.try_fold_with(&mut zoinkies).unwrap()))
+        .collect::<FxHashMap<_, _>>();
+    (zonked_var_tys, zonked_ty)
 }
 
-fn tc_term_with<'ast: 'ty, 'ty>(
-    mut tc: TypeChecker<'ast, 'ty>,
-    ast: Ast<'_, VarId>,
-) -> (
-    Ast<'ast, TypedVarId<'ty, TcVar>>,
-    &'ty Type<'ty, TcVar>,
-    Vec<TypeCheckError<'ty>>,
-) {
-    let (typed_term, ty) = tc.infer(ast.root());
-    let subst = tc.solve_constraints();
+const SHARD_BITS: usize = 5;
+const SHARDS: usize = 1 << SHARD_BITS;
 
-    println!("{:?}", subst);
+#[inline]
+fn get_shard_index_by_hash(hash: u64) -> usize {
+    let hash_len = std::mem::size_of::<usize>();
+    let bits = (hash >> (hash_len * 8 - 7 - SHARD_BITS)) as usize;
+    bits % SHARDS
+}
+fn make_hash<K: std::hash::Hash + ?Sized>(val: &K) -> u64 {
+    let mut state = FxHasher::default();
+    val.hash(&mut state);
+    state.finish()
+}
 
-    let (typed_term, ty) = (
-        typed_term.apply((tc.ast_arena, tc.ty_arena), &subst),
-        ty.zonk(tc.ty_arena, &subst),
-    );
-    // TODO: Use subst to zonk our r|esulting typed_term and type
-    // TODO: Figure out how to do Spans
-    (Ast::new(FxHashMap::default(), typed_term), ty, tc.errors)
+struct Sharded<T> {
+    shards: [parking_lot::RwLock<T>; SHARDS],
+}
+
+impl<T> Sharded<T> {
+    fn new(mut mk_t: impl FnMut() -> T) -> Self {
+        Self {
+            shards: [(); SHARDS].map(|()| RwLock::new(mk_t())),
+        }
+    }
+
+    fn get_shard_by_hash(&self, hash: u64) -> &RwLock<T> {
+        &self.shards[get_shard_index_by_hash(hash)]
+    }
+}
+impl<T: Default> Default for Sharded<T> {
+    fn default() -> Self {
+        Self::new(T::default)
+    }
+}
+
+type ShardedHashMap<K, V> = Sharded<hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>>;
+
+impl<K: Eq + std::hash::Hash + Copy> ShardedHashMap<K, ()> {
+    fn _intern<'a, Q>(&'a self, value: Q, make: impl FnOnce(Q) -> K) -> K
+    where
+        K: Borrow<Q>,
+        Q: std::hash::Hash + Eq,
+    {
+        let hash = make_hash(&value);
+        let mut shard = self.get_shard_by_hash(hash).write();
+        let entry = shard.raw_entry_mut().from_key_hashed_nocheck(hash, &value);
+
+        match entry {
+            hashbrown::hash_map::RawEntryMut::Occupied(e) => *e.key(),
+            hashbrown::hash_map::RawEntryMut::Vacant(e) => {
+                let v = make(value);
+                e.insert_hashed_nocheck(hash, v, ());
+                v
+            }
+        }
+    }
+}
+
+struct TyCtx<'ctx, TV> {
+    arena: &'ctx Bump,
+    tys: ShardedHashMap<RefHandle<'ctx, TypeKind<'ctx, TV>>, ()>,
+}
+
+impl<'ctx, TV> TyCtx<'ctx, TV>
+where
+    TV: Eq + Copy + std::hash::Hash,
+{
+    fn intern(&self, kind: TypeKind<'ctx, TV>) -> RefHandle<'ctx, TypeKind<'ctx, TV>> {
+        self.tys._intern(kind, |kind| {
+            let kind_ref = self.arena.alloc(kind);
+            Handle(kind_ref)
+        })
+    }
+}
+
+impl<'ctx, TV> MkTy<'ctx, TV> for TyCtx<'ctx, TV>
+where
+    TV: Eq + Copy + std::hash::Hash,
+{
+    fn mk_ty(&self, kind: TypeKind<'ctx, TV>) -> Ty<'ctx, TV> {
+        Ty(self.intern(kind))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::id::Id;
+    use aiahr_core::ast::Ast;
+    use assert_matches::assert_matches;
+    use bumpalo::Bump;
 
     use super::*;
+
+    macro_rules! ty {
+        ($kind:pat) => {
+            Ty(Handle($kind))
+        };
+    }
 
     #[test]
     fn test_tc_abs() {
@@ -443,37 +518,30 @@ mod tests {
                 }),
             }),
         );
+        let infer_intern = TyCtx {
+            arena: &arena,
+            tys: ShardedHashMap::default(),
+        };
+        let ty_intern = TyCtx {
+            arena: &arena,
+            tys: ShardedHashMap::default(),
+        };
 
-        let (typed_ast, ty, errors) = tc_term(&arena, &arena, untyped_ast);
+        let (var_to_tys, ty) = tc_term(&ty_intern, &infer_intern, untyped_ast.root());
 
-        assert_eq!(errors, vec![], "no type checking errors");
-        assert_eq!(
+        assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TcVar(0)))));
+        assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TcVar(1)))));
+        assert_matches!(
             ty,
-            &FunTy(&VarTy(TcVar(0)), &FunTy(&VarTy(TcVar(1)), &VarTy(TcVar(0)))),
-            "inferred types match"
+            ty!(FunTy(
+                ty!(VarTy(TcVar(0))),
+                ty!(FunTy(ty!(VarTy(TcVar(1))), ty!(VarTy(TcVar(0))),)),
+            ))
         );
-        assert_eq!(
-            typed_ast.root(),
-            &Abstraction {
-                arg: TypedVarId {
-                    var: VarId(0),
-                    ty: &VarTy(TcVar(0))
-                },
-                body: &Abstraction {
-                    arg: TypedVarId {
-                        var: VarId(1),
-                        ty: &VarTy(TcVar(1))
-                    },
-                    body: &Variable(TypedVarId {
-                        var: VarId(0),
-                        ty: &VarTy(TcVar(0)),
-                    })
-                }
-            },
-            "typed asts match"
-        )
     }
 
+    
+    /*
     #[test]
     fn test_tc_undefined_var_fails() {
         let arena = Bump::new();
@@ -487,7 +555,9 @@ mod tests {
         assert_eq!(ty, &ErrorTy);
         assert!(errors.contains(&TypeCheckError::VarNotDefined(VarId(0))))
     }
+    */
 
+    /*
     #[test]
     fn test_tc_undefined_global_fails() {
         let arena = Bump::new();
@@ -520,7 +590,7 @@ mod tests {
 
         let global_env = FxHashMap::from_iter([(item, scheme)]);
 
-        let tc = TypeChecker::with_global_env(&arena, &arena, global_env);
+        let tc = TypeChecker::with_global_env(TyCtx { ast_arena: &arena, ty_arena: &arena }, global_env);
         let (typed_term, ty, errors) = tc_term_with(
             tc,
             Ast::new(
@@ -553,5 +623,5 @@ mod tests {
             }
         );
         assert_eq!(ty, &FunTy(&VarTy(arg), &VarTy(ret)));
-    }
+    }*/
 }

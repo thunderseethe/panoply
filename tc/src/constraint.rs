@@ -3,9 +3,7 @@ use std::collections::hash_map::Entry;
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
-use crate::{UnifierType, TypeCheckError};
-use crate::subst::{UnifierSubst, InsertType};
-use crate::ty::{UnifierTypeId, TcUnifierVar, Type};
+use crate::{TypeCheckError, InferCtx};
 
 
 /// Solve constraints generated from Ast during first phase of type checking.
@@ -20,27 +18,27 @@ use crate::ty::{UnifierTypeId, TcUnifierVar, Type};
 /// At the end of this process we'll have a set of canonical constraints that can be turned into a
 /// substitution "solving" any open type variables (and crucially ALL unifier variables) for type
 /// checking.
-pub(crate) struct ConstraintSolver<'ty> {
-    ty_arena: &'ty Bump,
-    error_ty: &'ty UnifierType<'ty>,
+/*pub(crate) struct ConstraintSolver<'ctx> {
+    ctx: &'ctx InferCtx<'ctx>,
+    unifiers: InPlaceUnificationTable<TcUnifierVar<'ctx>>,
+    constraint: Vec<Constraint<InferTy<'ctx>>>,
 }
-impl<'ty> ConstraintSolver<'ty> {
-    pub(crate) fn new(ty_arena: &'ty Bump) -> Self {
+impl<'ctx> ConstraintSolver<'ctx> {
+    pub(crate) fn new(ctx: &'ctx InferCtx<'ctx>, ) -> Self {
         Self {
-            ty_arena,
-            error_ty: ty_arena.alloc(Type::ErrorTy),
+            ctx,
         }
     }
 
     /// Solve a set of input constraints.
     /// If solving succeeds a substitution from type variables to their types is returned.
     /// If solving failes a list of residual constraints and errors are returned.
-    pub(crate) fn solve(
+    pub(crate) fn solve<Ty>(
         self,
-        constraints: impl Iterator<Item = Constraint<'ty>>,
+        constraints: impl Iterator<Item = Constraint<Ty>>,
     ) -> (
         UnifierSubst<'ty>,
-        Vec<Constraint<'ty>>,
+        Vec<Constraint<Ty>>,
         Vec<TypeCheckError<'ty>>,
     ) {
         // Canonicalize our input set of constraints
@@ -61,7 +59,7 @@ impl<'ty> ConstraintSolver<'ty> {
                 let (new_canon, new_residual) = match interact {
                     Interaction::InteractEq { tvar, left, right } => canonical_constraints(
                         [
-                            Constraint::Eq(self.ty_arena.alloc(Type::VarTy(tvar)), left),
+                            Constraint::Eq(self.ty_arena.alloc(TypeKind::VarTy(tvar)), left),
                             Constraint::Eq(left, right),
                         ]
                         .into_iter(),
@@ -77,11 +75,11 @@ impl<'ty> ConstraintSolver<'ty> {
                     } => canonical_constraints(
                         [
                             Constraint::Eq(
-                                self.ty_arena.alloc(Type::VarTy(UnifierTypeId::Unifier(tvar))),
+                                self.ty_arena.alloc(TypeKind::VarTy(UnifierTypeId::Unifier(tvar))),
                                 needle,
                             ),
                             Constraint::Eq(
-                                self.ty_arena.alloc(Type::VarTy(hay_tvar)),
+                                self.ty_arena.alloc(TypeKind::VarTy(hay_tvar)),
                                 hay_ty.apply_oneshot(self.ty_arena, tvar, needle),
                             ),
                         ]
@@ -112,11 +110,11 @@ impl<'ty> ConstraintSolver<'ty> {
     /// types with no type variable indirections between them.
     fn flatten(
         &self,
-        mut canon: CanonConstraintBag<'ty>,
+        mut canon: CanonConstraintBag<&'ty InferUnifierType<'ty>>,
     ) -> Result<UnifierSubst<'ty>, TypeCheckError<'ty>> {
         fn resolve_var<'ty>(
             error_ty: &'ty UnifierType<'ty>,
-            canon: &mut CanonConstraintBag<'ty>,
+            canon: &mut CanonConstraintBag<&'ty InferUnifierType<'ty>>,
             uv: TcUnifierVar,
         ) -> Result<Option<&'ty UnifierType<'ty>>, TypeCheckError<'ty>> {
             match canon.get(&(uv.into())) {
@@ -130,7 +128,7 @@ impl<'ty> ConstraintSolver<'ty> {
                     match tys[0] {
                         // If our var is mapped to another var chase down that variable,
                         // and save the result for this variable as well.
-                        Type::VarTy(UnifierTypeId::Unifier(var)) => {
+                        TypeKind::VarTy(UnifierTypeId::Unifier(var)) => {
                             let opt_ty = resolve_var(error_ty, canon, *var)?;
                             if let Some(ty) = opt_ty {
                                 canon.insert(uv.into(), vec![ty]);
@@ -160,56 +158,56 @@ impl<'ty> ConstraintSolver<'ty> {
         }
         Ok(subst)
     }
-}
+}*/
 
 /// A constraint produced during initail type checking.
 /// It will be solved in the second half of type checking to produce a map from Unifier variables
 /// to their types.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Constraint<'ty> {
+pub enum Constraint<Ty> {
     /// Two types must be equal for our term to type check
-    Eq(&'ty UnifierType<'ty>, &'ty UnifierType<'ty>),
+    Eq(Ty, Ty),
 }
 
-/// A canonical constraint
+/*/// A canonical constraint
 /// A constraint that is in a standard form: type var ~ type
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CanonicalConstraint<'ty> {
+pub(crate) enum CanonicalConstraint<Ty> {
     CanonEq {
-        tvar: UnifierTypeId,
-        ty: &'ty UnifierType<'ty>,
+        tvar: TcUnifierVar,
+        ty: Ty,
     },
 }
 
 /// Result of canoncilization
-enum CanonResult<'ty> {
+enum CanonResult<Ty> {
     /// A canonical constraint
-    Canon(CanonicalConstraint<'ty>),
+    Canon(CanonicalConstraint<Ty>),
     /// More work is needed to canonicalize
-    Work(Vec<Constraint<'ty>>),
+    Work(Vec<Constraint<Ty>>),
     /// Could not canoncicalize, mark as residual
-    Residue(Constraint<'ty>),
+    Residue(Constraint<Ty>),
 }
 
-impl<'ty> From<CanonicalConstraint<'ty>> for CanonResult<'ty> {
-    fn from(canon: CanonicalConstraint<'ty>) -> Self {
+impl<Ty> From<CanonicalConstraint<Ty>> for CanonResult<Ty> {
+    fn from(canon: CanonicalConstraint<Ty>) -> Self {
         Self::Canon(canon)
     }
 }
-impl<'ty> From<Constraint<'ty>> for CanonResult<'ty> {
-    fn from(ct: Constraint<'ty>) -> Self {
+impl<Ty> From<Constraint<Ty>> for CanonResult<Ty> {
+    fn from(ct: Constraint<Ty>) -> Self {
         Self::Residue(ct)
     }
 }
 
-impl<'ty> Constraint<'ty> {
+impl<'ty> Constraint<&'ty InferUnifierType<'ty>> {
     /// Take a step towards canonicalizing a constraint:
     /// * Decompose compound types into a list of composite type constraints
     /// * Turn a VarTy ~ Type constraint into a canonical constraint
     /// * Incompatible types become residual constraints
-    fn canonical(self) -> CanonResult<'ty> {
+    fn canonical(self) -> CanonResult<&'ty InferUnifierType<'ty>> {
         use Constraint::*;
-        use crate::ty::Type::*;
+        use crate::ty::TypeKind::*;
         match self {
             // If two IntTy meet this is tautologically true and we can remove the constraint
             // entirely
@@ -236,26 +234,26 @@ impl<'ty> Constraint<'ty> {
             }
         }
     }
-}
+}*/
 
 /// A multiset of canoncial constraints
-pub(super) type CanonConstraintBag<'ty> = FxHashMap<UnifierTypeId, Vec<&'ty UnifierType<'ty>>>;
+//pub(super) type CanonConstraintBag<Ty> = FxHashMap<TcUnifierVar, Vec<Ty>>;
 
 /// In place merge the right canon bag into the left canon bag
-pub(super) fn merge_left<'ty>(canon: &mut CanonConstraintBag<'ty>, new_canon: CanonConstraintBag<'ty>) {
+/*pub(super) fn merge_left<Ty>(canon: &mut CanonConstraintBag<Ty>, new_canon: CanonConstraintBag<Ty>) {
     for (tvar, tys) in new_canon.into_iter() {
         canon.entry(tvar).or_default().extend(tys);
     }
-}
+}*/
 
 /// Canonical constraints
-pub(super) fn canonical_constraints<'ty>(
-    cts: impl Iterator<Item = Constraint<'ty>>,
-) -> (CanonConstraintBag<'ty>, Vec<Constraint<'ty>>) {
-    fn aux<'ty>(
-        canon: &mut CanonConstraintBag<'ty>,
-        residue: &mut Vec<Constraint<'ty>>,
-        cts: impl Iterator<Item = Constraint<'ty>>,
+/*pub(super) fn canonical_constraints<Ty>(
+    cts: impl Iterator<Item = Constraint<Ty>>,
+) -> (CanonConstraintBag<Ty>, Vec<Constraint<Ty>>) {
+    fn aux<Ty>(
+        canon: &mut CanonConstraintBag<Ty>,
+        residue: &mut Vec<Constraint<Ty>>,
+        cts: impl Iterator<Item = Constraint<Ty>>,
     ) {
         for ct in cts {
             match ct.canonical() {
@@ -273,24 +271,24 @@ pub(super) fn canonical_constraints<'ty>(
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Interaction<'ty> {
+pub(crate) enum Interaction<Ty> {
     InteractEq {
-        tvar: UnifierTypeId,
-        left: &'ty UnifierType<'ty>,
-        right: &'ty UnifierType<'ty>,
+        tvar: TcUnifierVar,
+        left: Ty,
+        right: Ty,
     },
     InteractOccurs {
         tvar: TcUnifierVar,
-        needle: &'ty UnifierType<'ty>,
-        haystack: CanonicalConstraint<'ty>,
+        needle: Ty,
+        haystack: CanonicalConstraint<Ty>,
     },
 }
 
 /// Search through a canonical constraint bag for interactions
 /// canon_bag is mutated so it does not contain any constraints that appear in interactions.
-pub(super) fn find_interactions<'ty>(
-    canon_bag: &mut CanonConstraintBag<'ty>,
-    interactions: &mut Vec<Interaction<'ty>>,
+pub(super) fn find_interactions<Ty>(
+    canon_bag: &mut CanonConstraintBag<Ty>,
+    interactions: &mut Vec<Interaction<Ty>>,
 ) {
     //let mut interactions = vec![];
     // We need to mutate canon_bag so don't hold keys
@@ -340,21 +338,19 @@ pub(super) fn find_interactions<'ty>(
             canon_bag.entry(tvar).or_default().push(ty);
         }
     }
-}
+}*/
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    macro_rules! unifier_var_ty {
+    /*macro_rules! unifier_var_ty {
         ($e:expr) => {
-            Type::VarTy(UnifierTypeId::Unifier(TcUnifierVar($e)))
+            Type::VarTy(TcUnifierVar($e))
         };
     }
 
-    macro_rules! bag {
-        () => {{ FxHashMap::default() }};
-        ($($key:expr => [$($ty:expr),*]),*) => {{
+    *macro_rules! bag { () => {{ FxHashMap::default() }}; ($($key:expr => [$($ty:expr),*]),*) => {{
             let mut bag = FxHashMap::default();
             $(bag.insert($key, vec![$($ty),*]);)*
             bag
@@ -363,9 +359,9 @@ mod tests {
 
     #[test]
     fn test_tc_interactions_eq() {
-        let tv = UnifierTypeId::Unifier(TcUnifierVar(0));
+        let tv = TcUnifierVar(0);
         let tv0 = unifier_var_ty!(1);
-        let fun = &Type::FunTy(&unifier_var_ty!(2), &unifier_var_ty!(3));
+        let fun = TypeKind::FunTy(&unifier_var_ty!(2), &unifier_var_ty!(3));
         let mut bag = bag!(tv => [&tv0, &fun]);
 
         let mut ints = vec![];
@@ -387,9 +383,9 @@ mod tests {
         let arn = Bump::new();
         let a = UnifierTypeId::Unifier(TcUnifierVar(0));
         let b = UnifierTypeId::Unifier(TcUnifierVar(1));
-        let fun: &UnifierType<'_> = arn.alloc(Type::FunTy(
+        let fun: &UnifierType<'_> = arn.alloc(TypeKind::FunTy(
             arn.alloc(unifier_var_ty!(3)),
-            arn.alloc(Type::FunTy(arn.alloc(unifier_var_ty!(2)), arn.alloc(Type::VarTy(b)))),
+            arn.alloc(TypeKind::FunTy(arn.alloc(unifier_var_ty!(2)), arn.alloc(TypeKind::VarTy(b)))),
         ));
         let mut bag = bag!(
             a => [fun],
@@ -406,7 +402,7 @@ mod tests {
                 needle: &unifier_var_ty!(4),
                 haystack: CanonicalConstraint::CanonEq {
                     tvar: a,
-                    ty: &Type::FunTy(&unifier_var_ty!(3), &Type::FunTy(&unifier_var_ty!(2), &Type::VarTy(b)))
+                    ty: &TypeKind::FunTy(&unifier_var_ty!(3), &TypeKind::FunTy(&unifier_var_ty!(2), &TypeKind::VarTy(b)))
                 }
             }]
         );
@@ -447,7 +443,7 @@ mod tests {
         let a = arena.alloc(unifier_var_ty!(0));
         let b = arena.alloc(unifier_var_ty!(1));
         let c = arena.alloc(unifier_var_ty!(2));
-        let int: &UnifierType<'_> = arena.alloc(Type::IntTy);
+        let int: &UnifierType<'_> = arena.alloc(TypeKind::IntTy);
 
         let (subst, _residual, errors) = cs.solve(
             vec![
@@ -470,7 +466,7 @@ mod tests {
         let a = arena.alloc(unifier_var_ty!(0));
         let b = arena.alloc(unifier_var_ty!(1));
         let c = arena.alloc(unifier_var_ty!(2));
-        let fun = arena.alloc(Type::FunTy(c, b));
+        let fun = arena.alloc(TypeKind::FunTy(c, b));
 
         let (_subst, residual, _errors) =
             cs.solve(vec![Constraint::Eq(c, a), Constraint::Eq(a, fun)].into_iter());
@@ -486,14 +482,14 @@ mod tests {
         let a = arena.alloc(unifier_var_ty!(0));
         let b = arena.alloc(unifier_var_ty!(1));
         let c = arena.alloc(unifier_var_ty!(2));
-        let fun = arena.alloc(Type::FunTy(a, b));
-        let int: &'_ UnifierType<'_> = arena.alloc(Type::IntTy);
-        let int_fun = arena.alloc(Type::FunTy(int, int));
+        let fun = arena.alloc(TypeKind::FunTy(a, b));
+        let int: &'_ UnifierType<'_> = arena.alloc(TypeKind::IntTy);
+        let int_fun = arena.alloc(TypeKind::FunTy(int, int));
 
         let (subst, residual, _errors) =
             cs.solve(vec![Constraint::Eq(c, fun), Constraint::Eq(c, int_fun)].into_iter());
 
         assert_eq!(residual, vec![]);
         assert_eq!(subst, UnifierSubst::from_iter([int, int, int_fun,]));
-    }
+    }*/
 }

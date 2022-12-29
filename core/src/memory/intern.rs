@@ -1,10 +1,11 @@
 use std::{
     fmt::{self, Debug, Formatter},
-    hash::{Hash, Hasher},
+    hash::{Hash, Hasher, BuildHasherDefault},
     ptr::NonNull,
 };
 
 use dashmap::{DashSet, SharedValue};
+use rustc_hash::FxHasher;
 
 use crate::memory::{
     arena::{Arena, ArenaByRef},
@@ -56,7 +57,7 @@ impl<T: PartialEq + ?Sized> PartialEq for ByPointee<T> {
 /// https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html.
 pub struct SyncInterner<T: ?Sized, A> {
     storage: A,
-    table: DashSet<ByPointee<T>>,
+    table: DashSet<ByPointee<T>, BuildHasherDefault<FxHasher>>,
 }
 
 impl<T, A> SyncInterner<T, A>
@@ -66,7 +67,7 @@ where
     pub fn new(storage: A) -> SyncInterner<T, A> {
         SyncInterner {
             storage,
-            table: DashSet::new(),
+            table: DashSet::with_hasher(BuildHasherDefault::default()),
         }
     }
 }

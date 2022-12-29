@@ -6,9 +6,10 @@ use aiahr_core::id::{Id, IdGen};
 use bumpalo::Bump;
 
 use crate::constraint::Constraint;
-use crate::ty::{TcUnifierVar, TcVar, Type, UnifierTypeId};
-use crate::{TypedVarId, UnifierType, UnifierVarId};
+use crate::ty::{TcUnifierVar, TcVar, TypeKind};
+use crate::{TypedVarId};
 
+/*
 /// Acts as a dense map from TcUnifierVar to T.
 /// Abstracts over the two kinds of substitutions we have. UnifierSubst which may not have types
 /// for all unifiers, and GeneralizedSubst which must have types for all unifiers.
@@ -141,12 +142,12 @@ impl<'ty> Substitutable<'ty, UnifierSubst<'ty>> for UnifierType<'ty> {
 
     fn apply(&self, ty_arena: Self::Alloc, subst: &UnifierSubst<'ty>) -> Self::Output {
         match self {
-            Type::IntTy | Type::ErrorTy => ty_arena.alloc(*self),
-            Type::VarTy(UnifierTypeId::Unifier(uni)) => {
+            TypeKind::IntTy | TypeKind::ErrorTy => ty_arena.alloc(*self),
+            TypeKind::VarTy(UnifierTypeId::Unifier(uni)) => {
                 subst.get(*uni).unwrap_or_else(|| ty_arena.alloc(*self))
             }
-            Type::VarTy(_) => ty_arena.alloc(*self),
-            Type::FunTy(arg, ret) => ty_arena.alloc(Type::FunTy(
+            TypeKind::VarTy(_) => ty_arena.alloc(*self),
+            TypeKind::FunTy(arg, ret) => ty_arena.alloc(TypeKind::FunTy(
                 arg.apply(ty_arena, subst),
                 ret.apply(ty_arena, subst),
             )),
@@ -163,13 +164,13 @@ impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for UnifierTyp
         subst: &IdGen<TcVar, &'ty UnifierType<'ty>>,
     ) -> Self::Output {
         match self {
-            Type::IntTy | Type::ErrorTy => ty_arena.alloc(*self),
-            Type::VarTy(UnifierTypeId::Var(var)) => subst
+            TypeKind::IntTy | TypeKind::ErrorTy => ty_arena.alloc(*self),
+            TypeKind::VarTy(UnifierTypeId::Var(var)) => subst
                 .get(*var)
                 .map(|ty| *ty)
-                .unwrap_or_else(|| ty_arena.alloc(Type::VarTy(UnifierTypeId::Var(*var)))),
-            Type::VarTy(var) => ty_arena.alloc(Type::VarTy(*var)),
-            Type::FunTy(arg, ret) => ty_arena.alloc(Type::FunTy(
+                .unwrap_or_else(|| ty_arena.alloc(TypeKind::VarTy(UnifierTypeId::Var(*var)))),
+            TypeKind::VarTy(var) => ty_arena.alloc(TypeKind::VarTy(*var)),
+            TypeKind::FunTy(arg, ret) => ty_arena.alloc(TypeKind::FunTy(
                 arg.apply(ty_arena, subst),
                 ret.apply(ty_arena, subst),
             )),
@@ -177,7 +178,20 @@ impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for UnifierTyp
     }
 }
 
-impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for Type<'ty, TcVar> {
+impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty InferUnifierType<'ty>>> for TypeKind<'ty, TcVar> {
+    type Alloc = &'ty Bump;
+    type Output = &'ty InferUnifierType<'ty>;
+
+    fn apply(&self, ty_arena: Self::Alloc, subst: &IdGen<TcVar, &'ty InferUnifierType<'ty>>) -> Self::Output {
+        self.and_then(ty_arena, |tv| {
+            subst
+                .get(*tv)
+                .map(|ty| *ty)
+                .unwrap_or_else(|| panic!("Unbound variable in scheme"))
+        })
+    }
+}
+impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for TypeKind<'ty, TcVar> {
     type Alloc = &'ty Bump;
     type Output = &'ty UnifierType<'ty>;
 
@@ -190,14 +204,14 @@ impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for Type<'ty, 
             subst
                 .get(*tv)
                 .map(|ty| *ty)
-                .unwrap_or_else(|| ty_arena.alloc(Type::VarTy(UnifierTypeId::Var(*tv))))
+                .unwrap_or_else(|| ty_arena.alloc(TypeKind::VarTy(UnifierTypeId::Var(*tv))))
         })
     }
 }
 
-impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for Constraint<'ty> {
+impl<'ty> Substitutable<'ty, IdGen<TcVar, &'ty UnifierType<'ty>>> for Constraint<&'ty UnifierType<'ty>> {
     type Alloc = &'ty Bump;
-    type Output = Constraint<'ty>;
+    type Output = Constraint<&'ty UnifierType<'ty>>;
 
     fn apply(
         &self,
@@ -247,6 +261,9 @@ impl<'ast: 'ty, 'ty> Substitutable<'ty, GeneralizedSubst<'ty>>
                 ty: ty.zonk(ty_arena, subst),
             })),
             Term::Item(item) => ast_arena.alloc(Term::Item(*item)),
+            Term::Unit => todo!(),
+            Term::Concat { left, right } => todo!(),
+            Term::Label { label, term } => todo!(),
         }
     }
-}
+}*/

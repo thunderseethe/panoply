@@ -8,7 +8,7 @@ use std::{
     ops::Deref,
     ptr,
     rc::Rc,
-    sync::Arc,
+    sync::Arc, borrow::Borrow,
 };
 
 /// A `Clone`-able pointer type. Implements `Deref` and provides a raw pointer to the target.
@@ -52,7 +52,8 @@ impl<T: ?Sized> Pointer for Arc<T> {
 #[derive(Clone, Copy)]
 pub struct Handle<P>(pub P);
 
-impl<P: Pointer> Debug for Handle<P> {
+impl<P: Pointer> Debug for Handle<P> 
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Handle").field(&self.0.ptr()).finish()
     }
@@ -84,9 +85,23 @@ impl<P: Pointer> PartialOrd for Handle<P> {
     }
 }
 
+impl<P: Pointer> Deref for Handle<P> {
+    type Target = P::Target;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+
 /// See `Handle` for further info.
 pub type RefHandle<'a, T> = Handle<&'a T>;
 
+impl<'a, T> Borrow<T> for RefHandle<'a, T> {
+    fn borrow(&self) -> &T {
+        &self.0
+    }
+}
 /// See `Handle` for further info.
 pub type RcHandle<T> = Handle<Rc<T>>;
 

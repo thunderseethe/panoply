@@ -1,4 +1,5 @@
 use crate::id::{ModuleId, ItemId};
+use crate::memory::handle::RefHandle;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
 
@@ -48,6 +49,13 @@ pub enum Term<'a, Var> {
     Variable(Var),
     // A global variable binding
     Item((ModuleId, ItemId)),
+    // A unit value
+    // Because all products are represented in terms of concat we don't actually have a way to
+    // represent unit at this level
+    Unit,
+    // Concat two rows into a larger row
+    Concat { left: &'a Term<'a, Var>, right: &'a Term<'a, Var> },
+    Label { label: RefHandle<'a, str>, term: &'a Term<'a, Var> },
 }
 
 impl<'a, Var> Term<'a, Var> {
@@ -69,6 +77,9 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
                 Term::Application { func, arg } => { self.stack.extend([func, arg]); self.next() },
                 Term::Variable(var) => Some(var),
                 Term::Item(_) => self.next(),
+                Term::Unit => self.next(),
+                Term::Concat { left, right } => { self.stack.extend([left, right]); self.next() },
+                Term::Label { term, .. } => { self.stack.push(term); self.next() },
             }
         })
     }

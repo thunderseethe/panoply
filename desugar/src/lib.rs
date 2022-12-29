@@ -12,8 +12,8 @@ use rustc_hash::FxHashMap;
 /// Desugar a NST into an AST.
 /// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
 /// the NST.
-pub fn desugar<'n, 's, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> Ast<'a, VarId> {
-    fn ds<'n, 's, 'a>(
+pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> Ast<'a, VarId> {
+    fn ds<'n, 's: 'a, 'a>(
         arena: &'a Bump,
         spans: &mut FxHashMap<&'a ast::Term<'a, VarId>, Span>,
         nst: &'n nst::Term<'n, 's>,
@@ -52,8 +52,19 @@ pub fn desugar<'n, 's, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> Ast<'
                 // We'll replace the span of this node with the parenthesized span
                 ds(arena, spans, term) as &_
             }
+            nst::Term::ProductRow(product) => {
+                match product.fields {
+                    None => arena.alloc(Unit),
+                    Some(fields) => {
+                        let head = arena.alloc(Label { label: fields.first.label.value, term: ds(arena, spans, fields.first.target) });
+                        fields.elems.iter().fold(head, |concat, (_, field)| {
+                            let right = arena.alloc(Label { label: field.label.value, term: ds(arena, spans, field.target) });
+                            arena.alloc(Concat { left: concat, right }) 
+                        })
+                    }
+                }
+            },
             nst::Term::Handle { .. } => todo!(),
-            nst::Term::ProductRow(_) => todo!(),
             nst::Term::SumRow(_) => todo!(),
             nst::Term::FieldAccess { .. } => todo!(),
             nst::Term::Match { .. } => todo!(),
@@ -69,6 +80,10 @@ pub fn desugar<'n, 's, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> Ast<'
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiahr_core::cst::{ProductRow, IdField, Separated};
+    use aiahr_core::memory::arena::BumpArena;
+    use aiahr_core::memory::intern::SyncInterner;
+    use aiahr_core::memory::intern::InternerByRef;
     use aiahr_core::{id::VarId, loc::Loc, nst, span::SpanOf};
     use bumpalo::Bump;
 
@@ -195,6 +210,79 @@ mod tests {
                     body: &Variable(VarId(123)),
                 },
                 arg: &Variable(VarId(10)),
+            }
+        );
+        assert_eq!(
+            ast.span_of(ast.tree),
+            Some(&Span {
+                start: start.start,
+                end: end.end,
+            })
+        );
+    }
+
+    #[test]
+    fn test_desugar_unit() {
+        let arena = Bump::new();
+        let start = random_span();
+        let end = random_span();
+        let ast = desugar(
+            &arena,
+            arena.alloc(nst::Term::ProductRow(ProductRow {
+                lbrace: start,
+                fields: None,
+                rbrace: end,
+            }))
+        );
+
+        assert_eq!(
+            ast.tree,
+            &Unit
+        );
+        assert_eq!(
+            ast.span_of(ast.tree),
+            Some(&Span {
+                start: start.start,
+                end: end.end,
+            })
+        );
+    }
+
+    #[test]
+    fn test_desugar_product() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+
+        let a = interner.intern_by_ref("abc");
+        let b = interner.intern_by_ref("def");
+        let c = interner.intern_by_ref("ghi");
+
+        let start = random_span();
+        let end = random_span();
+        let ast = desugar(
+            &arena,
+            arena.alloc(nst::Term::ProductRow(ProductRow {
+                lbrace: start,
+                fields: Some(Separated {
+                    first: IdField { label: random_span_of(a), sep: random_span(), target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))) },
+                    elems: &[
+                        (random_span(), IdField { label: random_span_of(b), sep: random_span(), target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(1)))) }),
+                        (random_span(), IdField { label: random_span_of(c), sep: random_span(), target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(2)))) }),
+                    ],
+                    comma: None,
+                }),
+                rbrace: end,
+            }))
+        );
+
+        assert_eq!(
+            ast.tree,
+            &Concat {
+                left: &Concat {
+                    left: &Label { label: a, term: &Variable(VarId(0)) },
+                    right: &Label { label: b, term: &Variable(VarId(1)) },
+                },
+                right: &Label { label: c, term: &Variable(VarId(2)) },
             }
         );
         assert_eq!(
