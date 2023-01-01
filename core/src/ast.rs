@@ -55,6 +55,7 @@ pub enum Term<'a, Var> {
     Unit,
     // Concat two rows into a larger row
     Concat { left: &'a Term<'a, Var>, right: &'a Term<'a, Var> },
+    // Label a term, used in construction of Product and Sum types.
     Label { label: RefHandle<'a, str>, term: &'a Term<'a, Var> },
 }
 

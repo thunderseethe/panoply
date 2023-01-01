@@ -1,10 +1,11 @@
 use std::{
     borrow::Borrow,
-    hash::{BuildHasherDefault, Hasher}, convert::Infallible,
+    convert::Infallible,
+    hash::{BuildHasherDefault, Hash, Hasher},
 };
 
 use aiahr_core::{
-    ast::{Term, Term::*},
+    ast::{Ast, Term, Term::*},
     id::{ItemId, ModuleId, VarId},
     memory::handle::{Handle, RefHandle},
 };
@@ -50,7 +51,7 @@ pub enum Constraint<Ty> {
 /// During 1. we use a bidirectional type checker to walk our input AST and generate a set of
 /// constraints (and unification variables) that have to be true for the ast to type check. This
 /// stage also produces a mapping from variables in the AST to their types.
-/// 
+///
 /// Once we have this set of constraints we solve them via unification. Unification maintains a
 /// mapping from unification variables to their type. Each constraint is decomposed into a list of
 /// (uni var, type) pairs that are saved in the mapping. At the end of this process we will either
@@ -93,6 +94,36 @@ where
         } else {
             Ok(self.ctx.mk_ty(VarTy(var)))
         }
+    }
+}
+
+/// Normalize a type for unification.
+/// Walks a type and checks any variables it contains against current unifiers. Replacing
+/// unification variables by their value when present.
+struct Normalize<'a, 'inf, I> {
+    ctx: &'a I,
+    unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'inf>>,
+}
+impl<'inf, I> FallibleTypeFold<'inf> for Normalize<'_, 'inf, I>
+where
+    I: MkTy<'inf, TcUnifierVar<'inf>>,
+{
+    type Error = Infallible;
+    type TypeVar = TcUnifierVar<'inf>;
+    type InTypeVar = TcUnifierVar<'inf>;
+
+    fn ctx(&self) -> &dyn MkTy<'inf, TcUnifierVar<'inf>> {
+        self.ctx
+    }
+
+    fn try_fold_var(
+        &mut self,
+        var: Self::InTypeVar,
+    ) -> Result<Ty<'inf, Self::TypeVar>, Self::Error> {
+        Ok(match self.unifiers.probe_value(var) {
+            Some(ty) => ty,
+            None => self.ctx().mk_ty(VarTy(var)),
+        })
     }
 }
 
@@ -214,20 +245,23 @@ impl<'infer> InferCtx<'infer> {
                     err_ty
                 }
             }
+            Label { .. } => todo!(),
             // TODOs
             Item(_) => todo!(),
             Unit => todo!(),
             Concat { .. } => todo!(),
-            Label { .. } => todo!(),
         }
     }
 
-    ///
-    fn normalize_ty(&mut self, ty: InferTy<'infer>) -> Option<InferTy<'infer>> {
-        match *ty {
-            VarTy(var) => self.unifiers.probe_value(var),
-            _ => None,
-        }
+    fn normalize_ty<I>(&mut self, ctx: &I, ty: InferTy<'infer>) -> InferTy<'infer>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        ty.try_fold_with(&mut Normalize {
+            ctx,
+            unifiers: &mut self.unifiers,
+        })
+        .unwrap()
     }
 
     /// Unify a variable and a type.
@@ -261,8 +295,9 @@ impl<'infer> InferCtx<'infer> {
     where
         I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
-        let normal_left = self.normalize_ty(left).unwrap_or(left);
-        let normal_right = self.normalize_ty(right).unwrap_or(right);
+        // Apply current partial substitution before comparing
+        let normal_left = self.normalize_ty(ctx, left);
+        let normal_right = self.normalize_ty(ctx, right);
 
         match (*normal_left, *normal_right) {
             // If an error appears anywhere fail unification
@@ -285,13 +320,17 @@ impl<'infer> InferCtx<'infer> {
                 self.unify_ty_ty(ctx.clone(), left_arg, right_arg)?;
                 self.unify_ty_ty(ctx, left_ret, right_ret)
             }
+            (RowTy(_left_row), RowTy(_right_row)) => todo!(),
             // Discharge equal types
             (IntTy, IntTy) => Ok(()),
 
             // Type mismatch
-            (IntTy, FunTy(_, _)) | (FunTy(_, _), IntTy) => {
-                Err(TypeCheckError::TypeMismatch(left, right))
-            }
+            (IntTy, FunTy(_, _))
+            | (FunTy(_, _), IntTy)
+            | (IntTy, RowTy(_))
+            | (RowTy(_), IntTy)
+            | (RowTy(_), FunTy(_, _))
+            | (FunTy(_, _), RowTy(_)) => Err(TypeCheckError::TypeMismatch(left, right)),
         }
     }
 
@@ -301,16 +340,25 @@ impl<'infer> InferCtx<'infer> {
         mut self,
         ctx: &I,
         constraints: Vec<Constraint<InferTy<'infer>>>,
-    ) -> Result<InPlaceUnificationTable<TcUnifierVar<'infer>>, TypeCheckError<'infer>>
+    ) -> (
+        InPlaceUnificationTable<TcUnifierVar<'infer>>,
+        Vec<TypeCheckError<'infer>>,
+    )
     where
         I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
         for constr in constraints {
             match constr {
-                Constraint::Eq(left, right) => self.unify_ty_ty(ctx.clone(), left, right)?,
+                Constraint::Eq(left, right) => self
+                    .unify_ty_ty(ctx.clone(), left, right)
+                    .map_err(|err| {
+                        self.errors.push(err);
+                        ()
+                    })
+                    .unwrap_or_default(),
             }
         }
-        Ok(self.unifiers)
+        (self.unifiers, self.errors)
     }
 }
 
@@ -334,17 +382,20 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
         self.ctx
     }
 
-    fn try_fold_var(&mut self, var: Self::InTypeVar) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> { 
+    fn try_fold_var(
+        &mut self,
+        var: Self::InTypeVar,
+    ) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> {
         match self.unifiers.probe_value(var) {
-            Some(ty) => {
-                ty.try_fold_with(self)
-            },
+            Some(ty) => ty.try_fold_with(self),
             None => {
                 // Our unification variable wasn't solved to a type.
                 // Find the root unification variable and return a type varaible representing that
                 // root.
                 let root = self.unifiers.find(var);
-                let var_indx = self.free_vars.iter()
+                let var_indx = self
+                    .free_vars
+                    .iter()
                     .position(|uv| &root == uv)
                     // We have not seen this unification variable before, so create a new one.
                     .unwrap_or_else(|| {
@@ -353,16 +404,36 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
                         next_index
                     });
                 Ok(self.ctx().mk_ty(VarTy(TcVar(var_indx))))
-            },
+            }
         }
     }
 }
 
-pub fn tc_term<'ty, 'infer, I, II>(
+fn type_check<'ty, 'infer, I, II>(
+    ty_ctx: &I,
+    infer_ctx: &II,
+    ast: Ast<'_, VarId>,
+) -> (
+    FxHashMap<VarId, Ty<'ty, TcVar>>,
+    Ty<'ty, TcVar>,
+    Vec<TypeCheckError<'infer>>,
+)
+where
+    I: MkTy<'ty, TcVar>,
+    II: MkTy<'infer, TcUnifierVar<'infer>>,
+{
+    tc_term(ty_ctx, infer_ctx, ast.root())
+}
+
+fn tc_term<'ty, 'infer, I, II>(
     ty_ctx: &I,
     infer_ctx: &II,
     term: &'_ Term<'_, VarId>,
-) -> (FxHashMap<VarId, Ty<'ty, TcVar>>, Ty<'ty, TcVar>)
+) -> (
+    FxHashMap<VarId, Ty<'ty, TcVar>>,
+    Ty<'ty, TcVar>,
+    Vec<TypeCheckError<'infer>>,
+)
 where
     I: MkTy<'ty, TcVar>,
     II: MkTy<'infer, TcUnifierVar<'infer>>,
@@ -377,9 +448,7 @@ where
     let (constraints, var_tys, ty) = infer.infer(infer_ctx, term);
 
     // Solve constraints into the unifiers mapping.
-    let mut unifiers = infer
-        .solve(infer_ctx, constraints)
-        .expect("TODO: error reporting");
+    let (mut unifiers, errors) = infer.solve(infer_ctx, constraints);
 
     // Zonk the variable -> type mapping and the root term type.
     let mut zoinkies = Zonker {
@@ -393,7 +462,7 @@ where
         .map(|(var, ty)| (var, ty.try_fold_with(&mut zoinkies).unwrap()))
         .collect::<FxHashMap<_, _>>();
     // TODO: Generalize root type as a scheme
-    (zonked_var_tys, zonked_ty)
+    (zonked_var_tys, zonked_ty, errors)
 }
 
 const SHARD_BITS: usize = 5;
@@ -405,7 +474,7 @@ fn get_shard_index_by_hash(hash: u64) -> usize {
     let bits = (hash >> (hash_len * 8 - 7 - SHARD_BITS)) as usize;
     bits % SHARDS
 }
-fn make_hash<K: std::hash::Hash + ?Sized>(val: &K) -> u64 {
+fn make_hash<K: Hash + ?Sized>(val: &K) -> u64 {
     let mut state = FxHasher::default();
     val.hash(&mut state);
     state.finish()
@@ -434,11 +503,11 @@ impl<T: Default> Default for Sharded<T> {
 
 type ShardedHashMap<K, V> = Sharded<hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>>;
 
-impl<K: Eq + std::hash::Hash + Copy> ShardedHashMap<K, ()> {
-    fn _intern<'a, Q>(&'a self, value: Q, make: impl FnOnce(Q) -> K) -> K
+impl<K: Eq + Hash + Copy> ShardedHashMap<K, ()> {
+    fn _intern<Q>(&self, value: Q, make: impl FnOnce(Q) -> K) -> K
     where
         K: Borrow<Q>,
-        Q: std::hash::Hash + Eq,
+        Q: Hash + Eq,
     {
         let hash = make_hash(&value);
         let mut shard = self.get_shard_by_hash(hash).write();
@@ -453,31 +522,99 @@ impl<K: Eq + std::hash::Hash + Copy> ShardedHashMap<K, ()> {
             }
         }
     }
+
+    fn _intern_ref<Q: ?Sized>(&self, value: &Q, make: impl FnOnce() -> K) -> K
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let hash = make_hash(value);
+        let mut shard = self.get_shard_by_hash(hash).write();
+        let entry = shard.raw_entry_mut().from_key_hashed_nocheck(hash, value);
+
+        match entry {
+            hashbrown::hash_map::RawEntryMut::Occupied(e) => *e.key(),
+            hashbrown::hash_map::RawEntryMut::Vacant(e) => {
+                let v = make();
+                e.insert_hashed_nocheck(hash, v, ());
+                v
+            }
+        }
+    }
 }
 
+// This looks frustratingly close to SyncInterner, except we hold a &'ctx Bump instead of an owned
+// A. Which allows us to produce interned values with lifetime `'ctx` without TyCtx needing to be a
+// `&'ctx TyCtx<...>`.
+// TODO: Look into ways to represent this style of allocation with existing intern stuff.
+//  1. We need to change
+//      `intern<'a>(&'a self, T) -> RefHandle<'a, T>`
+//  to
+//      `intern(&self, T) -> RefHandler<'a, T>`
+//
+//  2. Similarly Arena needs to be decoupled from `&'a self`
 struct TyCtx<'ctx, TV> {
     arena: &'ctx Bump,
     tys: ShardedHashMap<RefHandle<'ctx, TypeKind<'ctx, TV>>, ()>,
+    labels: ShardedHashMap<RefHandle<'ctx, str>, ()>,
+    row_labels: ShardedHashMap<RefHandle<'ctx, [RowLabel<'ctx>]>, ()>,
+    row_values: ShardedHashMap<RefHandle<'ctx, [Ty<'ctx, TV>]>, ()>,
 }
 
 impl<'ctx, TV> TyCtx<'ctx, TV>
 where
-    TV: Eq + Copy + std::hash::Hash,
+    TV: Eq + Copy + Hash,
 {
-    fn intern(&self, kind: TypeKind<'ctx, TV>) -> RefHandle<'ctx, TypeKind<'ctx, TV>> {
+    fn new(arena: &'ctx Bump) -> Self {
+        Self {
+            arena,
+            tys: ShardedHashMap::default(),
+            row_labels: ShardedHashMap::default(),
+            row_values: ShardedHashMap::default(),
+            labels: ShardedHashMap::default(),
+        }
+    }
+
+    fn intern_ty(&self, kind: TypeKind<'ctx, TV>) -> RefHandle<'ctx, TypeKind<'ctx, TV>> {
         self.tys._intern(kind, |kind| {
             let kind_ref = self.arena.alloc(kind);
             Handle(kind_ref)
         })
     }
+
+    fn intern_labels(&self, labels: &[RowLabel<'ctx>]) -> RefHandle<'ctx, [RowLabel<'ctx>]> {
+        self.row_labels
+            ._intern_ref(labels, || Handle(self.arena.alloc_slice_copy(labels)))
+    }
+
+    fn intern_values(&self, values: &[Ty<'ctx, TV>]) -> RefHandle<'ctx, [Ty<'ctx, TV>]> {
+        self.row_values
+            ._intern_ref(values, || Handle(self.arena.alloc_slice_copy(values)))
+    }
+
+    fn intern_label(&self, label: &str) -> RowLabel<'ctx> {
+        self.labels
+            ._intern_ref(label, || Handle(self.arena.alloc_str(label)))
+    }
 }
 
 impl<'ctx, TV> MkTy<'ctx, TV> for TyCtx<'ctx, TV>
 where
-    TV: Eq + Copy + std::hash::Hash,
+    TV: Eq + Copy + Hash,
 {
     fn mk_ty(&self, kind: TypeKind<'ctx, TV>) -> Ty<'ctx, TV> {
-        Ty(self.intern(kind))
+        Ty(self.intern_ty(kind))
+    }
+
+    fn mk_label(&self, label: &str) -> RowLabel<'ctx> {
+        self.intern_label(label)
+    }
+
+    fn mk_row(&self, labels: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV> {
+        ClosedRow {
+            labels: self.intern_labels(labels),
+            values: self.intern_values(values),
+        }
     }
 }
 
@@ -508,16 +645,10 @@ mod tests {
                 }),
             }),
         );
-        let infer_intern = TyCtx {
-            arena: &arena,
-            tys: ShardedHashMap::default(),
-        };
-        let ty_intern = TyCtx {
-            arena: &arena,
-            tys: ShardedHashMap::default(),
-        };
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
 
-        let (var_to_tys, ty) = tc_term(&ty_intern, &infer_intern, untyped_ast.root());
+        let (var_to_tys, ty, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
 
         assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TcVar(0)))));
         assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TcVar(1)))));
@@ -530,72 +661,15 @@ mod tests {
         );
     }
 
-    /*
     #[test]
     fn test_tc_undefined_var_fails() {
         let arena = Bump::new();
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(Variable(VarId(0)))
-        );
+        let untyped_ast = Ast::new(FxHashMap::default(), arena.alloc(Variable(VarId(0))));
+        let infer_ctx = TyCtx::new(&arena);
+        let ty_ctx = TyCtx::new(&arena);
 
-        let (_, ty, errors) = tc_term(&arena, &arena, untyped_ast);
+        let (_, _, errors) = type_check(&infer_ctx, &ty_ctx, untyped_ast);
 
-        assert_eq!(ty, &ErrorTy);
         assert!(errors.contains(&TypeCheckError::VarNotDefined(VarId(0))))
     }
-    */
-
-    /*
-    #[test]
-    fn test_tc_item() {
-        let arena = Bump::new();
-        let mut vars: IdGen<TcVar, ()> = IdGen::new();
-        let arg = vars.push(());
-        let ret = vars.push(());
-
-        let scheme = Scheme {
-            vars,
-            constraints: vec![],
-            ty: arena.alloc(FunTy(arena.alloc(VarTy(arg)), arena.alloc(VarTy(ret)))),
-        };
-
-        let item = (ModuleId::from_raw(0), ItemId::from_raw(0));
-
-        let global_env = FxHashMap::from_iter([(item, scheme)]);
-
-        let tc = TypeChecker::with_global_env(TyCtx { ast_arena: &arena, ty_arena: &arena }, global_env);
-        let (typed_term, ty, errors) = tc_term_with(
-            tc,
-            Ast::new(
-                FxHashMap::default(),
-                arena.alloc(Abstraction {
-                    arg: VarId(0),
-                    body: arena.alloc(Application {
-                        func: arena.alloc(Item(item)),
-                        arg: arena.alloc(Variable(VarId(0))),
-                    }),
-                }),
-            ),
-        );
-
-        assert_eq!(errors, vec![]);
-        assert_eq!(
-            typed_term.root(),
-            &Abstraction {
-                arg: TypedVarId {
-                    var: VarId(0),
-                    ty: &VarTy(arg)
-                },
-                body: &Application {
-                    func: &Item(item),
-                    arg: &Variable(TypedVarId {
-                        var: VarId(0),
-                        ty: &VarTy(arg)
-                    })
-                }
-            }
-        );
-        assert_eq!(ty, &FunTy(&VarTy(arg), &VarTy(ret)));
-    }*/
 }
