@@ -48,7 +48,16 @@ impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
 pub trait MkTy<'ctx, TV> {
     fn mk_ty(&self, kind: TypeKind<'ctx, TV>) -> Ty<'ctx, TV>;
     fn mk_label(&self, label: &str) -> RowLabel<'ctx>;
-    fn mk_row(&self, labels: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV>;
+    fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV>;
+
+    fn single_row(&self, label: &str, value: Ty<'ctx, TV>) -> ClosedRow<'ctx, TV> {
+        let field = self.mk_label(label);
+        self.mk_row(&[field], &[value])
+    }
+
+    fn single_row_ty(&self, label: &str, value: Ty<'ctx, TV>) -> Ty<'ctx, TV> {
+        self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
+    }
 }
 
 /// During inference our type variables are all unification variables.
@@ -95,14 +104,23 @@ pub type RowLabel<'ctx> = RefHandle<'ctx, str>;
 
 /// A closed row is a map of labels to values where all labels are known.
 /// Counterpart to an open row where the set of labels is polymorphic
+///
+/// Because our closed row is basically an interned map, some important invariants are maintained
+/// by the construction of ClosedRow:
+/// 1. fields and values are the same length
+/// 2. The field at index i is the key for the type at index i in values
+/// 3. fields is sorted lexographically
 #[derive(PartialEq, Eq, Hash)]
 pub struct ClosedRow<'ctx, TV> {
-    pub labels: RefHandle<'ctx, [RowLabel<'ctx>]>,
+    pub fields: RefHandle<'ctx, [RowLabel<'ctx>]>,
     pub values: RefHandle<'ctx, [Ty<'ctx, TV>]>,
 }
 impl<'ctx, TV> Clone for ClosedRow<'ctx, TV> {
     fn clone(&self) -> Self {
-        ClosedRow { labels: self.labels, values: self.values }
+        ClosedRow {
+            fields: self.fields,
+            values: self.values,
+        }
     }
 }
 impl<'ctx, TV> Copy for ClosedRow<'ctx, TV> {}
@@ -110,7 +128,7 @@ impl<'ctx, TV> Copy for ClosedRow<'ctx, TV> {}
 impl<'ctx, TV: Debug> Debug for ClosedRow<'ctx, TV> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map()
-            .entries(self.labels.iter().zip(self.values.iter()))
+            .entries(self.fields.iter().zip(self.values.iter()))
             .finish()
     }
 }
@@ -124,7 +142,7 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for ClosedRow<'_, TV> {
         fold: &mut F,
     ) -> Result<Self::Out<F::TypeVar>, F::Error> {
         let labels = self
-            .labels
+            .fields
             .iter()
             .map(|lbl| fold.ctx().mk_label(lbl))
             .collect::<Vec<_>>();

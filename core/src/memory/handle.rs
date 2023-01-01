@@ -2,13 +2,14 @@
 //! whose identity corresponds to its pointer value, rather than the pointed-to data.
 
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
     ops::Deref,
     ptr,
     rc::Rc,
-    sync::Arc, borrow::Borrow,
+    sync::Arc,
 };
 
 /// A `Clone`-able pointer type. Implements `Deref` and provides a raw pointer to the target.
@@ -52,8 +53,7 @@ impl<T: ?Sized> Pointer for Arc<T> {
 #[derive(Clone, Copy)]
 pub struct Handle<P>(pub P);
 
-impl<P: Pointer> Debug for Handle<P> 
-{
+impl<P: Pointer> Debug for Handle<P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Handle").field(&self.0.ptr()).finish()
     }
@@ -92,7 +92,6 @@ impl<P: Pointer> Deref for Handle<P> {
         self.0.deref()
     }
 }
-
 
 /// See `Handle` for further info.
 pub type RefHandle<'a, T> = Handle<&'a T>;

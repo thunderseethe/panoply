@@ -1,6 +1,6 @@
 use std::{
     fmt::{self, Debug, Formatter},
-    hash::{Hash, Hasher, BuildHasherDefault},
+    hash::{BuildHasherDefault, Hash, Hasher},
     ptr::NonNull,
 };
 

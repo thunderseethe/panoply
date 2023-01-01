@@ -1,4 +1,4 @@
-use crate::id::{ModuleId, ItemId};
+use crate::id::{ItemId, ModuleId};
 use crate::memory::handle::RefHandle;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
@@ -19,7 +19,7 @@ impl<'a, Var> Ast<'a, Var> {
     pub fn root(&self) -> &'a Term<'a, Var> {
         self.tree
     }
-    
+
     pub fn vars(&self) -> impl Iterator<Item = &'a Var> {
         self.tree.vars()
     }
@@ -54,9 +54,15 @@ pub enum Term<'a, Var> {
     // represent unit at this level
     Unit,
     // Concat two rows into a larger row
-    Concat { left: &'a Term<'a, Var>, right: &'a Term<'a, Var> },
+    Concat {
+        left: &'a Term<'a, Var>,
+        right: &'a Term<'a, Var>,
+    },
     // Label a term, used in construction of Product and Sum types.
-    Label { label: RefHandle<'a, str>, term: &'a Term<'a, Var> },
+    Label {
+        label: RefHandle<'a, str>,
+        term: &'a Term<'a, Var>,
+    },
 }
 
 impl<'a, Var> Term<'a, Var> {
@@ -72,15 +78,25 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
     type Item = &'a Var;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.stack.pop().and_then(|term| {
-            match term {
-                Term::Abstraction { arg, body } => { self.stack.push(body); Some(arg) },
-                Term::Application { func, arg } => { self.stack.extend([func, arg]); self.next() },
-                Term::Variable(var) => Some(var),
-                Term::Item(_) => self.next(),
-                Term::Unit => self.next(),
-                Term::Concat { left, right } => { self.stack.extend([left, right]); self.next() },
-                Term::Label { term, .. } => { self.stack.push(term); self.next() },
+        self.stack.pop().and_then(|term| match term {
+            Term::Abstraction { arg, body } => {
+                self.stack.push(body);
+                Some(arg)
+            }
+            Term::Application { func, arg } => {
+                self.stack.extend([func, arg]);
+                self.next()
+            }
+            Term::Variable(var) => Some(var),
+            Term::Item(_) => self.next(),
+            Term::Unit => self.next(),
+            Term::Concat { left, right } => {
+                self.stack.extend([left, right]);
+                self.next()
+            }
+            Term::Label { term, .. } => {
+                self.stack.push(term);
+                self.next()
             }
         })
     }

@@ -170,6 +170,28 @@ impl<'infer> InferCtx<'infer> {
                 self._check(infer_ctx, constraints, var_tys, body, body_ty);
                 self.local_env.remove(arg);
             }
+            (Label { label, term }, RowTy(row)) => {
+                // If our row is too small or too big, fail
+                if row.fields.len() != 1 {
+                    self.errors.push(TypeCheckError::TypeMismatch(
+                        infer_ctx.single_row_ty(label, infer_ctx.mk_ty(ErrorTy)),
+                        expected_ty,
+                    ));
+                    return ();
+                }
+                let field = infer_ctx.mk_label(label);
+                // If our singleton row is a different field name, fail
+                if field != row.fields[0] {
+                    self.errors.push(TypeCheckError::TypeMismatch(
+                        infer_ctx.single_row_ty(field.as_ref(), infer_ctx.mk_ty(ErrorTy)),
+                        expected_ty,
+                    ))
+                }
+
+                // If this is a singleton row with the right label check it's value type matches
+                // our term type
+                self._check(infer_ctx, constraints, var_tys, term, row.values[0])
+            }
             // Bucket case for when we need to check a rule against a type but no case applies
             (term, _) => {
                 // Infer a type for our term and check that the expected type is equal to the
@@ -245,7 +267,10 @@ impl<'infer> InferCtx<'infer> {
                     err_ty
                 }
             }
-            Label { .. } => todo!(),
+            Label { label, term } => {
+                let ty = self._infer(infer_ctx, constraints, var_tys, term);
+                infer_ctx.single_row_ty(label, ty)
+            }
             // TODOs
             Item(_) => todo!(),
             Unit => todo!(),
@@ -320,7 +345,17 @@ impl<'infer> InferCtx<'infer> {
                 self.unify_ty_ty(ctx.clone(), left_arg, right_arg)?;
                 self.unify_ty_ty(ctx, left_ret, right_ret)
             }
-            (RowTy(_left_row), RowTy(_right_row)) => todo!(),
+            (RowTy(left_row), RowTy(right_row)) => {
+                // If our row labels aren't equal the types cannot be equal
+                if left_row.fields != right_row.fields {
+                    return Err(TypeCheckError::TypeMismatch(left, right));
+                }
+
+                for (left_ty, right_ty) in left_row.values.iter().zip(right_row.values.iter()) {
+                    self.unify_ty_ty(ctx.clone(), *left_ty, *right_ty)?;
+                }
+                Ok(())
+            }
             // Discharge equal types
             (IntTy, IntTy) => Ok(()),
 
@@ -557,7 +592,7 @@ struct TyCtx<'ctx, TV> {
     arena: &'ctx Bump,
     tys: ShardedHashMap<RefHandle<'ctx, TypeKind<'ctx, TV>>, ()>,
     labels: ShardedHashMap<RefHandle<'ctx, str>, ()>,
-    row_labels: ShardedHashMap<RefHandle<'ctx, [RowLabel<'ctx>]>, ()>,
+    row_fields: ShardedHashMap<RefHandle<'ctx, [RowLabel<'ctx>]>, ()>,
     row_values: ShardedHashMap<RefHandle<'ctx, [Ty<'ctx, TV>]>, ()>,
 }
 
@@ -569,7 +604,7 @@ where
         Self {
             arena,
             tys: ShardedHashMap::default(),
-            row_labels: ShardedHashMap::default(),
+            row_fields: ShardedHashMap::default(),
             row_values: ShardedHashMap::default(),
             labels: ShardedHashMap::default(),
         }
@@ -582,9 +617,9 @@ where
         })
     }
 
-    fn intern_labels(&self, labels: &[RowLabel<'ctx>]) -> RefHandle<'ctx, [RowLabel<'ctx>]> {
-        self.row_labels
-            ._intern_ref(labels, || Handle(self.arena.alloc_slice_copy(labels)))
+    fn intern_fields(&self, fields: &[RowLabel<'ctx>]) -> RefHandle<'ctx, [RowLabel<'ctx>]> {
+        self.row_fields
+            ._intern_ref(fields, || Handle(self.arena.alloc_slice_copy(fields)))
     }
 
     fn intern_values(&self, values: &[Ty<'ctx, TV>]) -> RefHandle<'ctx, [Ty<'ctx, TV>]> {
@@ -610,9 +645,9 @@ where
         self.intern_label(label)
     }
 
-    fn mk_row(&self, labels: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV> {
+    fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV> {
         ClosedRow {
-            labels: self.intern_labels(labels),
+            fields: self.intern_fields(fields),
             values: self.intern_values(values),
         }
     }
@@ -630,6 +665,36 @@ mod tests {
         ($kind:pat) => {
             Ty(Handle($kind))
         };
+    }
+
+    #[test]
+    fn test_tc_label() {
+        let arena = Bump::new();
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(Abstraction {
+                arg: VarId(0),
+                body: arena.alloc(Label {
+                    label: Handle("start"),
+                    term: arena.alloc(Variable(VarId(0))),
+                }),
+            }),
+        );
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
+
+        let (_, ty, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
+
+        assert_matches!(
+            ty,
+            ty!(FunTy(
+                ty!(VarTy(TcVar(0))),
+                ty!(RowTy(ClosedRow {
+                    fields: Handle(&[Handle("start")]),
+                    values: Handle(&[ty!(VarTy(TcVar(0)))])
+                })),
+            ))
+        );
     }
 
     #[test]
