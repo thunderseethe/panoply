@@ -50,7 +50,7 @@ pub enum Term<'a, Var> {
     // A global variable binding
     Item((ModuleId, ItemId)),
     // A unit value
-    // Because all products are represented in terms of concat we don't actually have a way to
+    // Because all products are represented in terms of concat, we don't actually have a way to
     // represent unit at this level
     Unit,
     // Concat two rows into a larger row
@@ -60,6 +60,11 @@ pub enum Term<'a, Var> {
     },
     // Label a term, used in construction of Product and Sum types.
     Label {
+        label: RefHandle<'a, str>,
+        term: &'a Term<'a, Var>,
+    },
+    // Unlabel a term, this is used to project a product into one of it's fields.
+    Unlabel {
         label: RefHandle<'a, str>,
         term: &'a Term<'a, Var>,
     },
@@ -95,6 +100,10 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
                 self.next()
             }
             Term::Label { term, .. } => {
+                self.stack.push(term);
+                self.next()
+            }
+            Term::Unlabel { term, .. } => {
                 self.stack.push(term);
                 self.next()
             }

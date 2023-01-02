@@ -192,6 +192,10 @@ impl<'infer> InferCtx<'infer> {
                 // our term type
                 self._check(infer_ctx, constraints, var_tys, term, row.values[0])
             }
+            (Unlabel { label, term }, _) => {
+                let expected_ty = infer_ctx.single_row_ty(label, expected_ty);
+                self._check(infer_ctx, constraints, var_tys, term, expected_ty)
+            }
             // Bucket case for when we need to check a rule against a type but no case applies
             (term, _) => {
                 // Infer a type for our term and check that the expected type is equal to the
@@ -270,6 +274,23 @@ impl<'infer> InferCtx<'infer> {
             Label { label, term } => {
                 let ty = self._infer(infer_ctx, constraints, var_tys, term);
                 infer_ctx.single_row_ty(label, ty)
+            }
+            Unlabel { label, term } => {
+                let term_ty = self._infer(infer_ctx, constraints, var_tys, term);
+                let field = infer_ctx.mk_label(label);
+                match *term_ty {
+                    // If our output type is already a singleton row of without a label, use it
+                    // directly. This avoids introducing needless unifiers
+                    RowTy(row) if row.len() == 1 && row.fields[0] == field => row.values[0],
+                    // Othewise introduce a unifier, and rely on unification for any needed error
+                    // reporting
+                    _ => {
+                        let out_ty = infer_ctx.mk_ty(VarTy(self.unifiers.new_key(None)));
+                        let row_ty = infer_ctx.mk_ty(RowTy(infer_ctx.mk_row(&[field], &[out_ty])));
+                        constraints.push(Constraint::Eq(row_ty, term_ty));
+                        out_ty
+                    }
+                }
             }
             // TODOs
             Item(_) => todo!(),
@@ -667,18 +688,103 @@ mod tests {
         };
     }
 
+    macro_rules! row {
+        ([$($field:pat),*], [$($value:pat),*]) => {
+            RowTy(ClosedRow {
+                fields: Handle([$($field),*]),
+                values: Handle([$($value),*]),
+            }) 
+        };
+    }
+
+    // Utility trait to remove a lot of the intermediate allocation when creating ASTs
+    // Helps make tests a little more readable
+    trait MkTerm<'a, Var> {
+        fn mk_abs(&'a self, arg: Var, body: Term<'a, Var>) -> Term<'a, Var>;
+        fn mk_label(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
+        fn mk_unlabel(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
+    }
+
+    impl<'a, Var> MkTerm<'a, Var> for Bump {
+        fn mk_abs(&'a self, arg: Var, body: Term<'a, Var>) -> Term<'a, Var> {
+            Abstraction {
+                arg,
+                body: self.alloc(body),
+            }
+        }
+
+        fn mk_label(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
+            Label {
+                label: Handle(self.alloc_str(label)),
+                term: self.alloc(term),
+            }
+        }
+
+        fn mk_unlabel(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
+            Unlabel {
+                label: Handle(self.alloc_str(label)),
+                term: self.alloc(term),
+            }
+        }
+    }
+
+    #[test]
+    fn test_tc_unlabel() {
+        let arena = Bump::new();
+        let x = VarId(0);
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(arena.mk_abs(
+                x,
+                arena.mk_unlabel("start", arena.mk_label("start", Variable(x))),
+            )),
+        );
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
+
+        let (_, ty, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
+
+        assert_matches!(ty, ty!(FunTy(ty!(VarTy(TcVar(0))), ty!(VarTy(TcVar(0))))));
+    }
+
+    #[test]
+    fn test_tc_unlabel_fails_on_wrong_label() {
+        let arena = Bump::new();
+        let x = VarId(0);
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(arena.mk_abs(
+                x,
+                arena.mk_unlabel("start", arena.mk_label("end", Variable(x))),
+            )),
+        );
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
+
+        let (_, _, errors) = type_check(&ty_intern, &infer_intern, untyped_ast);
+
+        assert_matches!(
+            errors[0],
+            TypeCheckError::TypeMismatch(
+                ty!(RowTy(ClosedRow {
+                    fields: Handle([Handle("end")]),
+                    values: Handle([ty!(ErrorTy)])
+                })),
+                ty!(RowTy(ClosedRow {
+                    fields: Handle([Handle("start")]),
+                    values: Handle([ty!(VarTy(_))])
+                }))
+            )
+        );
+    }
+
     #[test]
     fn test_tc_label() {
         let arena = Bump::new();
+        let x = VarId(0);
         let untyped_ast = Ast::new(
             FxHashMap::default(),
-            arena.alloc(Abstraction {
-                arg: VarId(0),
-                body: arena.alloc(Label {
-                    label: Handle("start"),
-                    term: arena.alloc(Variable(VarId(0))),
-                }),
-            }),
+            arena.alloc(arena.mk_abs(x, arena.mk_label("start", Variable(x)))),
         );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
@@ -700,15 +806,11 @@ mod tests {
     #[test]
     fn test_tc_abs() {
         let arena = Bump::new();
+        let x = VarId(0);
+        let y = VarId(1);
         let untyped_ast = Ast::new(
             FxHashMap::default(),
-            arena.alloc(Abstraction {
-                arg: VarId(0),
-                body: arena.alloc(Abstraction {
-                    arg: VarId(1),
-                    body: arena.alloc(Variable(VarId(0))),
-                }),
-            }),
+            arena.alloc(arena.mk_abs(x, arena.mk_abs(y, Variable(x)))),
         );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);

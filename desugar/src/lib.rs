@@ -71,9 +71,15 @@ pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> A
                     })
                 }
             },
+            nst::Term::FieldAccess { base, field, .. } => {
+                let term = ds(arena, spans, base);
+                arena.alloc(Unlabel { 
+                    label: field.value, 
+                    term, 
+                })
+            },
             nst::Term::Handle { .. } => todo!(),
             nst::Term::SumRow(_) => todo!(),
-            nst::Term::FieldAccess { .. } => todo!(),
             nst::Term::Match { .. } => todo!(),
         };
         spans.insert(ast, nst.span());

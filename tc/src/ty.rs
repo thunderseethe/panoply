@@ -87,7 +87,7 @@ impl<'ctx, TV> Deref for Ty<'ctx, TV> {
 }
 impl<'ctx, TV: fmt::Debug> fmt::Debug for Ty<'ctx, TV> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Ty").field(&self.0 .0).finish()
+        self.0.0.fmt(f)
     }
 }
 
@@ -115,6 +115,14 @@ pub struct ClosedRow<'ctx, TV> {
     pub fields: RefHandle<'ctx, [RowLabel<'ctx>]>,
     pub values: RefHandle<'ctx, [Ty<'ctx, TV>]>,
 }
+
+impl<'ctx, TV> ClosedRow<'ctx, TV> {
+ pub fn len(&self) -> usize {
+     // Because fields.len() must equal values.len() it doesn't matter which we use here
+     self.fields.len()
+ }
+}
+
 impl<'ctx, TV> Clone for ClosedRow<'ctx, TV> {
     fn clone(&self) -> Self {
         ClosedRow {
@@ -128,7 +136,7 @@ impl<'ctx, TV> Copy for ClosedRow<'ctx, TV> {}
 impl<'ctx, TV: Debug> Debug for ClosedRow<'ctx, TV> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map()
-            .entries(self.fields.iter().zip(self.values.iter()))
+            .entries(self.fields.iter().map(|handle| &handle.0).zip(self.values.iter()))
             .finish()
     }
 }
