@@ -296,6 +296,7 @@ impl<'infer> InferCtx<'infer> {
             Item(_) => todo!(),
             Unit => todo!(),
             Concat { .. } => todo!(),
+            Project { .. } => todo!(),
         }
     }
 

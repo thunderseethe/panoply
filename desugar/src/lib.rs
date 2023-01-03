@@ -1,3 +1,4 @@
+use aiahr_core::ast::Direction;
 use aiahr_core::span::Spanned;
 use aiahr_core::{
     ast,
@@ -75,7 +76,10 @@ pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> A
                 let term = ds(arena, spans, base);
                 arena.alloc(Unlabel { 
                     label: field.value, 
-                    term, 
+                    term: arena.alloc(Project { 
+                        direction: Direction::Right, 
+                        term, 
+                    }), 
                 })
             },
             nst::Term::Handle { .. } => todo!(),
@@ -330,6 +334,42 @@ mod tests {
                 start: start.start,
                 end: end.end,
             })
+        );
+    }
+
+    
+    #[test]
+    fn test_desugar_field_access() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+
+        let state = interner.intern_by_ref("state");
+
+        let base = random_span_of(VarId(0));
+        let field = random_span_of(state);
+        let nst = arena.alloc(nst::Term::FieldAccess { 
+            base: arena.alloc(nst::Term::VariableRef(base)), 
+            dot: random_span(), 
+            field, 
+        }); 
+
+        let ast = desugar(&arena, nst);
+        assert_eq!(
+            ast.tree,
+            &Unlabel {
+                label: state, 
+                term: &Project {
+                    direction: Direction::Right, 
+                    term: &Variable(VarId(0))
+                }
+            }
+        );
+        assert_eq!(
+            ast.span_of(ast.tree),
+            Some(&Span {
+                start: base.start,
+                end: field.end,
+            }),
         );
     }
 }

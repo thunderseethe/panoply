@@ -32,6 +32,16 @@ impl<'a, Var: Eq + std::hash::Hash> Ast<'a, Var> {
     }
 }
 
+/// Direction of a row operation.
+/// When operating on a row we often split the row into a left and right row (concatenation,
+/// branching, injecting, etc.). When row combination is not commutative it matters whether an
+/// operation is using the left row, or right row. So we track it with this enum
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Direction {
+    Left,
+    Right,
+}
+
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Term<'a, Var> {
@@ -57,6 +67,10 @@ pub enum Term<'a, Var> {
     Concat {
         left: &'a Term<'a, Var>,
         right: &'a Term<'a, Var>,
+    },
+    Project {
+        direction: Direction,
+        term: &'a Term<'a, Var>,
     },
     // Label a term, used in construction of Product and Sum types.
     Label {
@@ -97,6 +111,10 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
             Term::Unit => self.next(),
             Term::Concat { left, right } => {
                 self.stack.extend([left, right]);
+                self.next()
+            }
+            Term::Project { term, .. } => {
+                self.stack.push(term);
                 self.next()
             }
             Term::Label { term, .. } => {
