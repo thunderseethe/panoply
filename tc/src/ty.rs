@@ -4,7 +4,9 @@ use std::ops::Deref;
 use aiahr_core::define_ids;
 use aiahr_core::memory::handle::RefHandle;
 
-use ena::unify::{EqUnifyValue, UnifyKey};
+use ena::unify::{EqUnifyValue, UnifyKey, UnifyValue};
+
+use crate::TypeCheckError;
 
 define_ids!(
 /// A type variable.
@@ -13,6 +15,21 @@ define_ids!(
 #[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub TcVar;
 );
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnifierToTcVarError {
+    index: u32,
+}
+
+impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
+    type Error = UnifierToTcVarError;
+
+    fn try_from(value: TcUnifierVar<'infer>) -> Result<Self, Self::Error> {
+        Err(UnifierToTcVarError {
+            index: value.index(),
+        })
+    }
+}
 
 /// A unifier variable.
 /// These are produced during the type checking process and MUST NOT persist outside the type
@@ -26,7 +43,7 @@ pub struct TcUnifierVar<'ctx> {
     _marker: std::marker::PhantomData<&'ctx ()>,
 }
 impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
-    type Value = Option<Ty<'ctx, TcUnifierVar<'ctx>>>;
+    type Value = Option<UnifyVal<'ctx, TcUnifierVar<'ctx>>>;
 
     fn index(&self) -> u32 {
         self.id
@@ -41,6 +58,79 @@ impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
 
     fn tag() -> &'static str {
         "TcUnifierVar"
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum PartialRow<'ctx, TV> {
+    /// This row represents the goal of a RowCombine constraint
+    OpenGoal { left: Row<'ctx, TV>, right: Row<'ctx, TV> },
+    /// This row represents the left subrow of a RowCombine constraint
+    OpenLeft { goal: Row<'ctx, TV>, right: Row<'ctx, TV> },
+    /// This row represents the right subrow of a RowCombine constraint
+    OpenRight { goal: Row<'ctx, TV>, left: Row<'ctx, TV> },
+}
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for PartialRow<'ctx, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = PartialRow<'ctx, T>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        match self {
+            PartialRow::OpenGoal { left, right } => {
+                let left = left.try_fold_with(fold)?;
+                let right = right.try_fold_with(fold)?;
+                Ok(PartialRow::OpenGoal { left, right })
+            },
+            PartialRow::OpenLeft { goal, right } => {
+                let goal = goal.try_fold_with(fold)?;
+                let right = right.try_fold_with(fold)?;
+                Ok(PartialRow::OpenLeft { goal, right })
+            },
+            PartialRow::OpenRight { goal, left } => {
+                let goal = goal.try_fold_with(fold)?;
+                let left = left.try_fold_with(fold)?;
+                Ok(PartialRow::OpenRight { goal, left })
+            },
+        }
+    }
+}
+
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum UnifyVal<'ctx, TV> {
+    /// Our unifier represents a type
+    Ty(Ty<'ctx, TV>),
+    /// Our unifier represents a row
+    Row(PartialRow<'ctx, TV>),
+}
+pub type InferUnifyVal<'infer> = UnifyVal<'infer, TcUnifierVar<'infer>>;
+impl<'ctx, TV: Eq + Clone + Debug> EqUnifyValue for UnifyVal<'ctx, TV> {}
+
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for UnifyVal<'ctx, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = UnifyVal<'ctx, T>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        match self {
+            UnifyVal::Ty(ty) => ty.try_fold_with(fold).map(UnifyVal::Ty),
+            UnifyVal::Row(row) => row.try_fold_with(fold).map(UnifyVal::Row),
+        }
+    }
+}
+impl<'ctx, TV> From<Ty<'ctx, TV>> for UnifyVal<'ctx, TV> {
+    fn from(ty: Ty<'ctx, TV>) -> Self {
+        UnifyVal::Ty(ty)
+    }
+}
+impl<'ctx, TV> From<PartialRow<'ctx, TV>> for UnifyVal<'ctx, TV> {
+    fn from(row: PartialRow<'ctx, TV>) -> Self {
+        UnifyVal::Row(row)
     }
 }
 
@@ -68,8 +158,25 @@ pub type InferTy<'ctx> = Ty<'ctx, TcUnifierVar<'ctx>>;
 ///
 /// This is just a wrapper around an interned reference to the `TypeKind` which contains the actual
 /// data.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Hash)]
 pub struct Ty<'ctx, TV>(pub RefHandle<'ctx, TypeKind<'ctx, TV>>);
+impl<'ctx, TV> PartialEq for Ty<'ctx, TV> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<'ctx, TV> Eq for Ty<'ctx, TV> {}
+
+impl<'ctx, TV: Clone> Ty<'ctx, TV> {
+    /// Convert a type to a row. If type is not representable as a row return type as an error.
+    pub(crate) fn try_to_row(&self) -> Result<Row<'ctx, TV>, Ty<'ctx, TV>> {
+        match self.deref() {
+            TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
+            TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            _ => Err(*self),
+        }
+    }
+}
 
 impl<'ctx, TV> Clone for Ty<'ctx, TV> {
     fn clone(&self) -> Self {
@@ -87,7 +194,7 @@ impl<'ctx, TV> Deref for Ty<'ctx, TV> {
 }
 impl<'ctx, TV: fmt::Debug> fmt::Debug for Ty<'ctx, TV> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.0.fmt(f)
+        self.0 .0.fmt(f)
     }
 }
 
@@ -117,10 +224,102 @@ pub struct ClosedRow<'ctx, TV> {
 }
 
 impl<'ctx, TV> ClosedRow<'ctx, TV> {
- pub fn len(&self) -> usize {
-     // Because fields.len() must equal values.len() it doesn't matter which we use here
-     self.fields.len()
- }
+    pub fn len(&self) -> usize {
+        // Because fields.len() must equal values.len() it doesn't matter which we use here
+        self.fields.len()
+    }
+
+    /// Return true if `self` is a sub row of `row`, false otherwise.
+    /// A row is a sub row if all it's fields are within the super row, and all values for those
+    /// fields equal the values in the super row.
+    pub fn is_sub_row(&self, row: &ClosedRow<'ctx, TV>) -> bool {
+        self.fields
+            .iter()
+            .zip(self.values.iter())
+            .all(|(field, value)| {
+                row.fields
+                    .as_ref()
+                    .binary_search(field)
+                    .map(|indx| value == &row.values[indx])
+                    .unwrap_or(false)
+            })
+    }
+}
+impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
+    /// Create a new row that contains all self fields that are not present in sub.
+    pub fn difference(self, sub: Self) -> (Box<[RowLabel<'ctx>]>, Box<[InferTy<'ctx>]>) {
+        let out_row = self
+            .fields
+            .iter()
+            .zip(self.values.iter())
+            .filter(|(field, _)| sub.fields.binary_search(field).is_err());
+
+        let (mut fields, mut values) = (Vec::new(), Vec::new());
+        for (field, value) in out_row {
+            fields.push(*field);
+            values.push(*value);
+        }
+        (fields.into_boxed_slice(), values.into_boxed_slice())
+    }
+
+    /// Combine two disjoint rows into a new row.
+    /// This maintains the row invariants in the resulting row.
+    /// If called on two overlapping rows an error is thrown.
+    pub fn disjoint_union(
+        self,
+        right: Self,
+    ) -> Result<(Box<[RowLabel<'ctx>]>, Box<[InferTy<'ctx>]>), TypeCheckError<'ctx>> {
+        use std::cmp::Ordering::*;
+
+        let goal_len = self.len() + right.len();
+        let mut left_fields = self.fields.iter().peekable();
+        let mut left_values = self.values.iter();
+        let mut right_fields = right.fields.iter().peekable();
+        let mut right_values = right.values.iter();
+
+        let (mut fields, mut values): (Vec<RowLabel<'ctx>>, Vec<InferTy<'ctx>>) =
+            (Vec::with_capacity(goal_len), Vec::with_capacity(goal_len));
+        // Because we know our rows are each individually sorted, we can optimistically merge them here
+        loop {
+            match (left_fields.peek(), right_fields.peek()) {
+                (Some(left_lbl), Some(right_lbl)) => {
+                    // This ensures we don't use Handle::ord on accident
+                    match str::cmp(left_lbl, right_lbl) {
+                        // Push left
+                        Less => {
+                            fields.push(*left_fields.next().unwrap());
+                            values.push(*left_values.next().unwrap());
+                        }
+                        // Because these are disjoint rows overlapping labels are an error
+                        Equal => return Err(TypeCheckError::RowsNotDisjoint(self, right)),
+                        // Push right
+                        Greater => {
+                            fields.push(*right_fields.next().unwrap());
+                            values.push(*right_values.next().unwrap());
+                        }
+                    }
+                }
+                // Right row bigger than left
+                (None, Some(_)) => {
+                    fields.extend(right_fields);
+                    values.extend(right_values);
+                    break;
+                }
+                // Left row bigger than right
+                (Some(_), None) => {
+                    fields.extend(left_fields);
+                    values.extend(left_values);
+                    break;
+                }
+                (None, None) => break,
+            }
+        }
+
+        fields.shrink_to_fit();
+        values.shrink_to_fit();
+
+        Ok((fields.into_boxed_slice(), values.into_boxed_slice()))
+    }
 }
 
 impl<'ctx, TV> Clone for ClosedRow<'ctx, TV> {
@@ -136,7 +335,12 @@ impl<'ctx, TV> Copy for ClosedRow<'ctx, TV> {}
 impl<'ctx, TV: Debug> Debug for ClosedRow<'ctx, TV> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map()
-            .entries(self.fields.iter().map(|handle| &handle.0).zip(self.values.iter()))
+            .entries(
+                self.fields
+                    .iter()
+                    .map(|handle| &handle.0)
+                    .zip(self.values.iter()),
+            )
             .finish()
     }
 }
@@ -163,6 +367,62 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for ClosedRow<'_, TV> {
     }
 }
 
+/// A row is our representaion of data, it maps fields to values.
+/// Rows come in two flavors: Open and Closed.
+#[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
+pub enum Row<'ctx, TV> {
+    /// An open row is a polymorphic set of data. Used to allow generic row programming.
+    Open(TV),
+    /// A closed row is a concrete mapping from fields to values.
+    Closed(ClosedRow<'ctx, TV>),
+}
+impl<'ctx, TV> From<TV> for Row<'ctx, TV> {
+    fn from(var: TV) -> Self {
+        Row::Open(var)
+    }
+}
+
+pub type InferRow<'infer> = Row<'infer, TcUnifierVar<'infer>>;
+
+impl<'ctx, TV> Row<'ctx, TV> {
+    pub fn to_ty<I: MkTy<'ctx, TV>>(self, ctx: &I) -> Ty<'ctx, TV> {
+        match self {
+            Row::Open(var) => ctx.mk_ty(TypeKind::VarTy(var)),
+            Row::Closed(row) => ctx.mk_ty(TypeKind::RowTy(row)),
+        }
+    }
+}
+impl<'ctx> UnifyValue for InferRow<'ctx> {
+    type Error = TypeCheckError<'ctx>;
+
+    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
+        match (left, right) {
+            (Row::Open(left_var), Row::Open(right_var)) => Ok(Row::Open(std::cmp::min(*left_var, *right_var))),
+            // Prefer the more solved row if possible
+            (Row::Open(_), Row::Closed(_)) => Ok(right.clone()),
+            (Row::Closed(_), Row::Open(_)) => Ok(left.clone()),
+            (Row::Closed(left_row), Row::Closed(right_row)) => 
+                (left_row == right_row)
+                    .then(|| left.clone())
+                    .ok_or_else(|| TypeCheckError::RowsNotEqual(*left, *right)),
+        }
+    }
+}
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Row<'_, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = Row<'ctx, T>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        match self {
+            Row::Open(var) => fold.try_fold_row_var(var),
+            Row::Closed(crow) => Ok(Row::Closed(crow.try_fold_with(fold)?)),
+        }
+    }
+}
+
 /// Data for `Ty`.
 /// `TypeKind` is interned to produce a `Ty`.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
@@ -179,6 +439,8 @@ pub enum TypeKind<'ctx, TV> {
     RowTy(ClosedRow<'ctx, TV>),
     /// A function type
     FunTy(Ty<'ctx, TV>, Ty<'ctx, TV>),
+    /// A product type. This is purely a wrapper type to coerce a row type to be a product.
+    ProdTy(Row<'ctx, TV>),
 }
 
 /// Defines the default way to fold over something.
@@ -239,6 +501,10 @@ impl<'ty, TV: Clone> DefaultFold for Ty<'ty, TV> {
                 let row_ = row.try_fold_with(fold)?;
                 Ok(fold.ctx().mk_ty(TypeKind::RowTy(row_)))
             }
+            TypeKind::ProdTy(row) => {
+                let row_ = row.clone().try_fold_with(fold)?;
+                Ok(fold.ctx().mk_ty(TypeKind::ProdTy(row_)))
+            }
         }
     }
 }
@@ -248,9 +514,9 @@ impl<'ty, TV: Clone> DefaultFold for Ty<'ty, TV> {
 ///
 /// Pairs with `TypeFoldable` to perform a type fold over arbitrary data containing types.
 pub trait FallibleTypeFold<'ctx>: Sized {
-    type Error;
-    type TypeVar: 'ctx;
     type InTypeVar: Clone;
+    type TypeVar: 'ctx + TryFrom<Self::InTypeVar>;
+    type Error: From<<Self::TypeVar as TryFrom<Self::InTypeVar>>::Error>;
 
     fn ctx(&self) -> &dyn MkTy<'ctx, Self::TypeVar>;
 
@@ -264,7 +530,18 @@ pub trait FallibleTypeFold<'ctx>: Sized {
     fn try_fold_var(
         &mut self,
         var: Self::InTypeVar,
-    ) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error>;
+    ) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> {
+        let v = var.try_into()?;
+        Ok(self.ctx().mk_ty(TypeKind::VarTy(v)))
+    }
+
+    fn try_fold_row_var(
+        &mut self,
+        var: Self::InTypeVar,
+    ) -> Result<Row<'ctx, Self::TypeVar>, Self::Error> {
+        let v = var.try_into()?;
+        Ok(Row::Open(v))
+    }
 }
 
 /// A trait for things that contain types.
