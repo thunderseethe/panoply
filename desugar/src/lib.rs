@@ -74,14 +74,14 @@ pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> A
             },
             nst::Term::FieldAccess { base, field, .. } => {
                 let term = ds(arena, spans, base);
-                arena.alloc(Unlabel { 
-                    label: field.value, 
-                    term: arena.alloc(Project { 
-                        direction: Direction::Right, 
-                        term, 
-                    }), 
+                arena.alloc(Unlabel {
+                    label: field.value,
+                    term: arena.alloc(Project {
+                        direction: Direction::Right,
+                        term,
+                    }),
                 })
-            },
+            }
             nst::Term::Handle { .. } => todo!(),
             nst::Term::SumRow(_) => todo!(),
             nst::Term::Match { .. } => todo!(),
@@ -337,7 +337,6 @@ mod tests {
         );
     }
 
-    
     #[test]
     fn test_desugar_field_access() {
         let arena = Bump::new();
@@ -347,19 +346,19 @@ mod tests {
 
         let base = random_span_of(VarId(0));
         let field = random_span_of(state);
-        let nst = arena.alloc(nst::Term::FieldAccess { 
-            base: arena.alloc(nst::Term::VariableRef(base)), 
-            dot: random_span(), 
-            field, 
-        }); 
+        let nst = arena.alloc(nst::Term::FieldAccess {
+            base: arena.alloc(nst::Term::VariableRef(base)),
+            dot: random_span(),
+            field,
+        });
 
         let ast = desugar(&arena, nst);
         assert_eq!(
             ast.tree,
             &Unlabel {
-                label: state, 
+                label: state,
                 term: &Project {
-                    direction: Direction::Right, 
+                    direction: Direction::Right,
                     term: &Variable(VarId(0))
                 }
             }

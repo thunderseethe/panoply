@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::fmt::{self, Debug};
 use std::ops::Deref;
 
@@ -37,10 +38,15 @@ impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
 /// zonking.
 /// Conversely to the untouchable TcVar, these are "touchable" and will be modified by the type
 /// checker.
-#[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct TcUnifierVar<'ctx> {
     id: u32,
     _marker: std::marker::PhantomData<&'ctx ()>,
+}
+impl<'ctx> Debug for TcUnifierVar<'ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("TcUnifierVar").field(&self.id).finish()
+    }
 }
 impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
     type Value = Option<UnifyVal<'ctx, TcUnifierVar<'ctx>>>;
@@ -64,13 +70,22 @@ impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub enum PartialRow<'ctx, TV> {
     /// This row represents the goal of a RowCombine constraint
-    OpenGoal { left: Row<'ctx, TV>, right: Row<'ctx, TV> },
+    OpenGoal {
+        left: Row<'ctx, TV>,
+        right: Row<'ctx, TV>,
+    },
     /// This row represents the left subrow of a RowCombine constraint
-    OpenLeft { goal: Row<'ctx, TV>, right: Row<'ctx, TV> },
+    OpenLeft {
+        goal: Row<'ctx, TV>,
+        right: Row<'ctx, TV>,
+    },
     /// This row represents the right subrow of a RowCombine constraint
-    OpenRight { goal: Row<'ctx, TV>, left: Row<'ctx, TV> },
+    OpenRight {
+        goal: Row<'ctx, TV>,
+        left: Row<'ctx, TV>,
+    },
 }
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for PartialRow<'ctx, TV> {
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for PartialRow<'_, TV> {
     type TypeVar = TV;
     type Out<T: 'ctx> = PartialRow<'ctx, T>;
 
@@ -83,31 +98,103 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for PartialRow<'ctx, TV> {
                 let left = left.try_fold_with(fold)?;
                 let right = right.try_fold_with(fold)?;
                 Ok(PartialRow::OpenGoal { left, right })
-            },
+            }
             PartialRow::OpenLeft { goal, right } => {
                 let goal = goal.try_fold_with(fold)?;
                 let right = right.try_fold_with(fold)?;
                 Ok(PartialRow::OpenLeft { goal, right })
-            },
+            }
             PartialRow::OpenRight { goal, left } => {
                 let goal = goal.try_fold_with(fold)?;
                 let left = left.try_fold_with(fold)?;
                 Ok(PartialRow::OpenRight { goal, left })
-            },
+            }
         }
     }
 }
 
+#[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
+pub struct RowSet<'ctx, TV> {
+    rows: Vec<PartialRow<'ctx, TV>>,
+}
+impl<'ctx, TV> RowSet<'ctx, TV> {
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a PartialRow<'ctx, TV>> {
+        self.rows.iter()
+    }
+}
+impl<'ctx, TV> From<PartialRow<'ctx, TV>> for RowSet<'ctx, TV> {
+    fn from(partial: PartialRow<'ctx, TV>) -> Self {
+        RowSet {
+            rows: vec![partial],
+        }
+    }
+}
+impl<'ctx, TV> IntoIterator for RowSet<'ctx, TV> {
+    type Item = PartialRow<'ctx, TV>;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows.into_iter()
+    }
+}
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for RowSet<'_, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = RowSet<'ctx, T>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        let rows: Vec<PartialRow<'ctx, F::TypeVar>> = self
+            .rows
+            .into_iter()
+            .map(|row| row.try_fold_with(fold))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RowSet { rows })
+    }
+}
+impl<'ctx, TV: Clone + Debug + PartialEq> UnifyValue for RowSet<'ctx, TV> {
+    type Error = Infallible;
+
+    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
+        let mut rows = Vec::with_capacity(left.rows.len() + right.rows.len());
+        rows.extend_from_slice(left.rows.as_slice());
+        rows.extend_from_slice(right.rows.as_slice());
+        rows.dedup_by(|a, b| a.eq(&b));
+        Ok(Self { rows })
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum UnifyVal<'ctx, TV> {
     /// Our unifier represents a type
     Ty(Ty<'ctx, TV>),
     /// Our unifier represents a row
-    Row(PartialRow<'ctx, TV>),
+    Row(RowSet<'ctx, TV>),
 }
 pub type InferUnifyVal<'infer> = UnifyVal<'infer, TcUnifierVar<'infer>>;
-impl<'ctx, TV: Eq + Clone + Debug> EqUnifyValue for UnifyVal<'ctx, TV> {}
+//impl<'ctx, TV: Eq + Clone + Debug> EqUnifyValue for UnifyVal<'ctx, TV> {}
+impl<'ctx> UnifyValue for UnifyVal<'ctx, TcUnifierVar<'ctx>> {
+    type Error = (Self, Self);
+
+    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
+        match (left, right) {
+            (UnifyVal::Ty(left), UnifyVal::Ty(right)) => Ty::unify_values(left, right)
+                .map(UnifyVal::Ty)
+                .map_err(|(a, b)| (UnifyVal::Ty(a), UnifyVal::Ty(b))),
+            (UnifyVal::Ty(ty), UnifyVal::Row(_)) | (UnifyVal::Row(_), UnifyVal::Ty(ty)) => {
+                match ty.deref() {
+                    // A solved row replaces a row set when unified
+                    TypeKind::RowTy(_) => Ok(UnifyVal::Ty(*ty)),
+                    _ => Err((left.clone(), right.clone())),
+                }
+            }
+            (UnifyVal::Row(left), UnifyVal::Row(right)) => RowSet::unify_values(left, right)
+                .map(UnifyVal::Row)
+                .map_err(|_| unreachable!()),
+        }
+    }
+}
 
 impl<'ctx, TV: Clone> TypeFoldable<'ctx> for UnifyVal<'ctx, TV> {
     type TypeVar = TV;
@@ -128,8 +215,8 @@ impl<'ctx, TV> From<Ty<'ctx, TV>> for UnifyVal<'ctx, TV> {
         UnifyVal::Ty(ty)
     }
 }
-impl<'ctx, TV> From<PartialRow<'ctx, TV>> for UnifyVal<'ctx, TV> {
-    fn from(row: PartialRow<'ctx, TV>) -> Self {
+impl<'ctx, TV> From<RowSet<'ctx, TV>> for UnifyVal<'ctx, TV> {
+    fn from(row: RowSet<'ctx, TV>) -> Self {
         UnifyVal::Row(row)
     }
 }
@@ -376,14 +463,12 @@ pub enum Row<'ctx, TV> {
     /// A closed row is a concrete mapping from fields to values.
     Closed(ClosedRow<'ctx, TV>),
 }
+
 impl<'ctx, TV> From<TV> for Row<'ctx, TV> {
     fn from(var: TV) -> Self {
         Row::Open(var)
     }
 }
-
-pub type InferRow<'infer> = Row<'infer, TcUnifierVar<'infer>>;
-
 impl<'ctx, TV> Row<'ctx, TV> {
     pub fn to_ty<I: MkTy<'ctx, TV>>(self, ctx: &I) -> Ty<'ctx, TV> {
         match self {
@@ -391,20 +476,30 @@ impl<'ctx, TV> Row<'ctx, TV> {
             Row::Closed(row) => ctx.mk_ty(TypeKind::RowTy(row)),
         }
     }
+
+    pub(crate) fn expect_closed(self, msg: &str) -> ClosedRow<'ctx, TV> {
+        match self {
+            Row::Closed(row) => row,
+            Row::Open(_) => panic!("{msg}"),
+        }
+    }
 }
+
+pub type InferRow<'infer> = Row<'infer, TcUnifierVar<'infer>>;
 impl<'ctx> UnifyValue for InferRow<'ctx> {
     type Error = TypeCheckError<'ctx>;
 
     fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
         match (left, right) {
-            (Row::Open(left_var), Row::Open(right_var)) => Ok(Row::Open(std::cmp::min(*left_var, *right_var))),
+            (Row::Open(left_var), Row::Open(right_var)) => {
+                Ok(Row::Open(std::cmp::min(*left_var, *right_var)))
+            }
             // Prefer the more solved row if possible
             (Row::Open(_), Row::Closed(_)) => Ok(right.clone()),
             (Row::Closed(_), Row::Open(_)) => Ok(left.clone()),
-            (Row::Closed(left_row), Row::Closed(right_row)) => 
-                (left_row == right_row)
-                    .then(|| left.clone())
-                    .ok_or_else(|| TypeCheckError::RowsNotEqual(*left, *right)),
+            (Row::Closed(left_row), Row::Closed(right_row)) => (left_row == right_row)
+                .then(|| left.clone())
+                .ok_or_else(|| TypeCheckError::RowsNotEqual(*left, *right)),
         }
     }
 }

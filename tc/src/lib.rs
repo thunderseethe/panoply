@@ -1,17 +1,17 @@
+use aiahr_core::{
+    ast::{Ast, Direction, Term, Term::*},
+    id::{Id, ItemId, ModuleId, VarId},
+    memory::handle::{Handle, RefHandle},
+};
+use bumpalo::Bump;
+use ena::unify::{InPlaceUnificationTable, UnifyKey};
+use parking_lot::RwLock;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
     borrow::Borrow,
     convert::Infallible,
     hash::{BuildHasherDefault, Hash, Hasher},
 };
-use aiahr_core::{
-    ast::{Ast, Direction, Term, Term::*},
-    id::{ItemId, ModuleId, VarId},
-    memory::handle::{Handle, RefHandle},
-};
-use bumpalo::Bump;
-use ena::unify::InPlaceUnificationTable;
-use parking_lot::RwLock;
-use rustc_hash::{FxHashMap, FxHasher};
 
 mod ty;
 
@@ -474,7 +474,7 @@ impl<'infer> InferCtx<'infer> {
             Item(_) => todo!(),
         }
     }
- 
+
     /// Apply the current partial substitution to a type, removing as many unifiers as possible
     /// before unification.
     fn normalize_ty<I>(&mut self, ctx: &I, ty: InferTy<'infer>) -> InferUnifyVal<'infer>
@@ -482,38 +482,67 @@ impl<'infer> InferCtx<'infer> {
         I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
         match *ty {
-            VarTy(var) => {
-                self.unifiers.probe_value(var)
-                    .map(|val| val.try_fold_with(&mut Normalize {ctx, unifiers: &mut self.unifiers}).unwrap())
-                    .unwrap_or_else(|| ty.into())
-            }
-            _ => {
-                ty.try_fold_with(&mut Normalize {ctx, unifiers: &mut self.unifiers}).unwrap().into()
-            }
+            VarTy(var) => self
+                .unifiers
+                .probe_value(var)
+                .map(|val| {
+                    val.try_fold_with(&mut Normalize {
+                        ctx,
+                        unifiers: &mut self.unifiers,
+                    })
+                    .unwrap()
+                })
+                .unwrap_or_else(|| ty.into()),
+            _ => ty
+                .try_fold_with(&mut Normalize {
+                    ctx,
+                    unifiers: &mut self.unifiers,
+                })
+                .unwrap()
+                .into(),
         }
     }
 
-    fn normalize_row<I>(&mut self, ctx: &I, row: InferRow<'infer>) -> Result<InferRow<'infer>, PartialRow<'infer, TcUnifierVar<'infer>>>
+    fn normalize_row<I>(
+        &mut self,
+        ctx: &I,
+        row: InferRow<'infer>,
+    ) -> Result<
+        ClosedRow<'infer, TcUnifierVar<'infer>>,
+        (TcUnifierVar<'infer>, RowSet<'infer, TcUnifierVar<'infer>>),
+    >
     where
         I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
         match row {
-            Row::Open(var) => {
-                self.unifiers.probe_value(var)
-                    .map(|val| match val.try_fold_with(&mut Normalize {ctx, unifiers: &mut self.unifiers }).unwrap() {
-                        UnifyVal::Ty(ty) => Ok(ty.try_to_row().expect("Row unifier was mapped to a type")),
-                        UnifyVal::Row(row) => Err(row),
-                    })
-                    .unwrap_or_else(|| Ok(Row::Open(var)))
-            },
-            Row::Closed(row) => 
-                Ok(Row::Closed(row.try_fold_with(&mut Normalize {ctx, unifiers: &mut self.unifiers}).unwrap())),
+            Row::Open(var) => self
+                .unifiers
+                .probe_value(var)
+                .map(|val| {
+                    match val
+                        .try_fold_with(&mut Normalize {
+                            ctx,
+                            unifiers: &mut self.unifiers,
+                        })
+                        .unwrap()
+                    {
+                        UnifyVal::Ty(ty) => Ok(ty
+                            .try_to_row()
+                            .expect("Row unifier was mapped to a type")
+                            .expect_closed(
+                                "Row variable should not be stored as unification value",
+                            )),
+                        UnifyVal::Row(row) => Err((var, row)),
+                    }
+                })
+                .unwrap_or_else(|| Err((var, RowSet::default()))),
+            Row::Closed(row) => Ok(row
+                .try_fold_with(&mut Normalize {
+                    ctx,
+                    unifiers: &mut self.unifiers,
+                })
+                .unwrap()),
         }
-        /*row.try_fold_with(&mut Normalize {
-            ctx,
-            unifiers: &mut self.unifiers,
-        })
-        .unwrap()*/
     }
 
     /// Unify a variable and a type.
@@ -544,10 +573,46 @@ impl<'infer> InferCtx<'infer> {
     where
         I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
+        self.unify_var_rows(ctx, goal_var, RowSet::from(row))
+    }
+
+    fn unify_var_rows<I>(
+        &mut self,
+        ctx: &I,
+        goal_var: TcUnifierVar<'infer>,
+        row: RowSet<'infer, TcUnifierVar<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
         let row_ = row.try_fold_with(&mut OccursCheck { ctx, var: goal_var })?;
         self.unifiers
             .unify_var_value(goal_var, Some(UnifyVal::Row(row_)))
             .map_err(|e| e.into())
+    }
+
+    fn unify_closedrow_closedrow<I>(
+        &mut self,
+        ctx: &I,
+        left: ClosedRow<'infer, TcUnifierVar<'infer>>,
+        right: ClosedRow<'infer, TcUnifierVar<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        // If our row labels aren't equal the types cannot be equal
+        if left.fields != right.fields {
+            return Err(TypeCheckError::RowsNotEqual(
+                Row::Closed(left),
+                Row::Closed(right),
+            ));
+        }
+
+        for (left_ty, right_ty) in left.values.iter().zip(right.values.iter()) {
+            self.unify_ty_ty(ctx.clone(), *left_ty, *right_ty)?;
+        }
+
+        Ok(())
     }
 
     fn unify_ty_ty_normalized<I>(
@@ -555,9 +620,9 @@ impl<'infer> InferCtx<'infer> {
         ctx: &I,
         left: InferTy<'infer>,
         right: InferTy<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> 
+    ) -> Result<(), TypeCheckError<'infer>>
     where
-        I: MkTy<'infer, TcUnifierVar<'infer>>
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
         match (*left, *right) {
             // If an error appears anywhere fail unification
@@ -581,24 +646,12 @@ impl<'infer> InferCtx<'infer> {
                 self.unify_ty_ty(ctx, left_ret, right_ret)
             }
             (RowTy(left_row), RowTy(right_row)) => {
-                // If our row labels aren't equal the types cannot be equal
-                if left_row.fields != right_row.fields {
-                    return Err((left, right).into());
-                }
-
-                for (left_ty, right_ty) in left_row.values.iter().zip(right_row.values.iter()) {
-                    self.unify_ty_ty(ctx.clone(), *left_ty, *right_ty)?;
-                }
-                Ok(())
+                self.unify_closedrow_closedrow(ctx, left_row, right_row)
             }
             // Coerce a product into a row
-            (RowTy(_), ProdTy(right)) => {
-                self.unify_ty_ty(ctx, left, right.to_ty(ctx.clone()))
-            }
+            (RowTy(_), ProdTy(right)) => self.unify_ty_ty(ctx, left, right.to_ty(ctx.clone())),
             // Coerce a product into a row
-            (ProdTy(left), RowTy(_)) => {
-                self.unify_ty_ty(ctx, left.to_ty(ctx.clone()), right)
-            }
+            (ProdTy(left), RowTy(_)) => self.unify_ty_ty(ctx, left.to_ty(ctx.clone()), right),
             // Decompose product and unify both internal types
             (ProdTy(left), ProdTy(right)) => {
                 self.unify_ty_ty(ctx, left.to_ty(ctx.clone()), right.to_ty(ctx.clone()))
@@ -637,20 +690,29 @@ impl<'infer> InferCtx<'infer> {
         let normal_right = self.normalize_ty(ctx, right);
 
         match (normal_left, normal_right) {
-            (UnifyVal::Ty(left_ty), UnifyVal::Ty(right_ty)) => self.unify_ty_ty_normalized(ctx, left_ty, right_ty),
-            (UnifyVal::Ty(ty), UnifyVal::Row(row)) | (UnifyVal::Row(row), UnifyVal::Ty(ty)) => {
-                match (*ty, row) {
-                    (VarTy(var), row) => self.unify_var_row(ctx, var, row),
-                    (RowTy(row), PartialRow::OpenGoal { left, right }) => self.unify_row_row_towards(ctx, left, right, Row::Closed(row)),
-                    (RowTy(row), PartialRow::OpenLeft { goal, right }) => self.unify_row_row_towards(ctx, Row::Closed(row), right, goal),
-                    (RowTy(row), PartialRow::OpenRight { goal, left }) => self.unify_row_row_towards(ctx, left, Row::Closed(row), goal),
+            (UnifyVal::Ty(left_ty), UnifyVal::Ty(right_ty)) => {
+                self.unify_ty_ty_normalized(ctx, left_ty, right_ty)
+            }
+            (UnifyVal::Ty(ty), UnifyVal::Row(rows)) | (UnifyVal::Row(rows), UnifyVal::Ty(ty)) => {
+                match *ty {
+                    VarTy(var) => self.unify_var_rows(ctx, var, rows),
+                    // TODO: We need to replace the entry in the unify table for right by the
+                    // entry in left. But we don't have access to the unifier vars themselves,
+                    // just their values.
+                    RowTy(row) => self.unify_closedrow_rowset(ctx, row, &rows),
                     // The rest of these cases are just type errors, things like (IntTy, Row) that
                     // could never succeed
-                    (_ , _) => Err(TypeCheckError::TypeMismatch(UnifyVal::Ty(ty), UnifyVal::Row(row))),
+                    _ => Err(TypeCheckError::TypeMismatch(
+                        UnifyVal::Ty(ty),
+                        UnifyVal::Row(rows),
+                    )),
                 }
-            },
+            }
             // TODO: Figure out what to do (if anything) here.
-            (UnifyVal::Row(left_row), UnifyVal::Row(right_row)) => panic!("Should this case be allowed? {:?} {:?}", left_row, right_row),
+            (UnifyVal::Row(left_row), UnifyVal::Row(right_row)) => panic!(
+                "Should this case be allowed? {:?} {:?}",
+                left_row, right_row
+            ),
         }
     }
 
@@ -677,7 +739,7 @@ impl<'infer> InferCtx<'infer> {
                     })
                     .unwrap_or_default(),
                 Constraint::RowCombine { left, right, goal } => self
-                    .unify_row_row_towards(ctx.clone(), left, right, goal)
+                    .unify_row_combine(ctx.clone(), left, right, goal)
                     .map_err(|err| {
                         self.errors.push(err);
                         ()
@@ -688,7 +750,29 @@ impl<'infer> InferCtx<'infer> {
         (self.unifiers, self.errors)
     }
 
-    fn unify_row_row_towards<I>(
+    fn unify_row_rowset<I>(
+        &mut self,
+        ctx: &I,
+        row: InferRow<'infer>,
+        row_var: TcUnifierVar<'infer>,
+        row_set: &RowSet<'infer, TcUnifierVar<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        match row {
+            Row::Open(var) => self
+                .unifiers
+                .unify_var_var(var, row_var)
+                .map_err(|e| e.into()),
+            Row::Closed(closed_row) => {
+                self.unify_closedrow_rowset(ctx, closed_row, row_set)?;
+                self.unify_var_ty(ctx, row_var, ctx.mk_ty(RowTy(closed_row)))
+            }
+        }
+    }
+
+    fn unify_row_combine<I>(
         &mut self,
         ctx: &I,
         left: InferRow<'infer>,
@@ -702,25 +786,299 @@ impl<'infer> InferCtx<'infer> {
         let left = self.normalize_row(ctx, left);
         let right = self.normalize_row(ctx, right);
 
-        match goal {
-            Ok(goal) => match (left, right) {
-                (Ok(left), Ok(right)) => self.unify_row_row_towards_normalized(ctx, left, right, goal),
-                (Ok(left), Err(PartialRow::OpenRight { goal: right_goal, left: right_left })) => {
-                    self.unify_row_row(ctx, left, right_left)?;
-                    self.unify_row_row(ctx, goal, right_goal)
-                },
-                (Ok(left), Err(right)) => panic!("Does this case make sense? goal: {:?} left: {:?} right: {:?}", goal, left, right),
-                (Err(PartialRow::OpenLeft { goal: left_goal, right: left_right }), Ok(right)) => {
-                    self.unify_row_row(ctx, right, left_right)?;
-                    self.unify_row_row(ctx, goal, left_goal)
-                },
-                (Err(left), Ok(right)) => panic!("Does this case make sense? goal: {:?} left: {:?} right: {:?}", goal, left, right),
-                (Err(left), Err(right)) => panic!("Does this case make sense? goal: {:?} left: {:?} right: {:?}", goal, left, right),
-            },
-            Err(goal) => panic!("Does this case make sense? goal: {:?} left: {:?} right: {:?}", goal, left, right),
-
+        fn f<'infer, I>(
+            infer: &mut InferCtx<'infer>,
+            ctx: &I,
+            a: InferRow<'infer>,
+            a_row: ClosedRow<'infer, TcUnifierVar<'infer>>,
+            b: InferRow<'infer>,
+            (b_var, b_rows): (TcUnifierVar<'infer>, &RowSet<'infer, TcUnifierVar<'infer>>),
+        ) -> Option<Result<(), TypeCheckError<'infer>>>
+        where
+            I: MkTy<'infer, TcUnifierVar<'infer>>,
+        {
+            match (a, b) {
+                (a, Row::Open(b)) if b == b_var => {
+                    Some(infer.unify_ty_ty(ctx, a.to_ty(ctx), ctx.mk_ty(RowTy(a_row))))
+                }
+                (Row::Closed(a), b) if a.fields == a_row.fields => Some(
+                    infer
+                        .unify_closedrow_closedrow(ctx, a, a_row)
+                        .and_then(|()| infer.unify_row_rowset(ctx, b, b_var, b_rows)),
+                ),
+                _ => None,
+            }
         }
 
+        match goal {
+            // Try to propagate any solves we can make based
+            Ok(goal_row) => match (left, right) {
+                (Ok(left), Ok(right)) => self.unify_row_combine_normalized(
+                    ctx,
+                    Row::Closed(left),
+                    Row::Closed(right),
+                    Row::Closed(goal_row),
+                ),
+                (Ok(left), Err((right_var, right_rows))) => {
+                    let (fields, values) = goal_row.difference(left);
+                    let right = ctx.mk_row(&fields, &values);
+                    self.unify_closedrow_rowset(ctx, right, &right_rows)?;
+                    self.unify_var_ty(ctx, right_var, ctx.mk_ty(RowTy(right)))
+                }
+                (Err((left_var, left_rows)), Ok(right)) => {
+                    let (fields, values) = goal_row.difference(right);
+                    let left = ctx.mk_row(&fields, &values);
+                    self.unify_closedrow_rowset(ctx, left, &left_rows)?;
+                    self.unify_var_ty(ctx, left_var, ctx.mk_ty(RowTy(left)))
+                }
+                (Err((left_var, left_rows)), Err((right_var, right_rows))) => {
+                    // Try to unify our constraint against an existing partial row
+                    left_rows
+                        .clone()
+                        .into_iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenLeft { goal, right } => {
+                                f(self, ctx, goal, goal_row, right, (right_var, &right_rows))
+                            }
+                            _ => None,
+                        })
+                        // If we don't find one add our new partial row to the row set
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                left_var,
+                                PartialRow::OpenLeft {
+                                    goal: Row::Closed(goal_row),
+                                    right: Row::Open(right_var),
+                                },
+                            )
+                        })?;
+
+                    right_rows
+                        .into_iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenRight { goal, left } => {
+                                f(self, ctx, goal, goal_row, left, (left_var, &left_rows))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                right_var,
+                                PartialRow::OpenRight {
+                                    goal: Row::Closed(goal_row),
+                                    left: Row::Open(right_var),
+                                },
+                            )
+                        })
+                }
+            },
+            Err((goal_var, goal_rows)) => match (left, right) {
+                (Ok(left), Ok(right)) => {
+                    let (fields, values) = left.disjoint_union(right)?;
+                    let row = ctx.mk_row(&fields, &values);
+                    self.unify_closedrow_rowset(ctx, row, &goal_rows)?;
+                    self.unify_var_ty(ctx, goal_var, ctx.mk_ty(RowTy(row)))
+                }
+                (Ok(left_row), Err((right_var, right_rows))) => {
+                    goal_rows
+                        .clone()
+                        .into_iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenGoal { left, right } => {
+                                f(self, ctx, left, left_row, right, (right_var, &right_rows))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                goal_var,
+                                PartialRow::OpenGoal {
+                                    left: Row::Closed(left_row),
+                                    right: Row::Open(right_var),
+                                },
+                            )
+                        })?;
+
+                    right_rows
+                        .into_iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenRight { goal, left } => {
+                                f(self, ctx, left, left_row, goal, (goal_var, &goal_rows))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                right_var,
+                                PartialRow::OpenRight {
+                                    goal: Row::Open(goal_var),
+                                    left: Row::Closed(left_row),
+                                },
+                            )
+                        })
+                }
+                (Err((left_var, left_rows)), Ok(right_row)) => {
+                    goal_rows
+                        .clone()
+                        .into_iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenGoal { left, right } => {
+                                f(self, ctx, right, right_row, left, (left_var, &left_rows))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                goal_var,
+                                PartialRow::OpenGoal {
+                                    left: Row::Open(left_var),
+                                    right: Row::Closed(right_row),
+                                },
+                            )
+                        })?;
+
+                    left_rows
+                        .into_iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenLeft { goal, right } => {
+                                f(self, ctx, right, right_row, goal, (goal_var, &goal_rows))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                left_var,
+                                PartialRow::OpenLeft {
+                                    goal: Row::Open(goal_var),
+                                    right: Row::Closed(right_row),
+                                },
+                            )
+                        })
+                }
+                (Err((left_var, left_rows)), Err((right_var, right_rows))) => {
+                    fn g<'infer, I>(
+                        infer: &mut InferCtx<'infer>,
+                        ctx: &I,
+                        a: InferRow<'infer>,
+                        (a_var, a_rows): (
+                            TcUnifierVar<'infer>,
+                            &RowSet<'infer, TcUnifierVar<'infer>>,
+                        ),
+                        b: InferRow<'infer>,
+                        (b_var, b_rows): (
+                            TcUnifierVar<'infer>,
+                            &RowSet<'infer, TcUnifierVar<'infer>>,
+                        ),
+                    ) -> Option<Result<(), TypeCheckError<'infer>>>
+                    where
+                        I: MkTy<'infer, TcUnifierVar<'infer>>,
+                    {
+                        match (a, b) {
+                            (a, Row::Open(b)) if b == b_var => {
+                                Some(infer.unify_row_rowset(ctx, a, a_var, a_rows))
+                            }
+                            (Row::Open(a), b) if a == a_var => {
+                                Some(infer.unify_row_rowset(ctx, b, b_var, b_rows))
+                            }
+                            _ => None,
+                        }
+                    }
+
+                    left_rows
+                        .iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenLeft { goal, right } => g(
+                                self,
+                                ctx,
+                                *goal,
+                                (goal_var, &goal_rows),
+                                *right,
+                                (right_var, &right_rows),
+                            ),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                left_var,
+                                PartialRow::OpenLeft {
+                                    goal: Row::Open(goal_var),
+                                    right: Row::Open(right_var),
+                                },
+                            )
+                        })?;
+
+                    right_rows
+                        .iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenRight { goal, left } => g(
+                                self,
+                                ctx,
+                                *goal,
+                                (goal_var, &goal_rows),
+                                *left,
+                                (left_var, &left_rows),
+                            ),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                right_var,
+                                PartialRow::OpenRight {
+                                    goal: Row::Open(goal_var),
+                                    left: Row::Open(left_var),
+                                },
+                            )
+                        })?;
+
+                    goal_rows
+                        .iter()
+                        .find_map(|pr| match pr {
+                            PartialRow::OpenGoal { left, right } => g(
+                                self,
+                                ctx,
+                                *left,
+                                (left_var, &left_rows),
+                                *right,
+                                (right_var, &right_rows),
+                            ),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_row(
+                                ctx,
+                                goal_var,
+                                PartialRow::OpenGoal {
+                                    left: Row::Open(left_var),
+                                    right: Row::Open(right_var),
+                                },
+                            )
+                        })
+                }
+            },
+        }
+    }
+
+    fn unify_row_closedrow<I>(
+        &mut self,
+        ctx: &I,
+        row: InferRow<'infer>,
+        closed_row: ClosedRow<'infer, TcUnifierVar<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        match row {
+            Row::Open(var) => self.unify_var_ty(ctx, var, ctx.mk_ty(RowTy(closed_row))),
+            Row::Closed(row) => self.unify_closedrow_closedrow(ctx, row, closed_row),
+        }
     }
 
     /// Make this type equal to a row and return that equivalent row.
@@ -746,10 +1104,16 @@ impl<'infer> InferCtx<'infer> {
         }
     }
 
-    fn unify_row_row_towards_normalized<I>(&mut self, ctx: &I, left: InferRow<'infer>, right: InferRow<'infer>, goal: InferRow<'infer>) -> Result<(), TypeCheckError<'infer>> 
+    fn unify_row_combine_normalized<I>(
+        &mut self,
+        ctx: &I,
+        left: InferRow<'infer>,
+        right: InferRow<'infer>,
+        goal: InferRow<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>>
     where
-        I: MkTy<'infer, TcUnifierVar<'infer>>
-    { 
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
         match goal {
             Row::Open(goal_var) => match (left, right) {
                 // With only one open variable we can solve
@@ -758,7 +1122,17 @@ impl<'infer> InferCtx<'infer> {
                     let row = ctx.mk_ty(RowTy(ctx.mk_row(&fields, &values)));
                     self.unify_var_ty(ctx, goal_var, row)
                 }
-                (left, right) => {
+                (left @ Row::Open(left_var), right @ Row::Closed(_)) => {
+                    self.unify_var_row(ctx, left_var, PartialRow::OpenLeft { goal, right })?;
+                    self.unify_var_row(ctx, goal_var, PartialRow::OpenGoal { left, right })
+                }
+                (left @ Row::Closed(_), right @ Row::Open(right_var)) => {
+                    self.unify_var_row(ctx, right_var, PartialRow::OpenRight { goal, left })?;
+                    self.unify_var_row(ctx, goal_var, PartialRow::OpenGoal { left, right })
+                }
+                (left @ Row::Open(left_var), right @ Row::Open(right_var)) => {
+                    self.unify_var_row(ctx, left_var, PartialRow::OpenLeft { goal, right })?;
+                    self.unify_var_row(ctx, right_var, PartialRow::OpenRight { goal, left })?;
                     self.unify_var_row(ctx, goal_var, PartialRow::OpenGoal { left, right })
                 }
             },
@@ -766,8 +1140,8 @@ impl<'infer> InferCtx<'infer> {
                 // Our rows are all closed, we just need to check they are equal and discharge them
                 (Row::Closed(left_row), Row::Closed(right_row)) => {
                     let (fields, values) = left_row.disjoint_union(right_row)?;
-                    let row = ctx.mk_ty(RowTy(ctx.mk_row(&fields, &values)));
-                    self.unify_ty_ty(ctx, ctx.mk_ty(RowTy(goal_row)), row)
+                    let row = ctx.mk_row(&fields, &values);
+                    self.unify_closedrow_closedrow(ctx, goal_row, row)
                 }
                 // With one open row we solve that row
                 (Row::Open(left_var), Row::Closed(right_row)) => {
@@ -785,26 +1159,62 @@ impl<'infer> InferCtx<'infer> {
                 (Row::Open(left_var), Row::Open(right_var)) => {
                     self.unify_var_row(ctx, left_var, PartialRow::OpenLeft { goal, right })?;
                     self.unify_var_row(ctx, right_var, PartialRow::OpenRight { goal, left })
-                },
+                }
             },
         }
     }
 
-    fn unify_row_row<I>(&mut self, ctx: &I, left: InferRow<'infer>, right: InferRow<'infer>) -> Result<(), TypeCheckError<'infer>> 
+    fn unify_row_row<I>(
+        &mut self,
+        ctx: &I,
+        left: InferRow<'infer>,
+        right: InferRow<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>>
     where
         I: MkTy<'infer, TcUnifierVar<'infer>>,
     {
         match (left, right) {
-            (Row::Open(left_var), Row::Open(right_var)) => self.unifiers.unify_var_var(left_var, right_var).map_err(|e| e.into()),
-            (Row::Open(var), Row::Closed(row)) | (Row::Closed(row), Row::Open(var)) => self.unify_var_ty(ctx, var, ctx.mk_ty(RowTy(row))),
+            (Row::Open(left_var), Row::Open(right_var)) => self
+                .unifiers
+                .unify_var_var(left_var, right_var)
+                .map_err(|e| e.into()),
+            (Row::Open(var), Row::Closed(row)) | (Row::Closed(row), Row::Open(var)) => {
+                self.unify_var_ty(ctx, var, ctx.mk_ty(RowTy(row)))
+            }
             // If both rows are closed unify them as types to ensure they are equal
-            (Row::Closed(left), Row::Closed(right)) => self.unify_ty_ty_normalized(ctx, ctx.mk_ty(RowTy(left)), ctx.mk_ty(RowTy(right))),
+            (Row::Closed(left), Row::Closed(right)) => {
+                self.unify_closedrow_closedrow(ctx, left, right)
+            }
         }
     }
 
+    fn unify_closedrow_rowset<I>(
+        &mut self,
+        ctx: &I,
+        row: ClosedRow<'infer, TcUnifierVar<'infer>>,
+        row_set: &RowSet<'infer, TcUnifierVar<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        I: MkTy<'infer, TcUnifierVar<'infer>>,
+    {
+        for partial_row in row_set.iter() {
+            match partial_row {
+                PartialRow::OpenGoal { left, right } => {
+                    self.unify_row_combine(ctx, *left, *right, Row::Closed(row))?
+                }
+                PartialRow::OpenLeft { goal, right } => {
+                    self.unify_row_combine(ctx, Row::Closed(row), *right, *goal)?
+                }
+                PartialRow::OpenRight { goal, left } => {
+                    self.unify_row_combine(ctx, *left, Row::Closed(row), *goal)?
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
-/// Zonk a thing
+/// Zonk anything that is TypeFoldable.
 /// This removes all unification variables.
 /// If a unification variables is solved to a type, it is replaced by that type.
 /// If a unification variable has no solution, we replace it by a fresh type variable and record it
@@ -813,6 +1223,25 @@ pub struct Zonker<'a, 'ctx, 'infer> {
     ctx: &'a dyn MkTy<'ctx, TcVar>,
     unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer>>,
     free_vars: Vec<TcUnifierVar<'infer>>,
+}
+
+impl<'a, 'ctx, 'infer> Zonker<'a, 'ctx, 'infer> {
+    fn add(&mut self, var: TcUnifierVar<'infer>) -> TcVar {
+        // Find the root unification variable and return a type varaible representing that
+        // root.
+        let root = self.unifiers.find(var);
+        let var_indx = self
+            .free_vars
+            .iter()
+            .position(|uv| &root == uv)
+            // We have not seen this unification variable before, so create a new one.
+            .unwrap_or_else(|| {
+                let next_index = self.free_vars.len();
+                self.free_vars.push(var);
+                next_index
+            });
+        TcVar::from_raw(var_indx)
+    }
 }
 
 impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
@@ -832,20 +1261,23 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
             Some(UnifyVal::Ty(ty)) => ty.try_fold_with(self),
             _ => {
                 // Our unification variable wasn't solved to a type.
-                // Find the root unification variable and return a type varaible representing that
-                // root.
-                let root = self.unifiers.find(var);
-                let var_indx = self
-                    .free_vars
-                    .iter()
-                    .position(|uv| &root == uv)
-                    // We have not seen this unification variable before, so create a new one.
-                    .unwrap_or_else(|| {
-                        let next_index = self.free_vars.len();
-                        self.free_vars.push(var);
-                        next_index
-                    });
-                Ok(self.ctx().mk_ty(VarTy(TcVar(var_indx))))
+                // Generalize it to a type variable.
+                let ty_var = self.add(var);
+                Ok(self.ctx().mk_ty(VarTy(ty_var)))
+            }
+        }
+    }
+
+    fn try_fold_row_var(
+        &mut self,
+        var: Self::InTypeVar,
+    ) -> Result<Row<'ctx, Self::TypeVar>, Self::Error> {
+        match self.unifiers.probe_value(var) {
+            Some(UnifyVal::Ty(Ty(Handle(RowTy(row))))) => row.try_fold_with(self).map(Row::Closed),
+            // TODO: Consider if we should handle PartialRow cases here
+            _ => {
+                let row_var = self.add(var);
+                Ok(Row::Open(row_var))
             }
         }
     }
@@ -857,7 +1289,7 @@ pub fn type_check<'ty, 'infer, I, II>(
     ast: Ast<'_, VarId>,
 ) -> (
     FxHashMap<VarId, Ty<'ty, TcVar>>,
-    Ty<'ty, TcVar>,
+    TyScheme<'ty, TcVar>,
     Vec<TypeCheckError<'infer>>,
 )
 where
@@ -873,7 +1305,7 @@ fn tc_term<'ty, 'infer, I, II>(
     term: &'_ Term<'_, VarId>,
 ) -> (
     FxHashMap<VarId, Ty<'ty, TcVar>>,
-    Ty<'ty, TcVar>,
+    TyScheme<'ty, TcVar>,
     Vec<TypeCheckError<'infer>>,
 )
 where
@@ -882,8 +1314,8 @@ where
 {
     let mut infer = InferCtx {
         local_env: FxHashMap::default(),
-        errors: vec![],
         unifiers: InPlaceUnificationTable::default(),
+        errors: vec![],
     };
 
     // Infer types for all our variables and the root term.
@@ -898,13 +1330,100 @@ where
         unifiers: &mut unifiers,
         free_vars: vec![],
     };
+    let constrs = collect_evidence(&mut zonker);
     let zonked_ty = ty.try_fold_with(&mut zonker).unwrap();
     let zonked_var_tys = var_tys
         .into_iter()
         .map(|(var, ty)| (var, ty.try_fold_with(&mut zonker).unwrap()))
         .collect::<FxHashMap<_, _>>();
+
+    let scheme = TyScheme {
+        bound: zonker
+            .free_vars
+            .into_iter()
+            .enumerate()
+            .map(|(i, _)| TcVar::from_raw(i))
+            .collect(),
+        constrs,
+        ty: zonked_ty,
+    };
     // TODO: Generalize root type as a scheme
-    (zonked_var_tys, zonked_ty, errors)
+    (zonked_var_tys, scheme, errors)
+}
+
+fn collect_evidence<'ctx, 'infer>(
+    zonker: &mut Zonker<'_, 'ctx, 'infer>,
+) -> Vec<Evidence<'ctx, TcVar>> {
+    let mut evidence = FxHashSet::default();
+
+    for unifier in (0..zonker.unifiers.len() as u32).map(TcUnifierVar::from_index) {
+        let root = zonker.unifiers.find(unifier);
+        // Only visit root unifiers
+        if unifier != root {
+            continue;
+        }
+        if let Some(UnifyVal::Row(row_set)) = zonker.unifiers.probe_value(root) {
+            println!("Row set for {:?} is {:?}", root, row_set);
+            evidence.extend(row_set.into_iter().map(|partial_row| {
+                let ev = match partial_row {
+                    PartialRow::OpenGoal { left, right } => Evidence::Row {
+                        left,
+                        right,
+                        goal: Row::Open(root),
+                    },
+                    PartialRow::OpenLeft { goal, right } => Evidence::Row {
+                        left: Row::Open(root),
+                        right,
+                        goal,
+                    },
+                    PartialRow::OpenRight { goal, left } => Evidence::Row {
+                        left,
+                        right: Row::Open(root),
+                        goal,
+                    },
+                };
+                ev.try_fold_with(zonker).unwrap()
+            }))
+        }
+    }
+
+    evidence.into_iter().collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Evidence<'ctx, TV> {
+    Row {
+        left: Row<'ctx, TV>,
+        right: Row<'ctx, TV>,
+        goal: Row<'ctx, TV>,
+    },
+}
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Evidence<'_, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = Evidence<'ctx, T>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        match self {
+            Evidence::Row { left, right, goal } => Ok(Evidence::Row {
+                left: left.try_fold_with(fold)?,
+                right: right.try_fold_with(fold)?,
+                goal: goal.try_fold_with(fold)?,
+            }),
+        }
+    }
+}
+
+/// A type scheme (also know as a polymorphic type).
+/// Type schemes wrap a monomorphic type in any number of foralls binding the free variables within
+/// the monomorphic type. They may also assert constraints on the bound type variables.
+#[derive(Debug)]
+pub struct TyScheme<'ctx, TV> {
+    bound: Vec<TV>,
+    constrs: Vec<Evidence<'ctx, TV>>,
+    ty: Ty<'ctx, TV>,
 }
 
 const SHARD_BITS: usize = 5;
@@ -1007,6 +1526,7 @@ impl<'ctx, TV> TyCtx<'ctx, TV>
 where
     TV: Eq + Copy + Hash,
 {
+    #[cfg(test)]
     fn new(arena: &'ctx Bump) -> Self {
         Self {
             arena,
@@ -1090,6 +1610,16 @@ mod tests {
         fn mk_label(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_unlabel(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_concat(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var>;
+        fn mk_project(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
+
+        fn mk_abss<II>(&'a self, args: II, body: Term<'a, Var>) -> Term<'a, Var>
+        where
+            II: IntoIterator,
+            II::IntoIter: DoubleEndedIterator<Item = Var>,
+        {
+            args.into_iter()
+                .rfold(body, |body, arg| self.mk_abs(arg, body))
+        }
     }
 
     impl<'a, Var> MkTerm<'a, Var> for Bump {
@@ -1115,7 +1645,17 @@ mod tests {
         }
 
         fn mk_concat(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var> {
-            Concat { left: self.alloc(left), right: self.alloc(right) }
+            Concat {
+                left: self.alloc(left),
+                right: self.alloc(right),
+            }
+        }
+
+        fn mk_project(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var> {
+            Project {
+                direction,
+                term: self.alloc(term),
+            }
         }
     }
 
@@ -1133,9 +1673,12 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_, ty, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
+        let (_, scheme, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
 
-        assert_matches!(ty, ty!(FunTy(ty!(VarTy(TcVar(0))), ty!(VarTy(TcVar(0))))));
+        assert_matches!(
+            scheme.ty,
+            ty!(FunTy(ty!(VarTy(TcVar(0))), ty!(VarTy(TcVar(0)))))
+        );
     }
 
     #[test]
@@ -1174,10 +1717,10 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_, ty, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
+        let (_, scheme, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
 
         assert_matches!(
-            ty,
+            scheme.ty,
             ty!(FunTy(
                 ty!(VarTy(TcVar(0))),
                 ty!(RowTy(ClosedRow {
@@ -1200,12 +1743,12 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (var_to_tys, ty, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
+        let (var_to_tys, scheme, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
 
         assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TcVar(0)))));
         assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TcVar(1)))));
         assert_matches!(
-            ty,
+            scheme.ty,
             ty!(FunTy(
                 ty!(VarTy(TcVar(0))),
                 ty!(FunTy(ty!(VarTy(TcVar(1))), ty!(VarTy(TcVar(0))),)),
@@ -1219,21 +1762,87 @@ mod tests {
         let x = VarId(0);
         let untyped_ast = Ast::new(
             FxHashMap::default(),
-            arena.alloc(arena.mk_abs(VarId(0), arena.mk_concat(
-                arena.mk_concat(arena.mk_label("a", Variable(x)), arena.mk_label("b", Variable(x))),
-                arena.mk_concat(arena.mk_label("c", Variable(x)), arena.mk_label("d", Variable(x)))
-            )))
+            arena.alloc(arena.mk_abs(
+                x,
+                arena.mk_concat(
+                    arena.mk_concat(
+                        arena.mk_label("a", Variable(x)),
+                        arena.mk_label("b", Variable(x)),
+                    ),
+                    arena.mk_concat(
+                        arena.mk_label("c", Variable(x)),
+                        arena.mk_label("d", Variable(x)),
+                    ),
+                ),
+            )),
         );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, ty, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
+        let (_var_to_tys, scheme, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
 
-        assert_matches!(ty,
-                        ty!(FunTy(ty!(VarTy(TcVar(0))), ty!(ProdTy(Row::Closed(row!(
-                            ["a", "b", "c", "d"],
-                            [ty!(VarTy(TcVar(0))),ty!(VarTy(TcVar(0))),ty!(VarTy(TcVar(0))),ty!(VarTy(TcVar(0)))]
-                        )))))))
+        assert_matches!(
+            scheme.ty,
+            ty!(FunTy(
+                ty!(VarTy(TcVar(0))),
+                ty!(ProdTy(Row::Closed(row!(
+                    ["a", "b", "c", "d"],
+                    [
+                        ty!(VarTy(TcVar(0))),
+                        ty!(VarTy(TcVar(0))),
+                        ty!(VarTy(TcVar(0))),
+                        ty!(VarTy(TcVar(0)))
+                    ]
+                ))))
+            ))
+        )
+    }
+
+    #[test]
+    fn test_tc_product_wand() {
+        let arena = Bump::new();
+        let m = VarId(0);
+        let n = VarId(1);
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(arena.mk_abss(
+                [m, n],
+                arena.mk_unlabel(
+                    "x",
+                    arena.mk_project(Direction::Right, arena.mk_concat(Variable(m), Variable(n))),
+                ),
+            )),
+        );
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
+
+        let (_var_to_tys, scheme, _) = type_check(&ty_intern, &infer_intern, untyped_ast);
+
+        println!("{:?}", scheme);
+
+        assert_matches!(
+            scheme.constrs[0],
+            Evidence::Row {
+                left: Row::Open(_),
+                right: Row::Closed(row!(["x"], [ty!(VarTy(TcVar(4)))])),
+                goal: Row::Open(TcVar(2))
+            }
+        );
+        assert_matches!(
+            scheme.constrs[1],
+            Evidence::Row {
+                left: Row::Open(_),
+                right: Row::Open(_),
+                goal: Row::Open(TcVar(2))
+            }
+        );
+        assert_matches!(
+            scheme.ty,
+            ty!(FunTy(
+                ty!(ProdTy(Row::Open(_))),
+                ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!(VarTy(TcVar(4)))))
+            ))
+        )
     }
 
     #[test]
