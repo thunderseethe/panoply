@@ -165,6 +165,7 @@ impl<'ctx, TV: Clone + Debug + PartialEq> UnifyValue for RowSet<'ctx, TV> {
     }
 }
 
+/// A unification value. 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum UnifyVal<'ctx, TV> {
     /// Our unifier represents a type
@@ -541,30 +542,6 @@ pub enum TypeKind<'ctx, TV> {
 /// Defines the default way to fold over something.
 /// This is used by `TypeFoldable` and `FallibleTypeFold` to determine how to fold over something
 /// when the trait implementator does not wish to use a custom traversal.
-///
-/// For example, the default fold over type is:
-/// ```
-/// fn try_default_fold<'ctx, F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
-///     self,
-///     fold: &mut F,
-/// ) -> Result<Self::Out<'ctx, F::TypeVar>, F::Error> {
-///     match self.deref() {
-///         VarTy(ref var) => fold.try_fold_var(var),
-///         IntTy => Ok(fold.ctx().mk_ty(TypeKind::IntTy)),
-///         ErrorTy => Ok(fold.ctx().mk_ty(TypeKind::ErrorTy)),
-///         FunTy(arg, ret) => {
-///             let arg_ = arg.try_fold_with(fold)?;
-///             let ret_ = ret.try_fold_with(fold)?;
-///             Ok(fold.ctx().mk_ty(TypeKind::FunTy(arg_, ret_)))
-///         }
-///         RowTy(row) => {
-///             let row_ = row.try_fold_with(fold)?;
-///             Ok(fold.ctx().mk_ty(TypeKind::RowTy(row_)))
-///         }
-///     }
-/// }
-/// ```
-/// So by default we visit each type and return it as is without modification.
 trait DefaultFold {
     type TypeVar;
     type Out<'a, TV: 'a>;
