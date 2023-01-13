@@ -4,18 +4,24 @@ use aiahr_core::{
     memory::handle::{Handle, RefHandle},
 };
 use bumpalo::Bump;
-use ena::unify::{InPlaceUnificationTable, UnifyKey};
+use ena::unify::{InPlaceUnificationTable, UnifyKey, UnifyValue};
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::{
     borrow::Borrow,
     convert::Infallible,
     hash::{BuildHasherDefault, Hash, Hasher},
+    ops::Deref,
 };
 
 mod ty;
 
-use ty::{TypeKind::*, *};
+use ty::{
+    fold::{FallibleTypeFold, TypeFoldable},
+    row::{ClosedRow, InferRow, PartialRow, Row, RowLabel, RowSet},
+    TypeKind::*,
+    *,
+};
 
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]
@@ -24,8 +30,8 @@ pub enum TypeCheckError<'ctx> {
     VarNotDefined(VarId),
     ItemNotDefined((ModuleId, ItemId)),
     TypeMismatch(
-        UnifyVal<'ctx, TcUnifierVar<'ctx>>,
-        UnifyVal<'ctx, TcUnifierVar<'ctx>>,
+        Candidate<'ctx, TcUnifierVar<'ctx>>,
+        Candidate<'ctx, TcUnifierVar<'ctx>>,
     ),
     OccursCheckFailed(TcUnifierVar<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),
@@ -35,8 +41,8 @@ pub enum TypeCheckError<'ctx> {
     ),
     RowsNotEqual(InferRow<'ctx>, InferRow<'ctx>),
     Unification(
-        UnifyVal<'ctx, TcUnifierVar<'ctx>>,
-        UnifyVal<'ctx, TcUnifierVar<'ctx>>,
+        Candidate<'ctx, TcUnifierVar<'ctx>>,
+        Candidate<'ctx, TcUnifierVar<'ctx>>,
     ),
 }
 
@@ -52,14 +58,14 @@ impl<'ty> From<UnifierToTcVarError> for TypeCheckError<'ty> {
 }
 impl<'ctx>
     From<(
-        UnifyVal<'ctx, TcUnifierVar<'ctx>>,
-        UnifyVal<'ctx, TcUnifierVar<'ctx>>,
+        Candidate<'ctx, TcUnifierVar<'ctx>>,
+        Candidate<'ctx, TcUnifierVar<'ctx>>,
     )> for TypeCheckError<'ctx>
 {
     fn from(
         (left, right): (
-            UnifyVal<'ctx, TcUnifierVar<'ctx>>,
-            UnifyVal<'ctx, TcUnifierVar<'ctx>>,
+            Candidate<'ctx, TcUnifierVar<'ctx>>,
+            Candidate<'ctx, TcUnifierVar<'ctx>>,
         ),
     ) -> Self {
         TypeCheckError::TypeMismatch(left, right)
@@ -68,6 +74,63 @@ impl<'ctx>
 impl<'ctx> From<(InferTy<'ctx>, InferTy<'ctx>)> for TypeCheckError<'ctx> {
     fn from((left, right): (InferTy<'ctx>, InferTy<'ctx>)) -> Self {
         TypeCheckError::TypeMismatch(left.into(), right.into())
+    }
+}
+
+/// A candidate solution for a unification variable.
+/// This acts as the value in the unification table for a unification variable.
+#[derive(Debug, Hash, PartialEq, Eq, Clone)]
+pub enum Candidate<'ctx, TV> {
+    /// Our unifier represents a type
+    Ty(Ty<'ctx, TV>),
+    /// Our unifier represents a row
+    Row(RowSet<'ctx, TV>),
+}
+pub type InferCandidate<'infer> = Candidate<'infer, TcUnifierVar<'infer>>;
+impl<'ctx> UnifyValue for Candidate<'ctx, TcUnifierVar<'ctx>> {
+    type Error = (Self, Self);
+
+    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
+        match (left, right) {
+            (Candidate::Ty(left), Candidate::Ty(right)) => Ty::unify_values(left, right)
+                .map(Candidate::Ty)
+                .map_err(|(a, b)| (Candidate::Ty(a), Candidate::Ty(b))),
+            (Candidate::Ty(ty), Candidate::Row(_)) | (Candidate::Row(_), Candidate::Ty(ty)) => {
+                match ty.deref() {
+                    // A solved row replaces a row set when unified
+                    TypeKind::RowTy(_) => Ok(Candidate::Ty(*ty)),
+                    _ => Err((left.clone(), right.clone())),
+                }
+            }
+            (Candidate::Row(left), Candidate::Row(right)) => RowSet::unify_values(left, right)
+                .map(Candidate::Row)
+                .map_err(|_| unreachable!()),
+        }
+    }
+}
+
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Candidate<'ctx, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = Candidate<'ctx, T>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        match self {
+            Candidate::Ty(ty) => ty.try_fold_with(fold).map(Candidate::Ty),
+            Candidate::Row(row) => row.try_fold_with(fold).map(Candidate::Row),
+        }
+    }
+}
+impl<'ctx, TV> From<Ty<'ctx, TV>> for Candidate<'ctx, TV> {
+    fn from(ty: Ty<'ctx, TV>) -> Self {
+        Candidate::Ty(ty)
+    }
+}
+impl<'ctx, TV> From<RowSet<'ctx, TV>> for Candidate<'ctx, TV> {
+    fn from(row: RowSet<'ctx, TV>) -> Self {
+        Candidate::Row(row)
     }
 }
 
@@ -139,7 +202,7 @@ where
         var: Self::InTypeVar,
     ) -> Result<Ty<'inf, Self::TypeVar>, Self::Error> {
         Ok(match self.unifiers.probe_value(var) {
-            Some(UnifyVal::Ty(ty)) => ty,
+            Some(Candidate::Ty(ty)) => ty,
             _ => self.ctx().mk_ty(VarTy(var)),
         })
     }
@@ -149,7 +212,7 @@ where
         var: Self::InTypeVar,
     ) -> Result<Row<'inf, Self::TypeVar>, Self::Error> {
         Ok(match self.unifiers.probe_value(var) {
-            Some(UnifyVal::Ty(ty)) => ty
+            Some(Candidate::Ty(ty)) => ty
                 .try_to_row()
                 .expect("Unified a non row type with a row var"),
             _ => Row::Open(var),
@@ -345,7 +408,6 @@ where
         }
     }
 
-    
     /// Create a unique unbound type variable
     fn fresh_var(&mut self) -> InferTy<'infer> {
         let uv = self.unifiers.new_key(None);
@@ -486,7 +548,7 @@ where
 
     /// Apply the current partial substitution to a type, removing as many unifiers as possible
     /// before unification.
-    fn normalize_ty(&mut self, ty: InferTy<'infer>) -> InferUnifyVal<'infer> {
+    fn normalize_ty(&mut self, ty: InferTy<'infer>) -> InferCandidate<'infer> {
         match *ty {
             VarTy(var) => self
                 .unifiers
@@ -528,13 +590,13 @@ where
                         })
                         .unwrap()
                     {
-                        UnifyVal::Ty(ty) => Ok(ty
+                        Candidate::Ty(ty) => Ok(ty
                             .try_to_row()
                             .expect("Row unifier was mapped to a type")
                             .expect_closed(
                                 "Row variable should not be stored as unification value",
                             )),
-                        UnifyVal::Row(row) => Err((var, row)),
+                        Candidate::Row(row) => Err((var, row)),
                     }
                 })
                 .unwrap_or_else(|| Err((var, RowSet::default()))),
@@ -558,7 +620,7 @@ where
     ) -> Result<(), TypeCheckError<'infer>> {
         let ty_ = ty.try_fold_with(&mut OccursCheck { ctx: self.ctx, var })?;
         self.unifiers
-            .unify_var_value(var, Some(UnifyVal::Ty(ty_)))
+            .unify_var_value(var, Some(Candidate::Ty(ty_)))
             .map_err(|e| e.into())
     }
 
@@ -580,7 +642,7 @@ where
             var: goal_var,
         })?;
         self.unifiers
-            .unify_var_value(goal_var, Some(UnifyVal::Row(row_)))
+            .unify_var_value(goal_var, Some(Candidate::Row(row_)))
             .map_err(|e| e.into())
     }
 
@@ -671,10 +733,11 @@ where
         let normal_right = self.normalize_ty(right);
 
         match (normal_left, normal_right) {
-            (UnifyVal::Ty(left_ty), UnifyVal::Ty(right_ty)) => {
+            (Candidate::Ty(left_ty), Candidate::Ty(right_ty)) => {
                 self.unify_ty_ty_normalized(left_ty, right_ty)
             }
-            (UnifyVal::Ty(ty), UnifyVal::Row(rows)) | (UnifyVal::Row(rows), UnifyVal::Ty(ty)) => {
+            (Candidate::Ty(ty), Candidate::Row(rows))
+            | (Candidate::Row(rows), Candidate::Ty(ty)) => {
                 match *ty {
                     VarTy(var) => self.unify_var_rowset(var, rows),
                     // TODO: We need to replace the entry in the unify table for right by the
@@ -684,13 +747,13 @@ where
                     // The rest of these cases are just type errors, things like (IntTy, Row) that
                     // could never succeed
                     _ => Err(TypeCheckError::TypeMismatch(
-                        UnifyVal::Ty(ty),
-                        UnifyVal::Row(rows),
+                        Candidate::Ty(ty),
+                        Candidate::Row(rows),
                     )),
                 }
             }
             // TODO: Figure out what to do (if anything) here.
-            (UnifyVal::Row(left_row), UnifyVal::Row(right_row)) => panic!(
+            (Candidate::Row(left_row), Candidate::Row(right_row)) => panic!(
                 "Should this case be allowed? {:?} {:?}",
                 left_row, right_row
             ),
@@ -1185,7 +1248,7 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
         var: Self::InTypeVar,
     ) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> {
         match self.unifiers.probe_value(var) {
-            Some(UnifyVal::Ty(ty)) => ty.try_fold_with(self),
+            Some(Candidate::Ty(ty)) => ty.try_fold_with(self),
             _ => {
                 // Our unification variable wasn't solved to a type.
                 // Generalize it to a type variable.
@@ -1200,7 +1263,7 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
         var: Self::InTypeVar,
     ) -> Result<Row<'ctx, Self::TypeVar>, Self::Error> {
         match self.unifiers.probe_value(var) {
-            Some(UnifyVal::Ty(Ty(Handle(RowTy(row))))) => row.try_fold_with(self).map(Row::Closed),
+            Some(Candidate::Ty(Ty(Handle(RowTy(row))))) => row.try_fold_with(self).map(Row::Closed),
             // TODO: Consider if we should handle PartialRow cases here
             _ => {
                 let row_var = self.add(var);
@@ -1290,7 +1353,7 @@ fn collect_evidence<'ctx, 'infer>(
         if unifier != root {
             continue;
         }
-        if let Some(UnifyVal::Row(row_set)) = zonker.unifiers.probe_value(root) {
+        if let Some(Candidate::Row(row_set)) = zonker.unifiers.probe_value(root) {
             println!("Row set for {:?} is {:?}", root, row_set);
             evidence.extend(row_set.into_iter().map(|partial_row| {
                 let ev = match partial_row {
@@ -1628,8 +1691,8 @@ mod tests {
         assert_matches!(
             errors[0],
             TypeCheckError::TypeMismatch(
-                UnifyVal::Ty(ty!(RowTy(row!(["end"], [ty!(ErrorTy)])))),
-                UnifyVal::Ty(ty!(RowTy(row!(["start"], [ty!(VarTy(_))]))))
+                Candidate::Ty(ty!(RowTy(row!(["end"], [ty!(ErrorTy)])))),
+                Candidate::Ty(ty!(RowTy(row!(["start"], [ty!(VarTy(_))]))))
             )
         );
     }
