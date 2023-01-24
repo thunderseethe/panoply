@@ -222,29 +222,22 @@ impl<'a, 's> Spanned for RowAtom<'a, 's> {
     }
 }
 
-/// A row expression for use in a type constraint, given as a combination of atoms.
-pub type RowExpr<'a, 's> = Separated<'a, RowAtom<'a, 's>>;
-
 /// A type constraint.
 #[derive(Clone, Copy, Debug)]
 pub enum Constraint<'a, 's> {
-    Subrow {
-        lhs: RowExpr<'a, 's>,
-        lt: Span,
-        rhs: RowExpr<'a, 's>,
-    },
-    Equals {
-        lhs: RowExpr<'a, 's>,
+    RowSum {
+        lhs: RowAtom<'a, 's>,
+        plus: Span,
+        rhs: RowAtom<'a, 's>,
         eq: Span,
-        rhs: RowExpr<'a, 's>,
+        goal: RowAtom<'a, 's>,
     },
 }
 
 impl<'a, 's> Spanned for Constraint<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Constraint::Subrow { lhs, rhs, .. } => Span::join(lhs, rhs),
-            Constraint::Equals { lhs, rhs, .. } => Span::join(lhs, rhs),
+            Constraint::RowSum { lhs, goal, .. } => Span::join(lhs, goal),
         }
     }
 }
@@ -279,6 +272,21 @@ impl<'a, 's> Spanned for Scheme<'a, 's> {
                 .start(),
             end: self.type_.end(),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Effect<'a, 's> {
+    pub effect: Span,
+    pub name: SpanOf<RefHandle<'s, str>>,
+    pub lbrace: Span,
+    pub ops: &'a [IdField<'s, Type<'a, 's>>],
+    pub rbrace: Span,
+}
+
+impl<'a, 's> Spanned for Effect<'a, 's> {
+    fn span(&self) -> Span {
+        Span::join(&self.effect, &self.rbrace)
     }
 }
 
@@ -538,22 +546,12 @@ macro_rules! rwx_variable {
 }
 
 #[macro_export]
-macro_rules! ct_subrow {
-    (($($lhs:pat),+ $(,)?), ($($rhs:pat),+ $(,)?)) => {
-        $crate::cst::Constraint::Subrow {
-            lhs: $crate::separated!($($lhs),+),
-            rhs: $crate::separated!($($rhs),+),
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! ct_equals {
-    (($($lhs:pat),+ $(,)?), ($($rhs:pat),+ $(,)?)) => {
-        $crate::cst::Constraint::Equals {
-            lhs: $crate::separated!($($lhs),+),
-            rhs: $crate::separated!($($rhs),+),
+macro_rules! ct_rowsum {
+    ($lhs:pat, $rhs:pat, $goal:pat) => {
+        $crate::cst::Constraint::RowSum {
+            lhs: $lhs,
+            rhs: $rhs,
+            goal: $goal,
             ..
         }
     };
@@ -690,6 +688,17 @@ macro_rules! item_term {
         $crate::cst::Item::Term {
             name: $crate::span_of!($crate::h!($name)),
             value: $value,
+            ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! item_effect {
+    ($name:pat, $($ops:pat),* $(,)?) => {
+        $crate::cst::Item::Effect {
+            name: $crate::span_of!($crate::h!($name)),
+            ops: &[$($ops),*],
             ..
         }
     };

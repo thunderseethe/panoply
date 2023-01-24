@@ -1,7 +1,7 @@
 use aiahr_core::{
     cst::{
-        Constraint, Field, IdField, Item, Pattern, ProductRow, Qualification, Row, RowAtom,
-        RowExpr, Scheme, Separated, SumRow, Term, Type,
+        Constraint, Field, IdField, Item, Pattern, ProductRow, Qualification, Row, RowAtom, Scheme,
+        Separated, SumRow, Term, Type,
     },
     diagnostic::parser::ParseErrors,
     loc::Loc,
@@ -115,7 +115,7 @@ fn row<'a, 's: 'a, C: 'a>(
     field: impl Clone + Parser<Token<'s>, C, Error = ParseErrors<'s>>,
 ) -> impl Clone + Parser<Token<'s>, Row<'a, 's, C>, Error = ParseErrors<'s>> {
     let concrete = separated(arena, field, lit(Token::Comma));
-    let variables = separated(arena, ident(), lit(Token::Comma));
+    let variables = separated(arena, ident(), lit(Token::Plus));
     choice((
         concrete
             .clone()
@@ -190,55 +190,39 @@ pub fn type_<'a, 's: 'a>(
     })
 }
 
-// Returns a parser for a row expression.
-fn row_expr<'a, 's: 'a>(
+// Returns a parser for a row type expression.
+fn row_atom<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, RowExpr<'a, 's>, Error = ParseErrors<'s>> {
-    separated(
-        arena,
-        choice((
-            lit(Token::LParen)
-                .then(separated(
-                    arena,
-                    id_field(Token::Colon, type_(arena)),
-                    lit(Token::Comma),
-                ))
-                .then(lit(Token::RParen))
-                .map(|((lpar, fields), rpar)| RowAtom::Concrete { lpar, fields, rpar }),
-            ident().map(RowAtom::Variable),
-        )),
-        lit(Token::Plus),
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ConstraintKind {
-    Subrow,
-    Equals,
+) -> impl Clone + Parser<Token<'s>, RowAtom<'a, 's>, Error = ParseErrors<'s>> {
+    choice((
+        lit(Token::LParen)
+            .then(separated(
+                arena,
+                id_field(Token::Colon, type_(arena)),
+                lit(Token::Comma),
+            ))
+            .then(lit(Token::RParen))
+            .map(|((lpar, fields), rpar)| RowAtom::Concrete { lpar, fields, rpar }),
+        ident().map(RowAtom::Variable),
+    ))
 }
 
 // Returns a parser for a type constraint.
 fn constraint<'a, 's: 'a>(
     arena: &'a Bump,
 ) -> impl Clone + Parser<Token<'s>, Constraint<'a, 's>, Error = ParseErrors<'s>> {
-    let row = row_expr(arena);
+    let row = row_atom(arena);
     row.clone()
-        .then(choice((
-            lit(Token::LAngle).map(|s| s.of(ConstraintKind::Subrow)),
-            lit(Token::Equal).map(|s| s.of(ConstraintKind::Equals)),
-        )))
+        .then(lit(Token::Plus))
+        .then(row.clone())
+        .then(lit(Token::Equal))
         .then(row)
-        .map(|((lhs, sep), rhs)| match sep.value {
-            ConstraintKind::Subrow => Constraint::Subrow {
-                lhs,
-                lt: sep.span(),
-                rhs,
-            },
-            ConstraintKind::Equals => Constraint::Equals {
-                lhs,
-                eq: sep.span(),
-                rhs,
-            },
+        .map(|((((lhs, plus), rhs), eq), goal)| Constraint::RowSum {
+            lhs,
+            plus,
+            rhs,
+            eq,
+            goal,
         })
 }
 
@@ -486,7 +470,7 @@ where
 mod tests {
     use aiahr_core::{
         cst::{Item, Scheme, Term, Type},
-        ct_equals, ct_subrow, field, id_field, item_term,
+        ct_rowsum, field, id_field, item_term,
         memory::{
             arena::BumpArena,
             intern::{InternerByRef, SyncInterner},
@@ -554,24 +538,28 @@ mod tests {
             parse_type_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "<x: A, y: B>"
+                "<x: a, y: b>"
             ),
             type_sum!(row_concrete!(
-                id_field!("x", type_named!("A")),
-                id_field!("y", type_named!("B"))
+                id_field!("x", type_named!("a")),
+                id_field!("y", type_named!("b"))
             ))
-        );
-        assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(BumpArena::new()), "<A, B>"),
-            type_sum!(row_variable!("A", "B"))
         );
         assert_matches!(
             parse_type_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "<x: A | B>"
+                "<r + s>"
             ),
-            type_sum!(row_mixed!((id_field!("x", type_named!("A"))), ("B")))
+            type_sum!(row_variable!("r", "s"))
+        );
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "<x: a | r>"
+            ),
+            type_sum!(row_mixed!((id_field!("x", type_named!("a"))), ("r")))
         );
     }
 
@@ -585,24 +573,28 @@ mod tests {
             parse_type_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "{x: A, y: B}"
+                "{x: a, y: b}"
             ),
             type_prod!(row_concrete!(
-                id_field!("x", type_named!("A")),
-                id_field!("y", type_named!("B"))
+                id_field!("x", type_named!("a")),
+                id_field!("y", type_named!("b"))
             ))
-        );
-        assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(BumpArena::new()), "{A, B}"),
-            type_prod!(row_variable!("A", "B"))
         );
         assert_matches!(
             parse_type_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "{x: A | B}"
+                "{r + s}"
             ),
-            type_prod!(row_mixed!((id_field!("x", type_named!("A"))), ("B")))
+            type_prod!(row_variable!("r", "s"))
+        );
+        assert_matches!(
+            parse_type_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "{x: a | r}"
+            ),
+            type_prod!(row_mixed!((id_field!("x", type_named!("a"))), ("r")))
         );
     }
 
@@ -613,13 +605,13 @@ mod tests {
             parse_type_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "(A -> B) -> A -> (B -> C)"
+                "(a -> b) -> a -> (b -> c)"
             ),
             type_func!(
-                type_par!(type_func!(type_named!("A"), type_named!("B"))),
+                type_par!(type_func!(type_named!("a"), type_named!("b"))),
                 type_func!(
-                    type_named!("A"),
-                    type_par!(type_func!(type_named!("B"), type_named!("C")))
+                    type_named!("a"),
+                    type_par!(type_func!(type_named!("b"), type_named!("c")))
                 )
             )
         );
@@ -631,13 +623,13 @@ mod tests {
             parse_type_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "{x: A} -> <f: B -> A | C>"
+                "{x: a} -> <f: b -> a | r>"
             ),
             type_func!(
-                type_prod!(row_concrete!(id_field!("x", type_named!("A")))),
+                type_prod!(row_concrete!(id_field!("x", type_named!("a")))),
                 type_sum!(row_mixed!(
-                    (id_field!("f", type_func!(type_named!("B"), type_named!("A")))),
-                    ("C")
+                    (id_field!("f", type_func!(type_named!("b"), type_named!("a")))),
+                    ("r")
                 ))
             )
         );
@@ -649,35 +641,17 @@ mod tests {
             parse_scheme_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "{x: A} -> <f: B -> A | C>"
+                "{x: a} -> <f: b -> a | r>"
             ),
             Scheme {
                 qualification: None,
                 type_: type_func!(
-                    type_prod!(row_concrete!(id_field!("x", type_named!("A")))),
+                    type_prod!(row_concrete!(id_field!("x", type_named!("a")))),
                     type_sum!(row_mixed!(
-                        (id_field!("f", type_func!(type_named!("B"), type_named!("A")))),
-                        ("C")
+                        (id_field!("f", type_func!(type_named!("b"), type_named!("a")))),
+                        ("r")
                     ))
                 )
-            }
-        );
-    }
-
-    #[test]
-    fn test_subrow_schemes() {
-        assert_matches!(
-            parse_scheme_unwrap(
-                &Bump::new(),
-                &SyncInterner::new(BumpArena::new()),
-                "(x: A) < Z => {Z} -> A"
-            ),
-            Scheme {
-                qualification: Some(qual!(ct_subrow!(
-                    (rwx_concrete!(id_field!("x", type_named!("A"))),),
-                    (rwx_variable!("Z"),)
-                ))),
-                type_: type_func!(type_prod!(row_variable!("Z")), type_named!("A"))
             }
         );
     }
@@ -688,46 +662,17 @@ mod tests {
             parse_scheme_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "X + (y: A) = Z => {X} -> A -> {Z}"
+                "r + (y: a) = s => {r} -> a -> {s}"
             ),
             Scheme {
-                qualification: Some(qual!(ct_equals!(
-                    (
-                        rwx_variable!("X"),
-                        rwx_concrete!(id_field!("y", type_named!("A")))
-                    ),
-                    (rwx_variable!("Z"),)
+                qualification: Some(qual!(ct_rowsum!(
+                    rwx_variable!("r"),
+                    rwx_concrete!(id_field!("y", type_named!("a"))),
+                    rwx_variable!("s")
                 ))),
                 type_: type_func!(
-                    type_prod!(row_variable!("X")),
-                    type_func!(type_named!("A"), type_prod!(row_variable!("Z")))
-                ),
-            }
-        );
-    }
-
-    #[test]
-    fn test_mixed_schemes() {
-        assert_matches!(
-            parse_scheme_unwrap(
-                &Bump::new(),
-                &SyncInterner::new(BumpArena::new()),
-                "X + Y = Z, (a: A) < Z => {X} -> {Y} -> A"
-            ),
-            Scheme {
-                qualification: Some(qual!(
-                    ct_equals!(
-                        (rwx_variable!("X"), rwx_variable!("Y")),
-                        (rwx_variable!("Z"),)
-                    ),
-                    ct_subrow!(
-                        (rwx_concrete!(id_field!("a", type_named!("A"))),),
-                        (rwx_variable!("Z"),)
-                    )
-                )),
-                type_: type_func!(
-                    type_prod!(row_variable!("X")),
-                    type_func!(type_prod!(row_variable!("Y")), type_named!("A"))
+                    type_prod!(row_variable!("r")),
+                    type_func!(type_named!("a"), type_prod!(row_variable!("s")))
                 ),
             }
         );
