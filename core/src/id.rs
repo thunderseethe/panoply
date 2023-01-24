@@ -203,6 +203,14 @@ pub ModuleId;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub ItemId;
 
+/// An ID for a top-level effect definition in a module. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub EffectId;
+
+/// An ID for an effect operation in an effect definition. Unique within an effect definition.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub EffectOpId;
+
 /// An ID for a local variable. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub VarId;

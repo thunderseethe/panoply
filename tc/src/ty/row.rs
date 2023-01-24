@@ -281,48 +281,166 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for PartialRow<'_, TV> {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug, Default)]
-pub struct RowSet<'ctx, TV> {
-    rows: Vec<PartialRow<'ctx, TV>>,
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub(crate) struct CombineInto<'ctx, TV> {
+    pub(crate) other: Row<'ctx, TV>,
+    pub(crate) goal: Row<'ctx, TV>,
 }
-
-impl<'ctx, TV> RowSet<'ctx, TV> {
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = &'a PartialRow<'ctx, TV>> {
-        self.rows.iter()
-    }
-}
-
-impl<'ctx, TV> From<PartialRow<'ctx, TV>> for RowSet<'ctx, TV> {
-    fn from(partial: PartialRow<'ctx, TV>) -> Self {
-        RowSet {
-            rows: vec![partial],
-        }
-    }
-}
-
-impl<'ctx, TV> IntoIterator for RowSet<'ctx, TV> {
-    type Item = PartialRow<'ctx, TV>;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.rows.into_iter()
-    }
-}
-
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for RowSet<'_, TV> {
+impl<'ctx, TV:Clone> TypeFoldable<'ctx> for CombineInto<'_, TV> {
     type TypeVar = TV;
-    type Out<T: 'ctx> = RowSet<'ctx, T>;
+    type Out<T: 'ctx> = CombineInto<'ctx, T>;
 
     fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
         self,
         fold: &mut F,
     ) -> Result<Self::Out<F::TypeVar>, F::Error> {
-        let rows: Vec<PartialRow<'ctx, F::TypeVar>> = self
-            .rows
-            .into_iter()
-            .map(|row| row.try_fold_with(fold))
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(RowSet { rows })
+        Ok(CombineInto {
+            other: self.other.try_fold_with(fold)?,
+            goal: self.goal.try_fold_with(fold)?,
+        })
+    }
+}
+
+/// TODO: WIP Name
+/// What we want to capture here is two fold:
+///  1. Row components are ordered in a standard way so comparison is easy (we don't have to check
+///     any permutations)
+///
+///  2. We can store at most one closed row. Two closed rows is considered invalid, unlike if we
+///     stored a `(Row<'ctx, TV>, Row<'ctx, TV>)`).
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub enum OrderedRowXorRow<'ctx, TV> {
+    ClosedOpen(ClosedRow<'ctx, TV>, TV),
+    OpenOpen { min: TV, max: TV },
+}
+impl<'ctx, TV> OrderedRowXorRow<'ctx, TV> {
+    pub(crate) fn with_open_open(l: TV, r: TV) -> Self 
+    where
+        TV: Ord
+    {
+        debug_assert!(l < r || r > l, "Expected l != r in OpenOpen variant");
+        if l < r {
+            Self::OpenOpen { min: l, max: r }
+        } else {
+            Self::OpenOpen { min: r, max: l }
+        }
+    }
+}
+impl<'ctx, TV> Into<(Row<'ctx, TV>, Row<'ctx, TV>)> for OrderedRowXorRow<'ctx, TV> {
+    fn into(self) -> (Row<'ctx, TV>, Row<'ctx, TV>) {
+        match self {
+            OrderedRowXorRow::ClosedOpen(row, tv) => (Row::Closed(row), Row::Open(tv)),
+            OrderedRowXorRow::OpenOpen { min, max } => (Row::Open(min), Row::Open(max)),
+        }
+    }
+}
+impl<'ctx, TV: Ord> TryFrom<(Row<'ctx, TV>, Row<'ctx, TV>)> for OrderedRowXorRow<'ctx, TV> {
+    type Error = (ClosedRow<'ctx, TV>, ClosedRow<'ctx, TV>);
+
+    fn try_from(value: (Row<'ctx, TV>, Row<'ctx, TV>)) -> Result<Self, Self::Error> {
+        match value {
+            (Row::Open(l), Row::Open(r)) => Ok(Self::with_open_open(l, r)),
+            (Row::Open(tv), Row::Closed(row)) | (Row::Closed(row), Row::Open(tv)) => Ok(Self::ClosedOpen(row, tv)),
+            (Row::Closed(l), Row::Closed(r)) => Err((l, r)),
+        }
+    }
+}
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for OrderedRowXorRow<'_, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = (Row<'ctx, T>, Row<'ctx, T>);
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        Ok(match self {
+            OrderedRowXorRow::ClosedOpen(row, tv) => (Row::Closed(row.try_fold_with(fold)?), fold.try_fold_row_var(tv)?),
+            OrderedRowXorRow::OpenOpen { min, max } => (fold.try_fold_row_var(min)?, fold.try_fold_row_var(max)?),
+        })
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct RowSet<'ctx, TV, OR=OrderedRowXorRow<'ctx, TV>> {
+    pub(crate) goals: Vec<OR>,
+    pub(crate) comps: Vec<CombineInto<'ctx, TV>>,
+}
+impl<'ctx, TV, OR> Default for RowSet<'ctx, TV, OR> {
+    fn default() -> Self {
+        Self {
+            goals: vec![],
+            comps: vec![],
+        }
+    }
+}
+impl<'ctx, TV> Into<RowSet<'ctx, TV, (Row<'ctx, TV>, Row<'ctx, TV>)>> for RowSet<'ctx, TV>
+{
+    fn into(self) -> RowSet<'ctx, TV, (Row<'ctx, TV>, Row<'ctx, TV>)> {
+        RowSet { 
+            goals: self.goals.into_iter().map(|a| a.into()).collect(), 
+            comps: self.comps,
+        }
+    }
+}
+
+impl<'ctx, TV, OR> RowSet<'ctx, TV, OR> {
+    pub(crate) fn goals_iter<'a>(&'a self) -> impl Iterator<Item = &'a OR> {
+        self.goals.iter()
+    }
+
+    pub(crate) fn comps_iter<'a>(&'a self) -> impl Iterator<Item = &'a CombineInto<'ctx, TV>> {
+        self.comps.iter()
+    }
+}
+
+impl<'ctx, TV> From<OrderedRowXorRow<'ctx, TV>> for RowSet<'ctx, TV> {
+    fn from(val: OrderedRowXorRow<'ctx, TV>) -> Self {
+        Self {
+            goals: vec![val],
+            comps: vec![],
+        }
+    }
+}
+impl<'ctx, TV> From<CombineInto<'ctx, TV>> for RowSet<'ctx, TV> {
+    fn from(val: CombineInto<'ctx, TV>) -> Self {
+        Self {
+            goals: vec![],
+            comps: vec![val],
+        }
+    }
+}
+impl<'ctx, TV: Ord> From<PartialRow<'ctx, TV>> for RowSet<'ctx, TV> {
+    fn from(partial: PartialRow<'ctx, TV>) -> Self {
+        match partial {
+            PartialRow::OpenGoal { left, right } => match (left, right) {
+                (Row::Open(left_var), Row::Open(right_var)) => {
+                    RowSet::from(OrderedRowXorRow::with_open_open(left_var, right_var))
+                }
+                (Row::Open(tv), Row::Closed(row)) | (Row::Closed(row), Row::Open(tv)) => {
+                    RowSet::from(OrderedRowXorRow::ClosedOpen(row, tv))
+                }
+                (Row::Closed(_), Row::Closed(_)) => {
+                    panic!("PartialRow of two closed Rows constructed, this should not be allowed")
+                }
+            },
+            PartialRow::OpenLeft { goal, right } => RowSet::from(CombineInto { goal, other: right }),
+            PartialRow::OpenRight { goal, left } => RowSet::from(CombineInto { goal, other: left }),
+        }
+    }
+}
+
+impl<'ctx, TV: Clone> TypeFoldable<'ctx> for RowSet<'_, TV> {
+    type TypeVar = TV;
+    type Out<T: 'ctx> = RowSet<'ctx, T, (Row<'ctx, T>, Row<'ctx, T>)>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        Ok(RowSet { 
+            goals: self.goals.try_fold_with(fold)?,
+            comps: self.comps.try_fold_with(fold)?,
+        })
     }
 }
 
@@ -330,10 +448,8 @@ impl<'ctx, TV: Clone + Debug + PartialEq> UnifyValue for RowSet<'ctx, TV> {
     type Error = Infallible;
 
     fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
-        let mut rows = Vec::with_capacity(left.rows.len() + right.rows.len());
-        rows.extend_from_slice(left.rows.as_slice());
-        rows.extend_from_slice(right.rows.as_slice());
-        rows.dedup_by(|a, b| a.eq(&b));
-        Ok(Self { rows })
+        let goals = [left.goals.as_slice(), right.goals.as_slice()].concat();
+        let comps = [left.comps.as_slice(), right.comps.as_slice()].concat();
+        Ok(Self { goals, comps })
     }
 }

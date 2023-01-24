@@ -26,6 +26,10 @@ pub TcVar;
 pub struct UnifierToTcVarError {
     index: u32,
 }
+#[derive(Debug, PartialEq, Eq)]
+pub struct TcVarToUnifierError {
+    index: u32,
+}
 
 impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
     type Error = UnifierToTcVarError;
@@ -34,6 +38,15 @@ impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
         Err(UnifierToTcVarError {
             index: value.index(),
         })
+    }
+}
+
+
+impl<'infer> TryFrom<TcVar> for TcUnifierVar<'infer> {
+    type Error = TcVarToUnifierError;
+
+    fn try_from(value: TcVar) -> Result<Self, Self::Error> {
+        Err(TcVarToUnifierError { index: value.0 as u32 })
     }
 }
 
@@ -78,13 +91,27 @@ pub trait MkTy<'ctx, TV> {
     fn mk_label(&self, label: &str) -> RowLabel<'ctx>;
     fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV>;
 
+    fn empty_row(&self) -> ClosedRow<'ctx, TV> {
+        self.mk_row(&[], &[])
+    }
+    fn empty_row_ty(&self) -> Ty<'ctx, TV> {
+        self.mk_ty(TypeKind::RowTy(self.empty_row()))
+    }
     fn single_row(&self, label: &str, value: Ty<'ctx, TV>) -> ClosedRow<'ctx, TV> {
         let field = self.mk_label(label);
         self.mk_row(&[field], &[value])
     }
-
     fn single_row_ty(&self, label: &str, value: Ty<'ctx, TV>) -> Ty<'ctx, TV> {
         self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
+    }
+
+    fn construct_row(&self, mut row: Vec<(RowLabel<'ctx>, Ty<'ctx, TV>)>) -> ClosedRow<'ctx, TV> {
+        row.sort_by(|a, b| str::cmp(&a.0, &b.0));
+
+        let fields = row.iter().map(|(k, _)| k).cloned().collect::<Vec<_>>();
+        let values = row.iter().map(|(_, v)| v).cloned().collect::<Vec<_>>();
+        
+        self.mk_row(&fields, &values)
     }
 }
 

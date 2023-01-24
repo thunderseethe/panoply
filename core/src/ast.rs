@@ -1,4 +1,4 @@
-use crate::id::{ItemId, ModuleId};
+use crate::id::{ItemId, ModuleId, EffectOpId, EffectId};
 use crate::memory::handle::RefHandle;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
@@ -63,15 +63,6 @@ pub enum Term<'a, Var> {
     // Because all products are represented in terms of concat, we don't actually have a way to
     // represent unit at this level
     Unit,
-    // Concat two rows into a larger row
-    Concat {
-        left: &'a Term<'a, Var>,
-        right: &'a Term<'a, Var>,
-    },
-    Project {
-        direction: Direction,
-        term: &'a Term<'a, Var>,
-    },
     // Label a term, used in construction of Product and Sum types.
     Label {
         label: RefHandle<'a, str>,
@@ -81,6 +72,22 @@ pub enum Term<'a, Var> {
     Unlabel {
         label: RefHandle<'a, str>,
         term: &'a Term<'a, Var>,
+    },
+    // Concat two rows into a larger row
+    Concat {
+        left: &'a Term<'a, Var>,
+        right: &'a Term<'a, Var>,
+    },
+    Project {
+        direction: Direction,
+        term: &'a Term<'a, Var>,
+    },
+    // An effect operation
+    Operation(EffectOpId),
+    Handle {
+        eff: EffectId,
+        handler: &'a Term<'a, Var>, 
+        body: &'a Term<'a, Var>,
     },
 }
 
@@ -107,6 +114,7 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
                 self.next()
             }
             Term::Variable(var) => Some(var),
+            Term::Operation(_) => self.next(),
             Term::Item(_) => self.next(),
             Term::Unit => self.next(),
             Term::Concat { left, right } => {
@@ -123,6 +131,10 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
             }
             Term::Unlabel { term, .. } => {
                 self.stack.push(term);
+                self.next()
+            }
+            Term::Handle { handler, body, .. } => {
+                self.stack.extend([handler, body]);
                 self.next()
             }
         })
