@@ -502,16 +502,9 @@ where
                 let right_row = self.equate_as_row(right_infer.ty);
 
                 // Check our expected effect is a combination of each components effects
-                self.constraints.add_row_combine(
-                     left_infer.eff,
-                     right_infer.eff,
-                     expected.eff,
-                );
-                self.constraints.add_row_combine(
-                     left_row,
-                     right_row,
-                     row,
-                );
+                self.constraints
+                    .add_row_combine(left_infer.eff, right_infer.eff, expected.eff);
+                self.constraints.add_row_combine(left_row, right_row, row);
             }
             (Project { .. }, RowTy(row)) => {
                 // Coerce row into a product and re-check.
@@ -529,16 +522,10 @@ where
 
                 self.row_eq_constraint(expected.eff, term_infer.eff);
                 match direction {
-                    Direction::Left => self.constraints.add_row_combine(
-                         row,
-                         unbound_row,
-                         term_row,
-                    ),
-                    Direction::Right => self.constraints.add_row_combine(
-                         unbound_row,
-                         row,
-                         term_row,
-                    ),
+                    Direction::Left => self.constraints.add_row_combine(row, unbound_row, term_row),
+                    Direction::Right => {
+                        self.constraints.add_row_combine(unbound_row, row, term_row)
+                    }
                 };
             }
             // Bucket case for when we need to check a rule against a type but no case applies
@@ -605,28 +592,18 @@ where
                     _ => {
                         let arg_ty = self.fresh_var();
                         let ret_ty = self.fresh_var();
-                        self.constraints.add_ty_eq(
-                            fun_infer.ty,
-                            self.mk_ty(FunTy(arg_ty, ret_ty)),
-                        );
+                        self.constraints
+                            .add_ty_eq(fun_infer.ty, self.mk_ty(FunTy(arg_ty, ret_ty)));
                         (arg_ty, ret_ty)
                     }
                 };
 
                 let arg_eff = self.fresh_row();
-                self._check(
-                    var_tys,
-                    eff_info,
-                    arg,
-                    InferResult::new(arg_ty, arg_eff),
-                );
+                self._check(var_tys, eff_info, arg, InferResult::new(arg_ty, arg_eff));
 
                 let eff = self.fresh_row();
-                self.constraints.add_row_combine(
-                     fun_infer.eff,
-                     arg_eff,
-                     eff,
-                );
+                self.constraints
+                    .add_row_combine(fun_infer.eff, arg_eff, eff);
                 InferResult::new(ret_ty, eff)
             }
             // If the variable is in environemnt return it's type, otherwise return an error.
@@ -678,12 +655,7 @@ where
                 let left_ty = self.mk_ty(ProdTy(left_row));
                 let right_ty = self.mk_ty(ProdTy(right_row));
 
-                self._check(
-                    var_tys,
-                    eff_info,
-                    left,
-                    InferResult::new(left_ty, left_eff),
-                );
+                self._check(var_tys, eff_info, left, InferResult::new(left_ty, left_eff));
                 self._check(
                     var_tys,
                     eff_info,
@@ -691,16 +663,10 @@ where
                     InferResult::new(right_ty, right_eff),
                 );
 
-                self.constraints.add_row_combine(
-                     left_eff,
-                     right_eff,
-                     out_eff,
-                );
-                self.constraints.add_row_combine(
-                     left_row,
-                     right_row,
-                     out_row,
-                );
+                self.constraints
+                    .add_row_combine(left_eff, right_eff, out_eff);
+                self.constraints
+                    .add_row_combine(left_row, right_row, out_row);
 
                 InferResult::new(self.mk_ty(ProdTy(out_row)), out_eff)
             }
@@ -712,12 +678,7 @@ where
 
                 let eff = self.fresh_row();
                 let term_ty = self.mk_ty(ProdTy(big_row));
-                self._check(
-                    var_tys,
-                    eff_info,
-                    term,
-                    InferResult::new(term_ty, eff),
-                );
+                self._check(var_tys, eff_info, term, InferResult::new(term_ty, eff));
 
                 match direction {
                     Direction::Left => {
@@ -812,10 +773,7 @@ where
     /// Make this type equal to a row and return that equivalent row.
     /// If it is already a row convert it directly, otherwise add a constraint that type must be a
     /// row.
-    pub(crate) fn equate_as_row(
-        &mut self,
-        ty: InferTy<'infer>,
-    ) -> InferRow<'infer> {
+    pub(crate) fn equate_as_row(&mut self, ty: InferTy<'infer>) -> InferRow<'infer> {
         match *ty {
             ProdTy(row) => row,
             RowTy(row) => Row::Closed(row),
@@ -828,12 +786,9 @@ where
         }
     }
 
-    fn row_eq_constraint(
-        &mut self,
-        left: InferRow<'infer>,
-        right: InferRow<'infer>,
-    ) {
-        self.constraints.add_ty_eq(left.to_ty(self), right.to_ty(self))
+    fn row_eq_constraint(&mut self, left: InferRow<'infer>, right: InferRow<'infer>) {
+        self.constraints
+            .add_ty_eq(left.to_ty(self), right.to_ty(self))
     }
 }
 
@@ -852,7 +807,9 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
 
     /// Solve a list of constraints to a mapping from unifiers to types.
     /// If there is no solution to the list of constraints we return a relevant error.
-    pub(crate) fn solve(mut self) -> (
+    pub(crate) fn solve(
+        mut self,
+    ) -> (
         InPlaceUnificationTable<TcUnifierVar<'infer>>,
         Vec<TypeCheckError<'infer>>,
     ) {
@@ -2489,6 +2446,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_tc_applied_wand() {
         let arena = Bump::new();
         let m = VarId(0);

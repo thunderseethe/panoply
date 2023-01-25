@@ -41,12 +41,13 @@ impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
     }
 }
 
-
 impl<'infer> TryFrom<TcVar> for TcUnifierVar<'infer> {
     type Error = TcVarToUnifierError;
 
     fn try_from(value: TcVar) -> Result<Self, Self::Error> {
-        Err(TcVarToUnifierError { index: value.0 as u32 })
+        Err(TcVarToUnifierError {
+            index: value.0 as u32,
+        })
     }
 }
 
@@ -110,7 +111,7 @@ pub trait MkTy<'ctx, TV> {
 
         let fields = row.iter().map(|(k, _)| k).cloned().collect::<Vec<_>>();
         let values = row.iter().map(|(_, v)| v).cloned().collect::<Vec<_>>();
-        
+
         self.mk_row(&fields, &values)
     }
 }

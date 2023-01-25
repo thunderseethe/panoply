@@ -1,4 +1,4 @@
-use crate::id::{ItemId, ModuleId, EffectOpId, EffectId};
+use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use crate::memory::handle::RefHandle;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
@@ -86,7 +86,7 @@ pub enum Term<'a, Var> {
     Operation(EffectOpId),
     Handle {
         eff: EffectId,
-        handler: &'a Term<'a, Var>, 
+        handler: &'a Term<'a, Var>,
         body: &'a Term<'a, Var>,
     },
 }

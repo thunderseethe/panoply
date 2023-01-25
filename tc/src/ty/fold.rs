@@ -25,9 +25,7 @@ impl<'ctx, T: TypeFoldable<'ctx>> TypeFoldable<'ctx> for Vec<T> {
         self,
         fold: &mut F,
     ) -> Result<Self::Out<F::TypeVar>, F::Error> {
-        self.into_iter()
-            .map(|t| t.try_fold_with(fold))
-            .collect()
+        self.into_iter().map(|t| t.try_fold_with(fold)).collect()
     }
 }
 
