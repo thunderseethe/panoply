@@ -2095,6 +2095,14 @@ mod tests {
         };
     }
 
+    macro_rules! assert_vec_matches {
+        ($vec: expr, [$($elem:pat),*]) => {{
+            let mut tmp = $vec;
+            tmp.sort();
+            assert_matches!(tmp.as_slice(), [$($elem),*]);
+        }};
+    }
+
     // Utility trait to remove a lot of the intermediate allocation when creating ASTs
     // Helps make tests a little more readable
     trait MkTerm<'a, Var> {
@@ -2353,26 +2361,24 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, mut scheme, _) =
+        let (_var_to_tys, scheme, _) =
             type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
 
-        // Sort so order of match is stable
-        scheme.constrs.sort();
-        assert_matches!(scheme.constrs.as_slice(), [a, b] => {
-            assert_matches!(a,
+        assert_vec_matches!(
+            scheme.constrs,
+            [
                 Evidence::Row {
                     left: Row::Closed(row!(["x"], [ty!(VarTy(TcVar(2)))])),
                     right: Row::Open(_),
                     goal: Row::Open(TcVar(3))
-                }
-                );
-            assert_matches!(b,
+                },
                 Evidence::Row {
                     left: Row::Open(_),
                     right: Row::Open(_),
                     goal: Row::Open(TcVar(3))
-                });
-        });
+                }
+            ]
+        );
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
@@ -2406,25 +2412,17 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, mut scheme, _) =
+        let (_var_to_tys, scheme, _) =
             type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
 
-        println!(
-            "TyScheme {{\n  bound: {:?},\n  constrs: {:?}\n  eff: {:?}\n  ty: {:?}\n}}",
-            scheme.bound, scheme.constrs, scheme.eff, scheme.ty
+        assert_vec_matches!(
+            scheme.constrs,
+            [Evidence::Row {
+                left: Row::Closed(row!(["x"], [ty!({})])),
+                right: Row::Open(_),
+                goal: Row::Open(_),
+            }]
         );
-
-        scheme.constrs.sort();
-        // TODO: Fix this test
-        assert_matches!(scheme.constrs.as_slice(), [a] => {
-            assert_matches!(a,
-                Evidence::Row {
-                    left: Row::Closed(row!(["x"], [ty!({})])),
-                    right: Row::Open(_),
-                    goal: Row::Open(_),
-                }
-            );
-        });
 
         assert_matches!(scheme.ty, ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!({}))))
     }
