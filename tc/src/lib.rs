@@ -163,50 +163,26 @@ impl<'ctx, TV> From<RowSet<'ctx, TV>> for Candidate<'ctx, TV> {
     }
 }
 
-/// A constraint produced during initial type checking.
-/// It will be solved in the second half of type checking to produce a map from Unifier variables
+struct RowCombination<'infer> {
+    left: InferRow<'infer>,
+    right: InferRow<'infer>,
+    goal: InferRow<'infer>,
+}
+
+/// List of constraints produced during initial type checking.
+/// These will be solved in the second half of type checking to produce a map from Unifier variables
 /// to their types.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Constraint<'ctx, TV> {
-    /// Two types must be equal for our term to type check
-    Eq(Ty<'ctx, TV>, Ty<'ctx, TV>),
-    /// Left and right row must combine to equal goal row
-    RowCombine {
-        left: Row<'ctx, TV>,
-        right: Row<'ctx, TV>,
-        goal: Row<'ctx, TV>,
-    },
-}
-type InferConstraint<'infer> = Constraint<'infer, TcUnifierVar<'infer>>;
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Constraint<'_, TV> {
-    type TypeVar = TV;
-    type Out<T: 'ctx> = Constraint<'ctx, T>;
-
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
-        Ok(match self {
-            Constraint::Eq(left, right) => {
-                Constraint::Eq(left.try_fold_with(fold)?, right.try_fold_with(fold)?)
-            }
-            Constraint::RowCombine { left, right, goal } => Constraint::RowCombine {
-                left: left.try_fold_with(fold)?,
-                right: right.try_fold_with(fold)?,
-                goal: goal.try_fold_with(fold)?,
-            },
-        })
-    }
-}
-
 #[derive(Default)]
 pub struct Constraints<'infer> {
-    cs: Vec<InferConstraint<'infer>>,
+    /// Each pair of types that should unify with each other
+    tys: Vec<(InferTy<'infer>, InferTy<'infer>)>,
+    /// Sets of row combinations predicates that must hold
+    rows: Vec<RowCombination<'infer>>,
 }
 
 impl<'infer> Constraints<'infer> {
     fn add_ty_eq(&mut self, left: InferTy<'infer>, right: InferTy<'infer>) {
-        self.cs.push(Constraint::Eq(left, right))
+        self.tys.push((left, right))
     }
 
     fn add_row_combine(
@@ -215,7 +191,7 @@ impl<'infer> Constraints<'infer> {
         right: InferRow<'infer>,
         goal: InferRow<'infer>,
     ) {
-        self.cs.push(Constraint::RowCombine { left, right, goal })
+        self.rows.push(RowCombination { left, right, goal })
     }
 }
 
@@ -808,23 +784,18 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
         Vec<TypeCheckError<'infer>>,
     ) {
         let constraints = std::mem::take(&mut self.constraints);
-        for constr in constraints.cs.into_iter() {
-            match constr {
-                Constraint::Eq(left, right) => self
-                    .unify_ty_ty(left, right)
-                    .map_err(|err| {
-                        self.errors.push(err);
-                    })
-                    .unwrap_or_default(),
-                Constraint::RowCombine { left, right, goal } => self
-                    .unify_row_combine(left, right, goal)
-                    .map_err(|err| {
-                        self.errors.push(err);
-                    })
-                    .unwrap_or_default(),
-            }
-            print_root_unifiers(&mut self.unifiers);
+        for (left, right) in constraints.tys {
+            self.unify_ty_ty(left, right)
+                .map_err(|err| self.errors.push(err))
+                .unwrap_or_default();
         }
+        print_root_unifiers(&mut self.unifiers);
+        for RowCombination { left, right, goal } in constraints.rows {
+            self.unify_row_combine(left, right, goal)
+                .map_err(|err| self.errors.push(err))
+                .unwrap_or_default();
+        }
+        print_root_unifiers(&mut self.unifiers);
         (self.unifiers, self.errors)
     }
 
@@ -1073,7 +1044,6 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                     }
                 }
             }
-            // TODO: Figure out what to do (if anything) here.
             (Right((left_var, _)), Right((right_var, _))) => self
                 .unifiers
                 .unify_var_var(left_var, right_var)
@@ -1391,15 +1361,15 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                     let ty = self.mk_ty(RowTy(self.mk_row(&fields, &values)));
                     self.unify_var_ty(*var, ty)?;
                 }
-                OrderedRowXorRow::OpenOpen { .. } => { /* In this situation we don't know enough to unify anything so pass */
+                OrderedRowXorRow::OpenOpen { .. } => {
+                    /* In this situation we don't know enough to unify anything so pass */
                 }
             }
         }
-        for combo in row_set.comps_iter() {
-            // TODO: We need to remove the goal entry for this component from it's RowSet and then
-            // re-add the updated entry. Need to think more about what this should look like
+        // TODO: How do we propagate to any combos that this row is a part of?
+        /*for combo in row_set.comps_iter() {
             self.unify_row_combine(Row::Closed(row), combo.other, combo.goal)?;
-        }
+        }*/
         Ok(())
     }
 
@@ -2386,11 +2356,6 @@ mod tests {
         let (_var_to_tys, mut scheme, _) =
             type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
 
-        println!(
-            "TyScheme {{\n  bound: {:?},\n  constrs: {:?}\n  eff: {:?}\n  ty: {:?}\n}}",
-            scheme.bound, scheme.constrs, scheme.eff, scheme.ty
-        );
-
         // Sort so order of match is stable
         scheme.constrs.sort();
         assert_matches!(scheme.constrs.as_slice(), [a, b] => {
@@ -2418,7 +2383,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_tc_applied_wand() {
         let arena = Bump::new();
         let m = VarId(0);
@@ -2455,12 +2419,13 @@ mod tests {
         assert_matches!(scheme.constrs.as_slice(), [a] => {
             assert_matches!(a,
                 Evidence::Row {
-                    left: Row::Open(_),
-                    right: Row::Closed(row!(["x"], [ty!({})])),
+                    left: Row::Closed(row!(["x"], [ty!({})])),
+                    right: Row::Open(_),
                     goal: Row::Open(_),
                 }
             );
         });
+
         assert_matches!(scheme.ty, ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!({}))))
     }
 
