@@ -250,7 +250,7 @@ impl<'ctx> UnifyValue for InferRow<'ctx> {
             (Row::Open(_), Row::Closed(_)) => Ok(*right),
             (Row::Closed(_), Row::Open(_)) => Ok(*left),
             (Row::Closed(left_row), Row::Closed(right_row)) => (left_row == right_row)
-                .then(|| *left)
+                .then_some(*left)
                 .ok_or(TypeCheckError::RowsNotEqual(*left, *right)),
         }
     }

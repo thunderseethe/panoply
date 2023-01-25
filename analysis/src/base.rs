@@ -32,7 +32,7 @@ impl<'a, 's> BaseNames<'a, 's> {
 
     /// Gets the ID of the owning module.
     pub fn this(&self) -> ModuleId {
-        self.this.clone()
+        self.this
     }
 
     /// Gets the symbol associated with the given name.

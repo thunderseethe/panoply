@@ -98,17 +98,17 @@ pub type RefHandle<'a, T> = Handle<&'a T>;
 
 impl<'a, T> Borrow<T> for RefHandle<'a, T> {
     fn borrow(&self) -> &T {
-        &self.0
+        self.0
     }
 }
 impl<'a, T> Borrow<[T]> for RefHandle<'a, [T]> {
     fn borrow(&self) -> &[T] {
-        &self.0
+        self.0
     }
 }
 impl<'a> Borrow<str> for RefHandle<'a, str> {
     fn borrow(&self) -> &str {
-        &self.0
+        self.0
     }
 }
 /// See `Handle` for further info.

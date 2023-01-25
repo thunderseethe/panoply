@@ -75,7 +75,7 @@ impl<'s> chumsky::Error<Token<'s>> for ParseErrors<'s> {
     ) -> Self {
         ParseErrors(LinkedList::from([ParseError::WrongToken {
             span,
-            got: found.map(|s| s),
+            got: found,
             want_any: expected.into_iter().collect(),
         }]))
     }
