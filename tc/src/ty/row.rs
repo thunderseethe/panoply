@@ -4,6 +4,7 @@ use ena::unify::UnifyValue;
 use crate::TypeCheckError;
 
 use crate::ty::{InferTy, TcUnifierVar, Ty, TypeFoldable};
+use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::fmt::{self, Debug};
 
@@ -20,12 +21,27 @@ pub type RowLabel<'ctx> = RefHandle<'ctx, str>;
 /// 1. fields and values are the same length
 /// 2. The field at index i is the key for the type at index i in values
 /// 3. fields is sorted lexographically
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Hash)]
 pub struct ClosedRow<'ctx, TV> {
     pub fields: RefHandle<'ctx, [RowLabel<'ctx>]>,
     pub values: RefHandle<'ctx, [Ty<'ctx, TV>]>,
 }
-
+impl<'ctx, TV> PartialEq for ClosedRow<'ctx, TV> {
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields && self.values == other.values
+    }
+}
+impl<'ctx, TV> Eq for ClosedRow<'ctx, TV> {}
+impl<'ctx, TV> PartialOrd for ClosedRow<'ctx, TV> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl<'ctx, TV> Ord for ClosedRow<'ctx, TV> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.fields.cmp(&other.fields)
+    }
+}
 impl<'ctx, TV> ClosedRow<'ctx, TV> {
     pub fn len(&self) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
@@ -178,6 +194,26 @@ pub enum Row<'ctx, TV> {
     Open(TV),
     /// A closed row is a concrete mapping from fields to values.
     Closed(ClosedRow<'ctx, TV>),
+}
+impl<'ctx, TV: PartialOrd> PartialOrd for Row<'ctx, TV> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Row::Open(_), Row::Closed(_)) => Some(Ordering::Greater),
+            (Row::Closed(_), Row::Open(_)) => Some(Ordering::Less),
+            (Row::Open(a), Row::Open(b)) => a.partial_cmp(b),
+            (Row::Closed(a), Row::Closed(b)) => Some(a.cmp(b)),
+        }
+    }
+}
+impl<'ctx, TV: Ord> Ord for Row<'ctx, TV> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Row::Open(_), Row::Closed(_)) => Ordering::Greater,
+            (Row::Closed(_), Row::Open(_)) => Ordering::Less,
+            (Row::Open(a), Row::Open(b)) => a.cmp(b),
+            (Row::Closed(a), Row::Closed(b)) => a.cmp(b),
+        }
+    }
 }
 
 impl<'ctx, TV> From<TV> for Row<'ctx, TV> {

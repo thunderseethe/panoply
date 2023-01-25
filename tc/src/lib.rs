@@ -203,6 +203,26 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Constraint<'_, TV> {
     }
 }
 
+#[derive(Default)]
+pub struct Constraints<'infer> {
+    cs: Vec<InferConstraint<'infer>>,
+}
+
+impl<'infer> Constraints<'infer> {
+    fn add_ty_eq(&mut self, left: InferTy<'infer>, right: InferTy<'infer>) {
+        self.cs.push(Constraint::Eq(left, right))
+    }
+
+    fn add_row_combine(
+        &mut self,
+        left: InferRow<'infer>,
+        right: InferRow<'infer>,
+        goal: InferRow<'infer>,
+    ) {
+        self.cs.push(Constraint::RowCombine { left, right, goal })
+    }
+}
+
 /// Check that a unification variable does not appear within the type the unification variable is
 /// mapped to. This prevents unification from solving to a substitution with a cycle.
 struct OccursCheck<'a, 'inf, I> {
@@ -284,53 +304,6 @@ macro_rules! ty_pat {
     };
 }
 
-/// A context for type inference.
-///
-/// Type inference is done in two stages:
-///     1. Constraint generation
-///     2. Unification
-/// During 1. we use a bidirectional type checker to walk our input AST and generate a set of
-/// constraints (and unification variables) that have to be true for the ast to type check. This
-/// stage also produces a mapping from variables in the AST to their types.
-///
-/// Once we have this set of constraints we solve them via unification. Unification maintains a
-/// mapping from unification variables to their type. Each constraint is decomposed into a list of
-/// (uni var, type) pairs that are saved in the mapping. At the end of this process we will either
-/// encounter an error (e.g. If we try to unify int and a function type), or we will produce a
-/// substitution from unification variables to types (possibly including type variables).
-///
-/// With this substitution constructed we walk the variable -> type mapping and substitute any
-/// unification variables for their types. This process of unification variable removal is called
-/// `zonking`.
-struct InferCtx<'a, 'infer, I> {
-    /// Store types for local variables.
-    local_env: FxHashMap<VarId, InferTy<'infer>>,
-    /// Mapping from unification variables to their types (if any).
-    unifiers: InPlaceUnificationTable<TcUnifierVar<'infer>>,
-    /// Errors that arise during type checking
-    errors: Vec<TypeCheckError<'infer>>,
-    /// Allocator for types created during inference
-    ctx: &'a I,
-}
-
-impl<'infer, TV, I: MkTy<'infer, TV>> MkTy<'infer, TV> for InferCtx<'_, 'infer, I> {
-    fn mk_ty(&self, kind: TypeKind<'infer, TV>) -> Ty<'infer, TV> {
-        self.ctx.mk_ty(kind)
-    }
-
-    fn mk_label(&self, label: &str) -> RowLabel<'infer> {
-        self.ctx.mk_label(label)
-    }
-
-    fn mk_row(
-        &self,
-        fields: &[RowLabel<'infer>],
-        values: &[Ty<'infer, TV>],
-    ) -> ClosedRow<'infer, TV> {
-        self.ctx.mk_row(fields, values)
-    }
-}
-
 struct TyChkRes<'infer, TV> {
     ty: Ty<'infer, TV>,
     eff: Row<'infer, TV>,
@@ -367,35 +340,98 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for TyChkRes<'_, TV> {
     }
 }
 
-impl<'infer, I> InferCtx<'_, 'infer, I>
+/// Type states for infer context
+struct Generation;
+struct Solution;
+
+/// A context for type inference.
+///
+/// Type inference is done in two stages:
+///     1. Constraint generation
+///     2. Unification
+/// During 1. we use a bidirectional type checker to walk our input AST and generate a set of
+/// constraints (and unification variables) that have to be true for the ast to type check. This
+/// stage also produces a mapping from variables in the AST to their types.
+///
+/// Once we have this set of constraints we solve them via unification. Unification maintains a
+/// mapping from unification variables to their type. Each constraint is decomposed into a list of
+/// (uni var, type) pairs that are saved in the mapping. At the end of this process we will either
+/// encounter an error (e.g. If we try to unify int and a function type), or we will produce a
+/// substitution from unification variables to types (possibly including type variables).
+///
+/// With this substitution constructed we walk the variable -> type mapping and substitute any
+/// unification variables for their types. This process of unification variable removal is called
+/// `zonking`.
+struct InferCtx<'a, 'infer, I, State = Generation> {
+    /// Store types for local variables.
+    local_env: FxHashMap<VarId, InferTy<'infer>>,
+    /// Mapping from unification variables to their types (if any).
+    unifiers: InPlaceUnificationTable<TcUnifierVar<'infer>>,
+    /// Constraints that have to be true for this inference context.
+    constraints: Constraints<'infer>,
+    /// Errors that arise during type checking
+    errors: Vec<TypeCheckError<'infer>>,
+    /// Allocator for types created during inference
+    ctx: &'a I,
+    _marker: std::marker::PhantomData<State>,
+}
+
+impl<'infer, TV, I: MkTy<'infer, TV>, S> MkTy<'infer, TV> for InferCtx<'_, 'infer, I, S> {
+    fn mk_ty(&self, kind: TypeKind<'infer, TV>) -> Ty<'infer, TV> {
+        self.ctx.mk_ty(kind)
+    }
+
+    fn mk_label(&self, label: &str) -> RowLabel<'infer> {
+        self.ctx.mk_label(label)
+    }
+
+    fn mk_row(
+        &self,
+        fields: &[RowLabel<'infer>],
+        values: &[Ty<'infer, TV>],
+    ) -> ClosedRow<'infer, TV> {
+        self.ctx.mk_row(fields, values)
+    }
+}
+
+impl<'a, 'infer, I> InferCtx<'a, 'infer, I>
 where
     I: MkTy<'infer, TcUnifierVar<'infer>>,
 {
+    pub(crate) fn new(ctx: &'a I) -> Self {
+        Self {
+            local_env: FxHashMap::default(),
+            unifiers: InPlaceUnificationTable::default(),
+            errors: vec![],
+            constraints: Constraints::default(),
+            ctx,
+            _marker: std::marker::PhantomData,
+        }
+    }
     /// This is the entrypoint to the bidirectional type checker. Since our language uses
     /// damnas-milner type inference we will always begin type checking with a call to infer.
-    pub fn infer<'s, 'ty, E>(
-        &mut self,
+    pub(crate) fn infer<'s, 'ty, E>(
+        mut self,
         eff_info: &E,
         term: &Term<'_, VarId>,
     ) -> (
-        Vec<InferConstraint<'infer>>,
+        InferCtx<'a, 'infer, I, Solution>,
         FxHashMap<VarId, InferTy<'infer>>,
         InferResult<'infer>,
     )
     where
         E: EffectInfo<'s, 'ty>,
     {
-        let mut constraints = vec![];
         let mut var_tys = FxHashMap::default();
-        let res = self._infer(&mut constraints, &mut var_tys, eff_info, term);
-        (constraints, var_tys, res)
+        let res = self._infer(&mut var_tys, eff_info, term);
+
+        (InferCtx::with_generation(self), var_tys, res)
     }
 
     /// Check a term against a given type.
     /// This method pairs with _infer to form a bidirectional type checker
     fn _check<'s, 'eff, E>(
         &mut self,
-        constraints: &mut Vec<InferConstraint<'infer>>,
         var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
         eff_info: &E,
         term: &Term<'_, VarId>,
@@ -410,25 +446,13 @@ where
                 // Check an abstraction against a function type by checking the body checks against
                 // the function return type with the function argument type in scope.
                 self.local_env.insert(*arg, arg_ty);
-                self._check(
-                    constraints,
-                    var_tys,
-                    eff_info,
-                    body,
-                    expected.with_ty(body_ty),
-                );
+                self._check(var_tys, eff_info, body, expected.with_ty(body_ty));
                 self.local_env.remove(arg);
             }
             (Label { .. }, ProdTy(row)) => {
                 // A label can check against a product, if it checks against the product's internal
                 // type
-                self._check(
-                    constraints,
-                    var_tys,
-                    eff_info,
-                    term,
-                    expected.with_ty(row.to_ty(self)),
-                )
+                self._check(var_tys, eff_info, term, expected.with_ty(row.to_ty(self)))
             }
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
@@ -451,32 +475,19 @@ where
 
                 // If this is a singleton row with the right label check it's value type matches
                 // our term type
-                self._check(
-                    constraints,
-                    var_tys,
-                    eff_info,
-                    term,
-                    expected.with_ty(row.values[0]),
-                )
+                self._check(var_tys, eff_info, term, expected.with_ty(row.values[0]))
             }
-            (Unit, ty_pat!({})) => constraints.push(Constraint::Eq(
+            (Unit, ty_pat!({})) => self.constraints.add_ty_eq(
                 expected.eff.to_ty(self),
                 Row::Closed(self.empty_row()).to_ty(self),
-            )),
+            ),
             (Unlabel { label, term }, _) => {
                 let expected_ty = self.single_row_ty(label, expected.ty);
-                self._check(
-                    constraints,
-                    var_tys,
-                    eff_info,
-                    term,
-                    expected.with_ty(expected_ty),
-                )
+                self._check(var_tys, eff_info, term, expected.with_ty(expected_ty))
             }
             (Concat { .. }, RowTy(row)) => {
                 // Coerece a row type into a product and re-check.
                 self._check(
-                    constraints,
                     var_tys,
                     eff_info,
                     term,
@@ -484,28 +495,27 @@ where
                 );
             }
             (Concat { left, right }, ProdTy(row)) => {
-                let left_infer = self._infer(constraints, var_tys, eff_info, left);
-                let left_row = self.equate_as_row(constraints, left_infer.ty);
+                let left_infer = self._infer(var_tys, eff_info, left);
+                let left_row = self.equate_as_row(left_infer.ty);
 
-                let right_infer = self._infer(constraints, var_tys, eff_info, right);
-                let right_row = self.equate_as_row(constraints, right_infer.ty);
+                let right_infer = self._infer(var_tys, eff_info, right);
+                let right_row = self.equate_as_row(right_infer.ty);
 
                 // Check our expected effect is a combination of each components effects
-                constraints.push(Constraint::RowCombine {
-                    left: left_infer.eff,
-                    right: right_infer.eff,
-                    goal: expected.eff,
-                });
-                constraints.push(Constraint::RowCombine {
-                    left: left_row,
-                    right: right_row,
-                    goal: row,
-                });
+                self.constraints.add_row_combine(
+                     left_infer.eff,
+                     right_infer.eff,
+                     expected.eff,
+                );
+                self.constraints.add_row_combine(
+                     left_row,
+                     right_row,
+                     row,
+                );
             }
             (Project { .. }, RowTy(row)) => {
                 // Coerce row into a product and re-check.
                 self._check(
-                    constraints,
                     var_tys,
                     eff_info,
                     term,
@@ -513,31 +523,31 @@ where
                 );
             }
             (Project { direction, term }, ProdTy(row)) => {
-                let term_infer = self._infer(constraints, var_tys, eff_info, term);
-                let term_row = self.equate_as_row(constraints, term_infer.ty);
+                let term_infer = self._infer(var_tys, eff_info, term);
+                let term_row = self.equate_as_row(term_infer.ty);
                 let unbound_row = self.fresh_row();
 
-                constraints.push(self.row_eq_constraint(expected.eff, term_infer.eff));
-                constraints.push(match direction {
-                    Direction::Left => Constraint::RowCombine {
-                        left: row,
-                        right: unbound_row,
-                        goal: term_row,
-                    },
-                    Direction::Right => Constraint::RowCombine {
-                        left: unbound_row,
-                        right: row,
-                        goal: term_row,
-                    },
-                });
+                self.row_eq_constraint(expected.eff, term_infer.eff);
+                match direction {
+                    Direction::Left => self.constraints.add_row_combine(
+                         row,
+                         unbound_row,
+                         term_row,
+                    ),
+                    Direction::Right => self.constraints.add_row_combine(
+                         unbound_row,
+                         row,
+                         term_row,
+                    ),
+                };
             }
             // Bucket case for when we need to check a rule against a type but no case applies
             (term, _) => {
                 // Infer a type for our term and check that the expected type is equal to the
                 // inferred type.
-                let inferred = self._infer(constraints, var_tys, eff_info, term);
-                constraints.push(Constraint::Eq(expected.ty, inferred.ty));
-                constraints.push(self.row_eq_constraint(expected.eff, inferred.eff));
+                let inferred = self._infer(var_tys, eff_info, term);
+                self.constraints.add_ty_eq(expected.ty, inferred.ty);
+                self.row_eq_constraint(expected.eff, inferred.eff);
             }
         }
     }
@@ -558,7 +568,6 @@ where
     /// This method pairs with check to form a bidirectional type checker
     fn _infer<'s, 'eff, E>(
         &mut self,
-        constraints: &mut Vec<InferConstraint<'infer>>,
         var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
         eff_info: &E,
         term: &Term<'_, VarId>,
@@ -577,13 +586,7 @@ where
 
                 var_tys.insert(*arg, arg_ty);
                 self.local_env.insert(*arg, arg_ty);
-                self._check(
-                    constraints,
-                    var_tys,
-                    eff_info,
-                    body,
-                    InferResult::new(body_ty, eff),
-                );
+                self._check(var_tys, eff_info, body, InferResult::new(body_ty, eff));
                 self.local_env.remove(arg);
 
                 InferResult::new(self.mk_ty(TypeKind::FunTy(arg_ty, body_ty)), eff)
@@ -594,7 +597,7 @@ where
             // We then check the arg of the application against the arg type of the function type
             // The resulting type of this application is the function result type.
             Application { func, arg } => {
-                let fun_infer = self._infer(constraints, var_tys, eff_info, func);
+                let fun_infer = self._infer(var_tys, eff_info, func);
                 // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
                 // for arg and ret type.
                 let (arg_ty, ret_ty) = match *fun_infer.ty {
@@ -602,17 +605,16 @@ where
                     _ => {
                         let arg_ty = self.fresh_var();
                         let ret_ty = self.fresh_var();
-                        constraints.push(Constraint::Eq(
+                        self.constraints.add_ty_eq(
                             fun_infer.ty,
                             self.mk_ty(FunTy(arg_ty, ret_ty)),
-                        ));
+                        );
                         (arg_ty, ret_ty)
                     }
                 };
 
                 let arg_eff = self.fresh_row();
                 self._check(
-                    constraints,
                     var_tys,
                     eff_info,
                     arg,
@@ -620,11 +622,11 @@ where
                 );
 
                 let eff = self.fresh_row();
-                constraints.push(Constraint::RowCombine {
-                    left: fun_infer.eff,
-                    right: arg_eff,
-                    goal: eff,
-                });
+                self.constraints.add_row_combine(
+                     fun_infer.eff,
+                     arg_eff,
+                     eff,
+                );
                 InferResult::new(ret_ty, eff)
             }
             // If the variable is in environemnt return it's type, otherwise return an error.
@@ -640,11 +642,11 @@ where
                 }
             }
             Label { label, term } => {
-                let infer = self._infer(constraints, var_tys, eff_info, term);
+                let infer = self._infer(var_tys, eff_info, term);
                 infer.map_ty(|ty| self.single_row_ty(label, ty))
             }
             Unlabel { label, term } => {
-                let term_infer = self._infer(constraints, var_tys, eff_info, term);
+                let term_infer = self._infer(var_tys, eff_info, term);
                 let field = self.mk_label(label);
                 term_infer.map_ty(|ty| match *ty {
                     // If our output type is already a singleton row of without a label, use it
@@ -655,7 +657,7 @@ where
                     _ => {
                         let out_ty = self.fresh_var();
                         let row_ty = self.mk_ty(RowTy(self.mk_row(&[field], &[out_ty])));
-                        constraints.push(Constraint::Eq(row_ty, ty));
+                        self.constraints.add_ty_eq(row_ty, ty);
                         out_ty
                     }
                 })
@@ -677,30 +679,28 @@ where
                 let right_ty = self.mk_ty(ProdTy(right_row));
 
                 self._check(
-                    constraints,
                     var_tys,
                     eff_info,
                     left,
                     InferResult::new(left_ty, left_eff),
                 );
                 self._check(
-                    constraints,
                     var_tys,
                     eff_info,
                     right,
                     InferResult::new(right_ty, right_eff),
                 );
 
-                constraints.push(Constraint::RowCombine {
-                    left: left_eff,
-                    right: right_eff,
-                    goal: out_eff,
-                });
-                constraints.push(Constraint::RowCombine {
-                    left: left_row,
-                    right: right_row,
-                    goal: out_row,
-                });
+                self.constraints.add_row_combine(
+                     left_eff,
+                     right_eff,
+                     out_eff,
+                );
+                self.constraints.add_row_combine(
+                     left_row,
+                     right_row,
+                     out_row,
+                );
 
                 InferResult::new(self.mk_ty(ProdTy(out_row)), out_eff)
             }
@@ -713,32 +713,28 @@ where
                 let eff = self.fresh_row();
                 let term_ty = self.mk_ty(ProdTy(big_row));
                 self._check(
-                    constraints,
                     var_tys,
                     eff_info,
                     term,
                     InferResult::new(term_ty, eff),
                 );
 
-                constraints.push(match direction {
-                    Direction::Left => Constraint::RowCombine {
-                        left: small_row,
-                        right: unbound_row,
-                        goal: big_row,
-                    },
-                    Direction::Right => Constraint::RowCombine {
-                        left: unbound_row,
-                        right: small_row,
-                        goal: big_row,
-                    },
-                });
+                match direction {
+                    Direction::Left => {
+                        self.constraints
+                            .add_row_combine(small_row, unbound_row, big_row)
+                    }
+                    Direction::Right => {
+                        self.constraints
+                            .add_row_combine(unbound_row, small_row, big_row)
+                    }
+                };
 
                 InferResult::new(self.mk_ty(ProdTy(small_row)), eff)
             }
             Operation(eff_op_id) => {
                 let eff_id = eff_info.lookup_effect_by_member(*eff_op_id);
-                let sig =
-                    self.instantiate(constraints, eff_info.effect_member_sig(eff_id, *eff_op_id));
+                let sig = self.instantiate(eff_info.effect_member_sig(eff_id, *eff_op_id));
 
                 InferResult::new(
                     sig.ty,
@@ -752,8 +748,7 @@ where
                     .effect_members(*eff)
                     .iter()
                     .map(|mem| {
-                        let sig =
-                            self.instantiate(constraints, eff_info.effect_member_sig(*eff, *mem));
+                        let sig = self.instantiate(eff_info.effect_member_sig(*eff, *mem));
                         let name = eff_info.effect_member_name(*eff, *mem);
                         (self.mk_label(&name), sig.ty)
                     })
@@ -767,7 +762,6 @@ where
 
                 let eff_handler = self.mk_ty(RowTy(self.construct_row(row)));
                 self._check(
-                    constraints,
                     var_tys,
                     eff_info,
                     handler,
@@ -776,30 +770,120 @@ where
 
                 let body_eff = self.fresh_row();
                 let out_eff = self.fresh_row();
-                self._check(
-                    constraints,
-                    var_tys,
-                    eff_info,
-                    body,
-                    InferResult::new(body_ty, body_eff),
-                );
+                self._check(var_tys, eff_info, body, InferResult::new(body_ty, body_eff));
 
                 let handled_eff =
                     Row::Closed(self.single_row(&eff_info.effect_name(*eff), self.empty_row_ty()));
 
                 // Handle removes an effect so our out_eff should be whatever body_eff was minus
                 // our handled effect
-                constraints.push(Constraint::RowCombine {
-                    left: out_eff,
-                    right: handled_eff,
-                    goal: body_eff,
-                });
+                self.constraints
+                    .add_row_combine(out_eff, handled_eff, body_eff);
 
                 InferResult::new(ret_ty, out_eff)
             }
             // TODOs
             Item(_) => todo!(),
         }
+    }
+
+    fn instantiate(&mut self, ty_scheme: TyScheme<'_, TcVar>) -> InferResult<'infer> {
+        let mut inst = Instantiate {
+            ctx: self.ctx,
+            unifiers: ty_scheme
+                .bound
+                .into_iter()
+                .map(|_| self.unifiers.new_key(None))
+                .collect(),
+        };
+        for ev in ty_scheme.constrs {
+            match ev.try_fold_with(&mut inst).unwrap() {
+                Evidence::Row { left, right, goal } => {
+                    self.constraints.add_row_combine(left, right, goal)
+                }
+            }
+        }
+        InferResult::new(
+            ty_scheme.ty.try_fold_with(&mut inst).unwrap(),
+            ty_scheme.eff.try_fold_with(&mut inst).unwrap(),
+        )
+    }
+
+    /// Make this type equal to a row and return that equivalent row.
+    /// If it is already a row convert it directly, otherwise add a constraint that type must be a
+    /// row.
+    pub(crate) fn equate_as_row(
+        &mut self,
+        ty: InferTy<'infer>,
+    ) -> InferRow<'infer> {
+        match *ty {
+            ProdTy(row) => row,
+            RowTy(row) => Row::Closed(row),
+            _ => {
+                let unifier = self.unifiers.new_key(None);
+                self.constraints
+                    .add_ty_eq(self.mk_ty(VarTy(unifier.into())), ty);
+                Row::Open(unifier.into())
+            }
+        }
+    }
+
+    fn row_eq_constraint(
+        &mut self,
+        left: InferRow<'infer>,
+        right: InferRow<'infer>,
+    ) {
+        self.constraints.add_ty_eq(left.to_ty(self), right.to_ty(self))
+    }
+}
+
+impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, Solution> {
+    /// Convert our previous InferCtx in Generation state into Solution state.
+    fn with_generation(prior: InferCtx<'a, 'infer, I, Generation>) -> Self {
+        Self {
+            local_env: prior.local_env,
+            unifiers: prior.unifiers,
+            errors: prior.errors,
+            constraints: prior.constraints,
+            ctx: prior.ctx,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    /// Solve a list of constraints to a mapping from unifiers to types.
+    /// If there is no solution to the list of constraints we return a relevant error.
+    pub(crate) fn solve(mut self) -> (
+        InPlaceUnificationTable<TcUnifierVar<'infer>>,
+        Vec<TypeCheckError<'infer>>,
+    ) {
+        let constraints = std::mem::replace(&mut self.constraints, Constraints::default());
+        for constr in constraints.cs.into_iter() {
+            match constr {
+                Constraint::Eq(left, right) => self
+                    .unify_ty_ty(left, right)
+                    .map_err(|err| {
+                        self.errors.push(err);
+                    })
+                    .unwrap_or_default(),
+                Constraint::RowCombine { left, right, goal } => self
+                    .unify_row_combine(left, right, goal)
+                    .map_err(|err| {
+                        self.errors.push(err);
+                    })
+                    .unwrap_or_default(),
+            }
+            print_root_unifiers(&mut self.unifiers);
+        }
+        (self.unifiers, self.errors)
+    }
+
+    fn union_rows(
+        &self,
+        left: ClosedRow<'infer, TcUnifierVar<'infer>>,
+        right: ClosedRow<'infer, TcUnifierVar<'infer>>,
+    ) -> Result<ClosedRow<'infer, TcUnifierVar<'infer>>, TypeCheckError<'infer>> {
+        left.disjoint_union(right)
+            .map(|(fields, values)| self.mk_row(&fields, &values))
     }
 
     /// Apply the current partial substitution to a type, removing as many unifiers as possible
@@ -981,13 +1065,11 @@ where
                 self.unify_closedrow_closedrow(left_row, right_row)
             }
             // Coerce a product into a row
-            (RowTy(_), ProdTy(right)) => self.unify_ty_ty_normalized(left, right.to_ty(self)),
+            (RowTy(_), ProdTy(right)) => self.unify_ty_ty(left, right.to_ty(self)),
             // Coerce a product into a row
-            (ProdTy(left), RowTy(_)) => self.unify_ty_ty_normalized(left.to_ty(self), right),
+            (ProdTy(left), RowTy(_)) => self.unify_ty_ty(left.to_ty(self), right),
             // Decompose product and unify both internal types
-            (ProdTy(left), ProdTy(right)) => {
-                self.unify_ty_ty_normalized(left.to_ty(self), right.to_ty(self))
-            }
+            (ProdTy(left), ProdTy(right)) => self.unify_ty_ty(left.to_ty(self), right.to_ty(self)),
             // Discharge equal types
             (IntTy, IntTy) => Ok(()),
 
@@ -1017,6 +1099,11 @@ where
         let normal_left = self.normalize_ty(left);
         let normal_right = self.normalize_ty(right);
 
+        println!(
+            "unify_ty_ty\n\tleft: {:?}\n\tright: {:?}",
+            normal_left, normal_right
+        );
+
         match (normal_left, normal_right) {
             (Left(left_ty), Left(right_ty)) => self.unify_ty_ty_normalized(left_ty, right_ty),
             (Left(ty), Right((row_var, rows))) | (Right((row_var, rows)), Left(ty)) => {
@@ -1029,7 +1116,10 @@ where
                                 .unifiers
                                 .unify_var_var(var, row_var)
                                 .map_err(|e| e.into()),
-                            RowTy(row) => self.unify_closedrow_rowset(row, &rows),
+                            RowTy(row) => {
+                                self.unify_closedrow_rowset(row, &rows)?;
+                                self.unify_var_ty(row_var, ty)
+                            }
                             // The rest of these cases are just type errors, things like (IntTy, Row) that
                             // could never succeed
                             _ => Err(TypeCheckError::from((
@@ -1046,34 +1136,6 @@ where
                 .unify_var_var(left_var, right_var)
                 .map_err(|e| e.into()),
         }
-    }
-
-    /// Solve a list of constraints to a mapping from unifiers to types.
-    /// If there is no solution to the list of constraints we return a relevant error.
-    fn solve(
-        mut self,
-        constraints: Vec<InferConstraint<'infer>>,
-    ) -> (
-        InPlaceUnificationTable<TcUnifierVar<'infer>>,
-        Vec<TypeCheckError<'infer>>,
-    ) {
-        for constr in constraints {
-            match constr {
-                Constraint::Eq(left, right) => self
-                    .unify_ty_ty(left, right)
-                    .map_err(|err| {
-                        self.errors.push(err);
-                    })
-                    .unwrap_or_default(),
-                Constraint::RowCombine { left, right, goal } => self
-                    .unify_row_combine(left, right, goal)
-                    .map_err(|err| {
-                        self.errors.push(err);
-                    })
-                    .unwrap_or_default(),
-            }
-        }
-        (self.unifiers, self.errors)
     }
 
     fn unify_row_rowset(
@@ -1111,7 +1173,7 @@ where
             .try_and_right(|(var, rows)| self.dispatch_solved(var, rows))?;
 
         fn find_unify_partial_row<'infer, I>(
-            infer: &mut InferCtx<'_, 'infer, I>,
+            infer: &mut InferCtx<'_, 'infer, I, Solution>,
             a: InferRow<'infer>,
             a_row: ClosedRow<'infer, TcUnifierVar<'infer>>,
             b: InferRow<'infer>,
@@ -1352,25 +1414,6 @@ where
         }
     }
 
-    /// Make this type equal to a row and return that equivalent row.
-    /// If it is already a row convert it directly, otherwise add a constraint that type must be a
-    /// row.
-    pub(crate) fn equate_as_row(
-        &mut self,
-        constraints: &mut Vec<InferConstraint<'infer>>,
-        ty: InferTy<'infer>,
-    ) -> InferRow<'infer> {
-        match *ty {
-            ProdTy(row) => row,
-            RowTy(row) => Row::Closed(row),
-            _ => {
-                let unifier = self.unifiers.new_key(None);
-                constraints.push(Constraint::Eq(self.mk_ty(VarTy(unifier.into())), ty));
-                Row::Open(unifier.into())
-            }
-        }
-    }
-
     fn unify_row_combine_normalized(
         &mut self,
         left: InferRow<'infer>,
@@ -1432,7 +1475,7 @@ where
         row: ClosedRow<'infer, TcUnifierVar<'infer>>,
         row_set: &RowSet<'infer, TcUnifierVar<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>> {
-        for orxr in row_set.goals.iter() {
+        for orxr in row_set.goals_iter() {
             match orxr {
                 OrderedRowXorRow::ClosedOpen(subrow, var) => {
                     let (fields, values) = row.difference(*subrow);
@@ -1443,54 +1486,12 @@ where
                 }
             }
         }
+        for combo in row_set.comps_iter() {
+            // TODO: We need to remove the goal entry for this component from it's RowSet and then
+            // re-add the updated entry. Need to think more about what this should look like
+            self.unify_row_combine(Row::Closed(row), combo.other, combo.goal)?;
+        }
         Ok(())
-    }
-
-    pub fn row_eq_constraint(
-        &self,
-        left: InferRow<'infer>,
-        right: InferRow<'infer>,
-    ) -> Constraint<'infer, TcUnifierVar<'infer>> {
-        Constraint::Eq(left.to_ty(self), right.to_ty(self))
-    }
-
-    fn instantiate(
-        &mut self,
-        constraints: &mut Vec<Constraint<'infer, TcUnifierVar<'infer>>>,
-        ty_scheme: TyScheme<'_, TcVar>,
-    ) -> InferResult<'infer> {
-        let mut inst = Instantiate {
-            ctx: self.ctx,
-            unifiers: ty_scheme
-                .bound
-                .into_iter()
-                .map(|_| self.unifiers.new_key(None))
-                .collect(),
-        };
-        constraints.extend(
-            ty_scheme
-                .constrs
-                .into_iter()
-                .map(|ev| match ev {
-                    Evidence::Row { left, right, goal } => {
-                        Constraint::RowCombine { left, right, goal }
-                    }
-                })
-                .map(|constr| constr.try_fold_with(&mut inst).unwrap()),
-        );
-        InferResult::new(
-            ty_scheme.ty.try_fold_with(&mut inst).unwrap(),
-            ty_scheme.eff.try_fold_with(&mut inst).unwrap(),
-        )
-    }
-
-    fn union_rows(
-        &self,
-        left: ClosedRow<'infer, TcUnifierVar<'infer>>,
-        right: ClosedRow<'infer, TcUnifierVar<'infer>>,
-    ) -> Result<ClosedRow<'infer, TcUnifierVar<'infer>>, TypeCheckError<'infer>> {
-        left.disjoint_union(right)
-            .map(|(fields, values)| self.mk_row(&fields, &values))
     }
 
     pub(crate) fn unify_var_combineinto(
@@ -1817,18 +1818,13 @@ where
     II: MkTy<'infer, TcUnifierVar<'infer>>,
     E: EffectInfo<'s, 'eff>,
 {
-    let mut infer = InferCtx {
-        local_env: FxHashMap::default(),
-        unifiers: InPlaceUnificationTable::default(),
-        errors: vec![],
-        ctx: infer_ctx,
-    };
+    let infer = InferCtx::new(infer_ctx);
 
     // Infer types for all our variables and the root term.
-    let (constraints, var_tys, ty) = infer.infer(eff_info, term);
+    let (infer, var_tys, ty) = infer.infer(eff_info, term);
 
     // Solve constraints into the unifiers mapping.
-    let (mut unifiers, errors) = infer.solve(constraints);
+    let (mut unifiers, errors) = infer.solve();
 
     // Zonk the variable -> type mapping and the root term type.
     let mut zonker = Zonker {
@@ -1844,7 +1840,7 @@ where
 
     let ev = collect_evidence(&mut zonker);
 
-    println!("{:#?}", zonker.unifiers);
+    print_root_unifiers(&mut zonker.unifiers);
 
     let scheme = TyScheme {
         bound: zonker
@@ -1914,7 +1910,7 @@ fn collect_evidence<'ctx, 'infer>(
     evidence.into_iter().collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Evidence<'ctx, TV> {
     Row {
         left: Row<'ctx, TV>,
@@ -2104,7 +2100,9 @@ where
             "Expected row fields and valuse to be the same length"
         );
         debug_assert!(
-            fields.iter().considered_sorted_by(|a, b| str::partial_cmp(a, b)),
+            fields
+                .iter()
+                .considered_sorted_by(|a, b| str::partial_cmp(a, b)),
             "Expected row fields to be sorted"
         );
         ClosedRow {
@@ -2151,6 +2149,20 @@ impl<I: Iterator> IteratorSorted for I {
             true
         })
     }
+}
+
+fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
+    println!("UnificationTable [");
+    for uv in (0..uni.len()).map(|i| TcUnifierVar::from_index(i as u32)) {
+        let root = uni.find(uv);
+        if root != uv {
+            continue;
+        }
+        if let Some(candidate) = uni.probe_value(root) {
+            println!("\t{} => {:?}", uv.index(), candidate);
+        }
+    }
+    println!("]");
 }
 
 #[cfg(test)]
@@ -2442,33 +2454,38 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, scheme, _) =
+        let (_var_to_tys, mut scheme, _) =
             type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
 
-        // TODO: Fix this test.
-        /*assert_matches!(
-            scheme.constrs[0],
-            Evidence::Row {
-                left: Row::Open(_),
-                right: Row::Closed(row!(["x"], [ty!(VarTy(TcVar(4)))])),
-                goal: Row::Open(TcVar(2))
-            }
+        println!(
+            "TyScheme {{\n  bound: {:?},\n  constrs: {:?}\n  eff: {:?}\n  ty: {:?}\n}}",
+            scheme.bound, scheme.constrs, scheme.eff, scheme.ty
         );
-        assert_matches!(
-            scheme.constrs[1],
-            Evidence::Row {
-                left: Row::Open(_),
-                right: Row::Open(_),
-                goal: Row::Open(TcVar(2))
-            }
-        );
+
+        // Sort so order of match is stable
+        scheme.constrs.sort();
+        assert_matches!(scheme.constrs.as_slice(), [a, b] => {
+            assert_matches!(a,
+                Evidence::Row {
+                    left: Row::Closed(row!(["x"], [ty!(VarTy(TcVar(2)))])),
+                    right: Row::Open(_),
+                    goal: Row::Open(TcVar(3))
+                }
+                );
+            assert_matches!(b,
+                Evidence::Row {
+                    left: Row::Open(_),
+                    right: Row::Open(_),
+                    goal: Row::Open(TcVar(3))
+                });
+        });
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
                 ty!(ProdTy(Row::Open(_))),
-                ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!(VarTy(TcVar(4)))))
+                ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!(VarTy(TcVar(2)))))
             ))
-        )*/
+        )
     }
 
     #[test]
@@ -2495,21 +2512,26 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, scheme, _) =
+        let (_var_to_tys, mut scheme, _) =
             type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
 
-        println!("TyScheme {{\n  bound: {:?},\n  constrs: {:?}\n  eff: {:?}\n  ty: {:?}\n}}", scheme.bound, scheme.constrs, scheme.eff, scheme.ty);
-
-        // TODO: Fix this test
-        /*assert_matches!(
-            scheme.constrs[0],
-            Evidence::Row {
-                left: Row::Open(_),
-                right: Row::Closed(row!(["x"], [ty!({})])),
-                goal: Row::Open(_),
-            }
+        println!(
+            "TyScheme {{\n  bound: {:?},\n  constrs: {:?}\n  eff: {:?}\n  ty: {:?}\n}}",
+            scheme.bound, scheme.constrs, scheme.eff, scheme.ty
         );
-        assert_matches!(scheme.ty, ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!({}))))*/
+
+        scheme.constrs.sort();
+        // TODO: Fix this test
+        assert_matches!(scheme.constrs.as_slice(), [a] => {
+            assert_matches!(a,
+                Evidence::Row {
+                    left: Row::Open(_),
+                    right: Row::Closed(row!(["x"], [ty!({})])),
+                    goal: Row::Open(_),
+                }
+            );
+        });
+        assert_matches!(scheme.ty, ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!({}))))
     }
 
     #[test]
