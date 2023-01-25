@@ -19,14 +19,10 @@ mod ty;
 
 use ty::{
     fold::{FallibleTypeFold, TypeFoldable},
-    row::{ClosedRow, InferRow, PartialRow, Row, RowLabel, RowSet},
+    row::{ClosedRow, CombineInto, InferRow, OrderedRowXorRow, Row, RowLabel, RowSet},
     TypeKind::*,
     *,
 };
-
-use crate::ty::row::CombineInto;
-
-use self::ty::row::OrderedRowXorRow;
 
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]
@@ -112,9 +108,9 @@ pub enum Candidate<'ctx, TV, OR = OrderedRowXorRow<'ctx, TV>> {
 }
 pub type InferCandidate<'infer> = Candidate<'infer, TcUnifierVar<'infer>>;
 pub type CandidateView<'ctx, TV> = Candidate<'ctx, TV, (Row<'ctx, TV>, Row<'ctx, TV>)>;
-impl<'ctx, TV> Into<CandidateView<'ctx, TV>> for Candidate<'ctx, TV> {
-    fn into(self) -> CandidateView<'ctx, TV> {
-        match self {
+impl<'ctx, TV> From<Candidate<'ctx, TV>> for CandidateView<'ctx, TV> {
+    fn from(val: Candidate<'ctx, TV>) -> Self {
+        match val {
             Candidate::Ty(ty) => Candidate::Ty(ty),
             Candidate::Row(row) => Candidate::Row(row.into()),
         }
@@ -436,8 +432,7 @@ where
         eff_info: &E,
         term: &Term<'_, VarId>,
         expected: InferResult<'infer>,
-    ) -> ()
-    where
+    ) where
         E: EffectInfo<'s, 'eff>,
     {
         use TypeKind::*;
@@ -459,7 +454,7 @@ where
                 if row.fields.len() != 1 {
                     self.errors
                         .push((self.single_row_ty(label, self.mk_ty(ErrorTy)), expected.ty).into());
-                    return ();
+                    return;
                 }
                 let field = self.mk_label(label);
                 // If our singleton row is a different field name, fail
@@ -779,9 +774,8 @@ where
             RowTy(row) => Row::Closed(row),
             _ => {
                 let unifier = self.unifiers.new_key(None);
-                self.constraints
-                    .add_ty_eq(self.mk_ty(VarTy(unifier.into())), ty);
-                Row::Open(unifier.into())
+                self.constraints.add_ty_eq(self.mk_ty(VarTy(unifier)), ty);
+                Row::Open(unifier)
             }
         }
     }
@@ -813,7 +807,7 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
         InPlaceUnificationTable<TcUnifierVar<'infer>>,
         Vec<TypeCheckError<'infer>>,
     ) {
-        let constraints = std::mem::replace(&mut self.constraints, Constraints::default());
+        let constraints = std::mem::take(&mut self.constraints);
         for constr in constraints.cs.into_iter() {
             match constr {
                 Constraint::Eq(left, right) => self
@@ -940,20 +934,12 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
             .map_err(|e| e.into())
     }
 
-    fn unify_var_partialrow(
+    fn unify_var_rowset<R: Into<RowSet<'infer, TcUnifierVar<'infer>>>>(
         &mut self,
         goal_var: TcUnifierVar<'infer>,
-        row: PartialRow<'infer, TcUnifierVar<'infer>>,
+        row: R,
     ) -> Result<(), TypeCheckError<'infer>> {
-        self.unify_var_rowset(goal_var, RowSet::from(row))
-    }
-
-    fn unify_var_rowset(
-        &mut self,
-        goal_var: TcUnifierVar<'infer>,
-        row: RowSet<'infer, TcUnifierVar<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let row_ = row.try_fold_with(&mut OccursCheck {
+        let row_ = row.into().try_fold_with(&mut OccursCheck {
             ctx: self.ctx,
             var: goal_var,
         })?;
@@ -1129,37 +1115,6 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
             .normalize_row(right)
             .try_and_right(|(var, rows)| self.dispatch_solved(var, rows))?;
 
-        fn find_unify_partial_row<'infer, I>(
-            infer: &mut InferCtx<'_, 'infer, I, Solution>,
-            a: InferRow<'infer>,
-            a_row: ClosedRow<'infer, TcUnifierVar<'infer>>,
-            b: InferRow<'infer>,
-            (b_var, b_rows): (TcUnifierVar<'infer>, &RowSet<'infer, TcUnifierVar<'infer>>),
-        ) -> Option<Result<(), TypeCheckError<'infer>>>
-        where
-            I: MkTy<'infer, TcUnifierVar<'infer>>,
-        {
-            match (a, b) {
-                (a, Row::Open(b)) if b == b_var => {
-                    Some(infer.unify_ty_ty(a.to_ty(infer), infer.mk_ty(RowTy(a_row))))
-                }
-                (Row::Open(a), b) if a == b_var => {
-                    Some(infer.unify_ty_ty(b.to_ty(infer), infer.mk_ty(RowTy(a_row))))
-                }
-                (Row::Closed(a), b) if a.fields == a_row.fields => Some(
-                    infer
-                        .unify_closedrow_closedrow(a, a_row)
-                        .and_then(|()| infer.unify_row_rowset(b, b_var, b_rows)),
-                ),
-                (a, Row::Closed(b)) if b.fields == a_row.fields => Some(
-                    infer
-                        .unify_closedrow_closedrow(b, a_row)
-                        .and_then(|()| infer.unify_row_rowset(a, b_var, b_rows)),
-                ),
-                _ => None,
-            }
-        }
-
         println!(
             "unify_row_combine\n\tleft: {:?}\n\tright: {:?}\n\tgoal: {:?}",
             left, right, goal
@@ -1204,26 +1159,25 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                                     other: Row::Open(right_var),
                                 },
                             )
+                        })?;
+
+                    right_rows
+                        .comps_iter()
+                        .find_map(|combo| {
+                            self.find_unify_closed_open_combineinto(
+                                combo,
+                                goal_row,
+                                (left_var, &left_rows),
+                            )
                         })
-                        .and_then(|()| {
-                            right_rows
-                                .comps_iter()
-                                .find_map(|combo| {
-                                    self.find_unify_closed_open_combineinto(
-                                        combo,
-                                        goal_row,
-                                        (left_var, &left_rows),
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    self.unify_var_combineinto(
-                                        right_var,
-                                        CombineInto {
-                                            goal: Row::Closed(goal_row),
-                                            other: Row::Open(left_var),
-                                        },
-                                    )
-                                })
+                        .unwrap_or_else(|| {
+                            self.unify_var_combineinto(
+                                right_var,
+                                CombineInto {
+                                    goal: Row::Closed(goal_row),
+                                    other: Row::Open(left_var),
+                                },
+                            )
                         })
                 }
             },
@@ -1249,12 +1203,10 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                     right_rows
                         .comps_iter()
                         .find_map(|combo| {
-                            find_unify_partial_row(
-                                self,
-                                combo.other,
-                                left_row,
-                                combo.goal,
+                            self.find_unify_open_closed_combineinto(
+                                combo,
                                 (goal_var, &goal_rows),
+                                left_row,
                             )
                         })
                         .unwrap_or_else(|| {
@@ -1283,12 +1235,10 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                     left_rows
                         .comps_iter()
                         .find_map(|combo| {
-                            find_unify_partial_row(
-                                self,
-                                combo.other,
-                                right_row,
-                                combo.goal,
+                            self.find_unify_open_closed_combineinto(
+                                combo,
                                 (goal_var, &goal_rows),
+                                right_row,
                             )
                         })
                         .unwrap_or_else(|| {
@@ -1302,34 +1252,26 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                         })
                 }
                 (Right((left_var, left_rows)), Right((right_var, right_rows))) => {
-                    let opt_left_unification =
-                        left_rows
-                            .comps_iter()
-                            .find_map(|combo| match (combo.goal, combo.other) {
-                                (goal, Row::Open(other)) if other == right_var => {
-                                    Some(self.unify_row_rowset(goal, goal_var, &goal_rows))
-                                }
-                                (Row::Open(goal), other) if goal == goal_var => {
-                                    Some(self.unify_row_rowset(other, right_var, &right_rows))
-                                }
-                                _ => None,
-                            });
-
-                    let left_unification = match opt_left_unification {
-                        Some(res) => res,
-                        None => self.unify_var_combineinto(
-                            left_var,
-                            CombineInto {
-                                other: Row::Open(right_var),
-                                goal: Row::Open(goal_var),
-                            },
-                        ),
-                    };
-
-                    let () = match left_unification {
-                        Ok(_) => (),
-                        Err(err) => return Err(err),
-                    };
+                    left_rows
+                        .comps_iter()
+                        .find_map(|combo| match (combo.goal, combo.other) {
+                            (goal, Row::Open(other)) if other == right_var => {
+                                Some(self.unify_row_rowset(goal, goal_var, &goal_rows))
+                            }
+                            (Row::Open(goal), other) if goal == goal_var => {
+                                Some(self.unify_row_rowset(other, right_var, &right_rows))
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_combineinto(
+                                left_var,
+                                CombineInto {
+                                    other: Row::Open(right_var),
+                                    goal: Row::Open(goal_var),
+                                },
+                            )
+                        })?;
 
                     right_rows
                         .comps_iter()
@@ -1352,20 +1294,21 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                             )
                         })?;
 
-                    let opt_unification = goal_rows.goals_iter().find_map(|orxr| {
-                        self.find_unify_open_open_orxr(
-                            orxr,
-                            (left_var, &left_rows),
-                            (right_var, &right_rows),
-                        )
-                    });
-                    match opt_unification {
-                        Some(res) => res,
-                        None => self.unify_var_orderedrowxorrow(
-                            goal_var,
-                            OrderedRowXorRow::with_open_open(left_var, right_var),
-                        ),
-                    }
+                    goal_rows
+                        .goals_iter()
+                        .find_map(|orxr| {
+                            self.find_unify_open_open_orxr(
+                                orxr,
+                                (left_var, &left_rows),
+                                (right_var, &right_rows),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            self.unify_var_orderedrowxorrow(
+                                goal_var,
+                                OrderedRowXorRow::with_open_open(left_var, right_var),
+                            )
+                        })
                 }
             },
         }
@@ -1385,18 +1328,27 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                     let row = self.mk_ty(RowTy(self.mk_row(&fields, &values)));
                     self.unify_var_ty(goal_var, row)
                 }
-                (left @ Row::Open(left_var), right @ Row::Closed(_)) => {
-                    self.unify_var_partialrow(left_var, PartialRow::OpenLeft { goal, right })?;
-                    self.unify_var_partialrow(goal_var, PartialRow::OpenGoal { left, right })
+                (Row::Open(left_var), right @ Row::Closed(right_row)) => {
+                    self.unify_var_rowset(left_var, CombineInto { goal, other: right })?;
+                    self.unify_var_rowset(
+                        goal_var,
+                        OrderedRowXorRow::ClosedOpen(right_row, left_var),
+                    )
                 }
-                (left @ Row::Closed(_), right @ Row::Open(right_var)) => {
-                    self.unify_var_partialrow(right_var, PartialRow::OpenRight { goal, left })?;
-                    self.unify_var_partialrow(goal_var, PartialRow::OpenGoal { left, right })
+                (left @ Row::Closed(left_row), Row::Open(right_var)) => {
+                    self.unify_var_rowset(right_var, CombineInto { goal, other: left })?;
+                    self.unify_var_rowset(
+                        goal_var,
+                        OrderedRowXorRow::ClosedOpen(left_row, right_var),
+                    )
                 }
                 (left @ Row::Open(left_var), right @ Row::Open(right_var)) => {
-                    self.unify_var_partialrow(left_var, PartialRow::OpenLeft { goal, right })?;
-                    self.unify_var_partialrow(right_var, PartialRow::OpenRight { goal, left })?;
-                    self.unify_var_partialrow(goal_var, PartialRow::OpenGoal { left, right })
+                    self.unify_var_rowset(left_var, CombineInto { goal, other: right })?;
+                    self.unify_var_rowset(right_var, CombineInto { goal, other: left })?;
+                    self.unify_var_rowset(
+                        goal_var,
+                        OrderedRowXorRow::with_open_open(left_var, right_var),
+                    )
                 }
             },
             Row::Closed(goal_row) => match (left, right) {
@@ -1420,8 +1372,8 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
                 // We can't unify this case as is, we need more information.
                 // And our goal is closed so we can't set it to pending
                 (Row::Open(left_var), Row::Open(right_var)) => {
-                    self.unify_var_partialrow(left_var, PartialRow::OpenLeft { goal, right })?;
-                    self.unify_var_partialrow(right_var, PartialRow::OpenRight { goal, left })
+                    self.unify_var_rowset(left_var, CombineInto { goal, other: right })?;
+                    self.unify_var_rowset(right_var, CombineInto { goal, other: left })
                 }
             },
         }
@@ -1583,6 +1535,26 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
         }
     }
 
+    pub(crate) fn find_unify_open_closed_combineinto(
+        &mut self,
+        combo: &CombineInto<'infer, TcUnifierVar<'infer>>,
+        (goal_var, goal_rows): (TcUnifierVar<'infer>, &RowSet<'infer, TcUnifierVar<'infer>>),
+        other_row: ClosedRow<'infer, TcUnifierVar<'infer>>,
+    ) -> Option<Result<(), TypeCheckError<'infer>>> {
+        match (combo.goal, combo.other) {
+            (Row::Open(goal), other) if goal_var == goal => Some(match other {
+                Row::Open(var) => {
+                    self.unify_ty_ty(self.mk_ty(VarTy(var)), self.mk_ty(RowTy(other_row)))
+                }
+                Row::Closed(row) => self.unify_closedrow_closedrow(row, other_row),
+            }),
+            (goal, Row::Closed(other)) if other.fields == other_row.fields => Some(
+                self.unify_closedrow_closedrow(other, other_row)
+                    .and_then(|()| self.unify_row_rowset(goal, goal_var, goal_rows)),
+            ),
+            _ => None,
+        }
+    }
     pub(crate) fn find_unify_closed_open_combineinto(
         &mut self,
         combo: &CombineInto<'infer, TcUnifierVar<'infer>>,
@@ -1797,7 +1769,7 @@ where
 
     let ev = collect_evidence(&mut zonker);
 
-    print_root_unifiers(&mut zonker.unifiers);
+    print_root_unifiers(zonker.unifiers);
 
     let scheme = TyScheme {
         bound: zonker

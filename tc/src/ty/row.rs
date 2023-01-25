@@ -221,7 +221,7 @@ impl<'ctx, TV> From<TV> for Row<'ctx, TV> {
         Row::Open(var)
     }
 }
-impl<'ctx, TV> Row<'ctx, TV> {
+impl<'ctx, TV: Copy> Row<'ctx, TV> {
     pub fn to_ty<I: MkTy<'ctx, TV>>(self, ctx: &I) -> Ty<'ctx, TV> {
         match self {
             Row::Open(var) => ctx.mk_ty(TypeKind::VarTy(var)),
@@ -247,11 +247,11 @@ impl<'ctx> UnifyValue for InferRow<'ctx> {
                 Ok(Row::Open(std::cmp::min(*left_var, *right_var)))
             }
             // Prefer the more solved row if possible
-            (Row::Open(_), Row::Closed(_)) => Ok(right.clone()),
-            (Row::Closed(_), Row::Open(_)) => Ok(left.clone()),
+            (Row::Open(_), Row::Closed(_)) => Ok(*right),
+            (Row::Closed(_), Row::Open(_)) => Ok(*left),
             (Row::Closed(left_row), Row::Closed(right_row)) => (left_row == right_row)
-                .then(|| left.clone())
-                .ok_or_else(|| TypeCheckError::RowsNotEqual(*left, *right)),
+                .then(|| *left)
+                .ok_or(TypeCheckError::RowsNotEqual(*left, *right)),
         }
     }
 }
@@ -270,53 +270,9 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Row<'_, TV> {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
-pub enum PartialRow<'ctx, TV> {
-    /// This row represents the goal of a RowCombine constraint
-    OpenGoal {
-        left: Row<'ctx, TV>,
-        right: Row<'ctx, TV>,
-    },
-    /// This row represents the left subrow of a RowCombine constraint
-    OpenLeft {
-        goal: Row<'ctx, TV>,
-        right: Row<'ctx, TV>,
-    },
-    /// This row represents the right subrow of a RowCombine constraint
-    OpenRight {
-        goal: Row<'ctx, TV>,
-        left: Row<'ctx, TV>,
-    },
-}
-
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for PartialRow<'_, TV> {
-    type TypeVar = TV;
-    type Out<T: 'ctx> = PartialRow<'ctx, T>;
-
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
-        match self {
-            PartialRow::OpenGoal { left, right } => {
-                let left = left.try_fold_with(fold)?;
-                let right = right.try_fold_with(fold)?;
-                Ok(PartialRow::OpenGoal { left, right })
-            }
-            PartialRow::OpenLeft { goal, right } => {
-                let goal = goal.try_fold_with(fold)?;
-                let right = right.try_fold_with(fold)?;
-                Ok(PartialRow::OpenLeft { goal, right })
-            }
-            PartialRow::OpenRight { goal, left } => {
-                let goal = goal.try_fold_with(fold)?;
-                let left = left.try_fold_with(fold)?;
-                Ok(PartialRow::OpenRight { goal, left })
-            }
-        }
-    }
-}
-
+/// Represents the value of a unification variable that is the component of a row combination.
+/// If this is the value in the unification table for row variable uv, then we can imagine it forms
+/// the row combination `uv * other ~ goal`
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub(crate) struct CombineInto<'ctx, TV> {
     pub(crate) other: Row<'ctx, TV>,
@@ -354,7 +310,7 @@ impl<'ctx, TV> OrderedRowXorRow<'ctx, TV> {
     where
         TV: Ord,
     {
-        debug_assert!(l < r || r > l, "Expected l != r in OpenOpen variant");
+        debug_assert!(l != r, "Expected l != r in OpenOpen variant");
         if l < r {
             Self::OpenOpen { min: l, max: r }
         } else {
@@ -362,10 +318,10 @@ impl<'ctx, TV> OrderedRowXorRow<'ctx, TV> {
         }
     }
 }
-impl<'ctx, TV> Into<(Row<'ctx, TV>, Row<'ctx, TV>)> for OrderedRowXorRow<'ctx, TV> {
-    fn into(self) -> (Row<'ctx, TV>, Row<'ctx, TV>) {
-        match self {
-            OrderedRowXorRow::ClosedOpen(row, tv) => (Row::Closed(row), Row::Open(tv)),
+impl<'ctx, TV> From<OrderedRowXorRow<'ctx, TV>> for (Row<'ctx, TV>, Row<'ctx, TV>) {
+    fn from(val: OrderedRowXorRow<'ctx, TV>) -> Self {
+        match val {
+            OrderedRowXorRow::ClosedOpen(row, var) => (Row::Closed(row), Row::Open(var)),
             OrderedRowXorRow::OpenOpen { min, max } => (Row::Open(min), Row::Open(max)),
         }
     }
@@ -416,21 +372,21 @@ impl<'ctx, TV, OR> Default for RowSet<'ctx, TV, OR> {
         }
     }
 }
-impl<'ctx, TV> Into<RowSet<'ctx, TV, (Row<'ctx, TV>, Row<'ctx, TV>)>> for RowSet<'ctx, TV> {
-    fn into(self) -> RowSet<'ctx, TV, (Row<'ctx, TV>, Row<'ctx, TV>)> {
+impl<'ctx, TV> From<RowSet<'ctx, TV>> for RowSet<'ctx, TV, (Row<'ctx, TV>, Row<'ctx, TV>)> {
+    fn from(val: RowSet<'ctx, TV>) -> Self {
         RowSet {
-            goals: self.goals.into_iter().map(|a| a.into()).collect(),
-            comps: self.comps,
+            goals: val.goals.into_iter().map(|a| a.into()).collect(),
+            comps: val.comps,
         }
     }
 }
 
 impl<'ctx, TV, OR> RowSet<'ctx, TV, OR> {
-    pub(crate) fn goals_iter<'a>(&'a self) -> impl Iterator<Item = &'a OR> {
+    pub(crate) fn goals_iter(&self) -> impl Iterator<Item = &'_ OR> {
         self.goals.iter()
     }
 
-    pub(crate) fn comps_iter<'a>(&'a self) -> impl Iterator<Item = &'a CombineInto<'ctx, TV>> {
+    pub(crate) fn comps_iter(&self) -> impl Iterator<Item = &'_ CombineInto<'ctx, TV>> {
         self.comps.iter()
     }
 }
@@ -448,27 +404,6 @@ impl<'ctx, TV> From<CombineInto<'ctx, TV>> for RowSet<'ctx, TV> {
         Self {
             goals: vec![],
             comps: vec![val],
-        }
-    }
-}
-impl<'ctx, TV: Ord> From<PartialRow<'ctx, TV>> for RowSet<'ctx, TV> {
-    fn from(partial: PartialRow<'ctx, TV>) -> Self {
-        match partial {
-            PartialRow::OpenGoal { left, right } => match (left, right) {
-                (Row::Open(left_var), Row::Open(right_var)) => {
-                    RowSet::from(OrderedRowXorRow::with_open_open(left_var, right_var))
-                }
-                (Row::Open(tv), Row::Closed(row)) | (Row::Closed(row), Row::Open(tv)) => {
-                    RowSet::from(OrderedRowXorRow::ClosedOpen(row, tv))
-                }
-                (Row::Closed(_), Row::Closed(_)) => {
-                    panic!("PartialRow of two closed Rows constructed, this should not be allowed")
-                }
-            },
-            PartialRow::OpenLeft { goal, right } => {
-                RowSet::from(CombineInto { goal, other: right })
-            }
-            PartialRow::OpenRight { goal, left } => RowSet::from(CombineInto { goal, other: left }),
         }
     }
 }

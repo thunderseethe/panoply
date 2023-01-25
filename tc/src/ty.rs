@@ -166,9 +166,9 @@ pub type InferTy<'ctx> = Ty<'ctx, TcUnifierVar<'ctx>>;
 
 impl<'ctx> EqUnifyValue for Ty<'ctx, TcUnifierVar<'ctx>> {}
 
-impl<'ty, TV> Into<Ty<'ty, TV>> for RefHandle<'ty, TypeKind<'ty, TV>> {
-    fn into(self) -> Ty<'ty, TV> {
-        Ty(self)
+impl<'ty, TV> From<RefHandle<'ty, TypeKind<'ty, TV>>> for Ty<'ty, TV> {
+    fn from(handle: RefHandle<'ty, TypeKind<'ty, TV>>) -> Self {
+        Ty(handle)
     }
 }
 
