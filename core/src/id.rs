@@ -214,4 +214,11 @@ pub EffectOpId;
 /// An ID for a local variable. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub VarId;
+
+/// A type variable. Unique within a type scheme.
+/// These are explicity referred to by the AST and can persist through type checking (unlike
+/// unification variables). They may not be modified by the type checking process, often
+/// referred to as untouchabale.k
+#[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub TyVarId;
 );

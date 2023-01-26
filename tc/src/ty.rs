@@ -1,7 +1,7 @@
 use std::fmt::{self, Debug};
 use std::ops::Deref;
 
-use aiahr_core::define_ids;
+use aiahr_core::id::TyVarId;
 use aiahr_core::memory::handle::RefHandle;
 
 use ena::unify::{EqUnifyValue, UnifyKey};
@@ -14,13 +14,13 @@ use fold::*;
 
 use crate::Candidate;
 
-define_ids!(
+/*define_ids!(
 /// A type variable.
 /// These are explicity referred to by the AST and can persist through type checking.
 /// They may not be modified by the type checking process, often referred to as untouchabale.
 #[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub TcVar;
-);
+);*/
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct UnifierToTcVarError {
@@ -31,7 +31,7 @@ pub struct TcVarToUnifierError {
     index: u32,
 }
 
-impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
+impl<'infer> TryFrom<TcUnifierVar<'infer>> for TyVarId {
     type Error = UnifierToTcVarError;
 
     fn try_from(value: TcUnifierVar<'infer>) -> Result<Self, Self::Error> {
@@ -41,10 +41,10 @@ impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
     }
 }
 
-impl<'infer> TryFrom<TcVar> for TcUnifierVar<'infer> {
+impl<'infer> TryFrom<TyVarId> for TcUnifierVar<'infer> {
     type Error = TcVarToUnifierError;
 
-    fn try_from(value: TcVar) -> Result<Self, Self::Error> {
+    fn try_from(value: TyVarId) -> Result<Self, Self::Error> {
         Err(TcVarToUnifierError {
             index: value.0 as u32,
         })

@@ -1,6 +1,6 @@
 use aiahr_core::{
     ast::{Ast, Direction, Term, Term::*},
-    id::{EffectId, EffectOpId, Id, ItemId, ModuleId, VarId},
+    id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     memory::handle::{Handle, RefHandle},
 };
 use bumpalo::Bump;
@@ -811,7 +811,7 @@ where
         }
     }
 
-    fn instantiate(&mut self, ty_scheme: TyScheme<'_, TcVar>) -> InferResult<'infer> {
+    fn instantiate(&mut self, ty_scheme: TyScheme<'_, TyVarId>) -> InferResult<'infer> {
         let mut inst = Instantiate {
             ctx: self.ctx,
             unifiers: ty_scheme
@@ -1704,7 +1704,7 @@ impl<'infer, I> FallibleTypeFold<'infer> for Instantiate<'_, 'infer, I>
 where
     I: MkTy<'infer, TcUnifierVar<'infer>>,
 {
-    type InTypeVar = TcVar;
+    type InTypeVar = TyVarId;
     type TypeVar = TcUnifierVar<'infer>;
     type Error = TcVarToUnifierError;
 
@@ -1733,13 +1733,13 @@ where
 /// If a unification variable has no solution, we replace it by a fresh type variable and record it
 /// as free.
 pub struct Zonker<'a, 'ctx, 'infer> {
-    ctx: &'a dyn MkTy<'ctx, TcVar>,
+    ctx: &'a dyn MkTy<'ctx, TyVarId>,
     unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer>>,
     free_vars: Vec<TcUnifierVar<'infer>>,
 }
 
 impl<'a, 'ctx, 'infer> Zonker<'a, 'ctx, 'infer> {
-    fn add(&mut self, var: TcUnifierVar<'infer>) -> TcVar {
+    fn add(&mut self, var: TcUnifierVar<'infer>) -> TyVarId {
         // Find the root unification variable and return a type varaible representing that
         // root.
         let root = self.unifiers.find(var);
@@ -1753,13 +1753,13 @@ impl<'a, 'ctx, 'infer> Zonker<'a, 'ctx, 'infer> {
                 self.free_vars.push(var);
                 next_index
             });
-        TcVar::from_raw(var_indx)
+        TyVarId::from_raw(var_indx)
     }
 }
 
 impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
     type Error = UnifierToTcVarError;
-    type TypeVar = TcVar;
+    type TypeVar = TyVarId;
     type InTypeVar = TcUnifierVar<'infer>;
 
     fn ctx(&self) -> &dyn MkTy<'ctx, Self::TypeVar> {
@@ -1806,7 +1806,7 @@ pub trait EffectInfo<'s, 'ctx> {
     /// Reverse index lookup, find an effect's ID from one of it's operation
     fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId;
     /// Lookup the type signature of an effect's member
-    fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TcVar>;
+    fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId>;
     /// Lookup the name of an effect's member
     fn effect_member_name(&self, eff: EffectId, member: EffectOpId) -> RefHandle<'s, str>;
 }
@@ -1817,12 +1817,12 @@ pub fn type_check<'ty, 'infer, 's, 'eff, I, II, E>(
     eff_info: &E,
     ast: Ast<'_, VarId>,
 ) -> (
-    FxHashMap<VarId, Ty<'ty, TcVar>>,
-    TyScheme<'ty, TcVar>,
+    FxHashMap<VarId, Ty<'ty, TyVarId>>,
+    TyScheme<'ty, TyVarId>,
     Vec<TypeCheckError<'infer>>,
 )
 where
-    I: MkTy<'ty, TcVar>,
+    I: MkTy<'ty, TyVarId>,
     II: MkTy<'infer, TcUnifierVar<'infer>>,
     E: EffectInfo<'s, 'eff>,
 {
@@ -1835,12 +1835,12 @@ fn tc_term<'ty, 'infer, 's, 'eff, I, II, E>(
     eff_info: &E,
     term: &'_ Term<'_, VarId>,
 ) -> (
-    FxHashMap<VarId, Ty<'ty, TcVar>>,
-    TyScheme<'ty, TcVar>,
+    FxHashMap<VarId, Ty<'ty, TyVarId>>,
+    TyScheme<'ty, TyVarId>,
     Vec<TypeCheckError<'infer>>,
 )
 where
-    I: MkTy<'ty, TcVar>,
+    I: MkTy<'ty, TyVarId>,
     II: MkTy<'infer, TcUnifierVar<'infer>>,
     E: EffectInfo<'s, 'eff>,
 {
@@ -1873,7 +1873,7 @@ where
             .free_vars
             .into_iter()
             .enumerate()
-            .map(|(i, _)| TcVar::from_raw(i))
+            .map(|(i, _)| TyVarId::from_raw(i))
             .collect(),
         constrs: ev.into_iter().collect(),
         eff: zonked_infer.eff,
@@ -1884,7 +1884,7 @@ where
 
 fn collect_evidence<'ctx, 'infer>(
     zonker: &mut Zonker<'_, 'ctx, 'infer>,
-) -> Vec<Evidence<'ctx, TcVar>> {
+) -> Vec<Evidence<'ctx, TyVarId>> {
     let mut evidence = FxHashSet::default();
 
     for unifier in (0..zonker.unifiers.len() as u32).map(TcUnifierVar::from_index) {
@@ -2196,6 +2196,7 @@ mod tests {
     use std::vec;
 
     use aiahr_core::ast::Ast;
+    use aiahr_core::id::TyVarId;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
 
@@ -2359,13 +2360,13 @@ mod tests {
             &self,
             _eff: EffectId,
             member: EffectOpId,
-        ) -> TyScheme<'static, TcVar> {
+        ) -> TyScheme<'static, TyVarId> {
             match member.0 {
                 // get: forall 0 . {} -{0}-> Int
                 0 => TyScheme {
-                    bound: vec![TcVar(0)],
+                    bound: vec![TyVarId(0)],
                     constrs: vec![],
-                    eff: Row::Open(TcVar(0)),
+                    eff: Row::Open(TyVarId(0)),
                     ty: Ty(Handle(&FunTy(
                         Ty(Handle(&RowTy(ClosedRow {
                             fields: Handle(&[]),
@@ -2376,9 +2377,9 @@ mod tests {
                 },
                 // put: forall 0 . Int -{0}-> {}
                 1 => TyScheme {
-                    bound: vec![TcVar(0)],
+                    bound: vec![TyVarId(0)],
                     constrs: vec![],
-                    eff: Row::Open(TcVar(0)),
+                    eff: Row::Open(TyVarId(0)),
                     ty: Ty(Handle(&FunTy(
                         Ty(Handle(&IntTy)),
                         Ty(Handle(&RowTy(ClosedRow {
@@ -2389,15 +2390,15 @@ mod tests {
                 },
                 // ask: forall 0 1. {} -{0}-> 1
                 2 => TyScheme {
-                    bound: vec![TcVar(0), TcVar(1)],
+                    bound: vec![TyVarId(0), TyVarId(1)],
                     constrs: vec![],
-                    eff: Row::Open(TcVar(0)),
+                    eff: Row::Open(TyVarId(0)),
                     ty: Ty(Handle(&FunTy(
                         Ty(Handle(&RowTy(ClosedRow {
                             fields: Handle(&[]),
                             values: Handle(&[]),
                         }))),
-                        Ty(Handle(&VarTy(TcVar(1)))),
+                        Ty(Handle(&VarTy(TyVarId(1)))),
                     ))),
                 },
                 _ => unimplemented!(),
@@ -2436,7 +2437,7 @@ mod tests {
 
         assert_matches!(
             scheme.ty,
-            ty!(FunTy(ty!(VarTy(TcVar(0))), ty!(VarTy(TcVar(0)))))
+            ty!(FunTy(ty!(VarTy(TyVarId(0))), ty!(VarTy(TyVarId(0)))))
         );
     }
 
@@ -2481,10 +2482,10 @@ mod tests {
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
-                ty!(VarTy(TcVar(0))),
+                ty!(VarTy(TyVarId(0))),
                 ty!(RowTy(ClosedRow {
                     fields: Handle(&[Handle("start")]),
-                    values: Handle(&[ty!(VarTy(TcVar(0)))])
+                    values: Handle(&[ty!(VarTy(TyVarId(0)))])
                 })),
             ))
         );
@@ -2504,13 +2505,13 @@ mod tests {
 
         let (var_to_tys, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
 
-        assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TcVar(0)))));
-        assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TcVar(1)))));
+        assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TyVarId(0)))));
+        assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TyVarId(1)))));
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
-                ty!(VarTy(TcVar(0))),
-                ty!(FunTy(ty!(VarTy(TcVar(1))), ty!(VarTy(TcVar(0))),)),
+                ty!(VarTy(TyVarId(0))),
+                ty!(FunTy(ty!(VarTy(TyVarId(1))), ty!(VarTy(TyVarId(0))),)),
             ))
         );
     }
@@ -2538,9 +2539,9 @@ mod tests {
             ty!(FunTy(
                 ty!(SumTy(Row::Closed(row!(
                     ["false", "true"],
-                    [ty!(VarTy(TcVar(0))), ty!(VarTy(TcVar(0)))]
+                    [ty!(VarTy(TyVarId(0))), ty!(VarTy(TyVarId(0)))]
                 )))),
-                ty!(VarTy(TcVar(0)))
+                ty!(VarTy(TyVarId(0)))
             ))
         );
     }
@@ -2574,14 +2575,14 @@ mod tests {
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
-                ty!(VarTy(TcVar(0))),
+                ty!(VarTy(TyVarId(0))),
                 ty!(ProdTy(Row::Closed(row!(
                     ["a", "b", "c", "d"],
                     [
-                        ty!(VarTy(TcVar(0))),
-                        ty!(VarTy(TcVar(0))),
-                        ty!(VarTy(TcVar(0))),
-                        ty!(VarTy(TcVar(0)))
+                        ty!(VarTy(TyVarId(0))),
+                        ty!(VarTy(TyVarId(0))),
+                        ty!(VarTy(TyVarId(0))),
+                        ty!(VarTy(TyVarId(0)))
                     ]
                 ))))
             ))
@@ -2613,14 +2614,14 @@ mod tests {
             scheme.constrs,
             [
                 Evidence::Row {
-                    left: Row::Closed(row!(["x"], [ty!(VarTy(TcVar(2)))])),
+                    left: Row::Closed(row!(["x"], [ty!(VarTy(TyVarId(2)))])),
                     right: Row::Open(_),
-                    goal: Row::Open(TcVar(3))
+                    goal: Row::Open(TyVarId(3))
                 },
                 Evidence::Row {
                     left: Row::Open(_),
                     right: Row::Open(_),
-                    goal: Row::Open(TcVar(3))
+                    goal: Row::Open(TyVarId(3))
                 }
             ]
         );
@@ -2628,7 +2629,7 @@ mod tests {
             scheme.ty,
             ty!(FunTy(
                 ty!(ProdTy(Row::Open(_))),
-                ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!(VarTy(TcVar(2)))))
+                ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!(VarTy(TyVarId(2)))))
             ))
         )
     }
