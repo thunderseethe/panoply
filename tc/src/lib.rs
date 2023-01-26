@@ -448,7 +448,7 @@ where
                 // our term type
                 self._check(var_tys, eff_info, term, expected.with_ty(row.values[0]))
             }
-            (Unit, ty_pat!({})) => self.constraints.add_ty_eq(
+            (Unit, ty_pat!({})) | (Int(_), IntTy) => self.constraints.add_ty_eq(
                 expected.eff.to_ty(self),
                 Row::Closed(self.empty_row()).to_ty(self),
             ),
@@ -670,9 +670,10 @@ where
 
                 InferResult::new(
                     sig.ty,
-                    Row::Closed(
-                        self.single_row(&eff_info.effect_name(eff_id), self.empty_row_ty()),
-                    ),
+                    Row::Closed(self.single_row(
+                        &eff_info.effect_name(eff_id),
+                        self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
+                    )),
                 )
             }
             Term::Handle { eff, handler, body } => {
@@ -716,6 +717,7 @@ where
             }
             // TODOs
             Item(_) => todo!(),
+            Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_row())),
         }
     }
 
@@ -2112,6 +2114,12 @@ mod tests {
         fn mk_unlabel(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_concat(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_project(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
+        fn mk_handler(
+            &'a self,
+            eff: EffectId,
+            handler: Term<'a, Var>,
+            body: Term<'a, Var>,
+        ) -> Term<'a, Var>;
 
         fn mk_abss<II>(&'a self, args: II, body: Term<'a, Var>) -> Term<'a, Var>
         where
@@ -2165,41 +2173,107 @@ mod tests {
                 term: self.alloc(term),
             }
         }
+
+        fn mk_handler(
+            &'a self,
+            eff: EffectId,
+            handler: Term<'a, Var>,
+            body: Term<'a, Var>,
+        ) -> Term<'a, Var> {
+            Term::Handle {
+                eff,
+                handler: self.alloc(handler),
+                body: self.alloc(body),
+            }
+        }
     }
 
     struct DummyEff;
     impl EffectInfo<'static, 'static> for DummyEff {
-        fn effect_name(&self, _eff: EffectId) -> RefHandle<'static, str> {
-            Handle("")
+        fn effect_name(&self, eff: EffectId) -> RefHandle<'static, str> {
+            match eff.0 {
+                0 => Handle("State"),
+                1 => Handle("Reader"),
+                _ => unimplemented!(),
+            }
         }
 
-        fn effect_members(&self, _eff: EffectId) -> RefHandle<'static, [EffectOpId]> {
-            Handle(&[])
+        fn effect_members(&self, eff: EffectId) -> RefHandle<'static, [EffectOpId]> {
+            match eff.0 {
+                0 => Handle(&[EffectOpId(0), EffectOpId(1)]),
+                1 => Handle(&[EffectOpId(2)]),
+                _ => unimplemented!(),
+            }
         }
 
-        fn lookup_effect_by_member(&self, _member: EffectOpId) -> EffectId {
-            EffectId(0)
+        fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId {
+            match member.0 {
+                0 | 1 => EffectId(0),
+                2 => EffectId(1),
+                _ => unimplemented!(),
+            }
         }
 
         fn effect_member_sig(
             &self,
             _eff: EffectId,
-            _member: EffectOpId,
+            member: EffectOpId,
         ) -> TyScheme<'static, TcVar> {
-            TyScheme {
-                bound: vec![],
-                constrs: vec![],
-                eff: Row::Open(TcVar(0)),
-                ty: Ty(Handle(&VarTy(TcVar(1)))),
+            match member.0 {
+                // get: forall 0 . {} -{0}-> Int
+                0 => TyScheme {
+                    bound: vec![TcVar(0)],
+                    constrs: vec![],
+                    eff: Row::Open(TcVar(0)),
+                    ty: Ty(Handle(&FunTy(
+                        Ty(Handle(&RowTy(ClosedRow {
+                            fields: Handle(&[]),
+                            values: Handle(&[]),
+                        }))),
+                        Ty(Handle(&IntTy)),
+                    ))),
+                },
+                // put: forall 0 . Int -{0}-> {}
+                1 => TyScheme {
+                    bound: vec![TcVar(0)],
+                    constrs: vec![],
+                    eff: Row::Open(TcVar(0)),
+                    ty: Ty(Handle(&FunTy(
+                        Ty(Handle(&IntTy)),
+                        Ty(Handle(&RowTy(ClosedRow {
+                            fields: Handle(&[]),
+                            values: Handle(&[]),
+                        }))),
+                    ))),
+                },
+                // ask: forall 0 1. {} -{0}-> 1
+                2 => TyScheme {
+                    bound: vec![TcVar(0), TcVar(1)],
+                    constrs: vec![],
+                    eff: Row::Open(TcVar(0)),
+                    ty: Ty(Handle(&FunTy(
+                        Ty(Handle(&RowTy(ClosedRow {
+                            fields: Handle(&[]),
+                            values: Handle(&[]),
+                        }))),
+                        Ty(Handle(&VarTy(TcVar(1)))),
+                    ))),
+                },
+                _ => unimplemented!(),
             }
         }
 
         fn effect_member_name(
             &self,
             _eff: EffectId,
-            _member: EffectOpId,
+            member: EffectOpId,
         ) -> RefHandle<'static, str> {
-            Handle("")
+            match member.0 {
+                0 => Handle("get"),
+                1 => Handle("put"),
+                2 => Handle("ask"),
+                _ => unimplemented!(),
+            }
         }
     }
 
@@ -2425,6 +2499,63 @@ mod tests {
         );
 
         assert_matches!(scheme.ty, ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!({}))))
+    }
+
+    #[test]
+    fn test_tc_eff_operation_infers_correct_effect() {
+        let arena = Bump::new();
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(arena.mk_app(Operation(EffectOpId(0)), Unit)),
+        );
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
+
+        let (_var_to_tys, scheme, _) =
+            type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+
+        assert_matches!(scheme.eff, Row::Closed(row!(["State"], [ty!(ty_pat!({}))])));
+        assert_matches!(scheme.ty, ty!(IntTy))
+    }
+
+    #[test]
+    fn test_tc_eff_handler_removes_correct_effect() {
+        let arena = Bump::new();
+        let handler = arena.mk_concat(
+            arena.mk_concat(
+                arena.mk_label("get", arena.mk_abs(VarId(0), Int(3))),
+                arena.mk_label("put", arena.mk_abs(VarId(1), Unit)),
+            ),
+            arena.mk_label("return", arena.mk_abs(VarId(2), Variable(VarId(2)))),
+        );
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(arena.mk_handler(
+                EffectId(0),
+                handler,
+                arena.mk_app(
+                    Operation(EffectOpId(1)),
+                    arena.mk_app(Operation(EffectOpId(2)), Unit),
+                ),
+            )),
+        );
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
+
+        let (_var_to_tys, scheme, _) =
+            type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+
+        assert_matches!(
+            scheme.eff,
+            Row::Closed(row!(["Reader"], [ty!(ty_pat!({}))]))
+        );
+        assert_matches!(
+            scheme.ty,
+            ty!(RowTy(ClosedRow {
+                fields: Handle(&[]),
+                values: Handle(&[])
+            }))
+        )
     }
 
     #[test]

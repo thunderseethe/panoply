@@ -57,6 +57,7 @@ pub enum Term<'a, Var> {
     },
     // A local variable binding
     Variable(Var),
+    Int(usize),
     // A global variable binding
     Item((ModuleId, ItemId)),
     // A unit value
@@ -137,6 +138,7 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
                 self.stack.extend([handler, body]);
                 self.next()
             }
+            Term::Int(_) => self.next(),
         })
     }
 }

@@ -1,5 +1,5 @@
 use aiahr_core::memory::handle::RefHandle;
-use ena::unify::UnifyValue;
+use ena::unify::{EqUnifyValue, UnifyValue};
 
 use crate::TypeCheckError;
 
@@ -26,6 +26,7 @@ pub struct ClosedRow<'ctx, TV> {
     pub fields: RefHandle<'ctx, [RowLabel<'ctx>]>,
     pub values: RefHandle<'ctx, [Ty<'ctx, TV>]>,
 }
+impl<'ctx, TV: Debug> EqUnifyValue for ClosedRow<'ctx, TV> {}
 impl<'ctx, TV> PartialEq for ClosedRow<'ctx, TV> {
     fn eq(&self, other: &Self) -> bool {
         self.fields == other.fields && self.values == other.values
@@ -300,10 +301,40 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for CombineInto<'_, TV> {
 ///
 ///  2. We can store at most one closed row. Two closed rows is considered invalid, unlike if we
 ///     stored a `(Row<'ctx, TV>, Row<'ctx, TV>)`).
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug, PartialOrd, Ord)]
 pub enum OrderedRowXorRow<'ctx, TV> {
     ClosedOpen(ClosedRow<'ctx, TV>, TV),
     OpenOpen { min: TV, max: TV },
+}
+impl<'ctx, TV: Copy + Debug + Ord> UnifyValue for OrderedRowXorRow<'ctx, TV> {
+    type Error = (Self, Self);
+
+    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
+        Ok(match (left, right) {
+            (
+                OrderedRowXorRow::ClosedOpen(left_row, left_var),
+                OrderedRowXorRow::ClosedOpen(right_row, right_var),
+            ) => OrderedRowXorRow::ClosedOpen(
+                ClosedRow::unify_values(left_row, right_row).map_err(|_| (*left, *right))?,
+                std::cmp::min(*left_var, *right_var),
+            ),
+            (OrderedRowXorRow::ClosedOpen(_, _), OrderedRowXorRow::OpenOpen { .. }) => *left,
+            (OrderedRowXorRow::OpenOpen { .. }, OrderedRowXorRow::ClosedOpen(_, _)) => *right,
+            (
+                OrderedRowXorRow::OpenOpen {
+                    min: left_min,
+                    max: left_max,
+                },
+                OrderedRowXorRow::OpenOpen {
+                    min: right_min,
+                    max: right_max,
+                },
+            ) => OrderedRowXorRow::with_open_open(
+                *std::cmp::min(left_min, right_min),
+                *std::cmp::min(left_max, right_max),
+            ),
+        })
+    }
 }
 impl<'ctx, TV> OrderedRowXorRow<'ctx, TV> {
     pub(crate) fn with_open_open(l: TV, r: TV) -> Self
