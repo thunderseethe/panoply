@@ -190,6 +190,8 @@ pub enum TypeKind<'ctx, TV> {
     FunTy(Ty<'ctx, TV>, Ty<'ctx, TV>),
     /// A product type. This is purely a wrapper type to coerce a row type to be a product.
     ProdTy(Row<'ctx, TV>),
+    /// A sum type. This is purely a wrapper type to coerce a row type to be a sum.
+    SumTy(Row<'ctx, TV>),
 }
 
 impl<'ty, TV: Clone> DefaultFold for Ty<'ty, TV> {
@@ -216,6 +218,10 @@ impl<'ty, TV: Clone> DefaultFold for Ty<'ty, TV> {
             TypeKind::ProdTy(row) => {
                 let row_ = row.clone().try_fold_with(fold)?;
                 Ok(fold.ctx().mk_ty(TypeKind::ProdTy(row_)))
+            }
+            TypeKind::SumTy(row) => {
+                let row_ = row.clone().try_fold_with(fold)?;
+                Ok(fold.ctx().mk_ty(TypeKind::SumTy(row_)))
             }
         }
     }

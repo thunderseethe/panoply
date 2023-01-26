@@ -425,6 +425,11 @@ where
                 // type
                 self._check(var_tys, eff_info, term, expected.with_ty(row.to_ty(self)))
             }
+            (Label { .. }, SumTy(row)) => {
+                // A label can check against a sum, if it checks against the sum's internal
+                // type
+                self._check(var_tys, eff_info, term, expected.with_ty(row.to_ty(self)))
+            }
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
                 if row.fields.len() != 1 {
@@ -467,15 +472,34 @@ where
             }
             (Concat { left, right }, ProdTy(row)) => {
                 let left_infer = self._infer(var_tys, eff_info, left);
-                let left_row = self.equate_as_row(left_infer.ty);
+                let left_row = self.equate_as_prod_row(left_infer.ty);
 
                 let right_infer = self._infer(var_tys, eff_info, right);
-                let right_row = self.equate_as_row(right_infer.ty);
+                let right_row = self.equate_as_prod_row(right_infer.ty);
 
                 // Check our expected effect is a combination of each components effects
                 self.constraints
                     .add_row_combine(left_infer.eff, right_infer.eff, expected.eff);
                 self.constraints.add_row_combine(left_row, right_row, row);
+            }
+            (Branch { left, right }, FunTy(arg, ret)) => {
+                let arg_row = self.equate_as_sum_row(arg);
+
+                let left_infer = self._infer(var_tys, eff_info, left);
+                let (left_arg, left_ret) = self.equate_as_fn_ty(left_infer.ty);
+                let left_row = self.equate_as_sum_row(left_arg);
+
+                let right_infer = self._infer(var_tys, eff_info, right);
+                let (right_arg, right_ret) = self.equate_as_fn_ty(right_infer.ty);
+                let right_row = self.equate_as_sum_row(right_arg);
+
+                self.constraints
+                    .add_row_combine(left_infer.eff, right_infer.eff, expected.eff);
+                self.constraints
+                    .add_row_combine(left_row, right_row, arg_row);
+                // All branch return types must be equal
+                self.constraints.add_ty_eq(left_ret, ret);
+                self.constraints.add_ty_eq(right_ret, ret);
             }
             (Project { .. }, RowTy(row)) => {
                 // Coerce row into a product and re-check.
@@ -488,7 +512,7 @@ where
             }
             (Project { direction, term }, ProdTy(row)) => {
                 let term_infer = self._infer(var_tys, eff_info, term);
-                let term_row = self.equate_as_row(term_infer.ty);
+                let term_row = self.equate_as_prod_row(term_infer.ty);
                 let unbound_row = self.fresh_row();
 
                 self.row_eq_constraint(expected.eff, term_infer.eff);
@@ -496,6 +520,28 @@ where
                     Direction::Left => self.constraints.add_row_combine(row, unbound_row, term_row),
                     Direction::Right => {
                         self.constraints.add_row_combine(unbound_row, row, term_row)
+                    }
+                };
+            }
+            (Inject { .. }, RowTy(row)) => {
+                // Coerce a row into a sum and re-check.
+                self._check(
+                    var_tys,
+                    eff_info,
+                    term,
+                    expected.with_ty(self.mk_ty(SumTy(Row::Closed(row)))),
+                );
+            }
+            (Inject { direction, term }, SumTy(row)) => {
+                let term_infer = self._infer(var_tys, eff_info, term);
+                let term_row = self.equate_as_prod_row(term_infer.ty);
+                let unbound_row = self.fresh_row();
+
+                self.row_eq_constraint(expected.eff, term_infer.eff);
+                match direction {
+                    Direction::Left => self.constraints.add_row_combine(term_row, unbound_row, row),
+                    Direction::Right => {
+                        self.constraints.add_row_combine(unbound_row, term_row, row)
                     }
                 };
             }
@@ -558,16 +604,7 @@ where
                 let fun_infer = self._infer(var_tys, eff_info, func);
                 // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
                 // for arg and ret type.
-                let (arg_ty, ret_ty) = match *fun_infer.ty {
-                    FunTy(arg_ty, ret_ty) => (arg_ty, ret_ty),
-                    _ => {
-                        let arg_ty = self.fresh_var();
-                        let ret_ty = self.fresh_var();
-                        self.constraints
-                            .add_ty_eq(fun_infer.ty, self.mk_ty(FunTy(arg_ty, ret_ty)));
-                        (arg_ty, ret_ty)
-                    }
-                };
+                let (arg_ty, ret_ty) = self.equate_as_fn_ty(fun_infer.ty);
 
                 let arg_eff = self.fresh_row();
                 self._check(var_tys, eff_info, arg, InferResult::new(arg_ty, arg_eff));
@@ -641,6 +678,37 @@ where
 
                 InferResult::new(self.mk_ty(ProdTy(out_row)), out_eff)
             }
+            Branch { left, right } => {
+                let left_row = self.fresh_row();
+                let left_eff = self.fresh_row();
+                let right_row = self.fresh_row();
+                let right_eff = self.fresh_row();
+                let out_row = self.fresh_row();
+                let out_eff = self.fresh_row();
+
+                let ret_ty = self.fresh_var();
+
+                let left_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret_ty));
+                let right_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret_ty));
+
+                self._check(var_tys, eff_info, left, InferResult::new(left_ty, left_eff));
+                self._check(
+                    var_tys,
+                    eff_info,
+                    right,
+                    InferResult::new(right_ty, right_eff),
+                );
+
+                self.constraints
+                    .add_row_combine(left_eff, right_eff, out_eff);
+                self.constraints
+                    .add_row_combine(left_row, right_row, out_row);
+
+                InferResult::new(
+                    self.mk_ty(FunTy(self.mk_ty(SumTy(out_row)), ret_ty)),
+                    out_eff,
+                )
+            }
             Project { direction, term } => {
                 let big_row = self.fresh_row();
                 let small_row = self.fresh_row();
@@ -663,6 +731,28 @@ where
                 };
 
                 InferResult::new(self.mk_ty(ProdTy(small_row)), eff)
+            }
+            Inject { direction, term } => {
+                let big_row = self.fresh_row();
+                let small_row = self.fresh_row();
+
+                let unbound_row = self.fresh_row();
+                let eff = self.fresh_row();
+                let term_ty = self.mk_ty(SumTy(small_row));
+                self._check(var_tys, eff_info, term, InferResult::new(term_ty, eff));
+
+                match direction {
+                    Direction::Left => {
+                        self.constraints
+                            .add_row_combine(small_row, unbound_row, big_row)
+                    }
+                    Direction::Right => {
+                        self.constraints
+                            .add_row_combine(unbound_row, small_row, big_row)
+                    }
+                };
+
+                InferResult::new(self.mk_ty(SumTy(big_row)), eff)
             }
             Operation(eff_op_id) => {
                 let eff_id = eff_info.lookup_effect_by_member(*eff_op_id);
@@ -743,12 +833,37 @@ where
         )
     }
 
+    pub(crate) fn equate_as_fn_ty(
+        &mut self,
+        ty: InferTy<'infer>,
+    ) -> (InferTy<'infer>, InferTy<'infer>) {
+        match *ty {
+            FunTy(arg, ret) => (arg, ret),
+            _ => {
+                let arg = self.fresh_var();
+                let ret = self.fresh_var();
+                self.constraints.add_ty_eq(ty, self.mk_ty(FunTy(arg, ret)));
+                (arg, ret)
+            }
+        }
+    }
     /// Make this type equal to a row and return that equivalent row.
     /// If it is already a row convert it directly, otherwise add a constraint that type must be a
     /// row.
-    pub(crate) fn equate_as_row(&mut self, ty: InferTy<'infer>) -> InferRow<'infer> {
+    pub(crate) fn equate_as_prod_row(&mut self, ty: InferTy<'infer>) -> InferRow<'infer> {
         match *ty {
             ProdTy(row) => row,
+            RowTy(row) => Row::Closed(row),
+            _ => {
+                let unifier = self.unifiers.new_key(None);
+                self.constraints.add_ty_eq(self.mk_ty(VarTy(unifier)), ty);
+                Row::Open(unifier)
+            }
+        }
+    }
+    pub(crate) fn equate_as_sum_row(&mut self, ty: InferTy<'infer>) -> InferRow<'infer> {
+        match *ty {
+            SumTy(row) => row,
             RowTy(row) => Row::Closed(row),
             _ => {
                 let unifier = self.unifiers.new_key(None);
@@ -972,6 +1087,14 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
             (_, VarTy(var)) => self.unify_var_ty(var, left),
             (VarTy(var), _) => self.unify_var_ty(var, right),
 
+            // Coerce a product into a row
+            (RowTy(_), ProdTy(right)) => self.unify_ty_ty(left, right.to_ty(self)),
+            (ProdTy(left), RowTy(_)) => self.unify_ty_ty(left.to_ty(self), right),
+
+            // Coerce a sum into a row
+            (RowTy(_), SumTy(right)) => self.unify_ty_ty(left, right.to_ty(self)),
+            (SumTy(left), RowTy(_)) => self.unify_ty_ty(left.to_ty(self), right),
+
             // Decompose compound types
             (FunTy(left_arg, left_ret), FunTy(right_arg, right_ret)) => {
                 self.unify_ty_ty_normalized(left_arg, right_arg)?;
@@ -980,26 +1103,28 @@ impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, 
             (RowTy(left_row), RowTy(right_row)) => {
                 self.unify_closedrow_closedrow(left_row, right_row)
             }
-            // Coerce a product into a row
-            (RowTy(_), ProdTy(right)) => self.unify_ty_ty(left, right.to_ty(self)),
-            // Coerce a product into a row
-            (ProdTy(left), RowTy(_)) => self.unify_ty_ty(left.to_ty(self), right),
-            // Decompose product and unify both internal types
             (ProdTy(left), ProdTy(right)) => self.unify_ty_ty(left.to_ty(self), right.to_ty(self)),
+            (SumTy(left), SumTy(right)) => self.unify_ty_ty(left.to_ty(self), right.to_ty(self)),
             // Discharge equal types
             (IntTy, IntTy) => Ok(()),
 
             // Type mismatch
             (IntTy, FunTy(_, _))
-            | (FunTy(_, _), IntTy)
             | (IntTy, RowTy(_))
+            | (IntTy, ProdTy(_))
+            | (IntTy, SumTy(_))
+            | (FunTy(_, _), IntTy)
+            | (FunTy(_, _), RowTy(_))
+            | (FunTy(_, _), ProdTy(_))
+            | (FunTy(_, _), SumTy(_))
             | (RowTy(_), IntTy)
             | (RowTy(_), FunTy(_, _))
-            | (FunTy(_, _), RowTy(_))
-            | (IntTy, ProdTy(_))
             | (ProdTy(_), IntTy)
-            | (FunTy(_, _), ProdTy(_))
-            | (ProdTy(_), FunTy(_, _)) => Err((left, right).into()),
+            | (ProdTy(_), FunTy(_, _))
+            | (ProdTy(_), SumTy(_))
+            | (SumTy(_), IntTy)
+            | (SumTy(_), FunTy(_, _))
+            | (SumTy(_), ProdTy(_)) => Err((left, right).into()),
         }
     }
 
@@ -2114,6 +2239,8 @@ mod tests {
         fn mk_unlabel(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_concat(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_project(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
+        fn mk_branch(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var>;
+        fn mk_inject(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_handler(
             &'a self,
             eff: EffectId,
@@ -2184,6 +2311,20 @@ mod tests {
                 eff,
                 handler: self.alloc(handler),
                 body: self.alloc(body),
+            }
+        }
+
+        fn mk_branch(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var> {
+            Branch {
+                left: self.alloc(left),
+                right: self.alloc(right),
+            }
+        }
+
+        fn mk_inject(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var> {
+            Inject {
+                direction,
+                term: self.alloc(term),
             }
         }
     }
@@ -2370,6 +2511,36 @@ mod tests {
             ty!(FunTy(
                 ty!(VarTy(TcVar(0))),
                 ty!(FunTy(ty!(VarTy(TcVar(1))), ty!(VarTy(TcVar(0))),)),
+            ))
+        );
+    }
+
+    #[test]
+    fn test_tc_sum_literal() {
+        let arena = Bump::new();
+        let t = VarId(0);
+        let f = VarId(1);
+        let untyped_ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(arena.mk_branch(
+                arena.mk_abs(t, arena.mk_unlabel("true", Variable(t))),
+                arena.mk_abs(f, arena.mk_unlabel("false", Variable(f))),
+            )),
+        );
+
+        let infer_intern = TyCtx::new(&arena);
+        let ty_intern = TyCtx::new(&arena);
+
+        let (_, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+
+        assert_matches!(
+            scheme.ty,
+            ty!(FunTy(
+                ty!(SumTy(Row::Closed(row!(
+                    ["false", "true"],
+                    [ty!(VarTy(TcVar(0))), ty!(VarTy(TcVar(0)))]
+                )))),
+                ty!(VarTy(TcVar(0)))
             ))
         );
     }

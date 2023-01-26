@@ -79,7 +79,16 @@ pub enum Term<'a, Var> {
         left: &'a Term<'a, Var>,
         right: &'a Term<'a, Var>,
     },
+    // Project a product out into a subproduct
     Project {
+        direction: Direction,
+        term: &'a Term<'a, Var>,
+    },
+    Branch {
+        left: &'a Term<'a, Var>,
+        right: &'a Term<'a, Var>,
+    },
+    Inject {
         direction: Direction,
         term: &'a Term<'a, Var>,
     },
@@ -123,6 +132,14 @@ impl<'a, Var> Iterator for TermVars<'a, Var> {
                 self.next()
             }
             Term::Project { term, .. } => {
+                self.stack.push(term);
+                self.next()
+            }
+            Term::Branch { left, right } => {
+                self.stack.extend([left, right]);
+                self.next()
+            }
+            Term::Inject { term, .. } => {
                 self.stack.push(term);
                 self.next()
             }
