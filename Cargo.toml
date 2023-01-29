@@ -3,6 +3,7 @@ members = [
     "analysis",
     "core",
     "desugar",
+    "lower-ir",
     "parser",
     "tc",
 ]

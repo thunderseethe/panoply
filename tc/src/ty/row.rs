@@ -1,3 +1,4 @@
+use aiahr_core::id::TyVarId;
 use aiahr_core::memory::handle::RefHandle;
 use ena::unify::{EqUnifyValue, UnifyValue};
 
@@ -65,30 +66,18 @@ impl<'ctx, TV> ClosedRow<'ctx, TV> {
             })
     }
 }
-impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
-    /// Create a new row that contains all self fields that are not present in sub.
-    pub fn difference(self, sub: Self) -> (Box<[RowLabel<'ctx>]>, Box<[InferTy<'ctx>]>) {
-        let out_row = self
-            .fields
-            .iter()
-            .zip(self.values.iter())
-            .filter(|(field, _)| sub.fields.binary_search(field).is_err());
 
-        let (mut fields, mut values) = (Vec::new(), Vec::new());
-        for (field, value) in out_row {
-            fields.push(*field);
-            values.push(*value);
-        }
-        (fields.into_boxed_slice(), values.into_boxed_slice())
-    }
+/// Internal representation of a row.
+/// Sometimes we need this to pass values that will become a row
+/// around before we're able to intern them into a row.
+pub type RowInternals<'ctx, TV> = (Box<[RowLabel<'ctx>]>, Box<[Ty<'ctx, TV>]>);
 
-    /// Combine two disjoint rows into a new row.
-    /// This maintains the row invariants in the resulting row.
-    /// If called on two overlapping rows an error is thrown.
-    pub fn disjoint_union(
+impl<'ctx, TV> ClosedRow<'ctx, TV> {
+    fn _disjoint_union<E>(
         self,
         right: Self,
-    ) -> Result<(Box<[RowLabel<'ctx>]>, Box<[InferTy<'ctx>]>), TypeCheckError<'ctx>> {
+        mk_err: impl FnOnce(Self, Self) -> E,
+    ) -> Result<RowInternals<'ctx, TV>, E> {
         use std::cmp::Ordering::*;
 
         let goal_len = self.len() + right.len();
@@ -97,7 +86,7 @@ impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
         let mut right_fields = right.fields.iter().peekable();
         let mut right_values = right.values.iter();
 
-        let (mut fields, mut values): (Vec<RowLabel<'ctx>>, Vec<InferTy<'ctx>>) =
+        let (mut fields, mut values): (Vec<RowLabel<'ctx>>, Vec<Ty<'ctx, TV>>) =
             (Vec::with_capacity(goal_len), Vec::with_capacity(goal_len));
         // Because we know our rows are each individually sorted, we can optimistically merge them here
         loop {
@@ -111,7 +100,7 @@ impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
                             values.push(*left_values.next().unwrap());
                         }
                         // Because these are disjoint rows overlapping labels are an error
-                        Equal => return Err(TypeCheckError::RowsNotDisjoint(self, right)),
+                        Equal => return Err(mk_err(self, right)),
                         // Push right
                         Greater => {
                             fields.push(*right_fields.next().unwrap());
@@ -139,6 +128,44 @@ impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
         values.shrink_to_fit();
 
         Ok((fields.into_boxed_slice(), values.into_boxed_slice()))
+    }
+}
+
+impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
+    /// Create a new row that contains all self fields that are not present in sub.
+    pub fn difference(self, sub: Self) -> (Box<[RowLabel<'ctx>]>, Box<[InferTy<'ctx>]>) {
+        let out_row = self
+            .fields
+            .iter()
+            .zip(self.values.iter())
+            .filter(|(field, _)| sub.fields.binary_search(field).is_err());
+
+        let (mut fields, mut values) = (Vec::new(), Vec::new());
+        for (field, value) in out_row {
+            fields.push(*field);
+            values.push(*value);
+        }
+        (fields.into_boxed_slice(), values.into_boxed_slice())
+    }
+
+    /// Combine two disjoint rows into a new row.
+    /// This maintains the row invariants in the resulting row.
+    /// If called on two overlapping rows an error is thrown.
+    pub fn disjoint_union(
+        self,
+        right: Self,
+    ) -> Result<RowInternals<'ctx, TcUnifierVar<'ctx>>, TypeCheckError<'ctx>> {
+        self._disjoint_union(right, |left, right| {
+            TypeCheckError::RowsNotDisjoint(left, right)
+        })
+    }
+}
+
+impl<'ctx> ClosedRow<'ctx, TyVarId> {
+    /// Invariant: These rows have already been typed checked so we cannot fail at union.
+    pub fn disjoint_union(self, right: Self) -> RowInternals<'ctx, TyVarId> {
+        self._disjoint_union::<Infallible>(right, |_, _| unreachable!())
+            .unwrap()
     }
 }
 

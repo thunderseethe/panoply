@@ -122,6 +122,31 @@ pub trait MkTy<'ctx, TV> {
 /// data.
 #[derive(Hash)]
 pub struct Ty<'ctx, TV>(pub RefHandle<'ctx, TypeKind<'ctx, TV>>);
+
+impl<'ctx, TV: Clone> Ty<'ctx, TV> {
+    pub fn try_as_prod_row(self) -> Result<Row<'ctx, TV>, Ty<'ctx, TV>> {
+        match self.deref() {
+            TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
+            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            _ => Err(self),
+        }
+    }
+
+    pub fn try_as_sum_row(self) -> Result<Row<'ctx, TV>, Ty<'ctx, TV>> {
+        match self.deref() {
+            TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
+            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            _ => Err(self),
+        }
+    }
+
+    pub fn try_as_fn_ty(self) -> Result<(Ty<'ctx, TV>, Ty<'ctx, TV>), Ty<'ctx, TV>> {
+        match self.deref() {
+            TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
+            _ => Err(self),
+        }
+    }
+}
 impl<'ctx, TV> PartialEq for Ty<'ctx, TV> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0

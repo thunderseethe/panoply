@@ -1,4 +1,4 @@
-use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
+use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId};
 use crate::memory::handle::RefHandle;
 use crate::span::Span;
 use rustc_hash::FxHashMap;

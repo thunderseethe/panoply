@@ -168,6 +168,17 @@ where
     }
 }
 
+impl<I> IdGen<I, ()>
+where
+    I: Id,
+{
+    /// Generate a new Id and return it.
+    /// Convenience method when we aren't storing any values with our Ids.
+    pub fn generate(&mut self) -> I {
+        self.push(())
+    }
+}
+
 impl<I, T> Deref for IdGen<I, T> {
     type Target = Ids<I, T>;
 

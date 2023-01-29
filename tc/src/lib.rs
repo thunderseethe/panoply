@@ -16,10 +16,14 @@ use std::{
 };
 
 mod ty;
+pub use ty::{
+    row::{/* I'm not proud of this one */ OrderedRowXorRow, Row},
+    MkTy, Ty, TypeKind,
+};
 
 use ty::{
     fold::{FallibleTypeFold, TypeFoldable},
-    row::{ClosedRow, CombineInto, InferRow, OrderedRowXorRow, Row, RowLabel, RowSet},
+    row::{ClosedRow, CombineInto, InferRow, RowLabel, RowSet},
     TypeKind::*,
     *,
 };
@@ -316,6 +320,21 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for TyChkRes<'_, TV> {
 struct Generation;
 struct Solution;
 
+trait InferState {
+    type Storage<'ctx, 'infer>;
+}
+
+struct GenerationStorage<'ctx, 'infer> {
+    var_tys: FxHashMap<VarId, InferTy<'infer>>,
+    term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, InferTy<'infer>>,
+}
+impl InferState for Generation {
+    type Storage<'ctx, 'infer> = GenerationStorage<'ctx, 'infer>;
+}
+impl InferState for Solution {
+    type Storage<'ctx, 'infer> = ();
+}
+
 /// A context for type inference.
 ///
 /// Type inference is done in two stages:
@@ -334,7 +353,7 @@ struct Solution;
 /// With this substitution constructed we walk the variable -> type mapping and substitute any
 /// unification variables for their types. This process of unification variable removal is called
 /// `zonking`.
-struct InferCtx<'a, 'infer, I, State = Generation> {
+struct InferCtx<'a, 'ctx, 'infer, I, State: InferState = Generation> {
     /// Store types for local variables.
     local_env: FxHashMap<VarId, InferTy<'infer>>,
     /// Mapping from unification variables to their types (if any).
@@ -345,10 +364,13 @@ struct InferCtx<'a, 'infer, I, State = Generation> {
     errors: Vec<TypeCheckError<'infer>>,
     /// Allocator for types created during inference
     ctx: &'a I,
+    state: State::Storage<'ctx, 'infer>,
     _marker: std::marker::PhantomData<State>,
 }
 
-impl<'infer, TV, I: MkTy<'infer, TV>, S> MkTy<'infer, TV> for InferCtx<'_, 'infer, I, S> {
+impl<'ctx, 'infer, TV, I: MkTy<'infer, TV>, S: InferState> MkTy<'infer, TV>
+    for InferCtx<'_, 'ctx, 'infer, I, S>
+{
     fn mk_ty(&self, kind: TypeKind<'infer, TV>) -> Ty<'infer, TV> {
         self.ctx.mk_ty(kind)
     }
@@ -366,7 +388,7 @@ impl<'infer, TV, I: MkTy<'infer, TV>, S> MkTy<'infer, TV> for InferCtx<'_, 'infe
     }
 }
 
-impl<'a, 'infer, I> InferCtx<'a, 'infer, I>
+impl<'a, 'ctx, 'infer, I> InferCtx<'a, 'ctx, 'infer, I>
 where
     I: MkTy<'infer, TcUnifierVar<'infer>>,
 {
@@ -377,58 +399,62 @@ where
             errors: vec![],
             constraints: Constraints::default(),
             ctx,
+            state: GenerationStorage {
+                var_tys: FxHashMap::default(),
+                term_tys: FxHashMap::default(),
+            },
             _marker: std::marker::PhantomData,
         }
     }
     /// This is the entrypoint to the bidirectional type checker. Since our language uses
     /// damnas-milner type inference we will always begin type checking with a call to infer.
-    pub(crate) fn infer<'s, 'ty, E>(
+    pub(crate) fn infer<'s, 'eff, E>(
         mut self,
         eff_info: &E,
-        term: &Term<'_, VarId>,
+        term: &'ctx Term<'ctx, VarId>,
     ) -> (
-        InferCtx<'a, 'infer, I, Solution>,
-        FxHashMap<VarId, InferTy<'infer>>,
+        InferCtx<'a, 'ctx, 'infer, I, Solution>,
+        <Generation as InferState>::Storage<'ctx, 'infer>,
         InferResult<'infer>,
     )
     where
-        E: EffectInfo<'s, 'ty>,
+        E: EffectInfo<'s, 'eff>,
     {
-        let mut var_tys = FxHashMap::default();
-        let res = self._infer(&mut var_tys, eff_info, term);
-
-        (InferCtx::with_generation(self), var_tys, res)
+        let res = self._infer(eff_info, term);
+        let (var_tys, infer_ctx) = InferCtx::with_generation(self);
+        (infer_ctx, var_tys, res)
     }
 
     /// Check a term against a given type.
     /// This method pairs with _infer to form a bidirectional type checker
     fn _check<'s, 'eff, E>(
         &mut self,
-        var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
+        //var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
         eff_info: &E,
-        term: &Term<'_, VarId>,
+        term: &'ctx Term<'ctx, VarId>,
         expected: InferResult<'infer>,
     ) where
         E: EffectInfo<'s, 'eff>,
     {
         use TypeKind::*;
+        self.state.term_tys.insert(term, expected.ty);
         match (term, *expected.ty) {
             (Abstraction { arg, body }, FunTy(arg_ty, body_ty)) => {
                 // Check an abstraction against a function type by checking the body checks against
                 // the function return type with the function argument type in scope.
                 self.local_env.insert(*arg, arg_ty);
-                self._check(var_tys, eff_info, body, expected.with_ty(body_ty));
+                self._check(eff_info, body, expected.with_ty(body_ty));
                 self.local_env.remove(arg);
             }
             (Label { .. }, ProdTy(row)) => {
                 // A label can check against a product, if it checks against the product's internal
                 // type
-                self._check(var_tys, eff_info, term, expected.with_ty(row.to_ty(self)))
+                self._check(eff_info, term, expected.with_ty(row.to_ty(self)))
             }
             (Label { .. }, SumTy(row)) => {
                 // A label can check against a sum, if it checks against the sum's internal
                 // type
-                self._check(var_tys, eff_info, term, expected.with_ty(row.to_ty(self)))
+                self._check(eff_info, term, expected.with_ty(row.to_ty(self)))
             }
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
@@ -451,7 +477,7 @@ where
 
                 // If this is a singleton row with the right label check it's value type matches
                 // our term type
-                self._check(var_tys, eff_info, term, expected.with_ty(row.values[0]))
+                self._check(eff_info, term, expected.with_ty(row.values[0]))
             }
             (Unit, ty_pat!({})) | (Int(_), IntTy) => self.constraints.add_ty_eq(
                 expected.eff.to_ty(self),
@@ -459,22 +485,21 @@ where
             ),
             (Unlabel { label, term }, _) => {
                 let expected_ty = self.single_row_ty(label, expected.ty);
-                self._check(var_tys, eff_info, term, expected.with_ty(expected_ty))
+                self._check(eff_info, term, expected.with_ty(expected_ty))
             }
             (Concat { .. }, RowTy(row)) => {
                 // Coerece a row type into a product and re-check.
                 self._check(
-                    var_tys,
                     eff_info,
                     term,
                     expected.with_ty(self.mk_ty(ProdTy(Row::Closed(row)))),
                 );
             }
             (Concat { left, right }, ProdTy(row)) => {
-                let left_infer = self._infer(var_tys, eff_info, left);
+                let left_infer = self._infer(eff_info, left);
                 let left_row = self.equate_as_prod_row(left_infer.ty);
 
-                let right_infer = self._infer(var_tys, eff_info, right);
+                let right_infer = self._infer(eff_info, right);
                 let right_row = self.equate_as_prod_row(right_infer.ty);
 
                 // Check our expected effect is a combination of each components effects
@@ -485,11 +510,11 @@ where
             (Branch { left, right }, FunTy(arg, ret)) => {
                 let arg_row = self.equate_as_sum_row(arg);
 
-                let left_infer = self._infer(var_tys, eff_info, left);
+                let left_infer = self._infer(eff_info, left);
                 let (left_arg, left_ret) = self.equate_as_fn_ty(left_infer.ty);
                 let left_row = self.equate_as_sum_row(left_arg);
 
-                let right_infer = self._infer(var_tys, eff_info, right);
+                let right_infer = self._infer(eff_info, right);
                 let (right_arg, right_ret) = self.equate_as_fn_ty(right_infer.ty);
                 let right_row = self.equate_as_sum_row(right_arg);
 
@@ -504,14 +529,13 @@ where
             (Project { .. }, RowTy(row)) => {
                 // Coerce row into a product and re-check.
                 self._check(
-                    var_tys,
                     eff_info,
                     term,
                     expected.with_ty(self.mk_ty(ProdTy(Row::Closed(row)))),
                 );
             }
             (Project { direction, term }, ProdTy(row)) => {
-                let term_infer = self._infer(var_tys, eff_info, term);
+                let term_infer = self._infer(eff_info, term);
                 let term_row = self.equate_as_prod_row(term_infer.ty);
                 let unbound_row = self.fresh_row();
 
@@ -526,14 +550,13 @@ where
             (Inject { .. }, RowTy(row)) => {
                 // Coerce a row into a sum and re-check.
                 self._check(
-                    var_tys,
                     eff_info,
                     term,
                     expected.with_ty(self.mk_ty(SumTy(Row::Closed(row)))),
                 );
             }
             (Inject { direction, term }, SumTy(row)) => {
-                let term_infer = self._infer(var_tys, eff_info, term);
+                let term_infer = self._infer(eff_info, term);
                 let term_row = self.equate_as_prod_row(term_infer.ty);
                 let unbound_row = self.fresh_row();
 
@@ -549,7 +572,7 @@ where
             (term, _) => {
                 // Infer a type for our term and check that the expected type is equal to the
                 // inferred type.
-                let inferred = self._infer(var_tys, eff_info, term);
+                let inferred = self._infer(eff_info, term);
                 self.constraints.add_ty_eq(expected.ty, inferred.ty);
                 self.row_eq_constraint(expected.eff, inferred.eff);
             }
@@ -572,14 +595,14 @@ where
     /// This method pairs with check to form a bidirectional type checker
     fn _infer<'s, 'eff, E>(
         &mut self,
-        var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
+        //var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
         eff_info: &E,
-        term: &Term<'_, VarId>,
+        term: &'ctx Term<'ctx, VarId>,
     ) -> InferResult<'infer>
     where
         E: EffectInfo<'s, 'eff>,
     {
-        match term {
+        let res = match term {
             // Abstraction inference  is done by creating two new unifiers <arg> and <body>
             // The abstraction body is checked against these fresh type variables
             // The resulting type of the inference is function type <arg> -> <body>
@@ -588,9 +611,9 @@ where
                 let body_ty = self.fresh_var();
                 let eff = self.fresh_row();
 
-                var_tys.insert(*arg, arg_ty);
+                self.state.var_tys.insert(*arg, arg_ty);
                 self.local_env.insert(*arg, arg_ty);
-                self._check(var_tys, eff_info, body, InferResult::new(body_ty, eff));
+                self._check(eff_info, body, InferResult::new(body_ty, eff));
                 self.local_env.remove(arg);
 
                 InferResult::new(self.mk_ty(TypeKind::FunTy(arg_ty, body_ty)), eff)
@@ -601,13 +624,13 @@ where
             // We then check the arg of the application against the arg type of the function type
             // The resulting type of this application is the function result type.
             Application { func, arg } => {
-                let fun_infer = self._infer(var_tys, eff_info, func);
+                let fun_infer = self._infer(eff_info, func);
                 // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
                 // for arg and ret type.
                 let (arg_ty, ret_ty) = self.equate_as_fn_ty(fun_infer.ty);
 
                 let arg_eff = self.fresh_row();
-                self._check(var_tys, eff_info, arg, InferResult::new(arg_ty, arg_eff));
+                self._check(eff_info, arg, InferResult::new(arg_ty, arg_eff));
 
                 let eff = self.fresh_row();
                 self.constraints
@@ -617,21 +640,21 @@ where
             // If the variable is in environemnt return it's type, otherwise return an error.
             Variable(var) => {
                 if let Some(ty) = self.local_env.get(var).cloned() {
-                    var_tys.insert(*var, ty);
+                    self.state.var_tys.insert(*var, ty);
                     InferResult::new(ty, Row::Closed(self.empty_row()))
                 } else {
                     self.errors.push(TypeCheckError::VarNotDefined(*var));
                     let err_ty = self.mk_ty(ErrorTy);
-                    var_tys.insert(*var, err_ty);
+                    self.state.var_tys.insert(*var, err_ty);
                     InferResult::new(err_ty, Row::Closed(self.empty_row()))
                 }
             }
             Label { label, term } => {
-                let infer = self._infer(var_tys, eff_info, term);
+                let infer = self._infer(eff_info, term);
                 infer.map_ty(|ty| self.single_row_ty(label, ty))
             }
             Unlabel { label, term } => {
-                let term_infer = self._infer(var_tys, eff_info, term);
+                let term_infer = self._infer(eff_info, term);
                 let field = self.mk_label(label);
                 term_infer.map_ty(|ty| match *ty {
                     // If our output type is already a singleton row of without a label, use it
@@ -663,13 +686,8 @@ where
                 let left_ty = self.mk_ty(ProdTy(left_row));
                 let right_ty = self.mk_ty(ProdTy(right_row));
 
-                self._check(var_tys, eff_info, left, InferResult::new(left_ty, left_eff));
-                self._check(
-                    var_tys,
-                    eff_info,
-                    right,
-                    InferResult::new(right_ty, right_eff),
-                );
+                self._check(eff_info, left, InferResult::new(left_ty, left_eff));
+                self._check(eff_info, right, InferResult::new(right_ty, right_eff));
 
                 self.constraints
                     .add_row_combine(left_eff, right_eff, out_eff);
@@ -691,13 +709,8 @@ where
                 let left_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret_ty));
                 let right_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret_ty));
 
-                self._check(var_tys, eff_info, left, InferResult::new(left_ty, left_eff));
-                self._check(
-                    var_tys,
-                    eff_info,
-                    right,
-                    InferResult::new(right_ty, right_eff),
-                );
+                self._check(eff_info, left, InferResult::new(left_ty, left_eff));
+                self._check(eff_info, right, InferResult::new(right_ty, right_eff));
 
                 self.constraints
                     .add_row_combine(left_eff, right_eff, out_eff);
@@ -717,7 +730,7 @@ where
 
                 let eff = self.fresh_row();
                 let term_ty = self.mk_ty(ProdTy(big_row));
-                self._check(var_tys, eff_info, term, InferResult::new(term_ty, eff));
+                self._check(eff_info, term, InferResult::new(term_ty, eff));
 
                 match direction {
                     Direction::Left => {
@@ -739,7 +752,7 @@ where
                 let unbound_row = self.fresh_row();
                 let eff = self.fresh_row();
                 let term_ty = self.mk_ty(SumTy(small_row));
-                self._check(var_tys, eff_info, term, InferResult::new(term_ty, eff));
+                self._check(eff_info, term, InferResult::new(term_ty, eff));
 
                 match direction {
                     Direction::Left => {
@@ -785,7 +798,6 @@ where
 
                 let eff_handler = self.mk_ty(RowTy(self.construct_row(row)));
                 self._check(
-                    var_tys,
                     eff_info,
                     handler,
                     InferResult::new(eff_handler, Row::Closed(self.empty_row())),
@@ -793,7 +805,7 @@ where
 
                 let body_eff = self.fresh_row();
                 let out_eff = self.fresh_row();
-                self._check(var_tys, eff_info, body, InferResult::new(body_ty, body_eff));
+                self._check(eff_info, body, InferResult::new(body_ty, body_eff));
 
                 let handled_eff =
                     Row::Closed(self.single_row(&eff_info.effect_name(*eff), self.empty_row_ty()));
@@ -808,7 +820,9 @@ where
             // TODOs
             Item(_) => todo!(),
             Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_row())),
-        }
+        };
+        self.state.term_tys.insert(term, res.ty);
+        res
     }
 
     fn instantiate(&mut self, ty_scheme: TyScheme<'_, TyVarId>) -> InferResult<'infer> {
@@ -879,17 +893,25 @@ where
     }
 }
 
-impl<'a, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>> InferCtx<'a, 'infer, I, Solution> {
+impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
+    InferCtx<'a, 'ctx, 'infer, I, Solution>
+{
     /// Convert our previous InferCtx in Generation state into Solution state.
-    fn with_generation(prior: InferCtx<'a, 'infer, I, Generation>) -> Self {
-        Self {
-            local_env: prior.local_env,
-            unifiers: prior.unifiers,
-            errors: prior.errors,
-            constraints: prior.constraints,
-            ctx: prior.ctx,
-            _marker: std::marker::PhantomData,
-        }
+    fn with_generation(
+        prior: InferCtx<'a, 'ctx, 'infer, I, Generation>,
+    ) -> (<Generation as InferState>::Storage<'ctx, 'infer>, Self) {
+        (
+            prior.state,
+            Self {
+                local_env: prior.local_env,
+                unifiers: prior.unifiers,
+                errors: prior.errors,
+                constraints: prior.constraints,
+                ctx: prior.ctx,
+                state: (),
+                _marker: std::marker::PhantomData,
+            },
+        )
     }
 
     /// Solve a list of constraints to a mapping from unifiers to types.
@@ -1847,7 +1869,7 @@ where
     let infer = InferCtx::new(infer_ctx);
 
     // Infer types for all our variables and the root term.
-    let (infer, var_tys, ty) = infer.infer(eff_info, term);
+    let (infer, gen_storage, ty) = infer.infer(eff_info, term);
 
     // Solve constraints into the unifiers mapping.
     let (mut unifiers, errors) = infer.solve();
@@ -1859,7 +1881,8 @@ where
         free_vars: vec![],
     };
     let zonked_infer = ty.try_fold_with(&mut zonker).unwrap();
-    let zonked_var_tys = var_tys
+    let zonked_var_tys = gen_storage
+        .var_tys
         .into_iter()
         .map(|(var, ty)| (var, ty.try_fold_with(&mut zonker).unwrap()))
         .collect::<FxHashMap<_, _>>();
@@ -1968,10 +1991,10 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Evidence<'_, TV> {
 /// the monomorphic type. They may also assert constraints on the bound type variables.
 #[derive(Debug)]
 pub struct TyScheme<'ctx, TV> {
-    bound: Vec<TV>,
-    constrs: Vec<Evidence<'ctx, TV>>,
-    eff: Row<'ctx, TV>,
-    ty: Ty<'ctx, TV>,
+    pub bound: Vec<TV>,
+    pub constrs: Vec<Evidence<'ctx, TV>>,
+    pub eff: Row<'ctx, TV>,
+    pub ty: Ty<'ctx, TV>,
 }
 
 const SHARD_BITS: usize = 5;
@@ -1989,7 +2012,7 @@ fn make_hash<K: Hash + ?Sized>(val: &K) -> u64 {
     state.finish()
 }
 
-struct Sharded<T> {
+pub struct Sharded<T> {
     shards: [parking_lot::RwLock<T>; SHARDS],
 }
 
@@ -2010,10 +2033,10 @@ impl<T: Default> Default for Sharded<T> {
     }
 }
 
-type ShardedHashMap<K, V> = Sharded<hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>>;
+pub type ShardedHashMap<K, V> = Sharded<hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>>;
 
 impl<K: Eq + Hash + Copy> ShardedHashMap<K, ()> {
-    fn _intern<Q>(&self, value: Q, make: impl FnOnce(Q) -> K) -> K
+    pub fn _intern<Q>(&self, value: Q, make: impl FnOnce(Q) -> K) -> K
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -2032,7 +2055,7 @@ impl<K: Eq + Hash + Copy> ShardedHashMap<K, ()> {
         }
     }
 
-    fn _intern_ref<Q: ?Sized>(&self, value: &Q, make: impl FnOnce() -> K) -> K
+    pub fn _intern_ref<Q: ?Sized>(&self, value: &Q, make: impl FnOnce() -> K) -> K
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
