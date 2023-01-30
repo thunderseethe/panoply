@@ -1,12 +1,13 @@
+use std::fmt::{self, Debug};
 use std::ops::Index;
 
-use aiahr_core::ast::{Ast, Direction, Term};
+use aiahr_core::ast::{Ast, Direction, RowTerm, Term};
 use aiahr_core::define_ids;
 use aiahr_core::id::{Id, IdGen, ItemId, ModuleId, TyVarId, VarId};
 use aiahr_core::memory::handle::{Handle, RefHandle};
-use aiahr_tc::{EffectInfo, Evidence, Row, ShardedHashMap, Ty, TyScheme, TypeKind};
+use aiahr_tc::{ClosedRow, EffectInfo, Evidence, Row, ShardedHashMap, Ty, TyScheme, TypeKind};
 use bumpalo::Bump;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 define_ids!(
 /// Uniquely identifies variables in IR. Unique within a module.
@@ -21,6 +22,11 @@ pub IrTyVarId;
 /// An owned T that is frozen and exposes a reduced Box API.
 struct P<T: ?Sized> {
     ptr: Box<T>,
+}
+impl<T: fmt::Debug> fmt::Debug for P<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.ptr.as_ref().fmt(f)
+    }
 }
 impl<T> P<T> {
     fn new(value: T) -> Self {
@@ -43,7 +49,7 @@ pub struct IrVarTy {
     kind: Kind,
 }
 
-#[derive(PartialEq, Eq, Clone, Copy, Hash, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Hash)]
 pub enum IrTyKind<'ctx> {
     VarTy(IrVarTy),
     IntTy,
@@ -52,10 +58,27 @@ pub enum IrTyKind<'ctx> {
     ProductTy(RefHandle<'ctx, [IrTy<'ctx>]>),
     CoproductTy(RefHandle<'ctx, [IrTy<'ctx>]>),
 }
+impl<'ctx> Debug for IrTyKind<'ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VarTy(v) => f.debug_tuple("VarTy").field(v).finish(),
+            IntTy => write!(f, "IntTy"),
+            FunTy(arg, ret) => f.debug_tuple("FunTy").field(arg).field(ret).finish(),
+            ForallTy(ty_var, ty) => f.debug_tuple("ForallTy").field(ty_var).field(ty).finish(),
+            ProductTy(elems) => f.debug_tuple("ProductTy").field(&elems.0).finish(),
+            CoproductTy(elems) => f.debug_tuple("CoproductTy").field(&elems.0).finish(),
+        }
+    }
+}
 use IrTyKind::*;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct IrTy<'ctx>(RefHandle<'ctx, IrTyKind<'ctx>>);
+impl<'ctx> Debug for IrTy<'ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0 .0.fmt(f)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 struct IrVar<'ctx> {
@@ -151,6 +174,11 @@ impl<'ctx> MkIrTy<'ctx> for IrCtx<'ctx> {
 pub struct Ir<'ctx> {
     kind: IrKind<'ctx>,
 }
+impl<'ctx> Debug for Ir<'ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)
+    }
+}
 impl<'ctx> Ir<'ctx> {
     fn new(kind: IrKind<'ctx>) -> Self {
         Self { kind }
@@ -165,22 +193,40 @@ impl<'ctx> Ir<'ctx> {
             .into_iter()
             .fold(head, |func, arg| Ir::new(App(P::new(func), P::new(arg))))
     }
+
+    fn abss<I>(vars: I, body: Ir<'ctx>) -> Self
+    where
+        I: IntoIterator,
+        I::IntoIter: DoubleEndedIterator<Item = IrVar<'ctx>>,
+    {
+        vars.into_iter()
+            .rfold(body, |body, var| Ir::new(Abs(var, P::new(body))))
+    }
+
+    fn case_on_var(var: IrVar<'ctx>, cases: impl IntoIterator<Item = Ir<'ctx>>) -> Self {
+        Ir::new(Case(
+            P::new(Ir::var(var)),
+            cases.into_iter().map(P::new).collect(),
+        ))
+    }
 }
 
-enum IrKind<'ctx> {
+#[derive(Debug)]
+enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     Int(usize),
     Var(IrVar<'ctx>),
     // Value abstraction and application
-    Abs(IrVar<'ctx>, P<Ir<'ctx>>),
-    App(P<Ir<'ctx>>, P<Ir<'ctx>>),
+    Abs(IrVar<'ctx>, IR),
+    App(IR, IR),
     // Type abstraction and application
-    TyAbs(TyVarId, P<Ir<'ctx>>),
-    TyApp(P<Ir<'ctx>>, Ty<'ctx, TyVarId>),
+    TyAbs(IrVarTy, IR),
+    TyApp(IR, Ty<'ctx, TyVarId>),
     // Trivial products
-    Struct(Vec<P<Ir<'ctx>>>),
-    FieldProj(usize, P<Ir<'ctx>>),
+    Struct(Vec<IR>),
+    FieldProj(usize, IR),
     // Trivial coproducts
-    Tag(usize, P<Ir<'ctx>>),
+    Tag(usize, IR),
+    Case(IR, Vec<IR>),
 }
 use IrKind::*;
 
@@ -198,7 +244,7 @@ struct IdConverter<VarIn, VarOut> {
     cache: FxHashMap<VarIn, VarOut>,
     gen: IdGen<VarOut, ()>,
 }
-impl<'a, VarIn, VarOut> IdConverter<VarIn, VarOut>
+impl<VarIn, VarOut> IdConverter<VarIn, VarOut>
 where
     VarIn: std::hash::Hash + Eq,
     VarOut: Id + Copy,
@@ -275,6 +321,253 @@ where
             }
         }
     }
+
+    fn row_evidence_ir(
+        &mut self,
+        left: ClosedRow<'ctx, TyVarId>,
+        right: ClosedRow<'ctx, TyVarId>,
+        goal: ClosedRow<'ctx, TyVarId>,
+    ) -> Ir<'ctx> {
+        let (left_prod, left_coprod) = self.row_ir_tys(&Row::Closed(left));
+        let (right_prod, right_coprod) = self.row_ir_tys(&Row::Closed(right));
+        let (goal_prod, goal_coprod) = self.row_ir_tys(&Row::Closed(goal));
+
+        let branch_tyvar = IrVarTy {
+            var: self.tyvar_conv.generate(),
+            kind: Kind::Type,
+        };
+        let left_var_id = self.var_conv.generate();
+        let right_var_id = self.var_conv.generate();
+        let goal_var_id = self.var_conv.generate();
+
+        // Product combinators: Concat, PrjL, and PrjR
+        let left_prod_var = IrVar {
+            var: left_var_id,
+            ty: left_prod,
+        };
+        let right_prod_var = IrVar {
+            var: right_var_id,
+            ty: right_prod,
+        };
+        let goal_prod_var = IrVar {
+            var: goal_var_id,
+            ty: goal_prod,
+        };
+        // Helper to handle when we need to unwrap trivial single field structs
+        let prj = |index, len, prod| {
+            if len == 1 {
+                prod
+            } else {
+                Ir::new(FieldProj(index, P::new(prod)))
+            }
+        };
+        let concat = P::new(Ir::abss(
+            [left_prod_var, right_prod_var],
+            Ir::new(match (left.fields.is_empty(), right.fields.is_empty()) {
+                (true, true) => Struct(vec![]),
+                (true, false) => Var(right_prod_var),
+                (false, true) => Var(left_prod_var),
+                (false, false) => {
+                    let left_elems =
+                        (0..left.len()).map(|i| prj(i, left.len(), Ir::var(left_prod_var)));
+                    let right_elems =
+                        (0..right.len()).map(|i| prj(i, right.len(), Ir::var(right_prod_var)));
+                    Struct(left_elems.chain(right_elems).map(P::new).collect())
+                }
+            }),
+        ));
+        let prj_l = P::new(Ir::abss(
+            [goal_prod_var],
+            if left.len() == 1 {
+                prj(0, goal.len(), Ir::var(goal_prod_var))
+            } else {
+                Ir::new(Struct(
+                    (0..left.len())
+                        .map(|i| prj(i, goal.len(), Ir::var(goal_prod_var)))
+                        .map(P::new)
+                        .collect(),
+                ))
+            },
+        ));
+        let prj_r = P::new(Ir::abss(
+            [goal_prod_var],
+            if right.len() == 1 {
+                prj(goal.len() - 1, goal.len(), Ir::var(goal_prod_var))
+            } else {
+                let range = (goal.len() - right.len())..goal.len();
+                Ir::new(Struct(
+                    range
+                        .map(|i| prj(i, goal.len(), Ir::var(goal_prod_var)))
+                        .map(P::new)
+                        .collect(),
+                ))
+            },
+        ));
+
+        let left_branch_var = IrVar {
+            var: left_var_id,
+            ty: self
+                .ctx
+                .mk_ir_ty(FunTy(left_coprod, self.ctx.mk_ir_ty(VarTy(branch_tyvar)))),
+        };
+        let right_branch_var = IrVar {
+            var: right_var_id,
+            ty: self
+                .ctx
+                .mk_ir_ty(FunTy(right_coprod, self.ctx.mk_ir_ty(VarTy(branch_tyvar)))),
+        };
+        let goal_branch_var = IrVar {
+            var: goal_var_id,
+            ty: goal_coprod,
+        };
+        let inj = |i, j, e| {
+            if j == 1 {
+                e
+            } else {
+                Ir::new(Tag(i, P::new(e)))
+            }
+        };
+        let branch = P::new(Ir::new(TyAbs(
+            branch_tyvar,
+            P::new(Ir::abss(
+                [left_branch_var, right_branch_var, goal_branch_var],
+                match (left.fields.is_empty(), right.fields.is_empty()) {
+                    // we're discriminating void, produce a case with no branches
+                    (true, true) => Ir::case_on_var(goal_branch_var, vec![]),
+                    (true, false) => Ir::app(Ir::var(left_branch_var), [Ir::var(goal_branch_var)]),
+                    (false, true) => Ir::app(Ir::var(right_branch_var), [Ir::var(goal_branch_var)]),
+                    (false, false) => {
+                        debug_assert!(left.len() + right.len() == goal.len());
+
+                        let case_var_id = self.var_conv.generate();
+                        let elems = left
+                            .values
+                            .iter()
+                            .chain(right.values.iter())
+                            .enumerate()
+                            .map(|(i, ty)| {
+                                let case_var = IrVar {
+                                    var: case_var_id,
+                                    ty: self.lower_ty(*ty),
+                                };
+                                let length = if i < left.len() {
+                                    left.len()
+                                } else {
+                                    right.len()
+                                };
+                                Ir::abss(
+                                    [case_var],
+                                    Ir::app(Ir::var(case_var), [inj(i, length, Ir::var(case_var))]),
+                                )
+                            });
+
+                        Ir::case_on_var(goal_branch_var, elems)
+                    }
+                },
+            )),
+        )));
+
+        let left_coprod_var = IrVar {
+            var: left_var_id,
+            ty: left_coprod,
+        };
+        let right_coprod_var = IrVar {
+            var: right_var_id,
+            ty: right_coprod,
+        };
+        let inj_l = P::new(Ir::abss(
+            [left_coprod_var],
+            if left.len() == 1 {
+                inj(0, goal.len(), Ir::var(left_coprod_var))
+            } else {
+                let case_var_id = self.var_conv.generate();
+                Ir::case_on_var(
+                    left_coprod_var,
+                    left.values.iter().enumerate().map(|(i, ty)| {
+                        let y = IrVar {
+                            var: case_var_id,
+                            ty: self.lower_ty(*ty),
+                        };
+                        Ir::abss([y], inj(i, goal.len(), Ir::var(y)))
+                    }),
+                )
+            },
+        ));
+        let inj_r = P::new(Ir::abss(
+            [right_coprod_var],
+            if right.len() == 1 {
+                inj(goal.len() - 1, goal.len(), Ir::var(right_coprod_var))
+            } else {
+                todo!()
+            },
+        ));
+
+        Ir::new(Struct(vec![
+            concat,
+            branch,
+            P::new(Ir::new(Struct(vec![prj_l, inj_l]))),
+            P::new(Ir::new(Struct(vec![prj_r, inj_r]))),
+        ]))
+    }
+
+    fn row_ir_tys(&mut self, row: &Row<'ctx, TyVarId>) -> (IrTy<'ctx>, IrTy<'ctx>) {
+        match row {
+            Row::Open(row_var) => {
+                let var = self.ctx.mk_ir_ty(VarTy(IrVarTy {
+                    var: self.tyvar_conv.convert(*row_var),
+                    kind: Kind::Row,
+                }));
+                (var, var)
+            }
+            Row::Closed(row) => {
+                let elems = row
+                    .values
+                    .iter()
+                    .map(|ty| self.lower_ty(*ty))
+                    .collect::<Vec<_>>();
+                (
+                    self.ctx.mk_prod_ty(elems.as_slice()),
+                    self.ctx.mk_coprod_ty(elems.as_slice()),
+                )
+            }
+        }
+    }
+
+    fn row_evidence_ir_ty(&mut self, ev: &Evidence<'ctx, TyVarId>) -> IrTy<'ctx> {
+        match ev {
+            Evidence::Row { left, right, goal } => {
+                let (left_prod, left_coprod) = self.row_ir_tys(left);
+                let (right_prod, right_coprod) = self.row_ir_tys(right);
+                let (goal_prod, goal_coprod) = self.row_ir_tys(goal);
+
+                let branch_var = IrVarTy {
+                    var: self.tyvar_conv.generate(),
+                    kind: Kind::Type,
+                };
+                let branch_var_ty = self.ctx.mk_ir_ty(VarTy(branch_var));
+
+                self.ctx.mk_prod_ty(&[
+                    self.ctx.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
+                    self.ctx.mk_ir_ty(ForallTy(
+                        branch_var,
+                        self.ctx.mk_binary_fun_ty(
+                            FunTy(left_coprod, branch_var_ty),
+                            FunTy(right_coprod, branch_var_ty),
+                            FunTy(goal_coprod, branch_var_ty),
+                        ),
+                    )),
+                    self.ctx.mk_prod_ty(&[
+                        self.ctx.mk_ir_ty(FunTy(goal_prod, left_prod)),
+                        self.ctx.mk_ir_ty(FunTy(left_coprod, goal_coprod)),
+                    ]),
+                    self.ctx.mk_prod_ty(&[
+                        self.ctx.mk_ir_ty(FunTy(goal_prod, right_prod)),
+                        self.ctx.mk_ir_ty(FunTy(right_coprod, goal_coprod)),
+                    ]),
+                ])
+            }
+        }
+    }
 }
 
 impl<'a, 'ctx, Db, I> LowerCtx<'a, 'ctx, Db, I, Evidenceless>
@@ -317,63 +610,11 @@ where
     }
 
     fn lower_evidence(&mut self, ev: &Evidence<'ctx, TyVarId>) -> IrVar<'ctx> {
-        match ev {
-            Evidence::Row { left, right, goal } => {
-                let ev_term = self.var_conv.generate();
-                let mut expand = |row: &Row<'ctx, TyVarId>| match row {
-                    Row::Open(row_var) => {
-                        let var = self.ctx.mk_ir_ty(VarTy(IrVarTy {
-                            var: self.tyvar_conv.convert(*row_var),
-                            kind: Kind::Row,
-                        }));
-                        (var, var)
-                    }
-                    Row::Closed(row) => {
-                        let elems = row
-                            .values
-                            .iter()
-                            .map(|ty| self.lower_ty(*ty))
-                            .collect::<Vec<_>>();
-                        (
-                            self.ctx.mk_prod_ty(elems.as_slice()),
-                            self.ctx.mk_coprod_ty(elems.as_slice()),
-                        )
-                    }
-                };
-                let (left_prod, left_coprod) = expand(left);
-                let (right_prod, right_coprod) = expand(right);
-                let (goal_prod, goal_coprod) = expand(goal);
-
-                let branch_var = IrVarTy {
-                    var: self.tyvar_conv.generate(),
-                    kind: Kind::Type,
-                };
-                let branch_var_ty = self.ctx.mk_ir_ty(VarTy(branch_var));
-
-                let row_ev_ty = self.ctx.mk_prod_ty(&[
-                    self.ctx.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
-                    self.ctx.mk_ir_ty(ForallTy(
-                        branch_var,
-                        self.ctx.mk_binary_fun_ty(
-                            FunTy(left_coprod, branch_var_ty),
-                            FunTy(right_coprod, branch_var_ty),
-                            FunTy(goal_coprod, branch_var_ty),
-                        ),
-                    )),
-                    self.ctx.mk_prod_ty(&[
-                        self.ctx.mk_ir_ty(FunTy(goal_prod, left_prod)),
-                        self.ctx.mk_ir_ty(FunTy(left_coprod, goal_coprod)),
-                    ]),
-                    self.ctx.mk_prod_ty(&[
-                        self.ctx.mk_ir_ty(FunTy(goal_prod, right_prod)),
-                        self.ctx.mk_ir_ty(FunTy(right_coprod, goal_coprod)),
-                    ]),
-                ]);
-                IrVar {
-                    var: ev_term,
-                    ty: row_ev_ty,
-                }
-            }
+        let ev_term = self.var_conv.generate();
+        let row_ev_ty = self.row_evidence_ir_ty(ev);
+        IrVar {
+            var: ev_term,
+            ty: row_ev_ty,
         }
     }
 }
@@ -469,8 +710,8 @@ where
                 Ir::new(Abs(var, P::new(self.lower_term(body))))
             }
             Application { func, arg } => Ir::new(App(
-                P::new(self.lower_term(*func)),
-                P::new(self.lower_term(*arg)),
+                P::new(self.lower_term(func)),
+                P::new(self.lower_term(arg)),
             )),
             Variable(var) => {
                 let ty = self.db.lookup_var(*var);
@@ -596,8 +837,8 @@ where
                 Ir::app(inj, [self.lower_term(subterm)])
             }
             // Effect stuff
-            Operation(eff_op_id) => todo!(),
-            Handle { eff, handler, body } => todo!(),
+            Operation(_) => todo!(),
+            Handle { .. } => todo!(),
         }
     }
 }
@@ -616,15 +857,319 @@ where
 {
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
-    let lower_ctx: LowerCtx<'_, 'ctx, Db, I> =
-        LowerCtx::new(&db, &ctx, &mut var_conv, &mut tyvar_conv);
+    let mut lower_ctx: LowerCtx<'_, 'ctx, Db, I> =
+        LowerCtx::new(db, ctx, &mut var_conv, &mut tyvar_conv);
+
+    // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
+    // Since we type-checked successfully we know nothing refers to that variable and we can use
+    // whatever row type for it.
+    let unit_row: ClosedRow<'ctx, TyVarId> = ClosedRow {
+        fields: Handle(&[]),
+        values: Handle(&[]),
+    };
+    let solved_row_ev = ast
+        .root()
+        .row_ev_terms()
+        .filter_map(|row_view| match row_view.view {
+            RowTerm::Concat { left, right } => {
+                let left_row = db
+                    .lookup_term(left)
+                    .try_as_prod_row()
+                    .unwrap_or_else(|_| unreachable!());
+                let right_row = db
+                    .lookup_term(right)
+                    .try_as_prod_row()
+                    .unwrap_or_else(|_| unreachable!());
+                let goal_row = db
+                    .lookup_term(row_view.parent)
+                    .try_as_prod_row()
+                    .unwrap_or_else(|_| unreachable!());
+
+                match (left_row, right_row, goal_row) {
+                    (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
+                        Some((left, right, goal))
+                    }
+                    _ => None,
+                }
+            }
+            RowTerm::Branch { left, right } => {
+                let left_row = db
+                    .lookup_term(left)
+                    .try_as_fn_ty()
+                    .and_then(|(func, _)| func.try_as_sum_row())
+                    .unwrap_or_else(|_| unreachable!());
+                let right_row = db
+                    .lookup_term(right)
+                    .try_as_fn_ty()
+                    .and_then(|(func, _)| func.try_as_sum_row())
+                    .unwrap_or_else(|_| unreachable!());
+                let goal_row = db
+                    .lookup_term(row_view.parent)
+                    .try_as_fn_ty()
+                    .and_then(|(func, _)| func.try_as_sum_row())
+                    .unwrap_or_else(|_| unreachable!());
+
+                match (left_row, right_row, goal_row) {
+                    (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
+                        Some((left, right, goal))
+                    }
+                    _ => None,
+                }
+            }
+            RowTerm::Project { direction, term } => {
+                let sub_row = db
+                    .lookup_term(term)
+                    .try_as_prod_row()
+                    .unwrap_or_else(|_| unreachable!());
+                let goal_row = db
+                    .lookup_term(row_view.parent)
+                    .try_as_prod_row()
+                    .unwrap_or_else(|_| unreachable!());
+
+                match (sub_row, goal_row) {
+                    (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
+                        Direction::Left => (sub, unit_row, goal),
+                        Direction::Right => (unit_row, sub, goal),
+                    }),
+                    _ => None,
+                }
+            }
+            RowTerm::Inject { direction, term } => {
+                let sub_row = db
+                    .lookup_term(term)
+                    .try_as_sum_row()
+                    .unwrap_or_else(|_| unreachable!());
+                let goal_row = db
+                    .lookup_term(row_view.parent)
+                    .try_as_sum_row()
+                    .unwrap_or_else(|_| unreachable!());
+
+                match (sub_row, goal_row) {
+                    (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
+                        Direction::Left => (sub, unit_row, goal),
+                        Direction::Right => (unit_row, sub, goal),
+                    }),
+                    _ => None,
+                }
+            }
+        })
+        .collect::<FxHashSet<_>>();
+
+    let local_ev_terms = solved_row_ev
+        .into_iter()
+        .map(|(left, right, goal)| {
+            let ev = Evidence::Row {
+                left: Row::Closed(left),
+                right: Row::Closed(right),
+                goal: Row::Closed(goal),
+            };
+            // We lower solved evidence so that during term lowering we can lookup any
+            // evidence and receive back a variable. The logic below handles whether that
+            // variable points to a concrete term or a top-level parameter.
+            let param = lower_ctx.lower_evidence(&ev);
+            let ir = lower_ctx.row_evidence_ir(left, right, goal);
+            lower_ctx.ev_map.insert(ev, param);
+            (param, ir)
+        })
+        .collect::<Vec<_>>();
     let (mut lower_ctx, ev_params) = lower_ctx.collect_evidence_params(scheme.constrs.iter());
+
     let body = lower_ctx.lower_term(ast.root());
+
+    // Bind all unique solved row evidence we need to local variables at top of term
+    let body = local_ev_terms
+        .into_iter()
+        .fold(body, |body, (ev_param, ev_ir)| {
+            Ir::app(Ir::abss([ev_param], body), [ev_ir])
+        });
     let body = ev_params
         .into_iter()
         .rfold(body, |body, arg| Ir::new(Abs(arg, P::new(body))));
-    scheme
-        .bound
-        .iter()
-        .rfold(body, |acc, ty_var| Ir::new(TyAbs(*ty_var, P::new(acc))))
+    scheme.bound.iter().rfold(body, |acc, ty_var| {
+        Ir::new(TyAbs(
+            IrVarTy {
+                var: tyvar_conv.convert(*ty_var),
+                kind: Kind::Type,
+            },
+            P::new(acc),
+        ))
+    })
+}
+
+pub mod test_utils {
+    use aiahr_tc::test_utils::DummyEff;
+
+    use super::*;
+
+    pub struct LowerDb<'ctx> {
+        var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
+        term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, Ty<'ctx, TyVarId>>,
+        eff_info: DummyEff,
+    }
+
+    impl<'ctx> LowerDb<'ctx> {
+        pub fn new(
+            var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
+            term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, Ty<'ctx, TyVarId>>,
+        ) -> Self {
+            Self {
+                var_tys,
+                term_tys,
+                eff_info: DummyEff,
+            }
+        }
+    }
+    impl<'ctx> VarTys<'ctx> for LowerDb<'ctx> {
+        fn lookup_var(&self, var_id: VarId) -> Ty<'ctx, TyVarId> {
+            self.var_tys[&var_id]
+        }
+    }
+    impl<'ctx> TermTys<'ctx> for LowerDb<'ctx> {
+        fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> Ty<'ctx, TyVarId> {
+            self.term_tys[term]
+        }
+    }
+    impl<'ctx> ItemSchemes<'ctx> for LowerDb<'ctx> {
+        fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme<'ctx, TyVarId> {
+            todo!()
+        }
+    }
+    impl<'ctx> EffectInfo<'ctx, 'ctx> for LowerDb<'ctx> {
+        fn effect_name(&self, eff: aiahr_core::id::EffectId) -> RefHandle<'static, str> {
+            self.eff_info.effect_name(eff)
+        }
+
+        fn effect_members(
+            &self,
+            eff: aiahr_core::id::EffectId,
+        ) -> RefHandle<'static, [aiahr_core::id::EffectOpId]> {
+            self.eff_info.effect_members(eff)
+        }
+
+        fn lookup_effect_by_member(
+            &self,
+            member: aiahr_core::id::EffectOpId,
+        ) -> aiahr_core::id::EffectId {
+            self.eff_info.lookup_effect_by_member(member)
+        }
+
+        fn effect_member_sig(
+            &self,
+            eff: aiahr_core::id::EffectId,
+            member: aiahr_core::id::EffectOpId,
+        ) -> TyScheme<'static, TyVarId> {
+            self.eff_info.effect_member_sig(eff, member)
+        }
+
+        fn effect_member_name(
+            &self,
+            eff: aiahr_core::id::EffectId,
+            member: aiahr_core::id::EffectOpId,
+        ) -> RefHandle<'static, str> {
+            self.eff_info.effect_member_name(eff, member)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{test_utils::LowerDb, *};
+    use aiahr_core::memory::arena::BumpArena;
+    use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
+    use assert_matches::assert_matches;
+    use bumpalo::Bump;
+
+    /// Compile an input string up to (but not including) the lower stage.
+    fn compile_upto_lower<'ctx, S>(
+        arena: &'ctx Bump,
+        interner: &'ctx S,
+        ty_ctx: &aiahr_tc::TyCtx<'ctx, TyVarId>,
+        input: &str,
+    ) -> (LowerDb<'ctx>, TyScheme<'ctx, TyVarId>, Ast<'ctx, VarId>)
+    where
+        S: InternerByRef<str>,
+    {
+        // Todo figure out what's up with this.
+
+        use aiahr_tc::test_utils::DummyEff;
+        let unresolved = aiahr_parser::parser::test_utils::parse_term(arena, interner, input);
+
+        let inames = HashMap::default();
+        let mtree = aiahr_analysis::modules::ModuleTree::new();
+        let base = aiahr_analysis::base::BaseNames::new(ModuleId(0), &mtree, &inames);
+
+        let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError<'ctx>> =
+            Vec::new();
+        let mut resolver = aiahr_analysis::resolve::Resolver::new(arena, &mut errors);
+        let resolved = resolver
+            .resolve_term(unresolved, &aiahr_analysis::names::Names::new(&base))
+            .expect("Name resolution to succeed");
+
+        let ast = aiahr_desugar::desugar(arena, resolved);
+
+        let infer_ctx = aiahr_tc::TyCtx::new(arena);
+        let (var_tys, term_tys, scheme, _) =
+            aiahr_tc::type_check(ty_ctx, &infer_ctx, &DummyEff, &ast);
+        (LowerDb::new(var_tys, term_tys), scheme, ast)
+    }
+
+    #[test]
+    fn lower_id() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+        let ty_ctx = aiahr_tc::TyCtx::new(&arena);
+        let (db, scheme, ast) = compile_upto_lower(&arena, &interner, &ty_ctx, "|x| x");
+        let ir_ctx = IrCtx::new(&arena);
+        let ir = lower(&db, &ir_ctx, &scheme, &ast);
+
+        assert_matches!(ir.kind, TyAbs(ty_var, body) => {
+            assert_matches!(
+                body.ptr.kind,
+                Abs(var@IrVar { ty, .. }, body) => {
+                    assert_eq!(ty.0.0, &VarTy(ty_var));
+                    assert_matches!(body.ptr.kind, Var(body_var) => {
+                        assert_eq!(var, body_var);
+                    });
+                });
+        });
+    }
+
+    #[test]
+    #[ignore]
+    fn lower_product_literal() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+        let ty_ctx = aiahr_tc::TyCtx::new(&arena);
+        let ir_ctx = IrCtx::new(&arena);
+        let (db, scheme, ast) =
+            compile_upto_lower(&arena, &interner, &ty_ctx, "|a| {x = a, y = a}");
+
+        let ir = lower(&db, &ir_ctx, &scheme, &ast);
+
+        assert_matches!(ir.kind, TyAbs(ty_var, body) => {
+            assert_matches!(body.ptr.kind, Abs(a, body) => {
+                assert_eq!(a.ty.0.0, &VarTy(ty_var));
+                assert_matches!(body.ptr.kind, App(app, right_row) => {
+                    assert_matches!(right_row.ptr.kind, Var(right_a) => { assert_eq!(a, right_a); });
+                    assert_matches!(app.ptr.kind, App(ev_term, left_row) => {
+                        assert_matches!(left_row.ptr.kind, Var(left_a) => { assert_eq!(a, left_a); });
+                        assert_matches!(ev_term.ptr.kind, FieldProj(0, concat) => {
+                            assert_matches!(concat.ptr.kind, Struct(elems) => {
+                                assert_matches!(&elems[0].ptr.kind, Abs(m, body) => {
+                                    assert_matches!(&body.ptr.kind, Abs(n, body) => {
+                                        assert_matches!(&body.ptr.kind, Struct(elems) => {
+                                            assert_matches!(elems[0].ptr.kind, Var(_m) => assert_eq!(*m, _m));
+                                            assert_matches!(elems[1].ptr.kind, Var(_n) => assert_eq!(*n, _n));
+                                        });
+                                    });
+                                });
+                            });
+                        })
+                    });
+                });
+            })
+        })
+    }
 }

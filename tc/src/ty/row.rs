@@ -14,10 +14,10 @@ use super::{FallibleTypeFold, MkTy, TypeKind};
 /// A label of a row field
 pub type RowLabel<'ctx> = RefHandle<'ctx, str>;
 
-/// A closed row is a map of labels to values where all labels are known.
+/// A closed row is a map of labels to types where all labels are known.
 /// Counterpart to an open row where the set of labels is polymorphic
 ///
-/// Because our closed row is basically an interned map, some important invariants are maintained
+/// Because our closed row is an interned map, some important invariants are maintained
 /// by the construction of ClosedRow:
 /// 1. fields and values are the same length
 /// 2. The field at index i is the key for the type at index i in values

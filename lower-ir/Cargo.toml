@@ -5,6 +5,10 @@ edition = "2021"
 
 [dev-dependencies]
 assert_matches = "1.5.0"
+aiahr-tc = { path = "../tc" }
+aiahr-parser = { path = "../parser" }
+aiahr-desugar = { path = "../desugar" }
+aiahr-analysis = { path = "../analysis" }
 
 [dependencies]
 aiahr-core = { path = "../core" }

@@ -466,6 +466,25 @@ where
     )
 }
 
+pub mod test_utils {
+    use super::*;
+    use crate::lexer::aiahr_lexer;
+    use aiahr_core::memory::intern::InternerByRef;
+
+    pub fn parse_term<'a, S: InternerByRef<str>>(
+        arena: &'a Bump,
+        interner: &'a S,
+        input: &str,
+    ) -> &'a Term<'a, 'a> {
+        let (tokens, eoi) = aiahr_lexer(interner)
+            .lex(input)
+            .expect("Lexing input failed");
+        term(arena)
+            .parse(to_stream(tokens, eoi))
+            .expect("Parsing input failed")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use aiahr_core::{

@@ -17,13 +17,13 @@ use std::{
 
 mod ty;
 pub use ty::{
-    row::{/* I'm not proud of this one */ OrderedRowXorRow, Row},
+    row::{ClosedRow, Row},
     MkTy, Ty, TypeKind,
 };
 
 use ty::{
     fold::{FallibleTypeFold, TypeFoldable},
-    row::{ClosedRow, CombineInto, InferRow, RowLabel, RowSet},
+    row::{CombineInto, InferRow, OrderedRowXorRow, RowLabel, RowSet},
     TypeKind::*,
     *,
 };
@@ -928,13 +928,11 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 .map_err(|err| self.errors.push(err))
                 .unwrap_or_default();
         }
-        print_root_unifiers(&mut self.unifiers);
         for RowCombination { left, right, goal } in constraints.rows {
             self.unify_row_combine(left, right, goal)
                 .map_err(|err| self.errors.push(err))
                 .unwrap_or_default();
         }
-        print_root_unifiers(&mut self.unifiers);
         (self.unifiers, self.errors)
     }
 
@@ -1162,11 +1160,6 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
         let normal_left = self.normalize_ty(left);
         let normal_right = self.normalize_ty(right);
 
-        println!(
-            "unify_ty_ty\n\tleft: {:?}\n\tright: {:?}",
-            normal_left, normal_right
-        );
-
         match (normal_left, normal_right) {
             (Left(left_ty), Left(right_ty)) => self.unify_ty_ty_normalized(left_ty, right_ty),
             (Left(ty), Right((row_var, rows))) | (Right((row_var, rows)), Left(ty)) => {
@@ -1233,11 +1226,6 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
         let right = self
             .normalize_row(right)
             .try_and_right(|(var, rows)| self.dispatch_solved(var, rows))?;
-
-        println!(
-            "unify_row_combine\n\tleft: {:?}\n\tright: {:?}\n\tgoal: {:?}",
-            left, right, goal
-        );
 
         match goal {
             // Try to propagate any solves we can make based
@@ -1837,9 +1825,10 @@ pub fn type_check<'ty, 'infer, 's, 'eff, I, II, E>(
     ty_ctx: &I,
     infer_ctx: &II, // TODO: Consider removing this to ensure inference don't escape type checking.
     eff_info: &E,
-    ast: Ast<'_, VarId>,
+    ast: &Ast<'ty, VarId>,
 ) -> (
     FxHashMap<VarId, Ty<'ty, TyVarId>>,
+    FxHashMap<&'ty Term<'ty, VarId>, Ty<'ty, TyVarId>>,
     TyScheme<'ty, TyVarId>,
     Vec<TypeCheckError<'infer>>,
 )
@@ -1855,9 +1844,10 @@ fn tc_term<'ty, 'infer, 's, 'eff, I, II, E>(
     ty_ctx: &I,
     infer_ctx: &II,
     eff_info: &E,
-    term: &'_ Term<'_, VarId>,
+    term: &'ty Term<'ty, VarId>,
 ) -> (
     FxHashMap<VarId, Ty<'ty, TyVarId>>,
+    FxHashMap<&'ty Term<'ty, VarId>, Ty<'ty, TyVarId>>,
     TyScheme<'ty, TyVarId>,
     Vec<TypeCheckError<'infer>>,
 )
@@ -1887,9 +1877,13 @@ where
         .map(|(var, ty)| (var, ty.try_fold_with(&mut zonker).unwrap()))
         .collect::<FxHashMap<_, _>>();
 
-    let ev = collect_evidence(&mut zonker);
+    let zonked_term_tys = gen_storage
+        .term_tys
+        .into_iter()
+        .map(|(term, ty)| (term, ty.try_fold_with(&mut zonker).unwrap()))
+        .collect::<FxHashMap<_, _>>();
 
-    print_root_unifiers(zonker.unifiers);
+    let ev = collect_evidence(&mut zonker);
 
     let scheme = TyScheme {
         bound: zonker
@@ -1902,7 +1896,7 @@ where
         eff: zonked_infer.eff,
         ty: zonked_infer.ty,
     };
-    (zonked_var_tys, scheme, errors)
+    (zonked_var_tys, zonked_term_tys, scheme, errors)
 }
 
 fn collect_evidence<'ctx, 'infer>(
@@ -2085,7 +2079,7 @@ impl<K: Eq + Hash + Copy> ShardedHashMap<K, ()> {
 //      `intern(&self, T) -> RefHandler<'a, T>`
 //
 //  2. Similarly Arena needs to be decoupled from `&'a self`
-struct TyCtx<'ctx, TV> {
+pub struct TyCtx<'ctx, TV> {
     arena: &'ctx Bump,
     tys: ShardedHashMap<RefHandle<'ctx, TypeKind<'ctx, TV>>, ()>,
     labels: ShardedHashMap<RefHandle<'ctx, str>, ()>,
@@ -2097,8 +2091,7 @@ impl<'ctx, TV> TyCtx<'ctx, TV>
 where
     TV: Eq + Copy + Hash,
 {
-    #[cfg(test)]
-    fn new(arena: &'ctx Bump) -> Self {
+    pub fn new(arena: &'ctx Bump) -> Self {
         Self {
             arena,
             tys: ShardedHashMap::default(),
@@ -2214,16 +2207,99 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
     println!("]");
 }
 
+pub mod test_utils {
+    use super::*;
+
+    pub struct DummyEff;
+    impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff {
+        fn effect_name(&self, eff: EffectId) -> RefHandle<'s, str> {
+            match eff.0 {
+                0 => Handle("State"),
+                1 => Handle("Reader"),
+                _ => unimplemented!(),
+            }
+        }
+
+        fn effect_members(&self, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]> {
+            match eff.0 {
+                0 => Handle(&[EffectOpId(0), EffectOpId(1)]),
+                1 => Handle(&[EffectOpId(2)]),
+                _ => unimplemented!(),
+            }
+        }
+
+        fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId {
+            match member.0 {
+                0 | 1 => EffectId(0),
+                2 => EffectId(1),
+                _ => unimplemented!(),
+            }
+        }
+
+        fn effect_member_sig(&self, _eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId> {
+            match member.0 {
+                // get: forall 0 . {} -{0}-> Int
+                0 => TyScheme {
+                    bound: vec![TyVarId(0)],
+                    constrs: vec![],
+                    eff: Row::Open(TyVarId(0)),
+                    ty: Ty(Handle(&FunTy(
+                        Ty(Handle(&RowTy(ClosedRow {
+                            fields: Handle(&[]),
+                            values: Handle(&[]),
+                        }))),
+                        Ty(Handle(&IntTy)),
+                    ))),
+                },
+                // put: forall 0 . Int -{0}-> {}
+                1 => TyScheme {
+                    bound: vec![TyVarId(0)],
+                    constrs: vec![],
+                    eff: Row::Open(TyVarId(0)),
+                    ty: Ty(Handle(&FunTy(
+                        Ty(Handle(&IntTy)),
+                        Ty(Handle(&RowTy(ClosedRow {
+                            fields: Handle(&[]),
+                            values: Handle(&[]),
+                        }))),
+                    ))),
+                },
+                // ask: forall 0 1. {} -{0}-> 1
+                2 => TyScheme {
+                    bound: vec![TyVarId(0), TyVarId(1)],
+                    constrs: vec![],
+                    eff: Row::Open(TyVarId(0)),
+                    ty: Ty(Handle(&FunTy(
+                        Ty(Handle(&RowTy(ClosedRow {
+                            fields: Handle(&[]),
+                            values: Handle(&[]),
+                        }))),
+                        Ty(Handle(&VarTy(TyVarId(1)))),
+                    ))),
+                },
+                _ => unimplemented!(),
+            }
+        }
+
+        fn effect_member_name(&self, _eff: EffectId, member: EffectOpId) -> RefHandle<'s, str> {
+            match member.0 {
+                0 => Handle("get"),
+                1 => Handle("put"),
+                2 => Handle("ask"),
+                _ => unimplemented!(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::vec;
-
     use aiahr_core::ast::Ast;
     use aiahr_core::id::TyVarId;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
 
-    use super::*;
+    use super::{test_utils::DummyEff, *};
 
     macro_rules! ty {
         ({}) => {
@@ -2353,95 +2429,6 @@ mod tests {
         }
     }
 
-    struct DummyEff;
-    impl EffectInfo<'static, 'static> for DummyEff {
-        fn effect_name(&self, eff: EffectId) -> RefHandle<'static, str> {
-            match eff.0 {
-                0 => Handle("State"),
-                1 => Handle("Reader"),
-                _ => unimplemented!(),
-            }
-        }
-
-        fn effect_members(&self, eff: EffectId) -> RefHandle<'static, [EffectOpId]> {
-            match eff.0 {
-                0 => Handle(&[EffectOpId(0), EffectOpId(1)]),
-                1 => Handle(&[EffectOpId(2)]),
-                _ => unimplemented!(),
-            }
-        }
-
-        fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId {
-            match member.0 {
-                0 | 1 => EffectId(0),
-                2 => EffectId(1),
-                _ => unimplemented!(),
-            }
-        }
-
-        fn effect_member_sig(
-            &self,
-            _eff: EffectId,
-            member: EffectOpId,
-        ) -> TyScheme<'static, TyVarId> {
-            match member.0 {
-                // get: forall 0 . {} -{0}-> Int
-                0 => TyScheme {
-                    bound: vec![TyVarId(0)],
-                    constrs: vec![],
-                    eff: Row::Open(TyVarId(0)),
-                    ty: Ty(Handle(&FunTy(
-                        Ty(Handle(&RowTy(ClosedRow {
-                            fields: Handle(&[]),
-                            values: Handle(&[]),
-                        }))),
-                        Ty(Handle(&IntTy)),
-                    ))),
-                },
-                // put: forall 0 . Int -{0}-> {}
-                1 => TyScheme {
-                    bound: vec![TyVarId(0)],
-                    constrs: vec![],
-                    eff: Row::Open(TyVarId(0)),
-                    ty: Ty(Handle(&FunTy(
-                        Ty(Handle(&IntTy)),
-                        Ty(Handle(&RowTy(ClosedRow {
-                            fields: Handle(&[]),
-                            values: Handle(&[]),
-                        }))),
-                    ))),
-                },
-                // ask: forall 0 1. {} -{0}-> 1
-                2 => TyScheme {
-                    bound: vec![TyVarId(0), TyVarId(1)],
-                    constrs: vec![],
-                    eff: Row::Open(TyVarId(0)),
-                    ty: Ty(Handle(&FunTy(
-                        Ty(Handle(&RowTy(ClosedRow {
-                            fields: Handle(&[]),
-                            values: Handle(&[]),
-                        }))),
-                        Ty(Handle(&VarTy(TyVarId(1)))),
-                    ))),
-                },
-                _ => unimplemented!(),
-            }
-        }
-
-        fn effect_member_name(
-            &self,
-            _eff: EffectId,
-            member: EffectOpId,
-        ) -> RefHandle<'static, str> {
-            match member.0 {
-                0 => Handle("get"),
-                1 => Handle("put"),
-                2 => Handle("ask"),
-                _ => unimplemented!(),
-            }
-        }
-    }
-
     #[test]
     fn test_tc_unlabel() {
         let arena = Bump::new();
@@ -2456,7 +2443,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(
             scheme.ty,
@@ -2478,7 +2465,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_, _, errors) = type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, _, errors) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(
             errors[0],
@@ -2500,7 +2487,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(
             scheme.ty,
@@ -2526,7 +2513,8 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (var_to_tys, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (var_to_tys, _, scheme, _) =
+            type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TyVarId(0)))));
         assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TyVarId(1)))));
@@ -2555,7 +2543,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(
             scheme.ty,
@@ -2592,8 +2580,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, scheme, _) =
-            type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(
             scheme.ty,
@@ -2630,8 +2617,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, scheme, _) =
-            type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
@@ -2681,8 +2667,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, scheme, _) =
-            type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
@@ -2706,8 +2691,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, scheme, _) =
-            type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(scheme.eff, Row::Closed(row!(["State"], [ty!(ty_pat!({}))])));
         assert_matches!(scheme.ty, ty!(IntTy))
@@ -2737,8 +2721,7 @@ mod tests {
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_var_to_tys, scheme, _) =
-            type_check(&ty_intern, &infer_intern, &DummyEff, untyped_ast);
+        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(
             scheme.eff,
@@ -2760,7 +2743,7 @@ mod tests {
         let infer_ctx = TyCtx::new(&arena);
         let ty_ctx = TyCtx::new(&arena);
 
-        let (_, _, errors) = type_check(&infer_ctx, &ty_ctx, &DummyEff, untyped_ast);
+        let (_, _, _, errors) = type_check(&infer_ctx, &ty_ctx, &DummyEff, &untyped_ast);
 
         assert!(errors.contains(&TypeCheckError::VarNotDefined(VarId(0))))
     }
