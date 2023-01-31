@@ -51,8 +51,8 @@ pub struct IrVarTy {
 
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
 pub enum IrTyKind<'ctx> {
-    VarTy(IrVarTy),
     IntTy,
+    VarTy(IrVarTy),
     FunTy(IrTy<'ctx>, IrTy<'ctx>),
     ForallTy(IrVarTy, IrTy<'ctx>),
     ProductTy(RefHandle<'ctx, [IrTy<'ctx>]>),
@@ -211,7 +211,7 @@ impl<'ctx> Ir<'ctx> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     Int(usize),
     Var(IrVar<'ctx>),
@@ -227,6 +227,39 @@ enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     // Trivial coproducts
     Tag(usize, IR),
     Case(IR, Vec<IR>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct IK<'a, 'ctx>(&'a IrKind<'ctx, IK<'a, 'ctx>>);
+impl<'ctx> IrKind<'ctx> {
+    fn arena_view<'a>(&self, arena: &'a Bump) -> IK<'a, 'ctx> {
+        IK(arena.alloc(match self {
+            Int(i) => Int(*i),
+            Var(v) => Var(*v),
+            Abs(arg, body) => Abs(*arg, body.ptr.kind.arena_view(arena)),
+            App(func, arg) => App(
+                func.ptr.kind.arena_view(arena),
+                arg.ptr.kind.arena_view(arena),
+            ),
+            TyAbs(ty_var, body) => TyAbs(*ty_var, body.ptr.kind.arena_view(arena)),
+            TyApp(ty_abs, ty) => TyApp(ty_abs.ptr.kind.arena_view(arena), *ty),
+            Struct(elems) => Struct(
+                elems
+                    .into_iter()
+                    .map(|e| e.ptr.kind.arena_view(arena))
+                    .collect(),
+            ),
+            FieldProj(idx, term) => FieldProj(*idx, term.ptr.kind.arena_view(arena)),
+            Tag(tag, term) => Tag(*tag, term.ptr.kind.arena_view(arena)),
+            Case(discri, cases) => Case(
+                discri.ptr.kind.arena_view(arena),
+                cases
+                    .into_iter()
+                    .map(|e| e.ptr.kind.arena_view(arena))
+                    .collect(),
+            ),
+        }))
+    }
 }
 use IrKind::*;
 
@@ -1091,8 +1124,6 @@ mod tests {
     where
         S: InternerByRef<str>,
     {
-        // Todo figure out what's up with this.
-
         use aiahr_tc::test_utils::DummyEff;
         let unresolved = aiahr_parser::parser::test_utils::parse_term(arena, interner, input);
 
@@ -1137,7 +1168,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    //#[ignore]
     fn lower_product_literal() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
@@ -1148,28 +1179,17 @@ mod tests {
 
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
 
-        assert_matches!(ir.kind, TyAbs(ty_var, body) => {
-            assert_matches!(body.ptr.kind, Abs(a, body) => {
-                assert_eq!(a.ty.0.0, &VarTy(ty_var));
-                assert_matches!(body.ptr.kind, App(app, right_row) => {
-                    assert_matches!(right_row.ptr.kind, Var(right_a) => { assert_eq!(a, right_a); });
-                    assert_matches!(app.ptr.kind, App(ev_term, left_row) => {
-                        assert_matches!(left_row.ptr.kind, Var(left_a) => { assert_eq!(a, left_a); });
-                        assert_matches!(ev_term.ptr.kind, FieldProj(0, concat) => {
-                            assert_matches!(concat.ptr.kind, Struct(elems) => {
-                                assert_matches!(&elems[0].ptr.kind, Abs(m, body) => {
-                                    assert_matches!(&body.ptr.kind, Abs(n, body) => {
-                                        assert_matches!(&body.ptr.kind, Struct(elems) => {
-                                            assert_matches!(elems[0].ptr.kind, Var(_m) => assert_eq!(*m, _m));
-                                            assert_matches!(elems[1].ptr.kind, Var(_n) => assert_eq!(*n, _n));
-                                        });
-                                    });
-                                });
-                            });
-                        })
-                    });
-                });
-            })
-        })
+        assert_matches!(ir.kind.arena_view(&arena), IK(TyAbs(ty_var, IK(App(IK(Abs(ev_a, IK(Abs(a, body)))), IK(Struct(ev_terms)))))) => {
+            assert_matches!(body, IK(App(IK(App(IK(FieldProj(0, IK(Var(ev_b)))), IK(Var(left_a)))), IK(Var(right_a)))) => {
+               assert_eq!(ev_a, ev_b);
+               assert_eq!(a, left_a);
+               assert_eq!(a, right_a);
+               assert_eq!(a.ty.0.0, &VarTy(*ty_var));
+               assert_matches!(&ev_terms[0], IK(Abs(m, IK(Abs(n, IK(Struct(splat)))))) => {
+                   assert_matches!(&splat[0], IK(Var(_m)) => { assert_eq!(m, _m); });
+                   assert_matches!(&splat[1], IK(Var(_n)) => { assert_eq!(n, _n); });
+               });
+            });
+        });
     }
 }
