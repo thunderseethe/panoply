@@ -16,4 +16,5 @@ aiahr-core = { path = "../core" }
 aiahr-tc = { path = "../tc" }
 bumpalo = "3.1.0"
 hashbrown = "0.13.1"
+pretty = "0.11.3"
 rustc-hash = "1.1.0"

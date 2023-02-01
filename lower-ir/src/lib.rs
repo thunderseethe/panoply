@@ -1,14 +1,17 @@
 use std::fmt::{self, Debug};
 use std::ops::Index;
 
-use aiahr_core::ast::{Ast, Direction, RowTerm, RowTermView, Term};
-use aiahr_core::define_ids;
-use aiahr_core::id::{Id, IdGen, ItemId, ModuleId, TyVarId, VarId};
-use aiahr_core::memory::handle::{Handle, RefHandle};
+use aiahr_core::{
+    ast::{Ast, Direction, RowTerm, RowTermView, Term},
+    define_ids,
+    id::{Id, IdGen, ItemId, ModuleId, TyVarId, VarId},
+    memory::handle::{Handle, RefHandle},
+};
 use aiahr_tc::{
     ClosedRow, EffectInfo, Evidence, Row, ShardedHashMap, Ty, TyChkRes, TyScheme, TypeKind,
 };
 use bumpalo::Bump;
+use pretty::*;
 use rustc_hash::FxHashMap;
 
 define_ids!(
@@ -50,6 +53,19 @@ pub struct IrVarTy {
     var: IrTyVarId,
     kind: Kind,
 }
+impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &IrVarTy {
+    fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, ()> {
+        allocator
+            .as_string(self.var.0)
+            .append(allocator.text(":"))
+            .append(allocator.space())
+            .append(allocator.text(match self.kind {
+                Kind::Type => "Type",
+                Kind::Row => "Row",
+            }))
+            .parens()
+    }
+}
 
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
 pub enum IrTyKind<'ctx> {
@@ -86,6 +102,16 @@ impl<'ctx> Debug for IrTy<'ctx> {
 struct IrVar<'ctx> {
     var: IrVarId,
     ty: IrTy<'ctx>,
+}
+impl<'a, 'ctx, D> Pretty<'a, D> for &IrVar<'ctx>
+where
+    D: ?Sized + DocAllocator<'a>,
+{
+    fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, ()> {
+        arena
+            .text("Var")
+            .append(arena.text(self.var.0.to_string()).parens())
+    }
 }
 
 struct IrCtx<'ctx> {
@@ -230,9 +256,6 @@ enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     Tag(usize, IR),
     Case(IR, Vec<IR>),
 }
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-struct IK<'a, 'ctx>(&'a IrKind<'ctx, IK<'a, 'ctx>>);
 impl<'ctx> IrKind<'ctx> {
     fn arena_view<'a>(&self, arena: &'a Bump) -> IK<'a, 'ctx> {
         IK(arena.alloc(match self {
@@ -255,7 +278,143 @@ impl<'ctx> IrKind<'ctx> {
         }))
     }
 }
+impl<'a, 'ctx> Pretty<'a, pretty::Arena<'a>> for &IrKind<'ctx> {
+    fn pretty(self, arena: &'a pretty::Arena<'a>) -> pretty::DocBuilder<'a, pretty::Arena<'a>, ()> {
+        fn gather_abs<'a, 'ctx>(
+            vars: &mut Vec<IrVar<'ctx>>,
+            kind: &'a IrKind<'ctx>,
+        ) -> &'a IrKind<'ctx> {
+            match kind {
+                Abs(arg, body) => {
+                    vars.push(*arg);
+                    gather_abs(vars, &body.ptr.kind)
+                }
+                _ => kind,
+            }
+        }
+        fn gather_ty_abs<'a, 'ctx>(
+            vars: &mut Vec<IrVarTy>,
+            kind: &'a IrKind<'ctx>,
+        ) -> &'a IrKind<'ctx> {
+            match kind {
+                TyAbs(arg, body) => {
+                    vars.push(*arg);
+                    gather_ty_abs(vars, &body.ptr.kind)
+                }
+                _ => kind,
+            }
+        }
+        let paren_app_arg = |arg: &IrKind<'ctx>| match arg {
+            App(_, _) => arg.pretty(arena).parens(),
+            _ => arg.pretty(arena),
+        };
+        match self {
+            Int(i) => i.to_string().pretty(arena),
+            Var(v) => v.pretty(arena),
+            Abs(arg, body) => {
+                let mut vars = vec![*arg];
+                let body = gather_abs(&mut vars, &body.ptr.kind);
+                docs![
+                    arena,
+                    docs![
+                        arena,
+                        "fun",
+                        arena.space(),
+                        arena
+                            .intersperse(
+                                vars.into_iter().map(|v| v.pretty(arena)),
+                                arena.text(",").append(arena.space()),
+                            )
+                            .group()
+                            .parens()
+                    ]
+                    .group(),
+                    arena.space(),
+                    body.pretty(arena)
+                        .enclose(arena.line(), arena.line())
+                        .nest(2)
+                        .braces(),
+                    arena.softline(),
+                ]
+            }
+            App(func, arg) => {
+                let func_doc = match &func.ptr.kind {
+                    // Wrap lambda literals in parens so they're easier to read
+                    f @ Abs(_, _) => f.pretty(arena).parens(),
+                    f => f.pretty(arena),
+                };
+                func_doc
+                    .append(arena.space())
+                    .append(paren_app_arg(&arg.ptr.kind))
+            }
+            TyAbs(tyvar, body) => {
+                let mut tyvars = vec![*tyvar];
+                let body = gather_ty_abs(&mut tyvars, &body.ptr.kind);
+                docs![
+                    arena,
+                    docs![
+                        arena,
+                        "forall",
+                        arena.space(),
+                        arena.intersperse(
+                            tyvars.into_iter().map(|tv| tv.pretty(arena)),
+                            arena.space()
+                        ),
+                        arena.space(),
+                    ]
+                    .group(),
+                    ".",
+                    arena.softline().append(body.pretty(arena)).nest(2)
+                ]
+            }
+            Struct(elems) => arena
+                .intersperse(
+                    elems.iter().map(|elem| elem.ptr.kind.pretty(arena)),
+                    arena.text(",").append(arena.softline()),
+                )
+                .enclose(arena.softline(), arena.softline())
+                .nest(2)
+                .braces(),
+            FieldProj(idx, term) => term
+                .ptr
+                .kind
+                .pretty(arena)
+                .append(arena.as_string(idx).brackets()),
+            Tag(tag, term) => docs![
+                arena,
+                arena.as_string(tag),
+                arena.text(":"),
+                arena.space(),
+                &term.ptr.kind
+            ]
+            .angles(),
+            Case(discr, branches) => docs![
+                arena,
+                "case",
+                arena.space(),
+                &discr.ptr.kind,
+                arena.space(),
+                arena
+                    .intersperse(
+                        branches.iter().map(|b| b.ptr.kind.pretty(arena)),
+                        arena.hardline()
+                    )
+                    .nest(2)
+                    .angles()
+            ],
+            TyApp(_, _) => todo!(),
+        }
+    }
+}
 use IrKind::*;
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+struct IK<'a, 'ctx>(&'a IrKind<'ctx, IK<'a, 'ctx>>);
+impl<'a, 'ctx> Debug for IK<'a, 'ctx> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 pub trait ItemSchemes<'ctx> {
     fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme<'ctx, TyVarId>;
@@ -355,10 +514,12 @@ impl<'ctx> Index<&PartialEv<'ctx>> for EvidenceMap<'ctx> {
     type Output = IrVar<'ctx>;
 
     fn index(&self, index: &PartialEv<'ctx>) -> &Self::Output {
-        &self.params[*self
-            .partial_map
-            .get(index)
-            .unwrap_or_else(|| panic!("Could not find partial ev: {:?} in\n{:#?}", index, self))]
+        &self.params[*self.partial_map.get(index).unwrap_or_else(|| {
+            panic!(
+                "Could not find partial ev: {:?} in\n{:#?}",
+                index, self.partial_map
+            )
+        })]
     }
 }
 
@@ -919,7 +1080,6 @@ where
                 Ir::app(concat, [self.lower_term(left), self.lower_term(right)])
             }
             Branch { left, right } => {
-                //
                 let left_row = expect_branch_ty(self.db.lookup_term(left).ty);
                 let right_row = expect_branch_ty(self.db.lookup_term(right).ty);
                 let goal_row = expect_branch_ty(self.db.lookup_term(term).ty);
@@ -937,18 +1097,18 @@ where
                 direction,
                 term: subterm,
             } => {
-                let goal = expect_prod_ty(self.db.lookup_term(term).ty);
-                let other = expect_prod_ty(self.db.lookup_term(subterm).ty);
+                let goal = expect_prod_ty(self.db.lookup_term(subterm).ty);
+                let other = expect_prod_ty(self.db.lookup_term(term).ty);
 
-                let param = self.ev_map[&(PartialEv { goal, other })];
+                let param = self.ev_map[&PartialEv { goal, other }];
                 let idx = match direction {
                     Direction::Left => 2,
                     Direction::Right => 3,
                 };
 
                 let prj = Ir::new(FieldProj(
-                    idx,
-                    P::new(Ir::new(FieldProj(0, P::new(Ir::var(param))))),
+                    0,
+                    P::new(Ir::new(FieldProj(idx, P::new(Ir::var(param))))),
                 ));
                 Ir::app(prj, [self.lower_term(subterm)])
             }
@@ -966,8 +1126,8 @@ where
                 };
 
                 let inj = Ir::new(FieldProj(
-                    idx,
-                    P::new(Ir::new(FieldProj(1, P::new(Ir::var(param))))),
+                    1,
+                    P::new(Ir::new(FieldProj(idx, P::new(Ir::var(param))))),
                 ));
                 Ir::app(inj, [self.lower_term(subterm)])
             }
@@ -1183,7 +1343,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn lower_wand() {
         let arena = Bump::new();
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
@@ -1209,6 +1368,15 @@ mod tests {
 
         let ir = lower(&LowerDb::new(var_tys, term_ress), &ir_ctx, &scheme, &ast);
 
-        expect![[]].assert_eq(&format!("{:?}", ir.kind.arena_view(&arena)))
+        let doc_arena = pretty::Arena::new();
+        let mut out = String::new();
+        ir.kind.pretty(&doc_arena).render_fmt(80, &mut out).unwrap();
+        expect![
+            [r"forall (0: Type) (1: Type) (4: Type) (2: Type) (5: Type) .
+  fun (Var(0), Var(1), Var(2), Var(3)) {
+    Var(1)[2][0] (Var(0)[0] Var(2) Var(3))
+    } "]
+        ]
+        .assert_eq(&out)
     }
 }
