@@ -9,6 +9,7 @@ aiahr-tc = { path = "../tc" }
 aiahr-parser = { path = "../parser" }
 aiahr-desugar = { path = "../desugar" }
 aiahr-analysis = { path = "../analysis" }
+expect-test = "1.4"
 
 [dependencies]
 aiahr-core = { path = "../core" }

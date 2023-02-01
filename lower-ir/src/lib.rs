@@ -1,13 +1,15 @@
 use std::fmt::{self, Debug};
 use std::ops::Index;
 
-use aiahr_core::ast::{Ast, Direction, RowTerm, Term};
+use aiahr_core::ast::{Ast, Direction, RowTerm, RowTermView, Term};
 use aiahr_core::define_ids;
 use aiahr_core::id::{Id, IdGen, ItemId, ModuleId, TyVarId, VarId};
 use aiahr_core::memory::handle::{Handle, RefHandle};
-use aiahr_tc::{ClosedRow, EffectInfo, Evidence, Row, ShardedHashMap, Ty, TyScheme, TypeKind};
+use aiahr_tc::{
+    ClosedRow, EffectInfo, Evidence, Row, ShardedHashMap, Ty, TyChkRes, TyScheme, TypeKind,
+};
 use bumpalo::Bump;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 define_ids!(
 /// Uniquely identifies variables in IR. Unique within a module.
@@ -243,20 +245,12 @@ impl<'ctx> IrKind<'ctx> {
             ),
             TyAbs(ty_var, body) => TyAbs(*ty_var, body.ptr.kind.arena_view(arena)),
             TyApp(ty_abs, ty) => TyApp(ty_abs.ptr.kind.arena_view(arena), *ty),
-            Struct(elems) => Struct(
-                elems
-                    .into_iter()
-                    .map(|e| e.ptr.kind.arena_view(arena))
-                    .collect(),
-            ),
+            Struct(elems) => Struct(elems.iter().map(|e| e.ptr.kind.arena_view(arena)).collect()),
             FieldProj(idx, term) => FieldProj(*idx, term.ptr.kind.arena_view(arena)),
             Tag(tag, term) => Tag(*tag, term.ptr.kind.arena_view(arena)),
             Case(discri, cases) => Case(
                 discri.ptr.kind.arena_view(arena),
-                cases
-                    .into_iter()
-                    .map(|e| e.ptr.kind.arena_view(arena))
-                    .collect(),
+                cases.iter().map(|e| e.ptr.kind.arena_view(arena)).collect(),
             ),
         }))
     }
@@ -270,7 +264,7 @@ pub trait VarTys<'ctx> {
     fn lookup_var(&self, var_id: VarId) -> Ty<'ctx, TyVarId>;
 }
 pub trait TermTys<'ctx> {
-    fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> Ty<'ctx, TyVarId>;
+    fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<'ctx, TyVarId>;
 }
 
 struct IdConverter<VarIn, VarOut> {
@@ -298,6 +292,127 @@ where
 
     fn generate(&mut self) -> VarOut {
         self.gen.generate()
+    }
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
+struct PartialEv<'ctx> {
+    other: Row<'ctx, TyVarId>,
+    goal: Row<'ctx, TyVarId>,
+}
+
+#[derive(Default, Debug)]
+struct EvidenceMap<'ctx> {
+    /// Unique list of parameters we've generated so far
+    params: Vec<IrVar<'ctx>>,
+    // Find evidence when we only have partial information about it.
+    // Like when we encounter a Project or Inject node.
+    partial_map: FxHashMap<PartialEv<'ctx>, usize>,
+    complete_map: FxHashMap<Evidence<'ctx, TyVarId>, usize>,
+}
+impl<'ctx> EvidenceMap<'ctx> {
+    fn insert(&mut self, ev: Evidence<'ctx, TyVarId>, param: IrVar<'ctx>) {
+        let idx = self
+            .params
+            .iter()
+            .position(|p| p == &param)
+            .unwrap_or_else(|| {
+                let idx = self.params.len();
+                self.params.push(param);
+                idx
+            });
+
+        match &ev {
+            Evidence::Row { left, right, goal } => {
+                self.partial_map.insert(
+                    PartialEv {
+                        other: *left,
+                        goal: *goal,
+                    },
+                    idx,
+                );
+                self.partial_map.insert(
+                    PartialEv {
+                        other: *right,
+                        goal: *goal,
+                    },
+                    idx,
+                );
+            }
+        }
+
+        self.complete_map.insert(ev, idx);
+    }
+}
+impl<'ctx> Index<&Evidence<'ctx, TyVarId>> for EvidenceMap<'ctx> {
+    type Output = IrVar<'ctx>;
+
+    fn index(&self, index: &Evidence<'ctx, TyVarId>) -> &Self::Output {
+        &self.params[self.complete_map[index]]
+    }
+}
+impl<'ctx> Index<&PartialEv<'ctx>> for EvidenceMap<'ctx> {
+    type Output = IrVar<'ctx>;
+
+    fn index(&self, index: &PartialEv<'ctx>) -> &Self::Output {
+        &self.params[*self
+            .partial_map
+            .get(index)
+            .unwrap_or_else(|| panic!("Could not find partial ev: {:?} in\n{:#?}", index, self))]
+    }
+}
+
+/// Unwrap a type into it a product and return the product's row.
+///
+/// Because we are lowering from a type checked AST we would've failed with a type error already if
+/// this operation would fail.
+fn expect_prod_ty<TV: Clone>(ty: Ty<'_, TV>) -> Row<'_, TV> {
+    ty.try_as_prod_row().unwrap_or_else(|_| unreachable!())
+}
+
+/// Unwrap a type into a sum and return the sum's row.
+///
+/// Because we are lowering from a type checked AST we would've failed with a type error already if
+/// this operation would fail.
+fn expect_sum_ty<TV: Clone>(ty: Ty<'_, TV>) -> Row<'_, TV> {
+    ty.try_as_sum_row().unwrap_or_else(|_| unreachable!())
+}
+
+/// Unwrap a type as a branch type, returning the row of the branch.
+/// A branch type is a `FunTy(SumTy(row), VarTy(_))` and is used as the argument to branch
+/// statements. We return the `row` from that type
+///
+/// Because we are lowering from a type checked AST we would've failed with a type error already if
+/// this operation would fail.
+fn expect_branch_ty<TV: Clone>(ty: Ty<'_, TV>) -> Row<'_, TV> {
+    ty.try_as_fn_ty()
+        .and_then(|(arg, _)| arg.try_as_sum_row())
+        .unwrap_or_else(|_| unreachable!())
+}
+
+/// Row evidence where every row is closed.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+struct SolvedRowEv<'ctx> {
+    goal: ClosedRow<'ctx, TyVarId>,
+    left: ClosedRow<'ctx, TyVarId>,
+    right: ClosedRow<'ctx, TyVarId>,
+}
+impl<'ctx> From<SolvedRowEv<'ctx>> for Evidence<'ctx, TyVarId> {
+    fn from(val: SolvedRowEv<'ctx>) -> Self {
+        Evidence::Row {
+            left: Row::Closed(val.left),
+            right: Row::Closed(val.right),
+            goal: Row::Closed(val.goal),
+        }
+    }
+}
+impl<'ctx> SolvedRowEv<'ctx> {
+    fn new(
+        left: ClosedRow<'ctx, TyVarId>,
+        right: ClosedRow<'ctx, TyVarId>,
+        goal: ClosedRow<'ctx, TyVarId>,
+    ) -> Self {
+        Self { goal, left, right }
     }
 }
 
@@ -608,7 +723,7 @@ where
     Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx>,
     I: MkIrTy<'ctx>,
 {
-    fn new(
+    pub fn new(
         db: &'a Db,
         ctx: &'a I,
         var_conv: &'a mut IdConverter<VarId, IrVarId>,
@@ -624,14 +739,105 @@ where
         }
     }
 
-    fn collect_evidence_params<'ev>(
-        mut self,
-        evs: impl IntoIterator<Item = &'ev Evidence<'ctx, TyVarId>>,
-    ) -> (LowerCtx<'a, 'ctx, Db, I, Evidentfull>, Vec<IrVar<'ctx>>)
+    fn solved_row_ev<'ev>(
+        &self,
+        term_rows: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
+    ) -> Vec<SolvedRowEv<'ctx>>
     where
         'ctx: 'ev,
     {
-        let params = evs
+        // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
+        // Since we type-checked successfully we know nothing refers to that variable and we can use
+        // whatever row type for it.
+        let unit_row: ClosedRow<'ctx, TyVarId> = ClosedRow {
+            fields: Handle(&[]),
+            values: Handle(&[]),
+        };
+
+        let mut solved_ev = term_rows
+            .into_iter()
+            .filter_map(|row_view| match row_view.view {
+                RowTerm::Concat { left, right } => {
+                    let left_row = expect_prod_ty(self.db.lookup_term(left).ty);
+                    let right_row = expect_prod_ty(self.db.lookup_term(right).ty);
+                    let goal_row = expect_prod_ty(self.db.lookup_term(row_view.parent).ty);
+
+                    match (left_row, right_row, goal_row) {
+                        (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
+                            Some(SolvedRowEv::new(left, right, goal))
+                        }
+                        _ => None,
+                    }
+                }
+                RowTerm::Branch { left, right } => {
+                    let left_row = expect_branch_ty(self.db.lookup_term(left).ty);
+                    let right_row = expect_branch_ty(self.db.lookup_term(right).ty);
+                    let goal_row = expect_branch_ty(self.db.lookup_term(row_view.parent).ty);
+
+                    match (left_row, right_row, goal_row) {
+                        (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
+                            Some(SolvedRowEv::new(left, right, goal))
+                        }
+                        _ => None,
+                    }
+                }
+                RowTerm::Project { direction, term } => {
+                    let sub_row = expect_prod_ty(self.db.lookup_term(term).ty);
+                    let goal_row = expect_prod_ty(self.db.lookup_term(row_view.parent).ty);
+
+                    match (sub_row, goal_row) {
+                        (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
+                            Direction::Left => SolvedRowEv::new(sub, unit_row, goal),
+                            Direction::Right => SolvedRowEv::new(unit_row, sub, goal),
+                        }),
+                        _ => None,
+                    }
+                }
+                RowTerm::Inject { direction, term } => {
+                    let sub_row = expect_sum_ty(self.db.lookup_term(term).ty);
+                    let goal_row = expect_sum_ty(self.db.lookup_term(row_view.parent).ty);
+
+                    match (sub_row, goal_row) {
+                        (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
+                            Direction::Left => SolvedRowEv::new(sub, unit_row, goal),
+                            Direction::Right => SolvedRowEv::new(unit_row, sub, goal),
+                        }),
+                        _ => None,
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        solved_ev.dedup();
+        solved_ev
+    }
+
+    fn collect_evidence_params<'ev>(
+        mut self,
+        term_evs: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
+        scheme_constrs: impl IntoIterator<Item = &'ev Evidence<'ctx, TyVarId>>,
+    ) -> (
+        LowerCtx<'a, 'ctx, Db, I, Evidentfull>,
+        Vec<(IrVar<'ctx>, Ir<'ctx>)>,
+        Vec<IrVar<'ctx>>,
+    )
+    where
+        'ctx: 'ev,
+    {
+        let locals = self
+            .solved_row_ev(term_evs)
+            .into_iter()
+            .map(|solved| {
+                let ev = solved.into();
+                // We lower solved evidence so that during term lowering we can lookup any
+                // evidence and receive back a variable. The logic below handles whether that
+                // variable points to a concrete term or a top-level parameter.
+                let param = self.lower_evidence(&ev);
+                let ir = self.row_evidence_ir(solved.left, solved.right, solved.goal);
+                self.ev_map.insert(ev, param);
+                (param, ir)
+            })
+            .collect::<Vec<_>>();
+        let params = scheme_constrs
             .into_iter()
             .map(|ev| {
                 let param = self.lower_evidence(ev);
@@ -639,7 +845,7 @@ where
                 param
             })
             .collect::<Vec<_>>();
-        (LowerCtx::with_evidenceless(self), params)
+        (LowerCtx::with_evidenceless(self), locals, params)
     }
 
     fn lower_evidence(&mut self, ev: &Evidence<'ctx, TyVarId>) -> IrVar<'ctx> {
@@ -649,67 +855,6 @@ where
             var: ev_term,
             ty: row_ev_ty,
         }
-    }
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-struct PartialEv<'ctx> {
-    other: Row<'ctx, TyVarId>,
-    goal: Row<'ctx, TyVarId>,
-}
-
-#[derive(Default)]
-struct EvidenceMap<'ctx> {
-    params: Vec<IrVar<'ctx>>,
-    /// Find evidence when we only have partial information about it.
-    /// Like when we enounter a Project or Inject node.
-    partial_map: FxHashMap<PartialEv<'ctx>, usize>,
-    complete_map: FxHashMap<Evidence<'ctx, TyVarId>, usize>,
-}
-impl<'ctx> EvidenceMap<'ctx> {
-    fn insert(&mut self, ev: Evidence<'ctx, TyVarId>, param: IrVar<'ctx>) {
-        let idx = self
-            .params
-            .iter()
-            .position(|p| p == &param)
-            .unwrap_or_else(|| {
-                let idx = self.params.len();
-                self.params.push(param);
-                idx
-            });
-        match &ev {
-            Evidence::Row { left, right, goal } => {
-                self.partial_map.insert(
-                    PartialEv {
-                        other: *left,
-                        goal: *goal,
-                    },
-                    idx,
-                );
-                self.partial_map.insert(
-                    PartialEv {
-                        other: *right,
-                        goal: *goal,
-                    },
-                    idx,
-                );
-            }
-        }
-        self.complete_map.insert(ev, idx);
-    }
-}
-impl<'ctx> Index<&Evidence<'ctx, TyVarId>> for EvidenceMap<'ctx> {
-    type Output = IrVar<'ctx>;
-
-    fn index(&self, index: &Evidence<'ctx, TyVarId>) -> &Self::Output {
-        &self.params[self.complete_map[index]]
-    }
-}
-impl<'ctx> Index<&PartialEv<'ctx>> for EvidenceMap<'ctx> {
-    type Output = IrVar<'ctx>;
-
-    fn index(&self, index: &PartialEv<'ctx>) -> &Self::Output {
-        &self.params[self.partial_map[index]]
     }
 }
 
@@ -760,21 +905,9 @@ where
             Unlabel { term, .. } => self.lower_term(term),
             // Row stuff
             Concat { left, right } => {
-                let goal_row = match *self.db.lookup_term(term) {
-                    TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Row::Closed(row),
-                    TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Row::Open(var),
-                    _ => unreachable!(),
-                };
-                let left_row = match *self.db.lookup_term(left) {
-                    TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Row::Closed(row),
-                    TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Row::Open(var),
-                    _ => unreachable!(),
-                };
-                let right_row = match *self.db.lookup_term(right) {
-                    TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Row::Closed(row),
-                    TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Row::Open(var),
-                    _ => unreachable!(),
-                };
+                let goal_row = expect_prod_ty(self.db.lookup_term(term).ty);
+                let left_row = expect_prod_ty(self.db.lookup_term(left).ty);
+                let right_row = expect_prod_ty(self.db.lookup_term(right).ty);
                 let ev = Evidence::Row {
                     left: left_row,
                     right: right_row,
@@ -787,24 +920,9 @@ where
             }
             Branch { left, right } => {
                 //
-                let left_row = self
-                    .db
-                    .lookup_term(left)
-                    .try_as_fn_ty()
-                    .and_then(|(arg, _)| arg.try_as_sum_row())
-                    .unwrap_or_else(|_| unreachable!());
-                let right_row = self
-                    .db
-                    .lookup_term(right)
-                    .try_as_fn_ty()
-                    .and_then(|(arg, _)| arg.try_as_sum_row())
-                    .unwrap_or_else(|_| unreachable!());
-                let goal_row = self
-                    .db
-                    .lookup_term(term)
-                    .try_as_fn_ty()
-                    .and_then(|(arg, _)| arg.try_as_sum_row())
-                    .unwrap_or_else(|_| unreachable!());
+                let left_row = expect_branch_ty(self.db.lookup_term(left).ty);
+                let right_row = expect_branch_ty(self.db.lookup_term(right).ty);
+                let goal_row = expect_branch_ty(self.db.lookup_term(term).ty);
 
                 let param = self.ev_map[&(Evidence::Row {
                     left: left_row,
@@ -819,18 +937,10 @@ where
                 direction,
                 term: subterm,
             } => {
-                let goal = self
-                    .db
-                    .lookup_term(term)
-                    .try_as_prod_row()
-                    .unwrap_or_else(|_| unreachable!());
-                let other = self
-                    .db
-                    .lookup_term(subterm)
-                    .try_as_prod_row()
-                    .unwrap_or_else(|_| unreachable!());
+                let goal = expect_prod_ty(self.db.lookup_term(term).ty);
+                let other = expect_prod_ty(self.db.lookup_term(subterm).ty);
 
-                let param = self.ev_map[&PartialEv { goal, other }];
+                let param = self.ev_map[&(PartialEv { goal, other })];
                 let idx = match direction {
                     Direction::Left => 2,
                     Direction::Right => 3,
@@ -846,16 +956,8 @@ where
                 direction,
                 term: subterm,
             } => {
-                let goal = self
-                    .db
-                    .lookup_term(term)
-                    .try_as_sum_row()
-                    .unwrap_or_else(|_| unreachable!());
-                let other = self
-                    .db
-                    .lookup_term(subterm)
-                    .try_as_sum_row()
-                    .unwrap_or_else(|_| unreachable!());
+                let goal = expect_sum_ty(self.db.lookup_term(term).ty);
+                let other = expect_sum_ty(self.db.lookup_term(subterm).ty);
 
                 let param = self.ev_map[&PartialEv { other, goal }];
                 let idx = match direction {
@@ -890,134 +992,21 @@ where
 {
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
-    let mut lower_ctx: LowerCtx<'_, 'ctx, Db, I> =
-        LowerCtx::new(db, ctx, &mut var_conv, &mut tyvar_conv);
-
-    // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
-    // Since we type-checked successfully we know nothing refers to that variable and we can use
-    // whatever row type for it.
-    let unit_row: ClosedRow<'ctx, TyVarId> = ClosedRow {
-        fields: Handle(&[]),
-        values: Handle(&[]),
-    };
-    let solved_row_ev = ast
-        .root()
-        .row_ev_terms()
-        .filter_map(|row_view| match row_view.view {
-            RowTerm::Concat { left, right } => {
-                let left_row = db
-                    .lookup_term(left)
-                    .try_as_prod_row()
-                    .unwrap_or_else(|_| unreachable!());
-                let right_row = db
-                    .lookup_term(right)
-                    .try_as_prod_row()
-                    .unwrap_or_else(|_| unreachable!());
-                let goal_row = db
-                    .lookup_term(row_view.parent)
-                    .try_as_prod_row()
-                    .unwrap_or_else(|_| unreachable!());
-
-                match (left_row, right_row, goal_row) {
-                    (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
-                        Some((left, right, goal))
-                    }
-                    _ => None,
-                }
-            }
-            RowTerm::Branch { left, right } => {
-                let left_row = db
-                    .lookup_term(left)
-                    .try_as_fn_ty()
-                    .and_then(|(func, _)| func.try_as_sum_row())
-                    .unwrap_or_else(|_| unreachable!());
-                let right_row = db
-                    .lookup_term(right)
-                    .try_as_fn_ty()
-                    .and_then(|(func, _)| func.try_as_sum_row())
-                    .unwrap_or_else(|_| unreachable!());
-                let goal_row = db
-                    .lookup_term(row_view.parent)
-                    .try_as_fn_ty()
-                    .and_then(|(func, _)| func.try_as_sum_row())
-                    .unwrap_or_else(|_| unreachable!());
-
-                match (left_row, right_row, goal_row) {
-                    (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
-                        Some((left, right, goal))
-                    }
-                    _ => None,
-                }
-            }
-            RowTerm::Project { direction, term } => {
-                let sub_row = db
-                    .lookup_term(term)
-                    .try_as_prod_row()
-                    .unwrap_or_else(|_| unreachable!());
-                let goal_row = db
-                    .lookup_term(row_view.parent)
-                    .try_as_prod_row()
-                    .unwrap_or_else(|_| unreachable!());
-
-                match (sub_row, goal_row) {
-                    (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
-                        Direction::Left => (sub, unit_row, goal),
-                        Direction::Right => (unit_row, sub, goal),
-                    }),
-                    _ => None,
-                }
-            }
-            RowTerm::Inject { direction, term } => {
-                let sub_row = db
-                    .lookup_term(term)
-                    .try_as_sum_row()
-                    .unwrap_or_else(|_| unreachable!());
-                let goal_row = db
-                    .lookup_term(row_view.parent)
-                    .try_as_sum_row()
-                    .unwrap_or_else(|_| unreachable!());
-
-                match (sub_row, goal_row) {
-                    (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
-                        Direction::Left => (sub, unit_row, goal),
-                        Direction::Right => (unit_row, sub, goal),
-                    }),
-                    _ => None,
-                }
-            }
-        })
-        .collect::<FxHashSet<_>>();
-
-    let local_ev_terms = solved_row_ev
-        .into_iter()
-        .map(|(left, right, goal)| {
-            let ev = Evidence::Row {
-                left: Row::Closed(left),
-                right: Row::Closed(right),
-                goal: Row::Closed(goal),
-            };
-            // We lower solved evidence so that during term lowering we can lookup any
-            // evidence and receive back a variable. The logic below handles whether that
-            // variable points to a concrete term or a top-level parameter.
-            let param = lower_ctx.lower_evidence(&ev);
-            let ir = lower_ctx.row_evidence_ir(left, right, goal);
-            lower_ctx.ev_map.insert(ev, param);
-            (param, ir)
-        })
-        .collect::<Vec<_>>();
-    let (mut lower_ctx, ev_params) = lower_ctx.collect_evidence_params(scheme.constrs.iter());
+    let (mut lower_ctx, ev_locals, ev_params) =
+        LowerCtx::new(db, ctx, &mut var_conv, &mut tyvar_conv)
+            .collect_evidence_params(ast.root().row_ev_terms(), scheme.constrs.iter());
 
     let body = lower_ctx.lower_term(ast.root());
-
-    // Bind all unique solved row evidence we need to local variables at top of term
-    let body = local_ev_terms
-        .into_iter()
-        .fold(body, |body, (ev_param, ev_ir)| {
-            Ir::app(Ir::abss([ev_param], body), [ev_ir])
-        });
+    // Bind all unique solved row evidence to local variables at top of the term
+    let body = ev_locals.into_iter().fold(body, |body, (ev_param, ev_ir)| {
+        Ir::app(Ir::abss([ev_param], body), [ev_ir])
+    });
+    // Add unsolved row evidence as parameters of the term
     let body = ev_params
         .into_iter()
         .rfold(body, |body, arg| Ir::new(Abs(arg, P::new(body))));
+
+    // Finally wrap our term in any type variables it needs to bind
     scheme.bound.iter().rfold(body, |acc, ty_var| {
         Ir::new(TyAbs(
             IrVarTy {
@@ -1031,19 +1020,20 @@ where
 
 pub mod test_utils {
     use aiahr_tc::test_utils::DummyEff;
+    use aiahr_tc::TyChkRes;
 
     use super::*;
 
     pub struct LowerDb<'ctx> {
         var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
-        term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, Ty<'ctx, TyVarId>>,
+        term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<'ctx, TyVarId>>,
         eff_info: DummyEff,
     }
 
     impl<'ctx> LowerDb<'ctx> {
         pub fn new(
             var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
-            term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, Ty<'ctx, TyVarId>>,
+            term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<'ctx, TyVarId>>,
         ) -> Self {
             Self {
                 var_tys,
@@ -1058,7 +1048,7 @@ pub mod test_utils {
         }
     }
     impl<'ctx> TermTys<'ctx> for LowerDb<'ctx> {
-        fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> Ty<'ctx, TyVarId> {
+        fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<'ctx, TyVarId> {
             self.term_tys[term]
         }
     }
@@ -1111,8 +1101,10 @@ mod tests {
     use super::{test_utils::LowerDb, *};
     use aiahr_core::memory::arena::BumpArena;
     use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
+    use aiahr_tc::test_utils::MkTerm;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
+    use expect_test::expect;
 
     /// Compile an input string up to (but not including) the lower stage.
     fn compile_upto_lower<'ctx, S>(
@@ -1131,8 +1123,7 @@ mod tests {
         let mtree = aiahr_analysis::modules::ModuleTree::new();
         let base = aiahr_analysis::base::BaseNames::new(ModuleId(0), &mtree, &inames);
 
-        let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError<'ctx>> =
-            Vec::new();
+        let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError<'_>> = Vec::new();
         let mut resolver = aiahr_analysis::resolve::Resolver::new(arena, &mut errors);
         let resolved = resolver
             .resolve_term(unresolved, &aiahr_analysis::names::Names::new(&base))
@@ -1168,17 +1159,15 @@ mod tests {
     }
 
     #[test]
-    //#[ignore]
     fn lower_product_literal() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
-        let ir_ctx = IrCtx::new(&arena);
         let (db, scheme, ast) =
-            compile_upto_lower(&arena, &interner, &ty_ctx, "|a| {x = a, y = a}");
+            compile_upto_lower(&arena, &interner, &ty_ctx, "|a| { x = a, y = a }");
 
+        let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
-
         assert_matches!(ir.kind.arena_view(&arena), IK(TyAbs(ty_var, IK(App(IK(Abs(ev_a, IK(Abs(a, body)))), IK(Struct(ev_terms)))))) => {
             assert_matches!(body, IK(App(IK(App(IK(FieldProj(0, IK(Var(ev_b)))), IK(Var(left_a)))), IK(Var(right_a)))) => {
                assert_eq!(ev_a, ev_b);
@@ -1191,5 +1180,35 @@ mod tests {
                });
             });
         });
+    }
+
+    #[test]
+    #[ignore]
+    fn lower_wand() {
+        let arena = Bump::new();
+        let ty_ctx = aiahr_tc::TyCtx::new(&arena);
+        let infer_ctx = aiahr_tc::TyCtx::new(&arena);
+        let ir_ctx = IrCtx::new(&arena);
+        let m = VarId(0);
+        let n = VarId(1);
+        let ast = Ast::new(
+            FxHashMap::default(),
+            arena.alloc(arena.mk_abss(
+                [m, n],
+                arena.mk_unlabel(
+                    "x",
+                    arena.mk_project(
+                        Direction::Left,
+                        arena.mk_concat(Term::Variable(m), Term::Variable(n)),
+                    ),
+                ),
+            )),
+        );
+        let (var_tys, term_ress, scheme, _) =
+            aiahr_tc::type_check(&ty_ctx, &infer_ctx, &aiahr_tc::test_utils::DummyEff, &ast);
+
+        let ir = lower(&LowerDb::new(var_tys, term_ress), &ir_ctx, &scheme, &ast);
+
+        expect![[]].assert_eq(&format!("{:?}", ir.kind.arena_view(&arena)))
     }
 }
