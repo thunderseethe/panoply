@@ -2313,35 +2313,43 @@ pub mod test_utils {
     }
 
     pub struct DummyEff;
+    impl DummyEff {
+        pub const STATE_ID: EffectId = EffectId(0);
+        pub const READER_ID: EffectId = EffectId(1);
+
+        pub const GET_ID: EffectOpId = EffectOpId(0);
+        pub const PUT_ID: EffectOpId = EffectOpId(1);
+        pub const ASK_ID: EffectOpId = EffectOpId(2);
+    }
     impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff {
         fn effect_name(&self, eff: EffectId) -> RefHandle<'s, str> {
-            match eff.0 {
-                0 => Handle("State"),
-                1 => Handle("Reader"),
+            match eff {
+                DummyEff::STATE_ID => Handle("State"),
+                DummyEff::READER_ID => Handle("Reader"),
                 _ => unimplemented!(),
             }
         }
 
         fn effect_members(&self, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]> {
-            match eff.0 {
-                0 => Handle(&[EffectOpId(0), EffectOpId(1)]),
-                1 => Handle(&[EffectOpId(2)]),
+            match eff {
+                DummyEff::STATE_ID => Handle(&[DummyEff::GET_ID, DummyEff::PUT_ID]),
+                DummyEff::READER_ID => Handle(&[DummyEff::ASK_ID]),
                 _ => unimplemented!(),
             }
         }
 
         fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId {
-            match member.0 {
-                0 | 1 => EffectId(0),
-                2 => EffectId(1),
+            match member {
+                DummyEff::GET_ID | DummyEff::PUT_ID => DummyEff::STATE_ID,
+                DummyEff::ASK_ID => DummyEff::READER_ID,
                 _ => unimplemented!(),
             }
         }
 
         fn effect_member_sig(&self, _eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId> {
-            match member.0 {
+            match member {
                 // get: forall 0 . {} -{0}-> Int
-                0 => TyScheme {
+                DummyEff::GET_ID => TyScheme {
                     bound: vec![TyVarId(0)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
@@ -2354,7 +2362,7 @@ pub mod test_utils {
                     ))),
                 },
                 // put: forall 0 . Int -{0}-> {}
-                1 => TyScheme {
+                DummyEff::PUT_ID => TyScheme {
                     bound: vec![TyVarId(0)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
@@ -2367,7 +2375,7 @@ pub mod test_utils {
                     ))),
                 },
                 // ask: forall 0 1. {} -{0}-> 1
-                2 => TyScheme {
+                DummyEff::ASK_ID => TyScheme {
                     bound: vec![TyVarId(0), TyVarId(1)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
@@ -2384,10 +2392,10 @@ pub mod test_utils {
         }
 
         fn effect_member_name(&self, _eff: EffectId, member: EffectOpId) -> RefHandle<'s, str> {
-            match member.0 {
-                0 => Handle("get"),
-                1 => Handle("put"),
-                2 => Handle("ask"),
+            match member {
+                DummyEff::GET_ID => Handle("get"),
+                DummyEff::PUT_ID => Handle("put"),
+                DummyEff::ASK_ID => Handle("ask"),
                 _ => unimplemented!(),
             }
         }

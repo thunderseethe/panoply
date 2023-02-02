@@ -1,7 +1,6 @@
 use std::fmt::{self, Debug};
 use std::ops::Index;
 
-use aiahr_core::id::{EffectId, EffectOpId};
 use aiahr_core::{
     ast::{Ast, Direction, RowTerm, RowTermView, Term},
     define_ids,
@@ -71,8 +70,6 @@ impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &IrVarTy {
 #[derive(PartialEq, Eq, Clone, Copy, Hash)]
 pub enum IrTyKind<'ctx> {
     IntTy,
-    // TODO: Should this have a different name?
-    EvidenceVectorTy,
     VarTy(IrVarTy),
     FunTy(IrTy<'ctx>, IrTy<'ctx>),
     ForallTy(IrVarTy, IrTy<'ctx>),
@@ -84,7 +81,6 @@ impl<'ctx> Debug for IrTyKind<'ctx> {
         match self {
             VarTy(v) => f.debug_tuple("VarTy").field(v).finish(),
             IntTy => write!(f, "IntTy"),
-            EvidenceVectorTy => write!(f, "EvidenceVectorTy"),
             FunTy(arg, ret) => f.debug_tuple("FunTy").field(arg).field(ret).finish(),
             ForallTy(ty_var, ty) => f.debug_tuple("ForallTy").field(ty_var).field(ty).finish(),
             ProductTy(elems) => f.debug_tuple("ProductTy").field(&elems.0).finish(),
@@ -241,10 +237,6 @@ impl<'ctx> Ir<'ctx> {
             cases.into_iter().map(P::new).collect(),
         ))
     }
-
-    fn local(var: IrVar<'ctx>, value: Ir<'ctx>, body: Ir<'ctx>) -> Self {
-        Ir::new(App(P::new(Ir::new(Abs(var, P::new(body)))), P::new(value)))
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -256,23 +248,17 @@ enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     App(IR, IR),
     // Type abstraction and application
     TyAbs(IrVarTy, IR),
-    TyApp(IR, IrTy<'ctx>),
+    TyApp(IR, Ty<'ctx, TyVarId>),
     // Trivial products
-    Struct(Vec<IR>),      // Intro
+    Struct(Vec<IR>), // Intro
     FieldProj(usize, IR), // Elim
     // Trivial coproducts
-    Tag(usize, IR),    // Intro
+    Tag(usize, IR), // Intro
     Case(IR, Vec<IR>), // Elim
     // Delimited control
-    // Generate a new prompt marker
     NewPrompt(IrVar<'ctx>, IR),
-    // Install a prompt for a marker
     Prompt(IR, IR),
-    // Yield to a marker's prompt
-    Yield(IR, IR),
-    // Set index in an effect vector to value.
-    VectorSet(IrVar<'ctx>, usize, IR),
-    VectorGet(IrVar<'ctx>, usize),
+    Yield(IR, IR)
 }
 impl<'ctx> IrKind<'ctx> {
     fn arena_view<'a>(&self, arena: &'a Bump) -> IK<'a, 'ctx> {
@@ -293,17 +279,6 @@ impl<'ctx> IrKind<'ctx> {
                 discri.ptr.kind.arena_view(arena),
                 cases.iter().map(|e| e.ptr.kind.arena_view(arena)).collect(),
             ),
-            NewPrompt(p_var, body) => NewPrompt(*p_var, body.ptr.kind.arena_view(arena)),
-            Prompt(marker, body) => Prompt(
-                marker.ptr.kind.arena_view(arena),
-                body.ptr.kind.arena_view(arena),
-            ),
-            Yield(marker, value) => Yield(
-                marker.ptr.kind.arena_view(arena),
-                value.ptr.kind.arena_view(arena),
-            ),
-            VectorSet(vec, idx, value) => VectorSet(*vec, *idx, value.ptr.kind.arena_view(arena)),
-            VectorGet(vec, idx) => VectorGet(*vec, *idx),
         }))
     }
 }
@@ -432,42 +407,6 @@ impl<'a, 'ctx> Pretty<'a, pretty::Arena<'a>> for &IrKind<'ctx> {
                     .angles()
             ],
             TyApp(_, _) => todo!(),
-            NewPrompt(p_var, body) => docs![
-                arena,
-                "new_prompt",
-                p_var.pretty(arena).parens(),
-                body.ptr.kind.pretty(arena).braces()
-            ],
-            Prompt(marker, body) => docs![
-                arena,
-                "prompt",
-                marker.ptr.kind.pretty(arena).parens(),
-                arena.space(),
-                body.ptr
-                    .kind
-                    .pretty(arena)
-                    .group()
-                    .enclose(arena.softline(), arena.softline())
-                    .nest(2)
-                    .braces(),
-            ],
-            Yield(marker, body) => docs![
-                arena,
-                "yield",
-                marker.ptr.kind.pretty(arena).parens(),
-                arena.space(),
-                body.ptr.kind.pretty(arena).nest(2).braces()
-            ],
-            VectorSet(vec, idx, value) => docs![
-                arena,
-                vec,
-                arena.as_string(idx).brackets(),
-                arena.space(),
-                ":=",
-                arena.softline(),
-                &value.ptr.kind,
-            ],
-            VectorGet(vec, idx) => docs![arena, vec, arena.as_string(idx).brackets()],
         }
     }
 }
@@ -652,7 +591,6 @@ struct LowerCtx<'a, 'ctx, Db, I, State = Evidenceless> {
     var_conv: &'a mut IdConverter<VarId, IrVarId>,
     tyvar_conv: &'a mut IdConverter<TyVarId, IrTyVarId>,
     ev_map: EvidenceMap<'ctx>,
-    evv_var: IrVar<'ctx>,
     _marker: std::marker::PhantomData<State>,
 }
 
@@ -873,20 +811,7 @@ where
             if right.len() == 1 {
                 inj(goal.len() - 1, goal.len(), Ir::var(right_coprod_var))
             } else {
-                let case_var_id = self.var_conv.generate();
-                Ir::case_on_var(
-                    right_coprod_var,
-                    right.values.iter().enumerate().map(|(i, ty)| {
-                        let y = IrVar {
-                            var: case_var_id,
-                            ty: self.lower_ty(*ty),
-                        };
-                        Ir::abss(
-                            [y],
-                            inj(goal.len() - right.len() + i, goal.len(), Ir::var(y)),
-                        )
-                    }),
-                )
+                todo!()
             },
         ));
 
@@ -960,7 +885,7 @@ where
 
 impl<'a, 'ctx, Db, I> LowerCtx<'a, 'ctx, Db, I, Evidenceless>
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
+    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx>,
     I: MkIrTy<'ctx>,
 {
     pub fn new(
@@ -969,17 +894,12 @@ where
         var_conv: &'a mut IdConverter<VarId, IrVarId>,
         tyvar_conv: &'a mut IdConverter<TyVarId, IrTyVarId>,
     ) -> Self {
-        let evv_id = var_conv.generate();
         Self {
             db,
             ctx,
             var_conv,
             tyvar_conv,
             ev_map: EvidenceMap::default(),
-            evv_var: IrVar {
-                var: evv_id,
-                ty: ctx.mk_ir_ty(EvidenceVectorTy),
-            },
             _marker: std::marker::PhantomData,
         }
     }
@@ -1105,7 +1025,7 @@ where
 
 impl<'a, 'ctx, Db, I> LowerCtx<'a, 'ctx, Db, I, Evidentfull>
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
+    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx>,
     I: MkIrTy<'ctx>,
 {
     fn with_evidenceless(prior: LowerCtx<'a, 'ctx, Db, I, Evidenceless>) -> Self {
@@ -1115,7 +1035,6 @@ where
             var_conv: prior.var_conv,
             tyvar_conv: prior.tyvar_conv,
             ev_map: prior.ev_map,
-            evv_var: prior.evv_var,
             _marker: std::marker::PhantomData,
         }
     }
@@ -1217,122 +1136,10 @@ where
                 Ir::app(inj, [self.lower_term(subterm)])
             }
             // Effect stuff
-            Operation(op) => {
-                let eff_id = self.db.lookup_effect_by_member(*op);
-                let (value_ty, _) = self
-                    .db
-                    .lookup_term(term)
-                    .ty
-                    .try_as_fn_ty()
-                    .unwrap_or_else(|_| unreachable!());
-                let value_var = IrVar {
-                    var: self.var_conv.generate(),
-                    ty: self.lower_ty(value_ty),
-                };
-                let handle_var = IrVar {
-                    var: self.var_conv.generate(),
-                    ty: self.db.effect_handler_ir_ty(eff_id),
-                };
-                let kont_var = IrVar {
-                    var: self.var_conv.generate(),
-                    // Figure out how to construct this return type
-                    // I think we might be able infer it from top level term type and op sig
-                    // where op sig is `op_arg -> op_ret`. We need to lean on the effect row here.
-                    // We'll stash the return type of a particular handler in the effect row so
-                    // that when we look up the effet row here the effect we're yielding too should
-                    // hold the innermost return type and we can make use of it to know how to type
-                    // our continuation.
-                    ty: self.ctx.mk_ir_ty(IntTy),
-                };
-
-                let handler_index = self.db.effect_member_op_index(eff_id, *op);
-                let eff_index = self.db.effect_vector_index(eff_id);
-                Ir::app(
-                    Ir::abss(
-                        [handle_var, value_var],
-                        Ir::new(Yield(
-                            P::new(Ir::new(FieldProj(0, P::new(Ir::var(handle_var))))),
-                            P::new(Ir::abss(
-                                [kont_var],
-                                Ir::app(
-                                    Ir::new(FieldProj(
-                                        handler_index,
-                                        P::new(Ir::new(FieldProj(1, P::new(Ir::var(handle_var))))),
-                                    )),
-                                    [Ir::var(value_var), Ir::var(kont_var)],
-                                ),
-                            )),
-                        )),
-                    ),
-                    [Ir::new(VectorGet(self.evv_var, eff_index))],
-                )
-            }
-            Handle { eff, handler, body } => {
-                let prompt_var = IrVar {
-                    var: self.var_conv.generate(),
-                    ty: self.ctx.mk_ir_ty(IntTy),
-                };
-                let eff_index = self.db.effect_vector_index(*eff);
-                let handler_var = IrVar {
-                    var: self.var_conv.generate(),
-                    ty: self.db.effect_handler_ir_ty(*eff),
-                };
-                let handler_ir = self.lower_term(handler);
-
-                let ret_ty = self.lower_ty(self.db.lookup_term(term).ty);
-
-                let body_ty = self.lower_ty(self.db.lookup_term(body).ty);
-                let ret_index = self.db.effect_handler_return_index(*eff);
-                let updated_evv = Ir::new(VectorSet(
-                    self.evv_var,
-                    eff_index,
-                    P::new(Ir::new(Struct(vec![
-                        P::new(Ir::var(prompt_var)),
-                        P::new(Ir::var(handler_var)),
-                    ]))),
-                ));
-                let install_prompt = Ir::new(NewPrompt(
-                    prompt_var,
-                    P::new(Ir::local(
-                        self.evv_var,
-                        // Update evv to include the new handler
-                        updated_evv,
-                        // Install prompt and wrap handler body in handler's return function
-                        Ir::new(Prompt(
-                            P::new(Ir::var(prompt_var)),
-                            P::new(Ir::app(
-                                Ir::new(TyApp(
-                                    P::new(Ir::new(FieldProj(
-                                        ret_index,
-                                        P::new(Ir::var(handler_var)),
-                                    ))),
-                                    body_ty,
-                                )),
-                                [self.lower_term(body)],
-                            )),
-                        )),
-                    )),
-                ));
-
-                Ir::local(
-                    handler_var,
-                    Ir::new(TyApp(P::new(handler_ir), ret_ty)),
-                    install_prompt,
-                )
-            }
+            Operation(_) => todo!(),
+            Handle { .. } => todo!(),
         }
     }
-}
-
-/// Slightly lower level of information than required by EffectInfo.
-/// However this is all calculatable off of the effect definition
-pub trait IrEffectInfo<'ctx> {
-    fn lookup_effect_by_member(&self, op_id: EffectOpId) -> EffectId;
-    fn effect_handler_return_index(&self, eff_id: EffectId) -> usize;
-    fn effect_member_op_index(&self, eff_id: EffectId, op_id: EffectOpId) -> usize;
-    fn effect_vector_index(&self, eff_id: EffectId) -> usize;
-
-    fn effect_handler_ir_ty(&self, eff_id: EffectId) -> IrTy<'ctx>;
 }
 
 /// Lower an `Ast` into an `Ir`.
@@ -1344,7 +1151,7 @@ pub fn lower<'ctx, Db, I>(
     ast: &Ast<'ctx, VarId>,
 ) -> Ir<'ctx>
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
+    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + EffectInfo<'ctx, 'ctx>,
     I: MkIrTy<'ctx>,
 {
     let mut var_conv = IdConverter::new();
@@ -1380,12 +1187,6 @@ pub mod test_utils {
     use aiahr_tc::TyChkRes;
 
     use super::*;
-
-    macro_rules! ir_ty {
-        ($ty:expr) => {{
-            IrTy(Handle(&$ty))
-        }};
-    }
 
     pub struct LowerDb<'ctx> {
         var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
@@ -1455,81 +1256,6 @@ pub mod test_utils {
             self.eff_info.effect_member_name(eff, member)
         }
     }
-
-    impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'ctx> {
-        fn lookup_effect_by_member(&self, op_id: EffectOpId) -> EffectId {
-            DummyEff.lookup_effect_by_member(op_id)
-        }
-
-        fn effect_member_op_index(&self, _eff_id: EffectId, op_id: EffectOpId) -> usize {
-            match op_id {
-                DummyEff::GET_ID | DummyEff::ASK_ID => 0,
-                DummyEff::PUT_ID => 1,
-                _ => unimplemented!(),
-            }
-        }
-
-        fn effect_handler_return_index(&self, eff_id: EffectId) -> usize {
-            match eff_id {
-                DummyEff::STATE_ID => 2,
-                DummyEff::READER_ID => 1,
-                _ => unimplemented!(),
-            }
-        }
-
-        fn effect_vector_index(&self, eff_id: EffectId) -> usize {
-            match eff_id {
-                DummyEff::STATE_ID => 0,
-                DummyEff::READER_ID => 1,
-                _ => unimplemented!(),
-            }
-        }
-
-        fn effect_handler_ir_ty(&self, eff_id: EffectId) -> IrTy<'ctx> {
-            // Find a better solution for this
-            // Guessing a big enough irvartyid that we won't hit it in tests is flaky.
-            static R: IrVarTy = IrVarTy {
-                var: IrTyVarId(1024),
-                kind: Kind::Type,
-            };
-            static A: IrVarTy = IrVarTy {
-                var: IrTyVarId(1025),
-                kind: Kind::Type,
-            };
-            static RET_TY: IrTy<'static> = ir_ty!(VarTy(R));
-            static UNIT_TY: IrTy<'static> = ir_ty!(ProductTy(Handle(&[])));
-            static INT_TY: IrTy<'static> = ir_ty!(IntTy);
-            static UNIT_KONT_TY: IrTy<'static> = ir_ty!(FunTy(UNIT_TY, RET_TY));
-            static INT_KONT_TY: IrTy<'static> = ir_ty!(FunTy(INT_TY, RET_TY));
-
-            static RETURN_TY: IrTy<'static> = ir_ty!(ForallTy(
-                A,
-                ir_ty!(FunTy(ir_ty!(VarTy(A)), ir_ty!(VarTy(R))))
-            ));
-            static STATE_HANDLER_TY: IrTy<'static> = ir_ty!(ForallTy(
-                R,
-                ir_ty!(ProductTy(Handle(&[
-                    ir_ty!(FunTy(UNIT_TY, ir_ty!(FunTy(UNIT_KONT_TY, RET_TY)))),
-                    ir_ty!(FunTy(INT_TY, ir_ty!(FunTy(INT_KONT_TY, RET_TY)))),
-                    RETURN_TY
-                ])))
-            ));
-
-            static READER_HANDLER_TY: IrTy<'static> = ir_ty!(ForallTy(
-                R,
-                ir_ty!(ProductTy(Handle(&[
-                    ir_ty!(FunTy(UNIT_TY, ir_ty!(FunTy(UNIT_KONT_TY, RET_TY)))),
-                    RETURN_TY
-                ])))
-            ));
-
-            match eff_id {
-                DummyEff::STATE_ID => STATE_HANDLER_TY,
-                DummyEff::READER_ID => READER_HANDLER_TY,
-                _ => unimplemented!(),
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1539,7 +1265,7 @@ mod tests {
     use super::{test_utils::LowerDb, *};
     use aiahr_core::memory::arena::BumpArena;
     use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
-    use aiahr_tc::test_utils::{DummyEff, MkTerm};
+    use aiahr_tc::test_utils::MkTerm;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
     use expect_test::expect;
@@ -1554,6 +1280,7 @@ mod tests {
     where
         S: InternerByRef<str>,
     {
+        use aiahr_tc::test_utils::DummyEff;
         let unresolved = aiahr_parser::parser::test_utils::parse_term(arena, interner, input);
 
         let inames = HashMap::default();
