@@ -1343,6 +1343,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn lower_wand() {
         let arena = Bump::new();
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);

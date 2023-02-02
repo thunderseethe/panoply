@@ -780,18 +780,31 @@ where
                 )
             }
             Term::Handle { eff, handler, body } => {
+                let ret_ty = self.fresh_var();
+
                 let mut row = eff_info
                     .effect_members(*eff)
                     .iter()
                     .map(|mem| {
                         let sig = self.instantiate(eff_info.effect_member_sig(*eff, *mem));
                         let name = eff_info.effect_member_name(*eff, *mem);
-                        (self.mk_label(&name), sig.ty)
+
+                        let (op_arg, op_ret) = sig.ty.try_as_fn_ty().unwrap_or_else(|ty| {
+                            let (arg, ret) = (self.fresh_var(), self.fresh_var());
+                            self.constraints.add_ty_eq(ty, self.mk_ty(FunTy(arg, ret)));
+                            (arg, ret)
+                        });
+
+                        let handler_member_type = self.mk_ty(FunTy(
+                            op_arg,
+                            self.mk_ty(FunTy(self.mk_ty(FunTy(op_ret, ret_ty)), ret_ty)),
+                        ));
+                        (self.mk_label(&name), handler_member_type)
                     })
                     .collect::<Vec<_>>();
 
                 let body_ty = self.fresh_var();
-                let ret_ty = self.fresh_var();
+
                 // Append the return to our expected handler type as it's not included in effect
                 // definition.
                 row.push((self.mk_label("return"), self.mk_ty(FunTy(body_ty, ret_ty))));
@@ -851,40 +864,30 @@ where
         &mut self,
         ty: InferTy<'infer>,
     ) -> (InferTy<'infer>, InferTy<'infer>) {
-        match *ty {
-            FunTy(arg, ret) => (arg, ret),
-            _ => {
-                let arg = self.fresh_var();
-                let ret = self.fresh_var();
-                self.constraints.add_ty_eq(ty, self.mk_ty(FunTy(arg, ret)));
-                (arg, ret)
-            }
-        }
+        ty.try_as_fn_ty().unwrap_or_else(|ty| {
+            let arg = self.fresh_var();
+            let ret = self.fresh_var();
+            self.constraints.add_ty_eq(ty, self.mk_ty(FunTy(arg, ret)));
+            (arg, ret)
+        })
     }
+
     /// Make this type equal to a row and return that equivalent row.
     /// If it is already a row convert it directly, otherwise add a constraint that type must be a
     /// row.
     pub(crate) fn equate_as_prod_row(&mut self, ty: InferTy<'infer>) -> InferRow<'infer> {
-        match *ty {
-            ProdTy(row) => row,
-            RowTy(row) => Row::Closed(row),
-            _ => {
-                let unifier = self.unifiers.new_key(None);
-                self.constraints.add_ty_eq(self.mk_ty(VarTy(unifier)), ty);
-                Row::Open(unifier)
-            }
-        }
+        ty.try_as_prod_row().unwrap_or_else(|ty| {
+            let unifier = self.unifiers.new_key(None);
+            self.constraints.add_ty_eq(self.mk_ty(VarTy(unifier)), ty);
+            Row::Open(unifier)
+        })
     }
     pub(crate) fn equate_as_sum_row(&mut self, ty: InferTy<'infer>) -> InferRow<'infer> {
-        match *ty {
-            SumTy(row) => row,
-            RowTy(row) => Row::Closed(row),
-            _ => {
-                let unifier = self.unifiers.new_key(None);
-                self.constraints.add_ty_eq(self.mk_ty(VarTy(unifier)), ty);
-                Row::Open(unifier)
-            }
-        }
+        ty.try_as_sum_row().unwrap_or_else(|ty| {
+            let unifier = self.unifiers.new_key(None);
+            self.constraints.add_ty_eq(self.mk_ty(VarTy(unifier)), ty);
+            Row::Open(unifier)
+        })
     }
 
     fn row_eq_constraint(&mut self, left: InferRow<'infer>, right: InferRow<'infer>) {
@@ -2705,8 +2708,17 @@ mod tests {
         let arena = Bump::new();
         let handler = arena.mk_concat(
             arena.mk_concat(
-                arena.mk_label("get", arena.mk_abs(VarId(0), Int(3))),
-                arena.mk_label("put", arena.mk_abs(VarId(1), Unit)),
+                arena.mk_label(
+                    "get",
+                    arena.mk_abss(
+                        [VarId(0), VarId(3)],
+                        arena.mk_app(Variable(VarId(3)), Int(3)),
+                    ),
+                ),
+                arena.mk_label(
+                    "put",
+                    arena.mk_abss([VarId(1), VarId(3)], arena.mk_app(Variable(VarId(3)), Unit)),
+                ),
             ),
             arena.mk_label("return", arena.mk_abs(VarId(2), Variable(VarId(2)))),
         );
