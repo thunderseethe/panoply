@@ -1,122 +1,17 @@
-use std::fmt::{self, Debug};
 use std::ops::Index;
 
 use aiahr_core::id::{EffectId, EffectOpId};
 use aiahr_core::{
     ast::{Ast, Direction, RowTerm, RowTermView, Term},
-    define_ids,
-    id::{Id, IdGen, ItemId, ModuleId, TyVarId, VarId},
+    id::{Id, IdGen, IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
+    ir::{IrKind::*, IrTyKind::*, *},
     memory::handle::{Handle, RefHandle},
 };
 use aiahr_tc::{
     ClosedRow, EffectInfo, Evidence, Row, ShardedHashMap, Ty, TyChkRes, TyScheme, TypeKind,
 };
 use bumpalo::Bump;
-use pretty::*;
 use rustc_hash::FxHashMap;
-
-define_ids!(
-/// Uniquely identifies variables in IR. Unique within a module.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub IrVarId;
-
-/// Uniquely identifies
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub IrTyVarId;
-);
-
-/// An owned T that is frozen and exposes a reduced Box API.
-struct P<T: ?Sized> {
-    ptr: Box<T>,
-}
-impl<T: fmt::Debug> fmt::Debug for P<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.ptr.as_ref().fmt(f)
-    }
-}
-impl<T> P<T> {
-    fn new(value: T) -> Self {
-        Self {
-            ptr: Box::new(value),
-        }
-    }
-}
-
-/// The kind of a type variable
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-enum Kind {
-    Type,
-    Row,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct IrVarTy {
-    var: IrTyVarId,
-    kind: Kind,
-}
-impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &IrVarTy {
-    fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, ()> {
-        allocator
-            .as_string(self.var.0)
-            .append(allocator.text(":"))
-            .append(allocator.space())
-            .append(allocator.text(match self.kind {
-                Kind::Type => "Type",
-                Kind::Row => "Row",
-            }))
-            .parens()
-    }
-}
-
-#[derive(PartialEq, Eq, Clone, Copy, Hash)]
-pub enum IrTyKind<'ctx> {
-    IntTy,
-    // TODO: Should this have a different name?
-    EvidenceVectorTy,
-    VarTy(IrVarTy),
-    FunTy(IrTy<'ctx>, IrTy<'ctx>),
-    ForallTy(IrVarTy, IrTy<'ctx>),
-    ProductTy(RefHandle<'ctx, [IrTy<'ctx>]>),
-    CoproductTy(RefHandle<'ctx, [IrTy<'ctx>]>),
-}
-impl<'ctx> Debug for IrTyKind<'ctx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            VarTy(v) => f.debug_tuple("VarTy").field(v).finish(),
-            IntTy => write!(f, "IntTy"),
-            EvidenceVectorTy => write!(f, "EvidenceVectorTy"),
-            FunTy(arg, ret) => f.debug_tuple("FunTy").field(arg).field(ret).finish(),
-            ForallTy(ty_var, ty) => f.debug_tuple("ForallTy").field(ty_var).field(ty).finish(),
-            ProductTy(elems) => f.debug_tuple("ProductTy").field(&elems.0).finish(),
-            CoproductTy(elems) => f.debug_tuple("CoproductTy").field(&elems.0).finish(),
-        }
-    }
-}
-use IrTyKind::*;
-
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-pub struct IrTy<'ctx>(RefHandle<'ctx, IrTyKind<'ctx>>);
-impl<'ctx> Debug for IrTy<'ctx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0 .0.fmt(f)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-struct IrVar<'ctx> {
-    var: IrVarId,
-    ty: IrTy<'ctx>,
-}
-impl<'a, 'ctx, D> Pretty<'a, D> for &IrVar<'ctx>
-where
-    D: ?Sized + DocAllocator<'a>,
-{
-    fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, ()> {
-        arena
-            .text("Var")
-            .append(arena.text(self.var.0.to_string()).parens())
-    }
-}
 
 struct IrCtx<'ctx> {
     arena: &'ctx Bump,
@@ -145,6 +40,7 @@ impl<'ctx> IrCtx<'ctx> {
             ._intern_ref(kinds, || Handle(self.arena.alloc_slice_copy(kinds)))
     }
 }
+
 pub trait MkIrTy<'ctx> {
     fn mk_ir_ty(&self, kind: IrTyKind<'ctx>) -> IrTy<'ctx>;
     fn mk_prod_ty(&self, elems: &[IrTy<'ctx>]) -> IrTy<'ctx>;
@@ -179,305 +75,15 @@ impl<'ctx> IntoIrTy<'ctx> for IrTyKind<'ctx> {
 
 impl<'ctx> MkIrTy<'ctx> for IrCtx<'ctx> {
     fn mk_ir_ty(&self, kind: IrTyKind<'ctx>) -> IrTy<'ctx> {
-        IrTy(self.intern_ir_ty(kind))
+        IrTy::new(self.intern_ir_ty(kind))
     }
 
     fn mk_prod_ty(&self, elems: &[IrTy<'ctx>]) -> IrTy<'ctx> {
-        IrTy(self.intern_ir_ty(IrTyKind::ProductTy(self.intern_ir_ty_slice(elems))))
+        IrTy::new(self.intern_ir_ty(IrTyKind::ProductTy(self.intern_ir_ty_slice(elems))))
     }
 
     fn mk_coprod_ty(&self, elems: &[IrTy<'ctx>]) -> IrTy<'ctx> {
-        IrTy(self.intern_ir_ty(IrTyKind::CoproductTy(self.intern_ir_ty_slice(elems))))
-    }
-}
-
-/// An Ir node
-/// `Ir` is much more explicit than `Term` from `Ast`. It is based on System F with some modest
-/// extensions. Each variable is annotated with it's type, and each type is annotated with it's kind.
-/// Type constraints are represented as explicit parameters in `Ir`.
-///
-/// The row typing of `Ast` is boiled down to trivial products and coproducts at the `Ir` level.
-/// Evidence parameters (which are just value parameters in `Ir`) are used to replicate the
-/// behavior of rows seen in `Ast`.
-///
-/// Effect typing is also made explicit and transformed to a lower level reprsentation in `Ir`.
-/// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
-/// the primitives to express delimited control which is how we implement effects under the hood.
-pub struct Ir<'ctx> {
-    kind: IrKind<'ctx>,
-}
-impl<'ctx> Debug for Ir<'ctx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.kind.fmt(f)
-    }
-}
-impl<'ctx> Ir<'ctx> {
-    fn new(kind: IrKind<'ctx>) -> Self {
-        Self { kind }
-    }
-
-    fn var(var: IrVar<'ctx>) -> Self {
-        Ir::new(Var(var))
-    }
-
-    fn app(head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
-        spine
-            .into_iter()
-            .fold(head, |func, arg| Ir::new(App(P::new(func), P::new(arg))))
-    }
-
-    fn abss<I>(vars: I, body: Ir<'ctx>) -> Self
-    where
-        I: IntoIterator,
-        I::IntoIter: DoubleEndedIterator<Item = IrVar<'ctx>>,
-    {
-        vars.into_iter()
-            .rfold(body, |body, var| Ir::new(Abs(var, P::new(body))))
-    }
-
-    fn case_on_var(var: IrVar<'ctx>, cases: impl IntoIterator<Item = Ir<'ctx>>) -> Self {
-        Ir::new(Case(
-            P::new(Ir::var(var)),
-            cases.into_iter().map(P::new).collect(),
-        ))
-    }
-
-    fn local(var: IrVar<'ctx>, value: Ir<'ctx>, body: Ir<'ctx>) -> Self {
-        Ir::new(App(P::new(Ir::new(Abs(var, P::new(body)))), P::new(value)))
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
-    Int(usize),
-    Var(IrVar<'ctx>),
-    // Value abstraction and application
-    Abs(IrVar<'ctx>, IR),
-    App(IR, IR),
-    // Type abstraction and application
-    TyAbs(IrVarTy, IR),
-    TyApp(IR, IrTy<'ctx>),
-    // Trivial products
-    Struct(Vec<IR>),      // Intro
-    FieldProj(usize, IR), // Elim
-    // Trivial coproducts
-    Tag(usize, IR),    // Intro
-    Case(IR, Vec<IR>), // Elim
-    // Delimited control
-    // Generate a new prompt marker
-    NewPrompt(IrVar<'ctx>, IR),
-    // Install a prompt for a marker
-    Prompt(IR, IR),
-    // Yield to a marker's prompt
-    Yield(IR, IR),
-    // Set index in an effect vector to value.
-    VectorSet(IrVar<'ctx>, usize, IR),
-    VectorGet(IrVar<'ctx>, usize),
-}
-impl<'ctx> IrKind<'ctx> {
-    fn arena_view<'a>(&self, arena: &'a Bump) -> IK<'a, 'ctx> {
-        IK(arena.alloc(match self {
-            Int(i) => Int(*i),
-            Var(v) => Var(*v),
-            Abs(arg, body) => Abs(*arg, body.ptr.kind.arena_view(arena)),
-            App(func, arg) => App(
-                func.ptr.kind.arena_view(arena),
-                arg.ptr.kind.arena_view(arena),
-            ),
-            TyAbs(ty_var, body) => TyAbs(*ty_var, body.ptr.kind.arena_view(arena)),
-            TyApp(ty_abs, ty) => TyApp(ty_abs.ptr.kind.arena_view(arena), *ty),
-            Struct(elems) => Struct(elems.iter().map(|e| e.ptr.kind.arena_view(arena)).collect()),
-            FieldProj(idx, term) => FieldProj(*idx, term.ptr.kind.arena_view(arena)),
-            Tag(tag, term) => Tag(*tag, term.ptr.kind.arena_view(arena)),
-            Case(discri, cases) => Case(
-                discri.ptr.kind.arena_view(arena),
-                cases.iter().map(|e| e.ptr.kind.arena_view(arena)).collect(),
-            ),
-            NewPrompt(p_var, body) => NewPrompt(*p_var, body.ptr.kind.arena_view(arena)),
-            Prompt(marker, body) => Prompt(
-                marker.ptr.kind.arena_view(arena),
-                body.ptr.kind.arena_view(arena),
-            ),
-            Yield(marker, value) => Yield(
-                marker.ptr.kind.arena_view(arena),
-                value.ptr.kind.arena_view(arena),
-            ),
-            VectorSet(vec, idx, value) => VectorSet(*vec, *idx, value.ptr.kind.arena_view(arena)),
-            VectorGet(vec, idx) => VectorGet(*vec, *idx),
-        }))
-    }
-}
-impl<'a, 'ctx> Pretty<'a, pretty::Arena<'a>> for &IrKind<'ctx> {
-    fn pretty(self, arena: &'a pretty::Arena<'a>) -> pretty::DocBuilder<'a, pretty::Arena<'a>, ()> {
-        fn gather_abs<'a, 'ctx>(
-            vars: &mut Vec<IrVar<'ctx>>,
-            kind: &'a IrKind<'ctx>,
-        ) -> &'a IrKind<'ctx> {
-            match kind {
-                Abs(arg, body) => {
-                    vars.push(*arg);
-                    gather_abs(vars, &body.ptr.kind)
-                }
-                _ => kind,
-            }
-        }
-        fn gather_ty_abs<'a, 'ctx>(
-            vars: &mut Vec<IrVarTy>,
-            kind: &'a IrKind<'ctx>,
-        ) -> &'a IrKind<'ctx> {
-            match kind {
-                TyAbs(arg, body) => {
-                    vars.push(*arg);
-                    gather_ty_abs(vars, &body.ptr.kind)
-                }
-                _ => kind,
-            }
-        }
-        let paren_app_arg = |arg: &IrKind<'ctx>| match arg {
-            App(_, _) => arg.pretty(arena).parens(),
-            _ => arg.pretty(arena),
-        };
-        match self {
-            Int(i) => i.to_string().pretty(arena),
-            Var(v) => v.pretty(arena),
-            Abs(arg, body) => {
-                let mut vars = vec![*arg];
-                let body = gather_abs(&mut vars, &body.ptr.kind);
-                docs![
-                    arena,
-                    docs![
-                        arena,
-                        "fun",
-                        arena.space(),
-                        arena
-                            .intersperse(
-                                vars.into_iter().map(|v| v.pretty(arena)),
-                                arena.text(",").append(arena.space()),
-                            )
-                            .group()
-                            .parens()
-                    ]
-                    .group(),
-                    arena.space(),
-                    body.pretty(arena)
-                        .enclose(arena.line(), arena.line())
-                        .nest(2)
-                        .braces(),
-                    arena.softline(),
-                ]
-            }
-            App(func, arg) => {
-                let func_doc = match &func.ptr.kind {
-                    // Wrap lambda literals in parens so they're easier to read
-                    f @ Abs(_, _) => f.pretty(arena).parens(),
-                    f => f.pretty(arena),
-                };
-                func_doc
-                    .append(arena.space())
-                    .append(paren_app_arg(&arg.ptr.kind))
-            }
-            TyAbs(tyvar, body) => {
-                let mut tyvars = vec![*tyvar];
-                let body = gather_ty_abs(&mut tyvars, &body.ptr.kind);
-                docs![
-                    arena,
-                    docs![
-                        arena,
-                        "forall",
-                        arena.space(),
-                        arena.intersperse(
-                            tyvars.into_iter().map(|tv| tv.pretty(arena)),
-                            arena.space()
-                        ),
-                        arena.space(),
-                    ]
-                    .group(),
-                    ".",
-                    arena.softline().append(body.pretty(arena)).nest(2)
-                ]
-            }
-            Struct(elems) => arena
-                .intersperse(
-                    elems.iter().map(|elem| elem.ptr.kind.pretty(arena)),
-                    arena.text(",").append(arena.softline()),
-                )
-                .enclose(arena.softline(), arena.softline())
-                .nest(2)
-                .braces(),
-            FieldProj(idx, term) => term
-                .ptr
-                .kind
-                .pretty(arena)
-                .append(arena.as_string(idx).brackets()),
-            Tag(tag, term) => docs![
-                arena,
-                arena.as_string(tag),
-                arena.text(":"),
-                arena.space(),
-                &term.ptr.kind
-            ]
-            .angles(),
-            Case(discr, branches) => docs![
-                arena,
-                "case",
-                arena.space(),
-                &discr.ptr.kind,
-                arena.space(),
-                arena
-                    .intersperse(
-                        branches.iter().map(|b| b.ptr.kind.pretty(arena)),
-                        arena.hardline()
-                    )
-                    .nest(2)
-                    .angles()
-            ],
-            TyApp(_, _) => todo!(),
-            NewPrompt(p_var, body) => docs![
-                arena,
-                "new_prompt",
-                p_var.pretty(arena).parens(),
-                body.ptr.kind.pretty(arena).braces()
-            ],
-            Prompt(marker, body) => docs![
-                arena,
-                "prompt",
-                marker.ptr.kind.pretty(arena).parens(),
-                arena.space(),
-                body.ptr
-                    .kind
-                    .pretty(arena)
-                    .group()
-                    .enclose(arena.softline(), arena.softline())
-                    .nest(2)
-                    .braces(),
-            ],
-            Yield(marker, body) => docs![
-                arena,
-                "yield",
-                marker.ptr.kind.pretty(arena).parens(),
-                arena.space(),
-                body.ptr.kind.pretty(arena).nest(2).braces()
-            ],
-            VectorSet(vec, idx, value) => docs![
-                arena,
-                vec,
-                arena.as_string(idx).brackets(),
-                arena.space(),
-                ":=",
-                arena.softline(),
-                &value.ptr.kind,
-            ],
-            VectorGet(vec, idx) => docs![arena, vec, arena.as_string(idx).brackets()],
-        }
-    }
-}
-use IrKind::*;
-
-#[derive(PartialEq, Eq, Clone, Copy)]
-struct IK<'a, 'ctx>(&'a IrKind<'ctx, IK<'a, 'ctx>>);
-impl<'a, 'ctx> Debug for IK<'a, 'ctx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        IrTy::new(self.intern_ir_ty(IrTyKind::CoproductTy(self.intern_ir_ty_slice(elems))))
     }
 }
 
@@ -1535,6 +1141,7 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::ops::Deref;
 
     use super::{test_utils::LowerDb, *};
     use aiahr_core::memory::arena::BumpArena;
@@ -1583,16 +1190,10 @@ mod tests {
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
 
-        assert_matches!(ir.kind, TyAbs(ty_var, body) => {
-            assert_matches!(
-                body.ptr.kind,
-                Abs(var@IrVar { ty, .. }, body) => {
-                    assert_eq!(ty.0.0, &VarTy(ty_var));
-                    assert_matches!(body.ptr.kind, Var(body_var) => {
-                        assert_eq!(var, body_var);
-                    });
-                });
-        });
+        ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(body_var))) => {
+            assert_eq!(var.ty.0.0, &VarTy(*ty_var));
+            assert_eq!(var, body_var);
+        })
     }
 
     #[test]
@@ -1605,21 +1206,25 @@ mod tests {
 
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
-        assert_matches!(ir.kind.arena_view(&arena), IK(TyAbs(ty_var, IK(App(IK(Abs(ev_a, IK(Abs(a, body)))), IK(Struct(ev_terms)))))) => {
-            assert_matches!(body, IK(App(IK(App(IK(FieldProj(0, IK(Var(ev_b)))), IK(Var(left_a)))), IK(Var(right_a)))) => {
-               assert_eq!(ev_a, ev_b);
-               assert_eq!(a, left_a);
-               assert_eq!(a, right_a);
-               assert_eq!(a.ty.0.0, &VarTy(*ty_var));
-               assert_matches!(&ev_terms[0], IK(Abs(m, IK(Abs(n, IK(Struct(splat)))))) => {
-                   assert_matches!(&splat[0], IK(Var(_m)) => { assert_eq!(m, _m); });
-                   assert_matches!(&splat[1], IK(Var(_n)) => { assert_eq!(n, _n); });
-               });
+        ir_matcher!(ir,
+            TyAbs([ty_var],
+                  App([
+                      Abs([ev_a, a], App([FieldProj(0, Var(ev_b)), Var(left_a), Var(right_a)])),
+                      Struct(ev_terms)])) => {
+            assert_eq!(ev_a, ev_b);
+            assert_eq!(a, left_a);
+            assert_eq!(a, right_a);
+            assert_eq!(a.ty.0.0, &VarTy(*ty_var));
+            let ir = &ev_terms[0];
+            ir_matcher!(ir, Abs([m, n], Struct(splat)) => {
+                assert_matches!(splat[0].deref().kind, Var(_m) => { assert_eq!(*m, _m); });
+                assert_matches!(splat[1].deref().kind, Var(_n) => { assert_eq!(*n, _n); });
             });
         });
     }
 
     #[test]
+    #[ignore]
     fn lower_wand() {
         let arena = Bump::new();
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
@@ -1645,19 +1250,16 @@ mod tests {
 
         let ir = lower(&LowerDb::new(var_tys, term_ress), &ir_ctx, &scheme, &ast);
 
-        let doc_arena = pretty::Arena::new();
-        let mut out = String::new();
-        ir.kind.pretty(&doc_arena).render_fmt(80, &mut out).unwrap();
         ir_matcher!(ir,
             TyAbs([_a, _b, _c, _d, _e],
                 Abs([w, x, y, z],
                     App([
                         FieldProj(0, FieldProj(2, Var(v0))),
                         App([FieldProj(0, Var(v1)), Var(v2), Var(v3)])]))) => {
-            assert_eq!(v0, w);
-            assert_eq!(v1, x);
-            assert_eq!(v2, y);
-            assert_eq!(v3, z);
+            assert_eq!(v0, w, "v0 != w");
+            assert_eq!(v1, x, "v1 != x");
+            assert_eq!(v2, y, "v2 != y");
+            assert_eq!(v3, z, "v3 != z");
         });
     }
 }

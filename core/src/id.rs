@@ -232,4 +232,12 @@ pub VarId;
 /// referred to as untouchabale.k
 #[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub TyVarId;
+
+/// Uniquely identifies variables in IR. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub IrVarId;
+
+/// Uniquely identifies an IR type. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub IrTyVarId;
 );
