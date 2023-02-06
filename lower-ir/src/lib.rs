@@ -1542,7 +1542,7 @@ mod tests {
     use aiahr_tc::test_utils::{DummyEff, MkTerm};
     use assert_matches::assert_matches;
     use bumpalo::Bump;
-    use expect_test::expect;
+    use ir_matcher::ir_matcher;
 
     /// Compile an input string up to (but not including) the lower stage.
     fn compile_upto_lower<'ctx, S>(
@@ -1620,7 +1620,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn lower_wand() {
         let arena = Bump::new();
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
@@ -1649,12 +1648,16 @@ mod tests {
         let doc_arena = pretty::Arena::new();
         let mut out = String::new();
         ir.kind.pretty(&doc_arena).render_fmt(80, &mut out).unwrap();
-        expect![
-            [r"forall (0: Type) (1: Type) (4: Type) (2: Type) (5: Type) .
-  fun (Var(0), Var(1), Var(2), Var(3)) {
-    Var(1)[2][0] (Var(0)[0] Var(2) Var(3))
-    } "]
-        ]
-        .assert_eq(&out)
+        ir_matcher!(ir,
+            TyAbs([_a, _b, _c, _d, _e],
+                Abs([w, x, y, z],
+                    App([
+                        FieldProj(0, FieldProj(2, Var(v0))),
+                        App([FieldProj(0, Var(v1)), Var(v2), Var(v3)])]))) => {
+            assert_eq!(v0, w);
+            assert_eq!(v1, x);
+            assert_eq!(v2, y);
+            assert_eq!(v3, z);
+        });
     }
 }

@@ -4,6 +4,7 @@ members = [
     "core",
     "desugar",
     "lower-ir",
+    "lower-ir/ir-matcher",
     "parser",
     "tc",
 ]

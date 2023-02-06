@@ -5,6 +5,7 @@ edition = "2021"
 
 [dev-dependencies]
 assert_matches = "1.5.0"
+ir-matcher = { path = "ir-matcher" }
 aiahr-tc = { path = "../tc" }
 aiahr-parser = { path = "../parser" }
 aiahr-desugar = { path = "../desugar" }
