@@ -364,13 +364,28 @@ mod tests {
     fn interpret_id_fun() {
         let x = IrVar {
             var: IrVarId(0),
-            ty: IrTy(Handle(&IrTyKind::VarTy(IrVarTy {
-                var: IrTyVarId(0),
-                kind: Kind::Type,
-            }))),
+            ty: IrTy(Handle(&IrTyKind::IntTy)),
         };
         let ir = Ir::app(Ir::abss([x], Ir::var(x)), [Ir::new(IrKind::Int(1))]);
         let mut interpreter = Machine::default();
         assert_eq!(interpreter.interpret(ir), Value::Int(1));
+    }
+
+    #[test]
+    fn interpret_lamba_captures_env_as_expected() {
+        let x = IrVar {
+            var: IrVarId(0),
+            ty: IrTy(Handle(&IrTyKind::IntTy)),
+        };
+        let y = IrVar {
+            var: IrVarId(1),
+            ty: IrTy(Handle(&IrTyKind::IntTy)),
+        };
+        let ir = Ir::app(
+            Ir::abss([x, y], Ir::var(x)),
+            [Ir::new(IrKind::Int(2)), Ir::new(IrKind::Int(0))],
+        );
+        let mut interpreter = Machine::default();
+        assert_eq!(interpreter.interpret(ir), Value::Int(2));
     }
 }
