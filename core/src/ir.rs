@@ -20,7 +20,6 @@ impl<T: fmt::Debug> fmt::Debug for P<T> {
         self.ptr.as_ref().fmt(f)
     }
 }
-
 impl<T> P<T> {
     pub fn new(value: T) -> Self {
         Self {

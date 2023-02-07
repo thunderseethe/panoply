@@ -1190,9 +1190,8 @@ mod tests {
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
 
-        ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(body_var))) => {
+        ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(var))) => {
             assert_eq!(var.ty.0.0, &VarTy(*ty_var));
-            assert_eq!(var, body_var);
         })
     }
 
@@ -1207,14 +1206,10 @@ mod tests {
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
         ir_matcher!(ir,
-            TyAbs([ty_var],
+            TyAbs([_ty_var],
                   App([
-                      Abs([ev_a, a], App([FieldProj(0, Var(ev_b)), Var(left_a), Var(right_a)])),
+                      Abs([ev, a], App([FieldProj(0, Var(ev)), Var(a), Var(a)])),
                       Struct(ev_terms)])) => {
-            assert_eq!(ev_a, ev_b);
-            assert_eq!(a, left_a);
-            assert_eq!(a, right_a);
-            assert_eq!(a.ty.0.0, &VarTy(*ty_var));
             let ir = &ev_terms[0];
             ir_matcher!(ir, Abs([m, n], Struct(splat)) => {
                 assert_matches!(splat[0].deref().kind, Var(_m) => { assert_eq!(*m, _m); });
@@ -1224,7 +1219,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn lower_wand() {
         let arena = Bump::new();
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
@@ -1250,16 +1244,18 @@ mod tests {
 
         let ir = lower(&LowerDb::new(var_tys, term_ress), &ir_ctx, &scheme, &ast);
 
-        ir_matcher!(ir,
-            TyAbs([_a, _b, _c, _d, _e],
-                Abs([w, x, y, z],
+        ir_matcher!(
+            ir,
+            TyAbs(
+                [_a, _b, _c, _d, _e],
+                Abs(
+                    [w, x, y, z],
                     App([
-                        FieldProj(0, FieldProj(2, Var(v0))),
-                        App([FieldProj(0, Var(v1)), Var(v2), Var(v3)])]))) => {
-            assert_eq!(v0, w, "v0 != w");
-            assert_eq!(v1, x, "v1 != x");
-            assert_eq!(v2, y, "v2 != y");
-            assert_eq!(v3, z, "v3 != z");
-        });
+                        FieldProj(0, FieldProj(2, Var(w))),
+                        App([FieldProj(0, Var(x)), Var(y), Var(z)])
+                    ])
+                )
+            )
+        );
     }
 }

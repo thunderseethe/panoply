@@ -1,5 +1,6 @@
 extern crate proc_macro;
 
+use im_rc::HashSet;
 use proc_macro2::Span;
 use quote::{quote, ToTokens};
 use syn::{parse::Parse, punctuated::Punctuated, *};
@@ -13,6 +14,10 @@ impl Uniq {
         let next = self.supply;
         self.supply += 1;
         next
+    }
+
+    fn ident(&mut self, tag: &str) -> Ident {
+        Ident::new(&format!("{}{}", tag, self.next()), Span::call_site())
     }
 }
 
@@ -54,7 +59,7 @@ impl Parse for App {
 
 enum IrMatch {
     Int(Pat),
-    Var(Pat),
+    Var(Ident),
     Abs(Bindings),
     TyAbs(Bindings),
     App(App),
@@ -105,12 +110,14 @@ impl Parse for IrMatch {
         })
     }
 }
+
 impl IrMatch {
     fn as_match(
         self,
         id: proc_macro2::TokenStream,
         match_res: proc_macro2::TokenStream,
         uniq: &mut Uniq,
+        bound: HashSet<Ident>,
     ) -> proc_macro2::TokenStream {
         match self {
             IrMatch::Int(pat) => quote! {
@@ -119,22 +126,31 @@ impl IrMatch {
                     ref e => panic!("assertion failed: expected `{}` but found `{:?}`", stringify!(Int(#pat)), e),
                 }
             },
-            IrMatch::Var(pat) => quote! {
-                match #id {
+            IrMatch::Var(var) => {
+                let (pat, match_res) = if bound.contains(&var) {
+                    let vee = uniq.ident("var");
+                    let match_res = quote!({ assert_eq!(#var, #vee); #match_res });
+                    (vee, match_res)
+                } else {
+                    (var, match_res)
+                };
+                quote!( match #id {
                     IrKind::Var(#pat) => #match_res,
                     ref e => panic!("assertion failed: expected `{}` but found `{:?}`", stringify!(Var(#pat)), e),
-                }
-            },
+                })
+            }
             IrMatch::Abs(bindings) => {
-                let tmp = Ident::new("body", Span::call_site());
+                let tmp = uniq.ident("body");
+                let mut bound = bound.clone();
+                bound.extend(bindings.args.iter().cloned());
                 let mut args = bindings.args.into_iter();
                 let arg = args.next().unwrap();
                 let (tmp, match_res) = args
                     .into_iter()
-                    .rfold((tmp.clone(), bindings.matcher.as_match(quote!(&#tmp.deref().kind), match_res, uniq)),
+                    .rfold((tmp.clone(), bindings.matcher.as_match(quote!(#tmp.kind()), match_res, uniq, bound)),
                     |(tmp, arm), arg| {
-                        let id = Ident::new("body", Span::call_site());
-                        (id.clone(), quote!(match &#id.deref().kind {
+                        let id = uniq.ident("body");
+                        (id.clone(), quote!(match #id.kind() {
                             IrKind::Abs(#arg, #tmp) => #arm
                             ref e => panic!("assertion failed: expected `{}` but found `{:?}`", stringify!(Abs(#arg, #tmp)), e),
                         }))
@@ -154,14 +170,15 @@ impl IrMatch {
                 let level = uniq.next();
                 let hd_id = Ident::new(&format!("head{level}"), Span::call_site());
                 let arg_id = Ident::new(&format!("arg{level}"), Span::call_site());
-                let arg_match = arg.as_match(quote!(&#arg_id.deref().kind), match_res, uniq);
-                let hd_match = head.as_match(quote!(&#hd_id.deref().kind), arg_match, uniq);
+                let arg_match =
+                    arg.as_match(quote!(#arg_id.kind()), match_res, uniq, bound.clone());
+                let hd_match = head.as_match(quote!(#hd_id.kind()), arg_match, uniq, bound.clone());
                 let (hd, arg, match_res) = spine.into_iter().fold((hd_id, arg_id, hd_match), |(hd, arg, match_), next_arg| {
                     let level = uniq.next();
                     let hd_id = Ident::new(&format!("head{level}"), Span::call_site());
                     let arg_id = Ident::new(&format!("arg{level}"), Span::call_site());
-                    let next_match = next_arg.as_match(quote!(&#arg_id.deref().kind), match_, uniq);
-                    (hd_id.clone(), arg_id, quote!(match &#hd_id.deref().kind {
+                    let next_match = next_arg.as_match(quote!(#arg_id.kind()), match_, uniq, bound.clone());
+                    (hd_id.clone(), arg_id, quote!(match #hd_id.kind() {
                         IrKind::App(#hd, #arg) => #next_match,
                         ref e => panic!("assertion failed: expected `{}` but found `{:?}`", stringify!(App(head, arg)), e),
                     }))
@@ -172,22 +189,22 @@ impl IrMatch {
                 })
             }
             IrMatch::TyAbs(bindings) => {
-                let tmp = Ident::new("body", Span::call_site());
+                let tmp = uniq.ident("body");
                 let body_match =
                     bindings
                         .matcher
-                        .as_match(quote!(&#tmp.deref().kind), match_res, uniq);
+                        .as_match(quote!(#tmp.kind()), match_res, uniq, bound);
 
                 let mut args = bindings.args.into_iter();
                 let tv = args.next();
                 let (tmp, match_) =
                     args.into_iter()
                         .rfold((tmp, body_match), |(tmp, matcher), tv| {
-                            let id = Ident::new("body", Span::call_site());
+                            let id = uniq.ident("body");
                             (
                                 id.clone(),
                                 quote! {
-                                    match &#id.deref().kind {
+                                    match #id.kind() {
                                         IrKind::TyAbs(#tv, #tmp) => #matcher,
                                         ref e => panic!("assertion failed: expected `{}` but found `{:?}`", stringify!(TyAbs(#tv, #tmp)), e),
                                     }
@@ -203,9 +220,9 @@ impl IrMatch {
                 }
             }
             IrMatch::TyApp(forall, ty) => {
-                let forall_tmp = Ident::new("forall", Span::call_site());
+                let forall_tmp = uniq.ident("forall");
                 let forall_match =
-                    forall.as_match(quote!(&#forall_tmp.deref().kind), match_res, uniq);
+                    forall.as_match(quote!(#forall_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::TyApp(#forall_tmp, #ty) => #forall_match,
@@ -221,8 +238,8 @@ impl IrMatch {
                 }
             },
             IrMatch::FieldProj(indx, ir) => {
-                let ir_tmp = Ident::new("ir", Span::call_site());
-                let ir_match = ir.as_match(quote!(&#ir_tmp.deref().kind), match_res, uniq);
+                let ir_tmp = uniq.ident("ir");
+                let ir_match = ir.as_match(quote!(#ir_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::FieldProj(#indx, #ir_tmp) => #ir_match,
@@ -231,8 +248,8 @@ impl IrMatch {
                 }
             }
             IrMatch::Tag(tag, ir) => {
-                let ir_tmp = Ident::new("ir", Span::call_site());
-                let ir_match = ir.as_match(quote!(&#ir_tmp.deref().kind), match_res, uniq);
+                let ir_tmp = uniq.ident("ir");
+                let ir_match = ir.as_match(quote!(#ir_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::Tag(#tag, #ir_tmp) => #ir_match,
@@ -241,8 +258,8 @@ impl IrMatch {
                 }
             }
             IrMatch::Case(discr, cases) => {
-                let discr_tmp = Ident::new("discr", Span::call_site());
-                let discr_match = discr.as_match(quote!(&#discr_tmp.deref().kind), match_res, uniq);
+                let discr_tmp = uniq.ident("discr");
+                let discr_match = discr.as_match(quote!(#discr_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::Case(#discr_tmp, #cases) => #discr_match,
@@ -258,8 +275,7 @@ struct IrMatchExpr {
     actual: Ident,
     _comma: Token![,],
     pattern: IrMatch,
-    _fat_arrow: Token![=>],
-    body: Box<Expr>,
+    body: Option<Box<Expr>>,
 }
 impl Parse for IrMatchExpr {
     fn parse(input: parse::ParseStream) -> Result<Self> {
@@ -267,8 +283,13 @@ impl Parse for IrMatchExpr {
             actual: input.parse()?,
             _comma: input.parse()?,
             pattern: input.parse()?,
-            _fat_arrow: input.parse()?,
-            body: input.parse()?,
+            body: input
+                .peek(Token![=>])
+                .then(|| {
+                    input.parse::<Token![=>]>()?;
+                    input.parse()
+                })
+                .transpose()?,
         })
     }
 }
@@ -278,12 +299,13 @@ pub fn ir_matcher(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let ir_match = parse_macro_input!(input as IrMatchExpr);
     let id = ir_match.actual;
     let mut uniq = Uniq::default();
-    ir_match
-        .pattern
-        .as_match(
-            quote!(&#id.kind),
-            ir_match.body.to_token_stream(),
-            &mut uniq,
-        )
-        .into()
+    let bound = HashSet::default();
+    let t = ir_match.pattern.as_match(
+        quote!(&#id.kind),
+        ir_match.body.to_token_stream(),
+        &mut uniq,
+        bound,
+    );
+    //quote!(compile_error!(stringify!(#t))).into()
+    t.into()
 }

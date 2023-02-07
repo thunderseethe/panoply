@@ -1862,7 +1862,7 @@ where
     let infer = InferCtx::new(infer_ctx);
 
     // Infer types for all our variables and the root term.
-    let (infer, gen_storage, ty) = infer.infer(eff_info, term);
+    let (infer, gen_storage, result) = infer.infer(eff_info, term);
 
     // Solve constraints into the unifiers mapping.
     let (mut unifiers, errors) = infer.solve();
@@ -1873,7 +1873,7 @@ where
         unifiers: &mut unifiers,
         free_vars: vec![],
     };
-    let zonked_infer = ty.try_fold_with(&mut zonker).unwrap();
+    let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
     let zonked_var_tys = gen_storage
         .var_tys
         .into_iter()
@@ -1886,7 +1886,7 @@ where
         .map(|(term, ty)| (term, ty.try_fold_with(&mut zonker).unwrap()))
         .collect::<FxHashMap<_, _>>();
 
-    let ev = collect_evidence(&mut zonker);
+    let constrs = collect_evidence(&mut zonker);
 
     let scheme = TyScheme {
         bound: zonker
@@ -1895,7 +1895,7 @@ where
             .enumerate()
             .map(|(i, _)| TyVarId::from_raw(i))
             .collect(),
-        constrs: ev.into_iter().collect(),
+        constrs,
         eff: zonked_infer.eff,
         ty: zonked_infer.ty,
     };
@@ -1953,7 +1953,9 @@ fn collect_evidence<'ctx, 'infer>(
         }
     }
 
-    evidence.into_iter().collect()
+    let mut vec = evidence.into_iter().collect::<Vec<_>>();
+    vec.sort();
+    vec
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
