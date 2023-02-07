@@ -4,6 +4,7 @@ use std::fmt;
 use std::ops::Deref;
 
 /// An owned T that is frozen and exposes a reduced Box API.
+#[derive(Clone, PartialEq, Eq)]
 pub struct P<T: ?Sized> {
     ptr: Box<T>,
 }
@@ -25,6 +26,10 @@ impl<T> P<T> {
         Self {
             ptr: Box::new(value),
         }
+    }
+
+    pub fn into_inner(self) -> T {
+        *self.ptr
     }
 }
 
@@ -89,7 +94,7 @@ pub struct IrVar<'ctx> {
     pub ty: IrTy<'ctx>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     Int(usize),
     Var(IrVar<'ctx>),
@@ -116,6 +121,7 @@ pub enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     VectorSet(IrVar<'ctx>, usize, IR),
     VectorGet(IrVar<'ctx>, usize),
 }
+use rustc_hash::FxHashSet;
 use IrKind::*;
 #[derive(PartialEq, Eq, Clone, Copy)]
 struct IK<'a, 'ctx>(&'a IrKind<'ctx, IK<'a, 'ctx>>);
@@ -137,6 +143,7 @@ impl<'a, 'ctx> fmt::Debug for IK<'a, 'ctx> {
 /// Effect typing is also made explicit and transformed to a lower level reprsentation in `Ir`.
 /// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
 /// the primitives to express delimited control which is how we implement effects under the hood.
+#[derive(Clone, PartialEq)]
 pub struct Ir<'ctx> {
     pub kind: IrKind<'ctx>,
 }
@@ -149,6 +156,10 @@ impl<'ctx> fmt::Debug for Ir<'ctx> {
 impl<'ctx> Ir<'ctx> {
     pub fn new(kind: IrKind<'ctx>) -> Self {
         Self { kind }
+    }
+
+    pub fn kind<'a>(&'a self) -> &'a IrKind<'ctx> {
+        &self.kind
     }
 
     pub fn var(var: IrVar<'ctx>) -> Self {
@@ -179,6 +190,65 @@ impl<'ctx> Ir<'ctx> {
 
     pub fn local(var: IrVar<'ctx>, value: Ir<'ctx>, body: Ir<'ctx>) -> Self {
         Ir::new(App(P::new(Ir::new(Abs(var, P::new(body)))), P::new(value)))
+    }
+
+    pub fn unbound_vars<'a>(&'a self) -> impl Iterator<Item = IrVar<'ctx>> + 'a {
+        self.unbound_vars_with_bound(FxHashSet::default())
+    }
+
+    pub fn unbound_vars_with_bound<'a>(
+        &'a self,
+        bound: FxHashSet<IrVarId>,
+    ) -> impl Iterator<Item = IrVar<'ctx>> + 'a {
+        UnboundVars {
+            bound,
+            stack: vec![self],
+        }
+    }
+}
+
+struct UnboundVars<'a, 'ctx> {
+    bound: FxHashSet<IrVarId>,
+    stack: Vec<&'a Ir<'ctx>>,
+}
+impl<'ctx> Iterator for UnboundVars<'_, 'ctx> {
+    type Item = IrVar<'ctx>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stack.pop().and_then(|ir| match ir.kind() {
+            Int(_) => self.next(),
+            Var(v) | VectorGet(v, _) => (!self.bound.contains(&v.var))
+                .then_some(*v)
+                .or_else(|| self.next()),
+            Abs(v, body) | NewPrompt(v, body) => {
+                self.bound.insert(v.var);
+                self.stack.push(body.deref());
+                self.next()
+            }
+            App(a, b) | Prompt(a, b) | Yield(a, b) => {
+                self.stack.extend([a.deref(), b.deref()]);
+                self.next()
+            }
+            TyAbs(_, a) | TyApp(a, _) | FieldProj(_, a) | Tag(_, a) => {
+                self.stack.extend([a.deref()]);
+                self.next()
+            }
+            Struct(irs) => {
+                self.stack.extend(irs.iter().map(|ir| ir.deref()));
+                self.next()
+            }
+            Case(discr, branches) => {
+                self.stack.push(discr.deref());
+                self.stack.extend(branches.iter().map(|ir| ir.deref()));
+                self.next()
+            }
+            VectorSet(v, _, a) => {
+                self.stack.push(a.deref());
+                (!self.bound.contains(&v.var))
+                    .then_some(*v)
+                    .or_else(|| self.next())
+            }
+        })
     }
 }
 

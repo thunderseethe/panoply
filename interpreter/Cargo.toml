@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 aiahr-core = { path = "../core" }
 rustc-hash = "1.1.0"
+im = "15.1.0"
