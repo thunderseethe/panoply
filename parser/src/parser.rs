@@ -1,7 +1,7 @@
 use aiahr_core::{
     cst::{
         Constraint, Field, IdField, Item, Pattern, ProductRow, Qualification, Row, RowAtom, Scheme,
-        Separated, SumRow, Term, Type,
+        Separated, SumRow, Term, Type, TypeAnnotation,
     },
     diagnostic::parser::ParseErrors,
     loc::Loc,
@@ -258,6 +258,7 @@ pub fn pattern<'a, 's: 'a>(
 enum TermPrefix<'a, 's> {
     Binding {
         var: SpanOf<RefHandle<'s, str>>,
+        annotation: Option<TypeAnnotation<'a, 's>>,
         eq: Span,
         value: &'a Term<'a, 's>,
         semi: Span,
@@ -270,6 +271,7 @@ enum TermPrefix<'a, 's> {
     Abstraction {
         lbar: Span,
         arg: SpanOf<RefHandle<'s, str>>,
+        annotation: Option<TypeAnnotation<'a, 's>>,
         rbar: Span,
     },
 }
@@ -279,11 +281,13 @@ impl<'a, 's> TermPrefix<'a, 's> {
         match self {
             TermPrefix::Binding {
                 var,
+                annotation,
                 eq,
                 value,
                 semi,
             } => arena.alloc(Term::Binding {
                 var,
+                annotation,
                 eq,
                 value,
                 semi,
@@ -295,9 +299,15 @@ impl<'a, 's> TermPrefix<'a, 's> {
                 do_,
                 expr: t,
             }),
-            TermPrefix::Abstraction { lbar, arg, rbar } => arena.alloc(Term::Abstraction {
+            TermPrefix::Abstraction {
                 lbar,
                 arg,
+                annotation,
+                rbar,
+            } => arena.alloc(Term::Abstraction {
+                lbar,
+                arg,
+                annotation,
                 rbar,
                 body: t,
             }),
@@ -339,6 +349,11 @@ impl<'a, 's> TermPostfix<'a, 's> {
 pub fn term<'a, 's: 'a>(
     arena: &'a Bump,
 ) -> impl Parser<Token<'s>, &'a Term<'a, 's>, Error = ParseErrors<'s>> {
+    // Type annotation.
+    let anno = lit(Token::Colon)
+        .then(type_(arena))
+        .map(|(colon, type_)| TypeAnnotation { colon, type_ });
+
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -398,15 +413,19 @@ pub fn term<'a, 's: 'a>(
 
         // Local variable binding
         let local_bind = ident()
+            .then(option(anno.clone()))
             .then(lit(Token::Equal))
             .then(term.clone())
             .then(lit(Token::Semicolon))
-            .map(|(((var, eq), val), semi)| TermPrefix::Binding {
-                var,
-                eq,
-                value: val,
-                semi,
-            });
+            .map(
+                |((((var, annotation), eq), val), semi)| TermPrefix::Binding {
+                    var,
+                    annotation,
+                    eq,
+                    value: val,
+                    semi,
+                },
+            );
 
         let handle = lit(Token::KwWith)
             .then(term)
@@ -416,12 +435,16 @@ pub fn term<'a, 's: 'a>(
         // Lambda abstraction
         let closure = lit(Token::VerticalBar)
             .then(ident())
+            .then(option(anno))
             .then(lit(Token::VerticalBar))
-            .map(|((lbar, var), rbar)| TermPrefix::Abstraction {
-                lbar,
-                arg: var,
-                rbar,
-            });
+            .map(
+                |(((lbar, var), annotation), rbar)| TermPrefix::Abstraction {
+                    lbar,
+                    arg: var,
+                    annotation,
+                    rbar,
+                },
+            );
 
         // Term parser
         // We need to construct our parse tree here bottom to get associativity of bindings and
@@ -470,7 +493,9 @@ where
 mod tests {
     use aiahr_core::{
         cst::{Item, Scheme, Term, Type},
-        ct_rowsum, field, id_field, item_term,
+        ct_rowsum, field,
+        id::ModuleId,
+        id_field, item_term,
         memory::{
             arena::BumpArena,
             intern::{InternerByRef, SyncInterner},
@@ -487,12 +512,14 @@ mod tests {
 
     use super::{aiahr_parser, scheme, term, to_stream, type_};
 
+    const MOD: ModuleId = ModuleId(0);
+
     fn parse_type_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
     ) -> &'a Type<'a, 's> {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
+        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
         type_(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
@@ -504,7 +531,7 @@ mod tests {
         interner: &'s S,
         input: &str,
     ) -> Scheme<'a, 's> {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
+        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
         scheme(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
@@ -516,7 +543,7 @@ mod tests {
         interner: &'s S,
         input: &str,
     ) -> &'a Term<'a, 's> {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
+        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
         term(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
@@ -528,7 +555,7 @@ mod tests {
         interner: &'s S,
         input: &str,
     ) -> &'a [Item<'a, 's>] {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(input).unwrap();
+        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
         aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
 
@@ -682,7 +709,7 @@ mod tests {
     fn test_undelimted_closure_fails() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (tokens, eoi) = aiahr_lexer(&interner).lex("|x whoops(x)").unwrap();
+        let (tokens, eoi) = aiahr_lexer(&interner).lex(MOD, "|x whoops(x)").unwrap();
         assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 
@@ -745,12 +772,13 @@ mod tests {
             parse_term_unwrap(
                 &Bump::new(),
                 &SyncInterner::new(BumpArena::new()),
-                "|x| |y| z = x(y); z"
+                "|x| |y: a| z = x(y); z"
             ),
             term_abs!(
                 "x",
                 term_abs!(
                     "y",
+                    type_named!("a"),
                     term_local!(
                         "z",
                         term_app!(term_sym!("x"), term_sym!("y")),

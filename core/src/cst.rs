@@ -196,10 +196,17 @@ impl<'a, 's> Spanned for Type<'a, 's> {
             Type::Product { lbrace, rbrace, .. } => Span::join(lbrace, rbrace),
             Type::Function {
                 domain, codomain, ..
-            } => Span::join(domain, codomain),
+            } => Span::join(*domain, *codomain),
             Type::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
         }
     }
+}
+
+/// A type annotation for a variable.
+#[derive(Clone, Copy, Debug)]
+pub struct TypeAnnotation<'a, 's> {
+    pub colon: Span,
+    pub type_: &'a Type<'a, 's>,
 }
 
 /// An atomic row for use in a type constraint.
@@ -275,21 +282,6 @@ impl<'a, 's> Spanned for Scheme<'a, 's> {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Effect<'a, 's> {
-    pub effect: Span,
-    pub name: SpanOf<RefHandle<'s, str>>,
-    pub lbrace: Span,
-    pub ops: &'a [IdField<'s, Type<'a, 's>>],
-    pub rbrace: Span,
-}
-
-impl<'a, 's> Spanned for Effect<'a, 's> {
-    fn span(&self) -> Span {
-        Span::join(&self.effect, &self.rbrace)
-    }
-}
-
 /// An Aiahr pattern.
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern<'a, 's> {
@@ -313,6 +305,7 @@ impl<'a, 's> Spanned for Pattern<'a, 's> {
 pub enum Term<'a, 's> {
     Binding {
         var: SpanOf<RefHandle<'s, str>>,
+        annotation: Option<TypeAnnotation<'a, 's>>,
         eq: Span,
         value: &'a Term<'a, 's>,
         semi: Span,
@@ -327,6 +320,7 @@ pub enum Term<'a, 's> {
     Abstraction {
         lbar: Span,
         arg: SpanOf<RefHandle<'s, str>>,
+        annotation: Option<TypeAnnotation<'a, 's>>,
         rbar: Span,
         body: &'a Term<'a, 's>,
     },
@@ -360,13 +354,13 @@ pub enum Term<'a, 's> {
 impl<'a, 's> Spanned for Term<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Term::Binding { var, expr, .. } => Span::join(var, expr),
-            Term::Handle { with, expr, .. } => Span::join(with, expr),
-            Term::Abstraction { lbar, body, .. } => Span::join(lbar, body),
-            Term::Application { func, rpar, .. } => Span::join(func, rpar),
+            Term::Binding { var, expr, .. } => Span::join(var, *expr),
+            Term::Handle { with, expr, .. } => Span::join(with, *expr),
+            Term::Abstraction { lbar, body, .. } => Span::join(lbar, *body),
+            Term::Application { func, rpar, .. } => Span::join(*func, rpar),
             Term::ProductRow(p) => p.span(),
             Term::SumRow(s) => s.span(),
-            Term::DotAccess { base, field, .. } => Span::join(base, field),
+            Term::DotAccess { base, field, .. } => Span::join(*base, field),
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
             Term::SymbolRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
@@ -396,7 +390,7 @@ impl<'a, 's> Item<'a, 's> {
 impl<'a, 's> Spanned for Item<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Item::Term { name, value, .. } => Span::join(name, value),
+            Item::Term { name, value, .. } => Span::join(name, *value),
         }
     }
 }
@@ -593,6 +587,16 @@ macro_rules! term_local {
     ($var:pat, $value:pat, $expr:pat) => {
         &$crate::cst::Term::Binding {
             var: $crate::span_of!($crate::h!((var))),
+            annotation: None,
+            value: $value,
+            expr: $expr,
+            ..
+        }
+    };
+    ($var:pat, $type_:pat, $value:pat, $expr:pat) => {
+        &$crate::cst::Term::Binding {
+            var: $crate::span_of!($crate::h!((var))),
+            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             value: $value,
             expr: $expr,
             ..
@@ -616,6 +620,15 @@ macro_rules! term_abs {
     ($arg:pat, $body:pat) => {
         &$crate::cst::Term::Abstraction {
             arg: $crate::span_of!($crate::h!($arg)),
+            annotation: None,
+            body: $body,
+            ..
+        }
+    };
+    ($arg:pat, $type_:pat, $body:pat) => {
+        &$crate::cst::Term::Abstraction {
+            arg: $crate::span_of!($crate::h!($arg)),
+            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             body: $body,
             ..
         }

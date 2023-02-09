@@ -1,12 +1,114 @@
 //! This module defines errors from the name resolution pass.
 
+use bitflags::bitflags;
+use std::{array, iter::Flatten, option};
+
 use crate::{
     id::ModuleId,
     memory::handle::RefHandle,
     span::{Span, SpanOf, Spanned},
 };
 
-use super::{Citation, Diagnostic};
+use super::{english::EnglishIterExt, Citation, Diagnostic};
+
+/// A kind of name.
+#[derive(Clone, Copy, Debug)]
+#[repr(u8)]
+pub enum NameKind {
+    Module = 0b1,
+    Item = 0b10,
+    TyVar = 0b100,
+    Var = 0b1000,
+}
+
+impl NameKind {
+    /// The English name for a name kind, with an indefinite article (i.e., "a" or "an").
+    pub fn indefinite_noun(&self) -> &'static str {
+        match self {
+            NameKind::Module => "a module",
+            NameKind::Item => "a top-level item",
+            NameKind::TyVar => "a type variable",
+            NameKind::Var => "a variable",
+        }
+    }
+}
+
+bitflags! {
+    /// A bitset of name kinds.
+    pub struct NameKinds: u8 {
+        const MODULE = NameKind::Module as u8;
+        const ITEM = NameKind::Item as u8;
+        const TY_VAR = NameKind::TyVar as u8;
+        const VAR = NameKind::Var as u8;
+    }
+}
+
+impl NameKinds {
+    fn get(&self, kind: NameKind) -> Option<NameKind> {
+        self.contains(NameKinds::from(kind)).then_some(kind)
+    }
+
+    pub fn iter(&self) -> Flatten<array::IntoIter<option::IntoIter<NameKind>, 4>> {
+        [
+            self.get(NameKind::Item).into_iter(),
+            self.get(NameKind::Module).into_iter(),
+            self.get(NameKind::TyVar).into_iter(),
+            self.get(NameKind::Var).into_iter(),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+impl From<NameKind> for NameKinds {
+    fn from(kind: NameKind) -> Self {
+        match kind {
+            NameKind::Module => NameKinds::MODULE,
+            NameKind::Item => NameKinds::ITEM,
+            NameKind::TyVar => NameKinds::TY_VAR,
+            NameKind::Var => NameKinds::VAR,
+        }
+    }
+}
+
+/// A reason that a reference wasn't resolved to a candidate name.
+#[derive(Clone, Copy, Debug)]
+pub enum RejectionReason {
+    /// The reference context and candidate name have incompatible kinds.
+    WrongKind {
+        /// The kind of the candidate name.
+        actual: NameKind,
+        /// The kinds that would be valid at the reference site.
+        expected: NameKinds,
+    },
+}
+
+impl RejectionReason {
+    // An explanation for why the candidate was rejected, suitable for use as a dependent clause.
+    pub fn dependent_clause(&self) -> String {
+        match self {
+            RejectionReason::WrongKind { actual, expected } => {
+                format!(
+                    "it refers to {}, while the context above requires {}",
+                    actual.indefinite_noun(),
+                    expected
+                        .iter()
+                        .map(|kind| kind.indefinite_noun())
+                        .english_list("or")
+                )
+            }
+        }
+    }
+}
+
+/// A suggestion for what name the user might have intended to refer to.
+#[derive(Clone, Copy, Debug)]
+pub struct Suggestion<'s> {
+    /// The suggested name.
+    pub name: SpanOf<RefHandle<'s, str>>,
+    /// Why the name wasn't matched.
+    pub why_not: RejectionReason,
+}
 
 /// A name resolution error.
 #[derive(Debug)]
@@ -15,35 +117,43 @@ pub enum NameResolutionError<'s> {
     Duplicate {
         /// The duplicated name.
         name: RefHandle<'s, str>,
+        /// The kind of both names.
+        kind: NameKind,
         /// The original definition site.
         original: Span,
         /// The duplicate definition site.
         duplicate: Span,
     },
     /// A reference to a name that isn't defined.
-    NotFound(SpanOf<RefHandle<'s, str>>),
-    /// A reference to a name in a module that isn't defined.
-    NotFoundIn {
-        /// The searched-in module.
-        module: ModuleId,
-        /// The name that isn't defined in the module.
+    NotFound {
+        /// The name that isn't defined.
         name: SpanOf<RefHandle<'s, str>>,
+        /// The module that was expected to contain the given name as a member.
+        context_module: Option<ModuleId>,
+        /// Possible names that the user could have intended.
+        suggestions: Vec<Suggestion<'s>>,
     },
-    /// A module used as a term.
-    ModuleTerm(SpanOf<ModuleId>),
+    /// A compound name has the wrong kind for the context in which it is used.
+    WrongKind {
+        /// The location of the compound name.
+        expr: Span,
+        /// The kind of the compound name.
+        actual: NameKind,
+        /// The kinds that would be valid at the usage site.
+        expected: NameKinds,
+    },
 }
 
 impl<'s> Diagnostic for NameResolutionError<'s> {
     fn name(&self) -> &'static str {
         match self {
             NameResolutionError::Duplicate { .. } => "name-resolution-duplicate-definition",
-            NameResolutionError::NotFound(..) => "name-resolution-name-not-found",
-            NameResolutionError::NotFoundIn { .. } => "name-resolution-name-not-found-in-module",
-            NameResolutionError::ModuleTerm(..) => "name-resolution-module-as-term",
+            NameResolutionError::NotFound { .. } => "name-resolution-name-not-found",
+            NameResolutionError::WrongKind { .. } => "name-resolution-wrong-kind",
         }
     }
 
-    fn principal(&self) -> Citation {
+    fn principal<M: crate::displayer::Displayer<ModuleId>>(&self, modules: &M) -> Citation {
         match self {
             NameResolutionError::Duplicate {
                 name, duplicate, ..
@@ -51,33 +161,57 @@ impl<'s> Diagnostic for NameResolutionError<'s> {
                 span: *duplicate,
                 message: format!("Duplicate definition of symbol '{}'", name.0),
             },
-            NameResolutionError::NotFound(name) => Citation {
+            NameResolutionError::NotFound {
+                name,
+                context_module,
+                ..
+            } => Citation {
                 span: name.span(),
-                message: format!("Unknown symbol '{}'", name.value.0),
+                message: match context_module {
+                    Some(m) => format!(
+                        "Symbol '{}' not found in module {}",
+                        name.value.0,
+                        modules.show(m)
+                    ),
+                    None => format!("Symbol '{}' not found", name.value.0),
+                },
             },
-            NameResolutionError::NotFoundIn { module, name } => Citation {
-                span: name.span(),
+            NameResolutionError::WrongKind {
+                expr,
+                actual,
+                expected,
+            } => Citation {
+                span: *expr,
                 message: format!(
-                    "Symbol '{}' not found in module '{:?}'",
-                    name.value.0, module
+                    "Expression refers to {}, while it is used as if it was {}",
+                    actual.indefinite_noun(),
+                    expected
+                        .iter()
+                        .map(|kind| kind.indefinite_noun())
+                        .english_list("or")
                 ),
-            },
-            NameResolutionError::ModuleTerm(module) => Citation {
-                span: module.span(),
-                message: format!("Module '{:?}' used as a term", module.value),
             },
         }
     }
 
-    fn additional(&self) -> Vec<Citation> {
+    fn additional<M: crate::displayer::Displayer<ModuleId>>(&self, _: &M) -> Vec<Citation> {
         match self {
             NameResolutionError::Duplicate { original, .. } => vec![Citation {
                 span: *original,
                 message: "Original definition here".to_owned(),
             }],
-            NameResolutionError::NotFound(..) => Vec::new(),
-            NameResolutionError::NotFoundIn { .. } => Vec::new(),
-            NameResolutionError::ModuleTerm(..) => Vec::new(),
+            NameResolutionError::NotFound { suggestions, .. } => suggestions
+                .iter()
+                .map(|sugg| Citation {
+                    span: sugg.name.span(),
+                    message: format!(
+                        "Did you mean '{}'? (rejected because {})",
+                        sugg.name.value.0,
+                        sugg.why_not.dependent_clause()
+                    ),
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 }

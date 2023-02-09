@@ -1,11 +1,16 @@
 use std::{marker::PhantomData, str::CharIndices};
 
+use crate::id::ModuleId;
+
 /// A location in a source text. Contains redundant data to avoid extra computation.
 ///
 /// All source texts have a "one past the end" location which corresponds to a cursor after the last
 /// character.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Loc {
+    /// The module ID of the source text.
+    pub module: ModuleId,
+
     /// A 0-indexed byte offset into the source text. Must point to the start of a valid unicode
     /// character (i.e., scalar value).
     pub byte: usize,
@@ -16,6 +21,18 @@ pub struct Loc {
     /// The 0-indexed column that the byte offset lies on on the line. Measured in characters
     /// (unicode scalar values) after the start of the line.
     pub col: usize,
+}
+
+impl Loc {
+    /// Returns a location at the beginning of the source text.
+    pub fn start(module: ModuleId) -> Loc {
+        Loc {
+            module,
+            byte: 0,
+            line: 0,
+            col: 0,
+        }
+    }
 }
 
 // A line of source text.
@@ -88,6 +105,7 @@ impl<'i> Line<'i> {
 /// Converts byte indices in a particular source text to `Loc`s.
 #[derive(Debug)]
 pub struct Locator<'i> {
+    module: ModuleId,
     // The lines of source text. Always holds at least one value.
     lines: Vec<Line<'i>>,
     // The total length of the source text in bytes.
@@ -96,7 +114,7 @@ pub struct Locator<'i> {
 
 impl<'i> Locator<'i> {
     /// Returns a new `Locator` for the given source text.
-    pub fn new(text: &'i str) -> Locator<'i> {
+    pub fn new(module: ModuleId, text: &'i str) -> Locator<'i> {
         let mut ci = text.char_indices();
         let mut lines = Vec::new();
         let mut length = 0;
@@ -106,7 +124,11 @@ impl<'i> Locator<'i> {
             lines.push(line);
             more
         } {}
-        Locator { lines, length }
+        Locator {
+            module,
+            lines,
+            length,
+        }
     }
 
     /// Converts a byte offset in the original source text to a `Loc`.
@@ -120,11 +142,13 @@ impl<'i> Locator<'i> {
                 .binary_search_by_key(&byte, |line| line.start_byte)
             {
                 Ok(i) => Loc {
+                    module: self.module,
                     byte,
                     line: i,
                     col: 0,
                 },
                 Err(i) => Loc {
+                    module: self.module,
                     byte,
                     line: i - 1,
                     col: self.lines[i - 1].column(byte)?,
@@ -136,6 +160,7 @@ impl<'i> Locator<'i> {
     /// The "one past the end" location in the source text.
     pub fn eoi(&self) -> Loc {
         Loc {
+            module: self.module,
             byte: self.length,
             line: self.lines.len() - 1,
             col: self.lines.last().unwrap().eol(),
@@ -153,11 +178,15 @@ impl<'i> Locator<'i> {
 
 #[cfg(test)]
 mod tests {
+    use crate::id::ModuleId;
+
     use super::Locator;
+
+    const MOD: ModuleId = ModuleId(0);
 
     #[test]
     fn test_locator_unicode() {
-        let locator = Locator::new("y̆es");
+        let locator = Locator::new(MOD, "y̆es");
 
         let l0 = locator.locate(0).unwrap();
         assert_eq!(l0.byte, 0);
@@ -196,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_multiline() {
-        let locator = Locator::new("a\nbc\nd");
+        let locator = Locator::new(MOD, "a\nbc\nd");
 
         let l2 = locator.locate(2).unwrap();
         assert_eq!(l2.byte, 2);
@@ -445,7 +474,7 @@ Box drawing alignment tests:                                          █
 
 "#;
 
-        let locator = Locator::new(W3_DEMO_TEXT);
+        let locator = Locator::new(MOD, W3_DEMO_TEXT);
         assert_eq!(locator.eoi().byte, W3_DEMO_TEXT.len());
         for (i, _) in W3_DEMO_TEXT.char_indices() {
             let loc = locator

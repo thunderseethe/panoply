@@ -98,14 +98,18 @@ pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> A
 mod tests {
     use super::*;
     use aiahr_core::cst::{IdField, ProductRow, Separated};
+    use aiahr_core::id::ModuleId;
     use aiahr_core::memory::arena::BumpArena;
     use aiahr_core::memory::intern::InternerByRef;
     use aiahr_core::memory::intern::SyncInterner;
     use aiahr_core::{id::VarId, loc::Loc, nst, span::SpanOf};
     use bumpalo::Bump;
 
+    const MOD: ModuleId = ModuleId(0);
+
     fn random_loc() -> Loc {
         Loc {
+            module: MOD,
             byte: rand::random(),
             line: rand::random(),
             col: rand::random(),

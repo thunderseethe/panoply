@@ -2,7 +2,7 @@ use std::{
     iter::{Enumerate, Map},
     marker::PhantomData,
     mem::transmute,
-    ops::{Deref, Index},
+    ops::{Deref, DerefMut, Index, IndexMut},
     slice::Iter,
 };
 
@@ -23,6 +23,11 @@ pub struct Ids<I, T> {
 
 impl<I, T> Ids<I, T> {
     fn from_raw(raw: &[T]) -> &Ids<I, T> {
+        // Safe because of #[repr(transparent)].
+        unsafe { transmute(raw) }
+    }
+
+    fn from_raw_mut(raw: &mut [T]) -> &mut Ids<I, T> {
         // Safe because of #[repr(transparent)].
         unsafe { transmute(raw) }
     }
@@ -88,6 +93,15 @@ where
 
     fn index(&self, index: I) -> &Self::Output {
         &self.slice[index.raw()]
+    }
+}
+
+impl<I, T> IndexMut<I> for Ids<I, T>
+where
+    I: Id,
+{
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        &mut self.slice[index.raw()]
     }
 }
 
@@ -168,11 +182,26 @@ where
     }
 }
 
+impl<I, T> Default for IdGen<I, T> {
+    fn default() -> Self {
+        IdGen {
+            vec: Vec::new(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<I, T> Deref for IdGen<I, T> {
     type Target = Ids<I, T>;
 
     fn deref(&self) -> &Self::Target {
         Ids::from_raw(&self.vec)
+    }
+}
+
+impl<I, T> DerefMut for IdGen<I, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Ids::from_raw_mut(&mut self.vec)
     }
 }
 
@@ -202,6 +231,10 @@ pub ModuleId;
 /// An ID for a top-level item in a module. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub ItemId;
+
+/// An ID for a local variable. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub TyVarId;
 
 /// An ID for a local variable. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]

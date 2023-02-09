@@ -2,7 +2,10 @@
 
 use std::{collections::LinkedList, fmt::Display};
 
-use crate::{display_iter::DisplayIterSeparated, span::Span, token::Token};
+use crate::{
+    display_iter::DisplayIterSeparated, displayer::Displayer, id::ModuleId, span::Span,
+    token::Token,
+};
 
 use super::{Citation, Diagnostic};
 
@@ -39,7 +42,7 @@ impl<'s> Diagnostic for ParseError<'s> {
         }
     }
 
-    fn principal(&self) -> Citation {
+    fn principal<M: Displayer<ModuleId>>(&self, _: &M) -> Citation {
         match self {
             ParseError::WrongToken {
                 span,
@@ -56,7 +59,7 @@ impl<'s> Diagnostic for ParseError<'s> {
         }
     }
 
-    fn additional(&self) -> Vec<Citation> {
+    fn additional<M: Displayer<ModuleId>>(&self, _: &M) -> Vec<Citation> {
         Vec::new()
     }
 }

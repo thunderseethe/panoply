@@ -1,6 +1,6 @@
 //! This module defines errors from the lexing pass.
 
-use crate::{loc::Loc, span::Span};
+use crate::{displayer::Displayer, id::ModuleId, loc::Loc, span::Span};
 
 use super::{Citation, Diagnostic};
 
@@ -18,7 +18,7 @@ impl Diagnostic for LexError {
         }
     }
 
-    fn principal(&self) -> Citation {
+    fn principal<M: Displayer<ModuleId>>(&self, _: &M) -> Citation {
         match self {
             LexError::NotAToken(loc) => Citation {
                 span: Span::zero(*loc),
@@ -27,7 +27,7 @@ impl Diagnostic for LexError {
         }
     }
 
-    fn additional(&self) -> Vec<Citation> {
+    fn additional<M: Displayer<ModuleId>>(&self, _: &M) -> Vec<Citation> {
         Vec::new()
     }
 }

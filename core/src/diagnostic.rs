@@ -1,11 +1,12 @@
 //! This module defines types and traits for diagnostic messages (i.e., errors and warnings).
 
 pub mod aiahr;
+mod english;
 pub mod lexer;
 pub mod nameres;
 pub mod parser;
 
-use crate::span::Span;
+use crate::{displayer::Displayer, id::ModuleId, span::Span};
 
 /// Kinds of diagnostic messages.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -19,7 +20,6 @@ pub enum DiagnosticKind {
 /// An annotated citation from source code.
 #[derive(Debug)]
 pub struct Citation {
-    // TODO: add file information.
     /// The span of the citation in source code.
     pub span: Span,
     /// A message associated with the citation. Should begin with a capital letter but not end with
@@ -33,10 +33,10 @@ pub trait Diagnostic {
     fn name(&self) -> &'static str;
 
     /// The principal source of the diagnostic.
-    fn principal(&self) -> Citation;
+    fn principal<M: Displayer<ModuleId>>(&self, modules: &M) -> Citation;
 
     /// Additional citations contributing to the diagnostic.
-    fn additional(&self) -> Vec<Citation>;
+    fn additional<M: Displayer<ModuleId>>(&self, modules: &M) -> Vec<Citation>;
 }
 
 /// A sink for diagnostic messages of a given type.

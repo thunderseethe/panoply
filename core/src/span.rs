@@ -125,16 +125,7 @@ impl<T> Spanned for SpanOf<T> {
     }
 }
 
-impl<T> Spanned for &T
-where
-    T: Spanned,
-{
-    fn span(&self) -> Span {
-        (*self).span()
-    }
-}
-
-/// Matches a `SpanOf` by value alone.
+/// Matches a [`SpanOf`] by value alone.
 #[macro_export]
 macro_rules! span_of {
     ($value:pat) => {

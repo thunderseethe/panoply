@@ -2,6 +2,7 @@ use std::cmp::Reverse;
 
 use aiahr_core::{
     diagnostic::lexer::LexError,
+    id::ModuleId,
     loc::{Loc, Locator},
     memory::{handle::RefHandle, intern::InternerByRef},
     span::SpanOf,
@@ -47,11 +48,15 @@ impl<'s, S> Lexer<'s, S> {
     }
 
     /// Splits `text` into a sequence of tokens.
-    pub fn lex(&self, text: &str) -> Result<(Vec<SpanOf<Token<'s>>>, Loc), LexError>
+    pub fn lex(
+        &self,
+        module: ModuleId,
+        text: &str,
+    ) -> Result<(Vec<SpanOf<Token<'s>>>, Loc), LexError>
     where
         S: InternerByRef<str>,
     {
-        let locator = Locator::new(text);
+        let locator = Locator::new(module, text);
         let mut idx = 0;
         let mut tokens = Vec::new();
 
@@ -141,13 +146,3 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
     )
     .unwrap()
 }
-
-/*
-
-getfoo : z1 + z2 = z3, (foo: a) < z3 => {z1} -> {z2} -> a
-
-effect Get[E, T] {
-    get() -> [E] T
-}
-
- */

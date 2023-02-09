@@ -33,19 +33,25 @@ impl<'s> Diagnostic for AiahrcError<'s> {
         }
     }
 
-    fn principal(&self) -> Citation {
+    fn principal<M: crate::displayer::Displayer<crate::id::ModuleId>>(
+        &self,
+        modules: &M,
+    ) -> Citation {
         match self {
-            AiahrcError::LexError(err) => err.principal(),
-            AiahrcError::NameResolutionError(err) => err.principal(),
-            AiahrcError::ParseError(err) => err.principal(),
+            AiahrcError::LexError(err) => err.principal(modules),
+            AiahrcError::NameResolutionError(err) => err.principal(modules),
+            AiahrcError::ParseError(err) => err.principal(modules),
         }
     }
 
-    fn additional(&self) -> Vec<Citation> {
+    fn additional<M: crate::displayer::Displayer<crate::id::ModuleId>>(
+        &self,
+        modules: &M,
+    ) -> Vec<Citation> {
         match self {
-            AiahrcError::LexError(err) => err.additional(),
-            AiahrcError::NameResolutionError(err) => err.additional(),
-            AiahrcError::ParseError(err) => err.additional(),
+            AiahrcError::LexError(err) => err.additional(modules),
+            AiahrcError::NameResolutionError(err) => err.additional(modules),
+            AiahrcError::ParseError(err) => err.additional(modules),
         }
     }
 }

@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 aiahr-core = { path = "../core" }
 bumpalo = "3.10"
+rustc-hash = "1.1.0"
 
 [dev-dependencies]
 aiahr-parser = { path = "../parser" }

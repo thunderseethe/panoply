@@ -76,13 +76,13 @@ pub enum Term<'a, 's> {
 impl<'a, 's> Spanned for Term<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Term::Binding { var, expr, .. } => Span::join(var, expr),
-            Term::Handle { with, expr, .. } => Span::join(with, expr),
-            Term::Abstraction { lbar, body, .. } => Span::join(lbar, body),
-            Term::Application { func, rpar, .. } => Span::join(func, rpar),
+            Term::Binding { var, expr, .. } => Span::join(var, *expr),
+            Term::Handle { with, expr, .. } => Span::join(with, *expr),
+            Term::Abstraction { lbar, body, .. } => Span::join(lbar, *body),
+            Term::Application { func, rpar, .. } => Span::join(*func, rpar),
             Term::ProductRow(p) => p.span(),
             Term::SumRow(s) => s.span(),
-            Term::FieldAccess { base, field, .. } => Span::join(base, field),
+            Term::FieldAccess { base, field, .. } => Span::join(*base, field),
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
             Term::ItemRef(i) => i.span(),
             Term::VariableRef(v) => v.span(),
@@ -104,7 +104,7 @@ pub enum Item<'a, 's> {
 impl<'a, 's> Spanned for Item<'a, 's> {
     fn span(&self) -> Span {
         match self {
-            Item::Term { name, value, .. } => Span::join(name, value),
+            Item::Term { name, value, .. } => Span::join(name, *value),
         }
     }
 }
