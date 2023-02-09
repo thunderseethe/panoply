@@ -137,7 +137,7 @@ where
 {
     let mut f = f;
     let fields = if let Some(cs) = &prod.fields {
-        Some(resolve_separated(arena, &cs, |field| {
+        Some(resolve_separated(arena, cs, |field| {
             resolve_id_field(field, &mut f)
         })?)
     } else {

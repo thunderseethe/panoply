@@ -1,7 +1,7 @@
 use std::fmt::{self, Debug};
 use std::ops::Deref;
 
-use aiahr_core::define_ids;
+use aiahr_core::id::TyVarId;
 use aiahr_core::memory::handle::RefHandle;
 
 use ena::unify::{EqUnifyValue, UnifyKey};
@@ -14,25 +14,39 @@ use fold::*;
 
 use crate::Candidate;
 
-define_ids!(
+/*define_ids!(
 /// A type variable.
 /// These are explicity referred to by the AST and can persist through type checking.
 /// They may not be modified by the type checking process, often referred to as untouchabale.
 #[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub TcVar;
-);
+);*/
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct UnifierToTcVarError {
     index: u32,
 }
+#[derive(Debug, PartialEq, Eq)]
+pub struct TcVarToUnifierError {
+    index: u32,
+}
 
-impl<'infer> TryFrom<TcUnifierVar<'infer>> for TcVar {
+impl<'infer> TryFrom<TcUnifierVar<'infer>> for TyVarId {
     type Error = UnifierToTcVarError;
 
     fn try_from(value: TcUnifierVar<'infer>) -> Result<Self, Self::Error> {
         Err(UnifierToTcVarError {
             index: value.index(),
+        })
+    }
+}
+
+impl<'infer> TryFrom<TyVarId> for TcUnifierVar<'infer> {
+    type Error = TcVarToUnifierError;
+
+    fn try_from(value: TyVarId) -> Result<Self, Self::Error> {
+        Err(TcVarToUnifierError {
+            index: value.0 as u32,
         })
     }
 }
@@ -78,13 +92,27 @@ pub trait MkTy<'ctx, TV> {
     fn mk_label(&self, label: &str) -> RowLabel<'ctx>;
     fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV>;
 
+    fn empty_row(&self) -> ClosedRow<'ctx, TV> {
+        self.mk_row(&[], &[])
+    }
+    fn empty_row_ty(&self) -> Ty<'ctx, TV> {
+        self.mk_ty(TypeKind::RowTy(self.empty_row()))
+    }
     fn single_row(&self, label: &str, value: Ty<'ctx, TV>) -> ClosedRow<'ctx, TV> {
         let field = self.mk_label(label);
         self.mk_row(&[field], &[value])
     }
-
     fn single_row_ty(&self, label: &str, value: Ty<'ctx, TV>) -> Ty<'ctx, TV> {
         self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
+    }
+
+    fn construct_row(&self, mut row: Vec<(RowLabel<'ctx>, Ty<'ctx, TV>)>) -> ClosedRow<'ctx, TV> {
+        row.sort_by(|a, b| str::cmp(&a.0, &b.0));
+
+        let fields = row.iter().map(|(k, _)| k).cloned().collect::<Vec<_>>();
+        let values = row.iter().map(|(_, v)| v).cloned().collect::<Vec<_>>();
+
+        self.mk_row(&fields, &values)
     }
 }
 
@@ -94,6 +122,31 @@ pub trait MkTy<'ctx, TV> {
 /// data.
 #[derive(Hash)]
 pub struct Ty<'ctx, TV>(pub RefHandle<'ctx, TypeKind<'ctx, TV>>);
+
+impl<'ctx, TV: Clone> Ty<'ctx, TV> {
+    pub fn try_as_prod_row(self) -> Result<Row<'ctx, TV>, Ty<'ctx, TV>> {
+        match self.deref() {
+            TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
+            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            _ => Err(self),
+        }
+    }
+
+    pub fn try_as_sum_row(self) -> Result<Row<'ctx, TV>, Ty<'ctx, TV>> {
+        match self.deref() {
+            TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
+            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            _ => Err(self),
+        }
+    }
+
+    pub fn try_as_fn_ty(self) -> Result<(Ty<'ctx, TV>, Ty<'ctx, TV>), Ty<'ctx, TV>> {
+        match self.deref() {
+            TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
+            _ => Err(self),
+        }
+    }
+}
 impl<'ctx, TV> PartialEq for Ty<'ctx, TV> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
@@ -138,9 +191,9 @@ pub type InferTy<'ctx> = Ty<'ctx, TcUnifierVar<'ctx>>;
 
 impl<'ctx> EqUnifyValue for Ty<'ctx, TcUnifierVar<'ctx>> {}
 
-impl<'ty, TV> Into<Ty<'ty, TV>> for RefHandle<'ty, TypeKind<'ty, TV>> {
-    fn into(self) -> Ty<'ty, TV> {
-        Ty(self)
+impl<'ty, TV> From<RefHandle<'ty, TypeKind<'ty, TV>>> for Ty<'ty, TV> {
+    fn from(handle: RefHandle<'ty, TypeKind<'ty, TV>>) -> Self {
+        Ty(handle)
     }
 }
 
@@ -162,6 +215,8 @@ pub enum TypeKind<'ctx, TV> {
     FunTy(Ty<'ctx, TV>, Ty<'ctx, TV>),
     /// A product type. This is purely a wrapper type to coerce a row type to be a product.
     ProdTy(Row<'ctx, TV>),
+    /// A sum type. This is purely a wrapper type to coerce a row type to be a sum.
+    SumTy(Row<'ctx, TV>),
 }
 
 impl<'ty, TV: Clone> DefaultFold for Ty<'ty, TV> {
@@ -188,6 +243,10 @@ impl<'ty, TV: Clone> DefaultFold for Ty<'ty, TV> {
             TypeKind::ProdTy(row) => {
                 let row_ = row.clone().try_fold_with(fold)?;
                 Ok(fold.ctx().mk_ty(TypeKind::ProdTy(row_)))
+            }
+            TypeKind::SumTy(row) => {
+                let row_ = row.clone().try_fold_with(fold)?;
+                Ok(fold.ctx().mk_ty(TypeKind::SumTy(row_)))
             }
         }
     }

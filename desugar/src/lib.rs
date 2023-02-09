@@ -82,9 +82,24 @@ pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> A
                     }),
                 })
             }
+            nst::Term::SumRow(sum) => {
+                let term = ds(arena, spans, sum.field.target);
+                arena.alloc(Inject {
+                    direction: Direction::Right,
+                    term: arena.alloc(Label {
+                        label: sum.field.label.value,
+                        term,
+                    }),
+                })
+            }
+            // This is gonna take a little more work.
+            nst::Term::Match { .. } => {
+                // TODO: Figure out desugaring patterns into binds.
+                // Maybe detour through a stage to ensure that each match is only one layer of
+                // patterns?
+                todo!()
+            }
             nst::Term::Handle { .. } => todo!(),
-            nst::Term::SumRow(_) => todo!(),
-            nst::Term::Match { .. } => todo!(),
         };
         spans.insert(ast, nst.span());
         ast
@@ -97,7 +112,7 @@ pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aiahr_core::cst::{IdField, ProductRow, Separated};
+    use aiahr_core::cst::{Field, IdField, ProductRow, Separated};
     use aiahr_core::id::ModuleId;
     use aiahr_core::memory::arena::BumpArena;
     use aiahr_core::memory::intern::InternerByRef;
@@ -372,6 +387,45 @@ mod tests {
             Some(&Span {
                 start: base.start,
                 end: field.end,
+            }),
+        );
+    }
+
+    #[test]
+    fn test_desugar_sum() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+
+        let tru = interner.intern_by_ref("true");
+
+        let langle = random_span();
+        let rangle = random_span();
+        let nst = arena.alloc(nst::Term::SumRow(aiahr_core::cst::SumRow {
+            langle,
+            field: Field {
+                label: random_span_of(tru),
+                sep: random_span(),
+                target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
+            },
+            rangle,
+        }));
+
+        let ast = desugar(&arena, nst);
+        assert_eq!(
+            ast.tree,
+            &Inject {
+                direction: Direction::Right,
+                term: &Label {
+                    label: tru,
+                    term: &Variable(VarId(0))
+                }
+            }
+        );
+        assert_eq!(
+            ast.span_of(ast.tree),
+            Some(&Span {
+                start: langle.start,
+                end: rangle.end,
             }),
         );
     }

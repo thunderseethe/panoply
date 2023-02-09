@@ -16,7 +16,7 @@ where
     C: IntoIterator<Item = R>,
     F: Fn(L, R) -> L,
 {
-    rights.into_iter().fold(left, |l, r| f(l, r))
+    rights.into_iter().fold(left, f)
 }
 
 // Folds the op-expression pairs `oprights` into the base expression `left` using `f`.

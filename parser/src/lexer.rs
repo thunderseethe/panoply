@@ -90,7 +90,7 @@ impl<'s, S> Lexer<'s, S> {
 
 // Maps the literal text to the given token.
 fn literal(text: &'static str, t: Token<'static>) -> (String, Option<TokenFactory>) {
-    (regex::escape(text), Some(Box::new(move |_, _| t.clone())))
+    (regex::escape(text), Some(Box::new(move |_, _| t)))
 }
 
 // Calls `f` on the entire match. Use this if you don't care about capture groups.

@@ -1,4 +1,4 @@
-use crate::id::{ItemId, ModuleId};
+use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use crate::memory::handle::RefHandle;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
@@ -18,10 +18,6 @@ impl<'a, Var> Ast<'a, Var> {
     /// Get the root node of this Ast
     pub fn root(&self) -> &'a Term<'a, Var> {
         self.tree
-    }
-
-    pub fn vars(&self) -> impl Iterator<Item = &'a Var> {
-        self.tree.vars()
     }
 }
 
@@ -57,21 +53,13 @@ pub enum Term<'a, Var> {
     },
     // A local variable binding
     Variable(Var),
+    Int(usize),
     // A global variable binding
     Item((ModuleId, ItemId)),
     // A unit value
     // Because all products are represented in terms of concat, we don't actually have a way to
     // represent unit at this level
     Unit,
-    // Concat two rows into a larger row
-    Concat {
-        left: &'a Term<'a, Var>,
-        right: &'a Term<'a, Var>,
-    },
-    Project {
-        direction: Direction,
-        term: &'a Term<'a, Var>,
-    },
     // Label a term, used in construction of Product and Sum types.
     Label {
         label: RefHandle<'a, str>,
@@ -82,49 +70,154 @@ pub enum Term<'a, Var> {
         label: RefHandle<'a, str>,
         term: &'a Term<'a, Var>,
     },
+    // Concat two rows into a larger row
+    Concat {
+        left: &'a Term<'a, Var>,
+        right: &'a Term<'a, Var>,
+    },
+    // Project a product out into a subproduct
+    Project {
+        direction: Direction,
+        term: &'a Term<'a, Var>,
+    },
+    Branch {
+        left: &'a Term<'a, Var>,
+        right: &'a Term<'a, Var>,
+    },
+    Inject {
+        direction: Direction,
+        term: &'a Term<'a, Var>,
+    },
+    // An effect operation
+    Operation(EffectOpId),
+    Handle {
+        eff: EffectId,
+        handler: &'a Term<'a, Var>,
+        body: &'a Term<'a, Var>,
+    },
 }
 
 impl<'a, Var> Term<'a, Var> {
-    fn vars(&'a self) -> impl Iterator<Item = &'a Var> {
-        TermVars { stack: vec![self] }
+    /// Return an iterator over all instances of variables in this term.
+    pub fn vars(&'a self) -> impl Iterator<Item = &'a Var> {
+        TermTraverse::new(self).filter_map(|term| match term {
+            Term::Abstraction { arg, .. } => Some(arg),
+            Term::Variable(var) => Some(var),
+            _ => None,
+        })
+    }
+
+    /// Return an iterator over all terms that require row evidence in this term.
+    pub fn row_ev_terms(&'a self) -> impl Iterator<Item = RowTermView<'a, Var>> {
+        TermTraverse::new(self).filter_map(|term| RowTermView::try_from(term).ok())
+    }
+
+    fn children(&'a self) -> ZeroOneOrTwo<&'a Term<'a, Var>> {
+        match self {
+            Term::Abstraction { body, .. } => ZeroOneOrTwo::One(body),
+            Term::Application { func, arg } => ZeroOneOrTwo::Two(func, arg),
+            Term::Label { term, .. } | Term::Unlabel { term, .. } => ZeroOneOrTwo::One(term),
+            Term::Concat { left, right } | Term::Branch { left, right } => {
+                ZeroOneOrTwo::Two(left, right)
+            }
+            Term::Project { term, .. } | Term::Inject { term, .. } => ZeroOneOrTwo::One(term),
+            Term::Handle { handler, body, .. } => ZeroOneOrTwo::Two(handler, body),
+            Term::Variable(_) | Term::Int(_) | Term::Item(_) | Term::Unit | Term::Operation(_) => {
+                ZeroOneOrTwo::Zero
+            }
+        }
     }
 }
 
-struct TermVars<'a, Var> {
-    stack: Vec<&'a Term<'a, Var>>,
+/// Convenience wrapper around a term to encode that is must be a row term (Concat, Branch, etc.) and not any other kind
+/// of term.
+pub struct RowTermView<'a, Var> {
+    pub parent: &'a Term<'a, Var>,
+    pub view: RowTerm<'a, Var>,
 }
-impl<'a, Var> Iterator for TermVars<'a, Var> {
-    type Item = &'a Var;
+pub enum RowTerm<'a, Var> {
+    Concat {
+        left: &'a Term<'a, Var>,
+        right: &'a Term<'a, Var>,
+    },
+    Branch {
+        left: &'a Term<'a, Var>,
+        right: &'a Term<'a, Var>,
+    },
+    Project {
+        direction: Direction,
+        term: &'a Term<'a, Var>,
+    },
+    Inject {
+        direction: Direction,
+        term: &'a Term<'a, Var>,
+    },
+}
+impl<'a, Var> From<RowTermView<'a, Var>> for &'a Term<'a, Var> {
+    fn from(value: RowTermView<'a, Var>) -> Self {
+        value.parent
+    }
+}
+impl<'a, Var> TryFrom<&'a Term<'a, Var>> for RowTermView<'a, Var> {
+    type Error = &'a Term<'a, Var>;
+
+    fn try_from(parent: &'a Term<'a, Var>) -> Result<Self, Self::Error> {
+        let view = match parent {
+            Term::Concat { left, right } => RowTerm::Concat { left, right },
+            Term::Project { direction, term } => RowTerm::Project {
+                direction: *direction,
+                term,
+            },
+            Term::Branch { left, right } => RowTerm::Branch { left, right },
+            Term::Inject { direction, term } => RowTerm::Inject {
+                direction: *direction,
+                term,
+            },
+            _ => return Err(parent),
+        };
+        Ok(RowTermView { parent, view })
+    }
+}
+
+/// Pass 0, 1, or 2 Ts on the stack as an iterator
+enum ZeroOneOrTwo<T> {
+    Zero,
+    One(T),
+    Two(T, T),
+}
+impl<T> Iterator for ZeroOneOrTwo<T> {
+    type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.stack.pop().and_then(|term| match term {
-            Term::Abstraction { arg, body } => {
-                self.stack.push(body);
-                Some(arg)
+        let zot = std::mem::replace(self, ZeroOneOrTwo::Zero);
+        match zot {
+            ZeroOneOrTwo::Zero => None,
+            ZeroOneOrTwo::One(fst) => Some(fst),
+            ZeroOneOrTwo::Two(fst, snd) => {
+                *self = ZeroOneOrTwo::One(snd);
+                Some(fst)
             }
-            Term::Application { func, arg } => {
-                self.stack.extend([func, arg]);
-                self.next()
-            }
-            Term::Variable(var) => Some(var),
-            Term::Item(_) => self.next(),
-            Term::Unit => self.next(),
-            Term::Concat { left, right } => {
-                self.stack.extend([left, right]);
-                self.next()
-            }
-            Term::Project { term, .. } => {
-                self.stack.push(term);
-                self.next()
-            }
-            Term::Label { term, .. } => {
-                self.stack.push(term);
-                self.next()
-            }
-            Term::Unlabel { term, .. } => {
-                self.stack.push(term);
-                self.next()
-            }
+        }
+    }
+}
+
+/// Traverse a term as an iterator, producing each child term.
+struct TermTraverse<'a, Var> {
+    stack: Vec<&'a Term<'a, Var>>,
+}
+
+impl<'a, Var> TermTraverse<'a, Var> {
+    fn new(root: &'a Term<'a, Var>) -> Self {
+        Self { stack: vec![root] }
+    }
+}
+impl<'a, Var> Iterator for TermTraverse<'a, Var> {
+    type Item = &'a Term<'a, Var>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stack.pop().and_then(|term| {
+            self.stack.extend(term.children());
+            Some(term)
         })
     }
 }

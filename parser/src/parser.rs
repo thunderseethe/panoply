@@ -84,7 +84,7 @@ fn product_row<'a, 's: 'a, T: 'a>(
     lit(Token::LBrace)
         .then(option(separated(
             arena,
-            id_field(Token::Equal, term.clone()),
+            id_field(Token::Equal, term),
             lit(Token::Comma),
         )))
         .then(lit(Token::RBrace))
@@ -100,7 +100,7 @@ fn sum_row<'s, T>(
     term: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
 ) -> impl Clone + Parser<Token<'s>, SumRow<'s, T>, Error = ParseErrors<'s>> {
     lit(Token::LAngle)
-        .then(id_field(Token::Equal, term.clone()))
+        .then(id_field(Token::Equal, term))
         .then(lit(Token::RAngle))
         .map(|((langle, field), rangle)| SumRow {
             langle,
@@ -451,10 +451,10 @@ pub fn term<'a, 's: 'a>(
         // closures correct. However we're recursive descent, so we only go top-down. To remedy
         // this we construct a series of prefixes top-down that are applied to the final expression
         // in right associative order.
-        let bound = prefix(choice((local_bind, handle, closure)), app_access, |p, t| {
+
+        prefix(choice((local_bind, handle, closure)), app_access, |p, t| {
             p.apply(arena, t)
-        });
-        bound
+        })
     })
 }
 
@@ -487,6 +487,25 @@ where
         Span::zero(end_of_input),
         Box::new(tokens.into_iter().map(|token| (token.value, token.span()))),
     )
+}
+
+pub mod test_utils {
+    use super::*;
+    use crate::lexer::aiahr_lexer;
+    use aiahr_core::memory::intern::InternerByRef;
+
+    pub fn parse_term<'a, S: InternerByRef<str>>(
+        arena: &'a Bump,
+        interner: &'a S,
+        input: &str,
+    ) -> &'a Term<'a, 'a> {
+        let (tokens, eoi) = aiahr_lexer(interner)
+            .lex(input)
+            .expect("Lexing input failed");
+        term(arena)
+            .parse(to_stream(tokens, eoi))
+            .expect("Parsing input failed")
+    }
 }
 
 #[cfg(test)]

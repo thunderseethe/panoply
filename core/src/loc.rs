@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn test_w3_demo_text() {
         // Sourced from https://www.w3.org/2001/06/utf-8-test/UTF-8-demo.html.
-        const W3_DEMO_TEXT: &'static str = r#"
+        const W3_DEMO_TEXT: &str = r#"
 UTF-8 encoded sample plain-text file
 ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾
 
@@ -479,11 +479,13 @@ Box drawing alignment tests:                                          █
         for (i, _) in W3_DEMO_TEXT.char_indices() {
             let loc = locator
                 .locate(i)
-                .expect(&format!("Expected location at byte {}", i));
-            let j = locator.unlocate(loc.line, loc.col).expect(&format!(
-                "Expected roundtrip for byte {} (line {}, col {})",
-                i, loc.line, loc.col
-            ));
+                .unwrap_or_else(|| panic!("Expected location at byte {}", i));
+            let j = locator.unlocate(loc.line, loc.col).unwrap_or_else(|| {
+                panic!(
+                    "Expected roundtrip for byte {} (line {}, col {})",
+                    i, loc.line, loc.col
+                )
+            });
             assert_eq!(i, j);
         }
     }

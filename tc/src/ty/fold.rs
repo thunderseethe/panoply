@@ -17,6 +17,18 @@ pub trait TypeFoldable<'ctx> {
     ) -> Result<Self::Out<F::TypeVar>, F::Error>;
 }
 
+impl<'ctx, T: TypeFoldable<'ctx>> TypeFoldable<'ctx> for Vec<T> {
+    type TypeVar = T::TypeVar;
+    type Out<TV: 'ctx> = Vec<T::Out<TV>>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+        self.into_iter().map(|t| t.try_fold_with(fold)).collect()
+    }
+}
+
 /// Defines a fold over types and sub components of types.
 /// This is commonly used to perform substitution.
 ///

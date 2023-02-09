@@ -73,7 +73,6 @@ data EvalCtx
   | CaseBranchFrame Value
   | TagFrame Int
 
-
 instance Show EvalCtx where
   showsPrec d eval_ctx = showParen (d > app_prec) $
       case eval_ctx of

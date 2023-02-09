@@ -5,6 +5,7 @@ mod display_iter;
 pub mod displayer;
 pub mod id;
 pub mod if_none;
+pub mod ir;
 pub mod loc;
 pub mod memory;
 pub mod modules;

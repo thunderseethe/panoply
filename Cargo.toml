@@ -3,6 +3,9 @@ members = [
     "analysis",
     "core",
     "desugar",
+    "interpreter",
+    "lower-ir",
+    "lower-ir/ir-matcher",
     "parser",
     "tc",
 ]

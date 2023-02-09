@@ -191,6 +191,17 @@ impl<I, T> Default for IdGen<I, T> {
     }
 }
 
+impl<I> IdGen<I, ()>
+where
+    I: Id,
+{
+    /// Generate a new Id and return it.
+    /// Convenience method when we aren't storing any values with our Ids.
+    pub fn generate(&mut self) -> I {
+        self.push(())
+    }
+}
+
 impl<I, T> Deref for IdGen<I, T> {
     type Target = Ids<I, T>;
 
@@ -232,11 +243,30 @@ pub ModuleId;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub ItemId;
 
-/// An ID for a local variable. Unique within a module.
+/// An ID for a top-level effect definition in a module. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub EffectId;
+
+/// An ID for an effect operation in an effect definition. Unique within an effect definition.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub EffectOpId;
+
+/// A type variable. Unique within a type scheme.
+/// These are explicity referred to by the AST and can persist through type checking (unlike
+/// unification variables). They may not be modified by the type checking process, often
+/// referred to as untouchabale.k
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub TyVarId;
 
 /// An ID for a local variable. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub VarId;
+
+/// Uniquely identifies variables in IR. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub IrVarId;
+
+/// Uniquely identifies an IR type. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub IrTyVarId;
 );

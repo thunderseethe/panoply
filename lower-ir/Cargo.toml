@@ -1,0 +1,20 @@
+[package]
+name = "lower-ir"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+assert_matches = "1.5.0"
+ir-matcher = { path = "ir-matcher" }
+aiahr-tc = { path = "../tc" }
+aiahr-parser = { path = "../parser" }
+aiahr-desugar = { path = "../desugar" }
+aiahr-analysis = { path = "../analysis" }
+expect-test = "1.4"
+
+[dependencies]
+aiahr-core = { path = "../core" }
+aiahr-tc = { path = "../tc" }
+bumpalo = "3.1.0"
+hashbrown = "0.13.1"
+rustc-hash = "1.1.0"
