@@ -492,7 +492,9 @@ where
 pub mod test_utils {
     use super::*;
     use crate::lexer::aiahr_lexer;
-    use aiahr_core::memory::intern::InternerByRef;
+    use aiahr_core::{id::ModuleId, memory::intern::InternerByRef};
+
+    const MOD: ModuleId = ModuleId(0);
 
     pub fn parse_term<'a, S: InternerByRef<str>>(
         arena: &'a Bump,
@@ -500,7 +502,7 @@ pub mod test_utils {
         input: &str,
     ) -> &'a Term<'a, 'a> {
         let (tokens, eoi) = aiahr_lexer(interner)
-            .lex(input)
+            .lex(MOD, input)
             .expect("Lexing input failed");
         term(arena)
             .parse(to_stream(tokens, eoi))

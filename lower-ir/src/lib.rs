@@ -20,6 +20,7 @@ struct IrCtx<'ctx> {
 }
 
 impl<'ctx> IrCtx<'ctx> {
+    #[allow(dead_code)]
     fn new(arena: &'ctx Bump) -> Self {
         Self {
             arena,
@@ -1140,16 +1141,21 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::ops::Deref;
 
     use super::{test_utils::LowerDb, *};
+    use aiahr_analysis::names::Names;
+    use aiahr_analysis::resolve::resolve_term;
+    use aiahr_analysis::top_level::BaseBuilder;
     use aiahr_core::memory::arena::BumpArena;
     use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
+    use aiahr_core::modules::ModuleTree;
     use aiahr_tc::test_utils::{DummyEff, MkTerm};
     use assert_matches::assert_matches;
     use bumpalo::Bump;
     use ir_matcher::ir_matcher;
+
+    const MODNAME: &'static str = "test_module";
 
     /// Compile an input string up to (but not including) the lower stage.
     fn compile_upto_lower<'ctx, S>(
@@ -1161,16 +1167,20 @@ mod tests {
     where
         S: InternerByRef<str>,
     {
+        let (m, modules) = {
+            let mut modules = ModuleTree::new();
+            let m = modules.add_package(interner.intern_by_ref(MODNAME));
+            (m, modules)
+        };
+
         let unresolved = aiahr_parser::parser::test_utils::parse_term(arena, interner, input);
-
-        let inames = HashMap::default();
-        let mtree = aiahr_analysis::modules::ModuleTree::new();
-        let base = aiahr_analysis::base::BaseNames::new(ModuleId(0), &mtree, &inames);
-
         let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError<'_>> = Vec::new();
-        let mut resolver = aiahr_analysis::resolve::Resolver::new(arena, &mut errors);
-        let resolved = resolver
-            .resolve_term(unresolved, &aiahr_analysis::names::Names::new(&base))
+
+        let mut module_names = FxHashMap::default();
+        let base = BaseBuilder::new().build(arena, m, &modules, &mut module_names);
+        let mut names = Names::new(&base);
+
+        let resolved = resolve_term(arena, unresolved, &mut names, &mut errors)
             .expect("Name resolution to succeed");
 
         let ast = aiahr_desugar::desugar(arena, resolved);

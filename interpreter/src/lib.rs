@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use aiahr_core::id::IrVarId;
 use aiahr_core::ir::{Ir, IrKind, IrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -354,8 +356,7 @@ impl<'ctx> Machine<'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::id::IrTyVarId;
-    use aiahr_core::ir::{IrTy, IrTyKind, IrVarTy, Kind};
+    use aiahr_core::ir::{IrTy, IrTyKind};
     use aiahr_core::memory::handle::Handle;
 
     use super::*;

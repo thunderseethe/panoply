@@ -2198,6 +2198,7 @@ impl<I: Iterator> IteratorSorted for I {
     }
 }
 
+#[allow(dead_code)]
 fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
     println!("UnificationTable [");
     for uv in (0..uni.len()).map(|i| TcUnifierVar::from_index(i as u32)) {
