@@ -1,6 +1,6 @@
 use crate::{
-    cst::{Field, ProductRow, Separated, SumRow},
-    id::{ItemId, ModuleId, VarId},
+    cst::{Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation},
+    id::{ItemId, ModuleId, TyVarId, VarId},
     memory::handle::RefHandle,
     span::{Span, SpanOf, Spanned},
 };
@@ -28,6 +28,7 @@ impl<'a, 's> Spanned for Pattern<'a, 's> {
 pub enum Term<'a, 's> {
     Binding {
         var: SpanOf<VarId>,
+        annotation: Option<TypeAnnotation<'a, 's, TyVarId>>,
         eq: Span,
         value: &'a Term<'a, 's>,
         semi: Span,
@@ -42,6 +43,7 @@ pub enum Term<'a, 's> {
     Abstraction {
         lbar: Span,
         arg: SpanOf<VarId>,
+        annotation: Option<TypeAnnotation<'a, 's, TyVarId>>,
         rbar: Span,
         body: &'a Term<'a, 's>,
     },
@@ -96,6 +98,7 @@ impl<'a, 's> Spanned for Term<'a, 's> {
 pub enum Item<'a, 's> {
     Term {
         name: SpanOf<ItemId>,
+        annotation: Option<SchemeAnnotation<'a, 's, TyVarId>>,
         eq: Span,
         value: &'a Term<'a, 's>,
     },

@@ -320,6 +320,8 @@ where
                     Some(nst::Term::Binding {
                         var: var.span().of(id),
                         eq: *eq,
+                        // TODO: resolve annotation.
+                        annotation: None,
                         value: value?,
                         semi: *semi,
                         expr: expr?,
@@ -354,6 +356,8 @@ where
                 Some(nst::Term::Abstraction {
                     lbar: *lbar,
                     arg: arg.span().of(id),
+                    // TODO: resolve annotation.
+                    annotation: None,
                     rbar: *rbar,
                     body: resolve_term(arena, body, scope, errors)?,
                 })
@@ -460,6 +464,8 @@ where
             value,
         } => nst::Item::Term {
             name: name.span().of(id),
+            // TODO: resolve annotation.
+            annotation: None,
             eq: *eq,
             value: arena.alloc(resolve_term(arena, value, names, errors)?),
         },

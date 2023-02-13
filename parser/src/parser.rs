@@ -113,7 +113,7 @@ fn sum_row<'s, T>(
 fn row<'a, 's: 'a, C: 'a>(
     arena: &'a Bump,
     field: impl Clone + Parser<Token<'s>, C, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, Row<'a, 's, C>, Error = ParseErrors<'s>> {
+) -> impl Clone + Parser<Token<'s>, Row<'a, RefHandle<'s, str>, C>, Error = ParseErrors<'s>> {
     let concrete = separated(arena, field, lit(Token::Comma));
     let variables = separated(arena, ident(), lit(Token::Plus));
     choice((
@@ -135,7 +135,7 @@ fn row<'a, 's: 'a, C: 'a>(
 /// Returns a parser for an Aiahr (mono-)type.
 pub fn type_<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, &'a Type<'a, 's>, Error = ParseErrors<'s>> {
+) -> impl Clone + Parser<Token<'s>, &'a Type<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>> {
     recursive(|type_| {
         let type_row = row(arena, id_field(Token::Colon, type_.clone()));
 
@@ -193,7 +193,7 @@ pub fn type_<'a, 's: 'a>(
 // Returns a parser for a row type expression.
 fn row_atom<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, RowAtom<'a, 's>, Error = ParseErrors<'s>> {
+) -> impl Clone + Parser<Token<'s>, RowAtom<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>> {
     choice((
         lit(Token::LParen)
             .then(separated(
@@ -210,7 +210,8 @@ fn row_atom<'a, 's: 'a>(
 // Returns a parser for a type constraint.
 fn constraint<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, Constraint<'a, 's>, Error = ParseErrors<'s>> {
+) -> impl Clone + Parser<Token<'s>, Constraint<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>>
+{
     let row = row_atom(arena);
     row.clone()
         .then(lit(Token::Plus))
@@ -229,7 +230,8 @@ fn constraint<'a, 's: 'a>(
 /// Returns a parser for a scheme (polymorphic type).
 pub fn scheme<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, &'a Scheme<'a, 's>, Error = ParseErrors<'s>> {
+) -> impl Clone + Parser<Token<'s>, &'a Scheme<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>>
+{
     lit(Token::KwForall)
         .then(ident())
         .then(lit(Token::Dot))
@@ -276,7 +278,7 @@ pub fn pattern<'a, 's: 'a>(
 enum TermPrefix<'a, 's> {
     Binding {
         var: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's>>,
+        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
         eq: Span,
         value: &'a Term<'a, 's>,
         semi: Span,
@@ -289,7 +291,7 @@ enum TermPrefix<'a, 's> {
     Abstraction {
         lbar: Span,
         arg: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's>>,
+        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
         rbar: Span,
     },
 }
@@ -538,6 +540,7 @@ mod tests {
         id_field, item_term,
         memory::{
             arena::BumpArena,
+            handle::RefHandle,
             intern::{InternerByRef, SyncInterner},
         },
         pat_prod, pat_sum, pat_var, qual, quant, row_concrete, row_mixed, row_variable,
@@ -559,7 +562,7 @@ mod tests {
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
-    ) -> &'a Type<'a, 's> {
+    ) -> &'a Type<'a, 's, RefHandle<'s, str>> {
         let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
         type_(arena)
             .then_ignore(end())
@@ -571,7 +574,7 @@ mod tests {
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
-    ) -> &'a Scheme<'a, 's> {
+    ) -> &'a Scheme<'a, 's, RefHandle<'s, str>> {
         let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
         scheme(arena)
             .then_ignore(end())

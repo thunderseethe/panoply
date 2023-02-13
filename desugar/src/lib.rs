@@ -170,6 +170,7 @@ mod tests {
         let nst = arena.alloc(nst::Term::Abstraction {
             lbar: start,
             arg: random_span_of(VarId(0)),
+            annotation: None,
             rbar: random_span(),
             body: arena.alloc(nst::Term::VariableRef(span_of_var)),
         });
@@ -231,6 +232,7 @@ mod tests {
             &arena,
             arena.alloc(nst::Term::Binding {
                 var: start,
+                annotation: None,
                 eq: random_span(),
                 value: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(10)))),
                 semi: random_span(),

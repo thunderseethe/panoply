@@ -133,19 +133,19 @@ impl<'s, T> Spanned for SumRow<'s, T> {
     }
 }
 
-/// A non-empty row with concrete fields in `C`.
+/// A non-empty row with concrete fields in `C` and variables in `V`.
 #[derive(Clone, Copy, Debug)]
-pub enum Row<'a, 's, C> {
+pub enum Row<'a, V, C> {
     Concrete(Separated<'a, C>),
-    Variable(Separated<'a, SpanOf<RefHandle<'s, str>>>),
+    Variable(Separated<'a, SpanOf<V>>),
     Mixed {
         concrete: Separated<'a, C>,
         vbar: Span,
-        variables: Separated<'a, SpanOf<RefHandle<'s, str>>>,
+        variables: Separated<'a, SpanOf<V>>,
     },
 }
 
-impl<'a, 's, C: Spanned> Spanned for Row<'a, 's, C> {
+impl<'a, V: Spanned, C: Spanned> Spanned for Row<'a, V, C> {
     fn span(&self) -> Span {
         match self {
             Row::Concrete(c) => c.span(),
@@ -160,12 +160,13 @@ impl<'a, 's, C: Spanned> Spanned for Row<'a, 's, C> {
 }
 
 /// A row of types.
-pub type TypeRow<'a, 's> = Row<'a, 's, IdField<'s, &'a Type<'a, 's>>>;
+pub type TypeRow<'a, 's> =
+    Row<'a, RefHandle<'s, str>, IdField<'s, &'a Type<'a, 's, RefHandle<'s, str>>>>;
 
 /// An unqualified Aiahr type.
 #[derive(Clone, Copy, Debug)]
-pub enum Type<'a, 's> {
-    Named(SpanOf<RefHandle<'s, str>>),
+pub enum Type<'a, 's, V> {
+    Named(SpanOf<V>),
     Sum {
         langle: Span,
         variants: TypeRow<'a, 's>,
@@ -177,18 +178,18 @@ pub enum Type<'a, 's> {
         rbrace: Span,
     },
     Function {
-        domain: &'a Type<'a, 's>,
+        domain: &'a Type<'a, 's, V>,
         arrow: Span,
-        codomain: &'a Type<'a, 's>,
+        codomain: &'a Type<'a, 's, V>,
     },
     Parenthesized {
         lpar: Span,
-        type_: &'a Type<'a, 's>,
+        type_: &'a Type<'a, 's, V>,
         rpar: Span,
     },
 }
 
-impl<'a, 's> Spanned for Type<'a, 's> {
+impl<'a, 's, V: Spanned> Spanned for Type<'a, 's, V> {
     fn span(&self) -> Span {
         match self {
             Type::Named(n) => n.span(),
@@ -204,16 +205,16 @@ impl<'a, 's> Spanned for Type<'a, 's> {
 
 /// An atomic row for use in a type constraint.
 #[derive(Clone, Copy, Debug)]
-pub enum RowAtom<'a, 's> {
+pub enum RowAtom<'a, 's, V> {
     Concrete {
         lpar: Span,
-        fields: Separated<'a, IdField<'s, &'a Type<'a, 's>>>,
+        fields: Separated<'a, IdField<'s, &'a Type<'a, 's, V>>>,
         rpar: Span,
     },
     Variable(SpanOf<RefHandle<'s, str>>),
 }
 
-impl<'a, 's> Spanned for RowAtom<'a, 's> {
+impl<'a, 's, V: Spanned> Spanned for RowAtom<'a, 's, V> {
     fn span(&self) -> Span {
         match self {
             RowAtom::Concrete { lpar, rpar, .. } => Span::join(lpar, rpar),
@@ -224,17 +225,17 @@ impl<'a, 's> Spanned for RowAtom<'a, 's> {
 
 /// A type constraint.
 #[derive(Clone, Copy, Debug)]
-pub enum Constraint<'a, 's> {
+pub enum Constraint<'a, 's, V> {
     RowSum {
-        lhs: RowAtom<'a, 's>,
+        lhs: RowAtom<'a, 's, V>,
         plus: Span,
-        rhs: RowAtom<'a, 's>,
+        rhs: RowAtom<'a, 's, V>,
         eq: Span,
-        goal: RowAtom<'a, 's>,
+        goal: RowAtom<'a, 's, V>,
     },
 }
 
-impl<'a, 's> Spanned for Constraint<'a, 's> {
+impl<'a, 's, V: Spanned> Spanned for Constraint<'a, 's, V> {
     fn span(&self) -> Span {
         match self {
             Constraint::RowSum { lhs, goal, .. } => Span::join(lhs, goal),
@@ -244,20 +245,26 @@ impl<'a, 's> Spanned for Constraint<'a, 's> {
 
 /// A quantifier for a polytype.
 #[derive(Clone, Copy, Debug)]
-pub struct Quantifier<'s> {
+pub struct Quantifier<V> {
     pub forall: Span,
-    pub var: SpanOf<RefHandle<'s, str>>,
+    pub var: SpanOf<V>,
     pub dot: Span,
+}
+
+impl<V> Spanned for Quantifier<V> {
+    fn span(&self) -> Span {
+        Span::join(&self.forall, &self.dot)
+    }
 }
 
 /// A qualifiers for a type.
 #[derive(Clone, Copy, Debug)]
-pub struct Qualifiers<'a, 's> {
-    pub constraints: Separated<'a, Constraint<'a, 's>>,
+pub struct Qualifiers<'a, 's, V> {
+    pub constraints: Separated<'a, Constraint<'a, 's, V>>,
     pub arrow: Span,
 }
 
-impl<'a, 's> Spanned for Qualifiers<'a, 's> {
+impl<'a, 's, V: Spanned> Spanned for Qualifiers<'a, 's, V> {
     fn span(&self) -> Span {
         Span::join(&self.constraints, &self.arrow)
     }
@@ -265,19 +272,25 @@ impl<'a, 's> Spanned for Qualifiers<'a, 's> {
 
 /// A polymorphic Aiahr type.
 #[derive(Clone, Copy, Debug)]
-pub struct Scheme<'a, 's> {
-    pub quantifiers: &'a [Quantifier<'s>],
-    pub qualifiers: Option<Qualifiers<'a, 's>>,
-    pub type_: &'a Type<'a, 's>,
+pub struct Scheme<'a, 's, V> {
+    pub quantifiers: &'a [Quantifier<V>],
+    pub qualifiers: Option<Qualifiers<'a, 's, V>>,
+    pub type_: &'a Type<'a, 's, V>,
 }
 
-impl<'a, 's> Spanned for Scheme<'a, 's> {
+impl<'a, 's, V: Spanned> Spanned for Scheme<'a, 's, V> {
     fn span(&self) -> Span {
         Span {
             start: self
-                .qualifiers
-                .map(|q| q.span())
-                .unwrap_or_else(|| self.type_.span())
+                .quantifiers
+                .first()
+                .map(Spanned::span)
+                .unwrap_or_else(|| {
+                    self.qualifiers
+                        .as_ref()
+                        .map(|q| q.span())
+                        .unwrap_or_else(|| self.type_.span())
+                })
                 .start(),
             end: self.type_.end(),
         }
@@ -310,17 +323,17 @@ pub struct Annotation<T> {
 }
 
 /// A monotype annotation.
-pub type TypeAnnotation<'a, 's> = Annotation<&'a Type<'a, 's>>;
+pub type TypeAnnotation<'a, 's, V> = Annotation<&'a Type<'a, 's, V>>;
 
 /// A scheme annotation.
-pub type SchemeAnnotation<'a, 's> = Annotation<&'a Scheme<'a, 's>>;
+pub type SchemeAnnotation<'a, 's, V> = Annotation<&'a Scheme<'a, 's, V>>;
 
 /// An Aiahr term.
 #[derive(Clone, Copy, Debug)]
 pub enum Term<'a, 's> {
     Binding {
         var: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's>>,
+        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
         eq: Span,
         value: &'a Term<'a, 's>,
         semi: Span,
@@ -335,7 +348,7 @@ pub enum Term<'a, 's> {
     Abstraction {
         lbar: Span,
         arg: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's>>,
+        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
         rbar: Span,
         body: &'a Term<'a, 's>,
     },
@@ -388,7 +401,7 @@ impl<'a, 's> Spanned for Term<'a, 's> {
 pub enum Item<'a, 's> {
     Term {
         name: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<SchemeAnnotation<'a, 's>>,
+        annotation: Option<SchemeAnnotation<'a, 's, RefHandle<'s, str>>>,
         eq: Span,
         value: &'a Term<'a, 's>,
     },
