@@ -17,15 +17,21 @@ use chumsky::{
 
 use crate::expr::{infixr1, postfix, prefix};
 
+/// A trait alias for a cloneable parser for Aiahr syntax.
+pub trait AiahrParser<'s, T>: Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>> {}
+impl<'s, T, A> AiahrParser<'s, T> for A where
+    A: Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>
+{
+}
+
 // Returns a spanned parser that matches just the given token and returns ().
-fn lit<'s>(token: Token<'s>) -> impl Clone + Parser<Token<'s>, Span, Error = ParseErrors<'s>> {
+fn lit<'s>(token: Token<'s>) -> impl AiahrParser<'s, Span> {
     just(token).map_with_span(|_, span| span)
 }
 
 // Returns a spanned parser that matches any `Token::Identifier` and unwraps it to the contained
 // `&str`.
-fn ident<'s>() -> impl Clone + Parser<Token<'s>, SpanOf<RefHandle<'s, str>>, Error = ParseErrors<'s>>
-{
+fn ident<'s>() -> impl AiahrParser<'s, SpanOf<RefHandle<'s, str>>> {
     select! {
         Token::Identifier(id) => id,
     }
@@ -33,9 +39,7 @@ fn ident<'s>() -> impl Clone + Parser<Token<'s>, SpanOf<RefHandle<'s, str>>, Err
 }
 
 // Returns a parser for either `parser` or the empty string.
-fn option<'s, T>(
-    parser: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, Option<T>, Error = ParseErrors<'s>> {
+fn option<'s, T>(parser: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, Option<T>> {
     choice((parser.map(Some), empty().map(|_| None)))
 }
 
@@ -43,9 +47,9 @@ fn option<'s, T>(
 // `Separated<T>`.
 fn separated<'a, 's, T: 'a>(
     arena: &'a Bump,
-    elem: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
-    sep: impl Clone + Parser<Token<'s>, Span, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, Separated<'a, T>, Error = ParseErrors<'s>> {
+    elem: impl AiahrParser<'s, T>,
+    sep: impl AiahrParser<'s, Span>,
+) -> impl AiahrParser<'s, Separated<'a, T>> {
     elem.clone()
         .then(sep.clone().then(elem).repeated())
         .then(choice((sep.map(Some), empty().map(|_| None))))
@@ -58,10 +62,10 @@ fn separated<'a, 's, T: 'a>(
 
 // Returns a parser for a field with a label, separator, and target.
 fn field<'s, L, T>(
-    label: impl Clone + Parser<Token<'s>, L, Error = ParseErrors<'s>>,
+    label: impl AiahrParser<'s, L>,
     sep: Token<'s>,
-    target: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, Field<L, T>, Error = ParseErrors<'s>> {
+    target: impl AiahrParser<'s, T>,
+) -> impl AiahrParser<'s, Field<L, T>> {
     label
         .then(lit(sep))
         .then(target)
@@ -71,16 +75,16 @@ fn field<'s, L, T>(
 // Returns a parser for a field with an identifier label, separator, and target.
 fn id_field<'s, T>(
     sep: Token<'s>,
-    target: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, IdField<'s, T>, Error = ParseErrors<'s>> {
+    target: impl AiahrParser<'s, T>,
+) -> impl AiahrParser<'s, IdField<'s, T>> {
     field(ident(), sep, target)
 }
 
 // Returns a parser for a product row with terms in `term`.
 fn product_row<'a, 's: 'a, T: 'a>(
     arena: &'a Bump,
-    term: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, ProductRow<'a, 's, T>, Error = ParseErrors<'s>> {
+    term: impl AiahrParser<'s, T>,
+) -> impl AiahrParser<'s, ProductRow<'a, 's, T>> {
     lit(Token::LBrace)
         .then(option(separated(
             arena,
@@ -96,9 +100,7 @@ fn product_row<'a, 's: 'a, T: 'a>(
 }
 
 // Returns a parser for a sum row with terms in `term`.
-fn sum_row<'s, T>(
-    term: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, SumRow<'s, T>, Error = ParseErrors<'s>> {
+fn sum_row<'s, T>(term: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, SumRow<'s, T>> {
     lit(Token::LAngle)
         .then(id_field(Token::Equal, term))
         .then(lit(Token::RAngle))
@@ -112,8 +114,8 @@ fn sum_row<'s, T>(
 // Returns a parser for a non-empty row of `C` in an explicit type.
 fn row<'a, 's: 'a, C: 'a>(
     arena: &'a Bump,
-    field: impl Clone + Parser<Token<'s>, C, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, Row<'a, RefHandle<'s, str>, C>, Error = ParseErrors<'s>> {
+    field: impl AiahrParser<'s, C>,
+) -> impl AiahrParser<'s, Row<'a, RefHandle<'s, str>, C>> {
     let concrete = separated(arena, field, lit(Token::Comma));
     let variables = separated(arena, ident(), lit(Token::Plus));
     choice((
@@ -135,7 +137,7 @@ fn row<'a, 's: 'a, C: 'a>(
 /// Returns a parser for an Aiahr (mono-)type.
 pub fn type_<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, &'a Type<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>> {
+) -> impl AiahrParser<'s, &'a Type<'a, 's, RefHandle<'s, str>>> {
     recursive(|type_| {
         let type_row = row(arena, id_field(Token::Colon, type_.clone()));
 
@@ -193,7 +195,7 @@ pub fn type_<'a, 's: 'a>(
 // Returns a parser for a row type expression.
 fn row_atom<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, RowAtom<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>> {
+) -> impl AiahrParser<'s, RowAtom<'a, 's, RefHandle<'s, str>>> {
     choice((
         lit(Token::LParen)
             .then(separated(
@@ -210,8 +212,7 @@ fn row_atom<'a, 's: 'a>(
 // Returns a parser for a type constraint.
 fn constraint<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, Constraint<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>>
-{
+) -> impl AiahrParser<'s, Constraint<'a, 's, RefHandle<'s, str>>> {
     let row = row_atom(arena);
     row.clone()
         .then(lit(Token::Plus))
@@ -230,8 +231,7 @@ fn constraint<'a, 's: 'a>(
 /// Returns a parser for a scheme (polymorphic type).
 pub fn scheme<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, &'a Scheme<'a, 's, RefHandle<'s, str>>, Error = ParseErrors<'s>>
-{
+) -> impl AiahrParser<'s, &'a Scheme<'a, 's, RefHandle<'s, str>>> {
     lit(Token::KwForall)
         .then(ident())
         .then(lit(Token::Dot))
@@ -254,18 +254,14 @@ pub fn scheme<'a, 's: 'a>(
 }
 
 /// Returns a parser for an annotation with a given type syntax.
-pub fn annotation<'s, T>(
-    ty: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
-) -> impl Clone + Parser<Token<'s>, Annotation<T>, Error = ParseErrors<'s>> {
+pub fn annotation<'s, T>(ty: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, Annotation<T>> {
     lit(Token::Colon)
         .then(ty)
         .map(|(colon, type_)| Annotation { colon, type_ })
 }
 
 /// Returns a parser for a pattern.
-pub fn pattern<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, &'a Pattern<'a, 's>, Error = ParseErrors<'s>> {
+pub fn pattern<'a, 's: 'a>(arena: &'a Bump) -> impl AiahrParser<'s, &'a Pattern<'a, 's>> {
     recursive(|pattern| {
         choice((
             product_row(arena, pattern.clone()).map(|p| arena.alloc(Pattern::ProductRow(p)) as &_),
