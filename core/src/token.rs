@@ -5,6 +5,7 @@ use crate::memory::handle::RefHandle;
 /// A token in Aiahr.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Token<'s> {
+    KwForall,
     KwEffect,
     KwMatch,
     KwWith,
@@ -34,6 +35,7 @@ impl<'s> Token<'s> {
     /// literal string, then that string is its name.
     pub fn name(&self) -> &'static str {
         match self {
+            Token::KwForall => "forall",
             Token::KwMatch => "match",
             Token::KwEffect => "effect",
             Token::KwWith => "with",

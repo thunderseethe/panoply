@@ -453,7 +453,12 @@ where
     E: DiagnosticSink<NameResolutionError<'s>>,
 {
     Some(match item {
-        cst::Item::Term { name, eq, value } => nst::Item::Term {
+        cst::Item::Term {
+            name,
+            annotation: _,
+            eq,
+            value,
+        } => nst::Item::Term {
             name: name.span().of(id),
             eq: *eq,
             value: arena.alloc(resolve_term(arena, value, names, errors)?),

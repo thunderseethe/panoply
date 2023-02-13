@@ -109,6 +109,7 @@ pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
     Lexer::new(
         vec![
             // Keywords
+            literal("forall", Token::KwForall),
             literal("match", Token::KwMatch),
             literal("effect", Token::KwEffect),
             literal("with", Token::KwWith),

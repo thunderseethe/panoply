@@ -1,7 +1,7 @@
 use aiahr_core::{
     cst::{
-        Constraint, Field, IdField, Item, Pattern, ProductRow, Qualification, Row, RowAtom, Scheme,
-        Separated, SumRow, Term, Type, TypeAnnotation,
+        Annotation, Constraint, Field, IdField, Item, Pattern, ProductRow, Qualifiers, Quantifier,
+        Row, RowAtom, Scheme, Separated, SumRow, Term, Type, TypeAnnotation,
     },
     diagnostic::parser::ParseErrors,
     loc::Loc,
@@ -229,17 +229,35 @@ fn constraint<'a, 's: 'a>(
 /// Returns a parser for a scheme (polymorphic type).
 pub fn scheme<'a, 's: 'a>(
     arena: &'a Bump,
-) -> impl Clone + Parser<Token<'s>, Scheme<'a, 's>, Error = ParseErrors<'s>> {
-    option(
-        separated(arena, constraint(arena), lit(Token::Comma))
-            .then(lit(Token::BigArrow))
-            .map(|(constraints, arrow)| Qualification { constraints, arrow }),
-    )
-    .then(type_(arena))
-    .map(|(qualification, type_)| Scheme {
-        qualification,
-        type_,
-    })
+) -> impl Clone + Parser<Token<'s>, &'a Scheme<'a, 's>, Error = ParseErrors<'s>> {
+    lit(Token::KwForall)
+        .then(ident())
+        .then(lit(Token::Dot))
+        .map(|((forall, var), dot)| Quantifier { forall, var, dot })
+        .repeated()
+        .map(|qs| arena.alloc_slice_fill_iter(qs.into_iter()) as &[_])
+        .then(option(
+            separated(arena, constraint(arena), lit(Token::Comma))
+                .then(lit(Token::BigArrow))
+                .map(|(constraints, arrow)| Qualifiers { constraints, arrow }),
+        ))
+        .then(type_(arena))
+        .map(|((quantifiers, qualifiers), type_)| {
+            arena.alloc(Scheme {
+                quantifiers,
+                qualifiers,
+                type_,
+            }) as &_
+        })
+}
+
+/// Returns a parser for an annotation with a given type syntax.
+pub fn annotation<'s, T>(
+    ty: impl Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>,
+) -> impl Clone + Parser<Token<'s>, Annotation<T>, Error = ParseErrors<'s>> {
+    lit(Token::Colon)
+        .then(ty)
+        .map(|(colon, type_)| Annotation { colon, type_ })
 }
 
 /// Returns a parser for a pattern.
@@ -349,11 +367,6 @@ impl<'a, 's> TermPostfix<'a, 's> {
 pub fn term<'a, 's: 'a>(
     arena: &'a Bump,
 ) -> impl Parser<Token<'s>, &'a Term<'a, 's>, Error = ParseErrors<'s>> {
-    // Type annotation.
-    let anno = lit(Token::Colon)
-        .then(type_(arena))
-        .map(|(colon, type_)| TypeAnnotation { colon, type_ });
-
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -413,7 +426,7 @@ pub fn term<'a, 's: 'a>(
 
         // Local variable binding
         let local_bind = ident()
-            .then(option(anno.clone()))
+            .then(option(annotation(type_(arena))))
             .then(lit(Token::Equal))
             .then(term.clone())
             .then(lit(Token::Semicolon))
@@ -435,7 +448,7 @@ pub fn term<'a, 's: 'a>(
         // Lambda abstraction
         let closure = lit(Token::VerticalBar)
             .then(ident())
-            .then(option(anno))
+            .then(option(annotation(type_(arena))))
             .then(lit(Token::VerticalBar))
             .map(
                 |(((lbar, var), annotation), rbar)| TermPrefix::Abstraction {
@@ -463,9 +476,15 @@ pub fn aiahr_parser<'a, 's: 'a>(
     arena: &'a Bump,
 ) -> impl Parser<Token<'s>, &'a [Item<'a, 's>], Error = ParseErrors<'s>> {
     let term = ident()
+        .then(option(annotation(scheme(arena))))
         .then(lit(Token::Equal))
         .then(term(arena))
-        .map(|((name, eq), value)| Item::Term { name, eq, value });
+        .map(|(((name, annotation), eq), value)| Item::Term {
+            name,
+            annotation,
+            eq,
+            value,
+        });
 
     choice((term,))
         .repeated()
@@ -521,9 +540,10 @@ mod tests {
             arena::BumpArena,
             intern::{InternerByRef, SyncInterner},
         },
-        pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed, row_variable, rwx_concrete,
-        rwx_variable, term_abs, term_app, term_dot, term_local, term_match, term_paren, term_prod,
-        term_sum, term_sym, term_with, type_func, type_named, type_par, type_prod, type_sum,
+        pat_prod, pat_sum, pat_var, qual, quant, row_concrete, row_mixed, row_variable,
+        rwx_concrete, rwx_variable, scheme, term_abs, term_app, term_dot, term_local, term_match,
+        term_paren, term_prod, term_sum, term_sym, term_with, type_func, type_named, type_par,
+        type_prod, type_sum,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
@@ -551,7 +571,7 @@ mod tests {
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
-    ) -> Scheme<'a, 's> {
+    ) -> &'a Scheme<'a, 's> {
         let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
         scheme(arena)
             .then_ignore(end())
@@ -691,16 +711,13 @@ mod tests {
                 &SyncInterner::new(BumpArena::new()),
                 "{x: a} -> <f: b -> a | r>"
             ),
-            Scheme {
-                qualification: None,
-                type_: type_func!(
-                    type_prod!(row_concrete!(id_field!("x", type_named!("a")))),
-                    type_sum!(row_mixed!(
-                        (id_field!("f", type_func!(type_named!("b"), type_named!("a")))),
-                        ("r")
-                    ))
-                )
-            }
+            scheme!(type_func!(
+                type_prod!(row_concrete!(id_field!("x", type_named!("a")))),
+                type_sum!(row_mixed!(
+                    (id_field!("f", type_func!(type_named!("b"), type_named!("a")))),
+                    ("r")
+                ))
+            ))
         );
     }
 
@@ -712,17 +729,17 @@ mod tests {
                 &SyncInterner::new(BumpArena::new()),
                 "r + (y: a) = s => {r} -> a -> {s}"
             ),
-            Scheme {
-                qualification: Some(qual!(ct_rowsum!(
+            scheme!(
+                qual!(ct_rowsum!(
                     rwx_variable!("r"),
                     rwx_concrete!(id_field!("y", type_named!("a"))),
                     rwx_variable!("s")
-                ))),
-                type_: type_func!(
+                )),
+                type_func!(
                     type_prod!(row_variable!("r")),
                     type_func!(type_named!("a"), type_prod!(row_variable!("s")))
-                ),
-            }
+                )
+            )
         );
     }
 
@@ -910,6 +927,25 @@ mod tests {
                 item_term!("x", term_sym!("a")),
                 item_term!("y", term_abs!("b", term_sym!("b"))),
                 item_term!("z", term_local!("t", term_sym!("x"), term_sym!("t"))),
+            ]
+        );
+        assert_matches!(
+            parse_file_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "x: a = a\ny: forall b. b -> b = |b| b"
+            ),
+            &[
+                item_term!("x", scheme!(type_named!("a")), term_sym!("a")),
+                item_term!(
+                    "y",
+                    scheme!(
+                        quant!("b"),
+                        None,
+                        type_func!(type_named!("b"), type_named!("b"))
+                    ),
+                    term_abs!("b", term_sym!("b"))
+                ),
             ]
         );
     }

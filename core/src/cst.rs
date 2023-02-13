@@ -202,13 +202,6 @@ impl<'a, 's> Spanned for Type<'a, 's> {
     }
 }
 
-/// A type annotation for a variable.
-#[derive(Clone, Copy, Debug)]
-pub struct TypeAnnotation<'a, 's> {
-    pub colon: Span,
-    pub type_: &'a Type<'a, 's>,
-}
-
 /// An atomic row for use in a type constraint.
 #[derive(Clone, Copy, Debug)]
 pub enum RowAtom<'a, 's> {
@@ -249,14 +242,22 @@ impl<'a, 's> Spanned for Constraint<'a, 's> {
     }
 }
 
-/// A qualification for a type.
+/// A quantifier for a polytype.
 #[derive(Clone, Copy, Debug)]
-pub struct Qualification<'a, 's> {
+pub struct Quantifier<'s> {
+    pub forall: Span,
+    pub var: SpanOf<RefHandle<'s, str>>,
+    pub dot: Span,
+}
+
+/// A qualifiers for a type.
+#[derive(Clone, Copy, Debug)]
+pub struct Qualifiers<'a, 's> {
     pub constraints: Separated<'a, Constraint<'a, 's>>,
     pub arrow: Span,
 }
 
-impl<'a, 's> Spanned for Qualification<'a, 's> {
+impl<'a, 's> Spanned for Qualifiers<'a, 's> {
     fn span(&self) -> Span {
         Span::join(&self.constraints, &self.arrow)
     }
@@ -265,7 +266,8 @@ impl<'a, 's> Spanned for Qualification<'a, 's> {
 /// A polymorphic Aiahr type.
 #[derive(Clone, Copy, Debug)]
 pub struct Scheme<'a, 's> {
-    pub qualification: Option<Qualification<'a, 's>>,
+    pub quantifiers: &'a [Quantifier<'s>],
+    pub qualifiers: Option<Qualifiers<'a, 's>>,
     pub type_: &'a Type<'a, 's>,
 }
 
@@ -273,7 +275,7 @@ impl<'a, 's> Spanned for Scheme<'a, 's> {
     fn span(&self) -> Span {
         Span {
             start: self
-                .qualification
+                .qualifiers
                 .map(|q| q.span())
                 .unwrap_or_else(|| self.type_.span())
                 .start(),
@@ -299,6 +301,19 @@ impl<'a, 's> Spanned for Pattern<'a, 's> {
         }
     }
 }
+
+/// A typing annotation for a variable.
+#[derive(Clone, Copy, Debug)]
+pub struct Annotation<T> {
+    pub colon: Span,
+    pub type_: T,
+}
+
+/// A monotype annotation.
+pub type TypeAnnotation<'a, 's> = Annotation<&'a Type<'a, 's>>;
+
+/// A scheme annotation.
+pub type SchemeAnnotation<'a, 's> = Annotation<&'a Scheme<'a, 's>>;
 
 /// An Aiahr term.
 #[derive(Clone, Copy, Debug)]
@@ -373,6 +388,7 @@ impl<'a, 's> Spanned for Term<'a, 's> {
 pub enum Item<'a, 's> {
     Term {
         name: SpanOf<RefHandle<'s, str>>,
+        annotation: Option<SchemeAnnotation<'a, 's>>,
         eq: Span,
         value: &'a Term<'a, 's>,
     },
@@ -552,11 +568,50 @@ macro_rules! ct_rowsum {
 }
 
 #[macro_export]
+macro_rules! quant {
+    ($($vars:pat),* $(,)?) => { &[$(
+        $crate::cst::Quantifier { var: $crate::span_of!($crate::h!($vars)), .. }
+    ),*] };
+}
+
+#[macro_export]
 macro_rules! qual {
     ($($cts:pat),+ $(,)?) => {
-        $crate::cst::Qualification {
+        $crate::cst::Qualifiers {
             constraints: $crate::separated!($($cts),+),
             ..
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! scheme {
+    ($type_:pat) => {
+        &$crate::cst::Scheme {
+            quantifiers: &[],
+            qualifiers: None,
+            type_: $type_,
+        }
+    };
+    ($qualifiers:pat, $type_:pat) => {
+        &$crate::cst::Scheme {
+            quantifiers: &[],
+            qualifiers: Some($qualifiers),
+            type_: $type_,
+        }
+    };
+    ($quantifiers:pat, None, $type_:pat) => {
+        &$crate::cst::Scheme {
+            quantifiers: $quantifiers,
+            qualifiers: None,
+            type_: $type_,
+        }
+    };
+    ($quantifiers:pat, $qualifiers:pat, $type_:pat) => {
+        &$crate::cst::Scheme {
+            quantifiers: $quantifiers,
+            qualifiers: Some($qualifiers),
+            type_: $type_,
         }
     };
 }
@@ -700,6 +755,15 @@ macro_rules! item_term {
     ($name:pat, $value:pat) => {
         $crate::cst::Item::Term {
             name: $crate::span_of!($crate::h!($name)),
+            annotation: None,
+            value: $value,
+            ..
+        }
+    };
+    ($name:pat, $type_:pat, $value:pat) => {
+        $crate::cst::Item::Term {
+            name: $crate::span_of!($crate::h!($name)),
+            annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
             ..
         }
