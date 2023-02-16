@@ -1,17 +1,11 @@
-use aiahr_core::{
-    diagnostic::{
-        nameres::{NameKind, NameResolutionError},
-        DiagnosticSink,
-    },
-    memory::handle::RefHandle,
-    span::{SpanOf, Spanned},
-};
+use aiahr_core::{memory::handle::RefHandle, span::SpanOf};
 
 /// The result of an insert into a name layer.
 #[derive(Clone, Copy, Debug)]
 pub struct InsertResult<I> {
     /// The ID of the inserted name.
     pub id: I,
+
     /// If the name already existed in the layer, the ID and span associated with the existing name.
     pub existing: Option<SpanOf<I>>,
 }
@@ -28,27 +22,6 @@ impl<I> InsertResult<I> {
             id,
             existing: Some(existing),
         }
-    }
-
-    /// Emits a duplicate definition error if necessary, then returns the contained ID.
-    pub fn emit_and_unwrap<'s, E>(
-        self,
-        name: SpanOf<RefHandle<'s, str>>,
-        kind: NameKind,
-        errors: &mut E,
-    ) -> SpanOf<I>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>,
-    {
-        if let Some(existing) = self.existing {
-            errors.add(NameResolutionError::Duplicate {
-                name: name.value,
-                kind,
-                original: existing.span(),
-                duplicate: name.span(),
-            });
-        }
-        name.span().of(self.id)
     }
 }
 

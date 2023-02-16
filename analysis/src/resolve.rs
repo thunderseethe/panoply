@@ -2,7 +2,7 @@ use crate::{
     base::BaseNames,
     name::{BaseName, ModuleName, Name, NameKinded},
     names::{LocalIds, Names},
-    ops::IdOps,
+    ops::{IdOps, InsertResult},
 };
 use aiahr_core::{
     cst::{
@@ -13,7 +13,7 @@ use aiahr_core::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
     },
-    id::{ItemId, ModuleId, TyVarId},
+    id::{ItemId, ModuleId, TyVarId, VarId},
     memory::handle::RefHandle,
     nst,
     option::Transpose,
@@ -165,6 +165,53 @@ where
     })
 }
 
+// Inserts a symbol into the current scope using the given function.
+fn insert_symbol<'s, I, F, E>(
+    kind: NameKind,
+    var: SpanOf<RefHandle<'s, str>>,
+    f: F,
+    errors: &mut E,
+) -> SpanOf<I>
+where
+    F: FnOnce(SpanOf<RefHandle<'s, str>>) -> InsertResult<I>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    let InsertResult { id, existing } = f(var);
+    if let Some(orig) = existing {
+        errors.add(NameResolutionError::Duplicate {
+            name: var.value,
+            kind,
+            original: orig.span(),
+            duplicate: var.span(),
+        });
+    }
+    var.span().of(id)
+}
+
+// Inserts a variable into the current scope.
+fn insert_var<'s, E>(
+    var: SpanOf<RefHandle<'s, str>>,
+    names: &mut Names<'_, '_, 's>,
+    errors: &mut E,
+) -> SpanOf<VarId>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    insert_symbol(NameKind::Var, var, |v| names.insert_var(v), errors)
+}
+
+// Inserts a variable into the current scope.
+fn insert_ty_var<'s, E>(
+    var: SpanOf<RefHandle<'s, str>>,
+    names: &mut Names<'_, '_, 's>,
+    errors: &mut E,
+) -> SpanOf<TyVarId>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    insert_symbol(NameKind::TyVar, var, |v| names.insert_ty_var(v), errors)
+}
+
 // A module or some other value.
 #[derive(Clone, Copy, Debug)]
 enum ModuleOr<T> {
@@ -266,12 +313,7 @@ where
             Name::TyVar(t) => Some(t),
             _ => None,
         });
-        existing.unwrap_or_else(|| {
-            names
-                .insert_ty_var(var)
-                .emit_and_unwrap(var, NameKind::TyVar, errors)
-                .value
-        })
+        existing.unwrap_or_else(|| insert_ty_var(var, names, errors).value)
     }))
 }
 
@@ -451,11 +493,7 @@ where
 {
     Quantifier {
         forall: quantifier.forall,
-        var: names.insert_ty_var(quantifier.var).emit_and_unwrap(
-            quantifier.var,
-            NameKind::TyVar,
-            errors,
-        ),
+        var: insert_ty_var(quantifier.var, names, errors),
         dot: quantifier.dot,
     }
 }
@@ -550,11 +588,7 @@ where
         cst::Pattern::SumRow(sr) => nst::Pattern::SumRow(resolve_sum_row(sr, |target| {
             resolve_pattern(arena, target, names, errors)
         })?),
-        cst::Pattern::Whole(var) => nst::Pattern::Whole(names.insert_var(*var).emit_and_unwrap(
-            *var,
-            NameKind::Var,
-            errors,
-        )),
+        cst::Pattern::Whole(var) => nst::Pattern::Whole(insert_var(*var, names, errors)),
     }))
 }
 
@@ -682,9 +716,7 @@ where
         } => {
             let value = resolve_term(arena, value, names, errors);
             names.subscope(|scope| {
-                let var = scope
-                    .insert_var(*var)
-                    .emit_and_unwrap(*var, NameKind::Var, errors);
+                let var = insert_var(*var, scope, errors);
                 let annotation = annotation
                     .map(|annotation| resolve_type_annotation(arena, &annotation, scope, errors))
                     .transpose();
@@ -722,9 +754,7 @@ where
             rbar,
             body,
         } => names.subscope(|scope| {
-            let arg = scope
-                .insert_var(*arg)
-                .emit_and_unwrap(*arg, NameKind::Var, errors);
+            let arg = insert_var(*arg, scope, errors);
             let annotation = annotation
                 .map(|annotation| resolve_type_annotation(arena, &annotation, scope, errors))
                 .transpose();
