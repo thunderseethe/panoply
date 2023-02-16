@@ -18,9 +18,19 @@ pub struct Separated<'a, T> {
 impl<'a, T> Separated<'a, T> {
     /// An iterator over the non-separator elements.
     pub fn elements<'b>(&'b self) -> Elements<'b, T> {
+        self.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Separated<'a, T> {
+    type Item = &'a T;
+
+    type IntoIter = Elements<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
         Elements {
-            cs: self,
-            idx: Some(0),
+            head: Some(&self.first),
+            tail: self.elems.iter().map(|(_, t)| t),
         }
     }
 }
@@ -42,17 +52,15 @@ impl<'a, T: Spanned> Spanned for Separated<'a, T> {
 /// implement `ExactSizeIterator`.
 #[derive(Debug)]
 pub struct Elements<'a, T> {
-    cs: &'a Separated<'a, T>,
-
-    // `Some(0)` for `cs.first`, `Some(i + 1)` for `cs.elems[i].1`, or `None` for EOI.
-    idx: Option<usize>,
+    head: Option<&'a T>,
+    tail: std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>,
 }
 
 impl<'a, T> Clone for Elements<'a, T> {
     fn clone(&self) -> Self {
         Elements {
-            cs: self.cs,
-            idx: self.idx,
+            head: self.head,
+            tail: self.tail.clone(),
         }
     }
 }
@@ -62,29 +70,12 @@ impl<'a, T> Iterator for Elements<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        Some(match self.idx? {
-            0 => {
-                self.idx = if self.cs.elems.is_empty() {
-                    None
-                } else {
-                    Some(1)
-                };
-                &self.cs.first
-            }
-            i => {
-                self.idx = if i == self.cs.elems.len() {
-                    None
-                } else {
-                    Some(i + 1)
-                };
-                &self.cs.elems[i].1
-            }
-        })
+        self.head.take().or_else(|| self.tail.next())
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let size = 1 + self.cs.elems.len();
-        (size, Some(size))
+        let (lower, upper) = self.tail.size_hint();
+        (lower + 1, upper.map(|u| u + 1))
     }
 }
 
