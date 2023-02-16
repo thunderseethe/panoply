@@ -878,10 +878,7 @@ mod tests {
         field, h,
         id::ModuleId,
         id_field,
-        memory::{
-            arena::BumpArena,
-            intern::{InternerByRef, SyncInterner},
-        },
+        memory::intern::{InternerByRef, SyncInterner},
         modules::ModuleTree,
         nitem_term, npat_prod, npat_var, nst, nterm_abs, nterm_app, nterm_dot, nterm_item,
         nterm_local, nterm_match, nterm_prod, nterm_sum, nterm_var, nterm_with, quant, scheme,
@@ -978,7 +975,7 @@ mod tests {
     #[test]
     fn test_local_binding() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "x = {}; y = {}; x");
         assert_matches!(errs[..], []);
         assert_matches!(
@@ -998,7 +995,7 @@ mod tests {
     #[test]
     fn test_local_binding_types() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "x: a = {}; y: {} = {}; x");
         assert_matches!(errs[..], []);
@@ -1021,7 +1018,7 @@ mod tests {
     #[test]
     fn test_local_binding_shadowing() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "x = {}; x = x; x");
         assert_matches!(errs[..], []);
         assert_matches!(term,
@@ -1041,7 +1038,7 @@ mod tests {
     #[test]
     fn test_local_binding_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, _, errs) = parse_resolve_term(&arena, &interner, "x = y; z");
         assert_matches!(term, None);
         assert_matches!(
@@ -1064,7 +1061,7 @@ mod tests {
     #[test]
     fn test_handler() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "x = {}; with x do x");
         assert_matches!(errs[..], []);
         assert_matches!(term,
@@ -1083,7 +1080,7 @@ mod tests {
     #[test]
     fn test_handler_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, _, errs) = parse_resolve_term(&arena, &interner, "with h do x");
         assert_matches!(term, None);
         assert_matches!(
@@ -1106,7 +1103,7 @@ mod tests {
     #[test]
     fn test_abstraction() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| |y| y(x)");
         assert_matches!(errs[..], []);
         assert_matches!(term,
@@ -1128,7 +1125,7 @@ mod tests {
     #[test]
     fn test_abstraction_types() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "|x: {}| |y: a -> b| y(x)");
         assert_matches!(errs[..], []);
@@ -1155,7 +1152,7 @@ mod tests {
     #[test]
     fn test_abstraction_shadowing() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| |x| x(x)");
         assert_matches!(errs[..], []);
         assert_matches!(term,
@@ -1177,7 +1174,7 @@ mod tests {
     #[test]
     fn test_application() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| x(x)");
         assert_matches!(errs[..], []);
         assert_matches!(term,
@@ -1195,7 +1192,7 @@ mod tests {
     #[test]
     fn test_application_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, _, errs) = parse_resolve_term(&arena, &interner, "f(x)");
         assert_matches!(term, None);
         assert_matches!(
@@ -1218,7 +1215,7 @@ mod tests {
     #[test]
     fn test_product_row() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "x = {}; {a = x, b = {x = x}}");
         assert_matches!(errs[..], []);
@@ -1241,7 +1238,7 @@ mod tests {
     #[test]
     fn test_product_row_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, _, errs) = parse_resolve_term(&arena, &interner, "{x = y, z = x}");
         assert_matches!(term, None);
         assert_matches!(
@@ -1264,7 +1261,7 @@ mod tests {
     #[test]
     fn test_sum_row() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| <a = x>");
         assert_matches!(errs[..], []);
         assert_matches!(term,
@@ -1278,7 +1275,7 @@ mod tests {
     #[test]
     fn test_sum_row_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, _, errs) = parse_resolve_term(&arena, &interner, "<x = x>");
         assert_matches!(term, None);
         assert_matches!(
@@ -1294,7 +1291,7 @@ mod tests {
     #[test]
     fn test_dot_access() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) = parse_resolve_term(&arena, &interner, "id = |x| x; {x = id}.x");
         assert_matches!(errs[..], []);
         assert_matches!(term,
@@ -1317,7 +1314,7 @@ mod tests {
     #[test]
     fn test_dot_access_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, _, errs) = parse_resolve_term(&arena, &interner, "x.a");
         assert_matches!(term, None);
         assert_matches!(
@@ -1333,7 +1330,7 @@ mod tests {
     #[test]
     fn test_match() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "match <{a = x} => x, y => y>");
         assert_matches!(errs[..], []);
@@ -1353,7 +1350,7 @@ mod tests {
     #[test]
     fn test_match_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, _, errs) =
             parse_resolve_term(&arena, &interner, "match <{a = x} => f(x), {} => z>");
         assert_matches!(term, None);
@@ -1406,7 +1403,7 @@ mod tests {
     #[test]
     fn test_mixed_shadowing() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "x = {}; |x| match <x => x>");
         assert_matches!(errs[..], []);
@@ -1424,7 +1421,7 @@ mod tests {
     #[test]
     fn test_schemes() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (res, ids, errs) =
             parse_resolve_module(&arena, &interner, "foo : forall a. a -> a = |x| x");
         assert_matches!(errs[..], []);
@@ -1446,7 +1443,7 @@ mod tests {
     #[test]
     fn test_top_level_letrec() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (res, ids, errs) = parse_resolve_module(&arena, &interner, "foo = bar\nbar = foo");
         assert_matches!(errs[..], []);
         assert_matches!(
@@ -1468,7 +1465,7 @@ mod tests {
     #[test]
     fn test_top_level_errors() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let (res, _, errs) = parse_resolve_module(&arena, &interner, "foo = x\nbar = y");
         assert_matches!(res.resolved_items[..], [None, None]);
         assert_matches!(

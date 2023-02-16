@@ -114,7 +114,6 @@ mod tests {
     use super::*;
     use aiahr_core::cst::{Field, IdField, ProductRow, Separated};
     use aiahr_core::id::ModuleId;
-    use aiahr_core::memory::arena::BumpArena;
     use aiahr_core::memory::intern::InternerByRef;
     use aiahr_core::memory::intern::SyncInterner;
     use aiahr_core::{id::VarId, loc::Loc, nst, span::SpanOf};
@@ -286,7 +285,7 @@ mod tests {
     #[test]
     fn test_desugar_product() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
 
         let a = interner.intern_by_ref("abc");
         let b = interner.intern_by_ref("def");
@@ -361,7 +360,7 @@ mod tests {
     #[test]
     fn test_desugar_field_access() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
 
         let state = interner.intern_by_ref("state");
 
@@ -396,7 +395,7 @@ mod tests {
     #[test]
     fn test_desugar_sum() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
 
         let tru = interner.intern_by_ref("true");
 

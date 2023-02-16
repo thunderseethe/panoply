@@ -1147,7 +1147,6 @@ mod tests {
     use aiahr_analysis::names::Names;
     use aiahr_analysis::resolve::resolve_term;
     use aiahr_analysis::top_level::BaseBuilder;
-    use aiahr_core::memory::arena::BumpArena;
     use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
     use aiahr_core::modules::ModuleTree;
     use aiahr_tc::test_utils::{DummyEff, MkTerm};
@@ -1194,7 +1193,7 @@ mod tests {
     #[test]
     fn lower_id() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
         let (db, scheme, ast) = compile_upto_lower(&arena, &interner, &ty_ctx, "|x| x");
         let ir_ctx = IrCtx::new(&arena);
@@ -1208,7 +1207,7 @@ mod tests {
     #[test]
     fn lower_product_literal() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(BumpArena::new());
+        let interner = SyncInterner::new(Bump::new());
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
         let (db, scheme, ast) =
             compile_upto_lower(&arena, &interner, &ty_ctx, "|a| { x = a, y = a }");

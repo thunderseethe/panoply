@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use bumpalo_herd::Herd;
+use bumpalo_herd::Member;
 
 /// An arena for values of a given type.
 pub trait Arena<T> {
@@ -21,22 +21,9 @@ pub trait ArenaByRef<T: ?Sized> {
     fn alloc_by_ref<'a>(&'a self, value: &T) -> &'a T;
 }
 
-/// An arena implementation using [`bumpalo::Bump`]. Only supports [`Copy`] types and [`str`], since
-/// `Bump`s don't [`Drop`] their contents.
-#[derive(Debug)]
-pub struct BumpArena {
-    arena: Bump,
-}
-
-impl BumpArena {
-    pub fn new() -> BumpArena {
-        BumpArena { arena: Bump::new() }
-    }
-}
-
-impl<T: Copy> Arena<T> for BumpArena {
+impl<T: Copy> Arena<T> for Bump {
     fn alloc<'a>(&'a self, value: T) -> &'a T {
-        self.arena.alloc(value)
+        self.alloc(value)
     }
 
     fn alloc_slice_by_iter<'a, I>(&'a self, iter: I) -> &'a [T]
@@ -44,40 +31,25 @@ impl<T: Copy> Arena<T> for BumpArena {
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,
     {
-        self.arena.alloc_slice_fill_iter(iter)
+        self.alloc_slice_fill_iter(iter)
     }
 }
 
-impl<T: Copy> ArenaByRef<[T]> for BumpArena {
+impl<T: Copy> ArenaByRef<[T]> for Bump {
     fn alloc_by_ref<'a>(&'a self, value: &[T]) -> &'a [T] {
-        self.arena.alloc_slice_copy(value)
+        self.alloc_slice_copy(value)
     }
 }
 
-impl ArenaByRef<str> for BumpArena {
+impl ArenaByRef<str> for Bump {
     fn alloc_by_ref<'a>(&'a self, value: &str) -> &'a str {
-        self.arena.alloc_str(value)
+        self.alloc_str(value)
     }
 }
 
-/// An arena implementation using [`bumpalo_herd::Herd`]. As with [`BumpArena`], only supports
-/// [`Copy`] types and [`str`], since `Bump`s don't [`Drop`] their contents.
-#[derive(Debug)]
-pub struct HerdArena {
-    arenas: Herd,
-}
-
-impl HerdArena {
-    pub fn new() -> HerdArena {
-        HerdArena {
-            arenas: Herd::new(),
-        }
-    }
-}
-
-impl<T: Copy> Arena<T> for HerdArena {
+impl<'h, T: Copy> Arena<T> for Member<'h> {
     fn alloc<'a>(&'a self, value: T) -> &'a T {
-        self.arenas.get().alloc(value)
+        self.alloc(value)
     }
 
     fn alloc_slice_by_iter<'a, I>(&'a self, iter: I) -> &'a [T]
@@ -85,20 +57,18 @@ impl<T: Copy> Arena<T> for HerdArena {
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,
     {
-        self.arenas.get().alloc_slice_fill_iter(iter)
+        self.alloc_slice_fill_iter(iter)
     }
 }
 
-impl<T: Copy> ArenaByRef<[T]> for HerdArena {
+impl<'h, T: Copy> ArenaByRef<[T]> for Member<'h> {
     fn alloc_by_ref<'a>(&'a self, value: &[T]) -> &'a [T] {
-        self.arenas.get().alloc_slice_copy(value)
+        self.alloc_slice_copy(value)
     }
 }
 
-impl ArenaByRef<str> for HerdArena {
+impl<'h> ArenaByRef<str> for Member<'h> {
     fn alloc_by_ref<'a>(&'a self, value: &str) -> &'a str {
-        self.arenas.get().alloc_str(value)
+        self.alloc_str(value)
     }
 }
-
-unsafe impl Sync for HerdArena {}
