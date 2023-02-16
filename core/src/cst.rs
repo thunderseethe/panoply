@@ -110,6 +110,20 @@ impl<'a, 's, T> Spanned for ProductRow<'a, 's, T> {
     }
 }
 
+impl<'a, 's, T> IntoIterator for &'a ProductRow<'a, 's, T> {
+    type Item = &'a IdField<'s, T>;
+
+    type IntoIter = std::iter::FlatMap<
+        std::option::Iter<'a, Separated<'a, IdField<'s, T>>>,
+        Elements<'a, IdField<'s, T>>,
+        fn(&'a Separated<'a, IdField<'s, T>>) -> Elements<'a, IdField<'s, T>>,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.iter().flat_map(IntoIterator::into_iter)
+    }
+}
+
 /// A sum row with value in `T`.
 #[derive(Clone, Copy, Debug)]
 pub struct SumRow<'s, T> {
