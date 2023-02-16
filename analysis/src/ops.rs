@@ -36,7 +36,7 @@ impl<I> InsertResult<I> {
         name: SpanOf<RefHandle<'s, str>>,
         kind: NameKind,
         errors: &mut E,
-    ) -> I
+    ) -> SpanOf<I>
     where
         E: DiagnosticSink<NameResolutionError<'s>>,
     {
@@ -48,7 +48,7 @@ impl<I> InsertResult<I> {
                 duplicate: name.span(),
             });
         }
-        self.id
+        name.span().of(self.id)
     }
 }
 

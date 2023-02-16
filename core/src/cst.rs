@@ -160,8 +160,7 @@ impl<'a, V: Spanned, C: Spanned> Spanned for Row<'a, V, C> {
 }
 
 /// A row of types.
-pub type TypeRow<'a, 's> =
-    Row<'a, RefHandle<'s, str>, IdField<'s, &'a Type<'a, 's, RefHandle<'s, str>>>>;
+pub type TypeRow<'a, 's, V> = Row<'a, V, IdField<'s, &'a Type<'a, 's, V>>>;
 
 /// An unqualified Aiahr type.
 #[derive(Clone, Copy, Debug)]
@@ -169,12 +168,12 @@ pub enum Type<'a, 's, V> {
     Named(SpanOf<V>),
     Sum {
         langle: Span,
-        variants: TypeRow<'a, 's>,
+        variants: TypeRow<'a, 's, V>,
         rangle: Span,
     },
     Product {
         lbrace: Span,
-        fields: Option<TypeRow<'a, 's>>,
+        fields: Option<TypeRow<'a, 's, V>>,
         rbrace: Span,
     },
     Function {
@@ -211,7 +210,7 @@ pub enum RowAtom<'a, 's, V> {
         fields: Separated<'a, IdField<'s, &'a Type<'a, 's, V>>>,
         rpar: Span,
     },
-    Variable(SpanOf<RefHandle<'s, str>>),
+    Variable(SpanOf<V>),
 }
 
 impl<'a, 's, V: Spanned> Spanned for RowAtom<'a, 's, V> {
@@ -505,8 +504,11 @@ macro_rules! row_mixed {
 
 #[macro_export]
 macro_rules! type_named {
-    ($name:pat) => {
+    ($name:literal) => {
         &$crate::cst::Type::Named($crate::span_of!($crate::h!($name)))
+    };
+    ($name:pat) => {
+        &$crate::cst::Type::Named($crate::span_of!($name))
     };
 }
 
@@ -582,8 +584,11 @@ macro_rules! ct_rowsum {
 
 #[macro_export]
 macro_rules! quant {
-    ($($vars:pat),* $(,)?) => { &[$(
+    ($($vars:literal),* $(,)?) => { &[$(
         $crate::cst::Quantifier { var: $crate::span_of!($crate::h!($vars)), .. }
+    ),*] };
+    ($($vars:pat),* $(,)?) => { &[$(
+        $crate::cst::Quantifier { var: $crate::span_of!($vars), .. }
     ),*] };
 }
 

@@ -86,6 +86,14 @@ impl<T> SpanOf<T> {
     }
 }
 
+impl<T> SpanOf<Option<T>> {
+    /// Converts a `SpanOf<Option<T>>` to an `Option<SpanOf<T>>`.
+    pub fn transpose(self) -> Option<SpanOf<T>> {
+        let s = self.span();
+        self.value.map(|val| s.of(val))
+    }
+}
+
 /// An item that can be located in an interval of a source text.
 pub trait Spanned {
     /// The location of the item in source text.

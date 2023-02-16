@@ -143,6 +143,15 @@ macro_rules! nterm_local {
             ..
         }
     };
+    ($var:pat, $type_:pat, $value:pat, $expr:pat) => {
+        &$crate::nst::Term::Binding {
+            var: $crate::span_of!($var),
+            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
+            value: $value,
+            expr: $expr,
+            ..
+        }
+    };
 }
 
 #[macro_export]
@@ -161,6 +170,14 @@ macro_rules! nterm_abs {
     ($arg:pat, $body:pat) => {
         &$crate::nst::Term::Abstraction {
             arg: $crate::span_of!($arg),
+            body: $body,
+            ..
+        }
+    };
+    ($arg:pat, $type_:pat, $body:pat) => {
+        &$crate::nst::Term::Abstraction {
+            arg: $crate::span_of!($arg),
+            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             body: $body,
             ..
         }
@@ -246,6 +263,14 @@ macro_rules! nitem_term {
     ($name:pat, $value:pat) => {
         $crate::nst::Item::Term {
             name: $crate::span_of!($name),
+            value: $value,
+            ..
+        }
+    };
+    ($name:pat, $type_:pat, $value:pat) => {
+        $crate::nst::Item::Term {
+            name: $crate::span_of!($name),
+            annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
             ..
         }

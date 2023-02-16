@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 use aiahr_core::{
-    diagnostic::nameres::{RejectionReason, Suggestion},
     id::{IdGen, Ids, ModuleId, TyVarId, VarId},
     memory::handle::RefHandle,
     span::{SpanOf, Spanned},
@@ -10,7 +9,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     base::BaseNames,
-    find_or_collect::FindOrCollect,
     name::{BaseName, Name},
     ops::{GensOps, IdOps, InsertResult, MatchesOps},
 };
@@ -120,7 +118,7 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
                 vars: IdGen::new(),
             },
             names: FxHashMap::default(),
-            scopes: Vec::new(),
+            scopes: vec![FxHashSet::default()],
         }
     }
 
@@ -182,41 +180,22 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
     }
 
     /// Finds the correct ID associated with the given string.
-    pub fn find<T, F>(&self, name: RefHandle<'s, str>, mut f: F) -> Result<T, Vec<Suggestion<'s>>>
-    where
-        F: FnMut(Name) -> Result<T, RejectionReason>,
-    {
+    pub fn find<'c>(&'c self, name: RefHandle<'s, str>) -> impl 'c + Iterator<Item = SpanOf<Name>> {
         self.names
             .get(&name)
             .into_iter()
             .flat_map(|stack| stack.iter().rev().flat_map(Matches::iter))
-            .find_or_collect::<_, _, _, Vec<_>>(|n| {
-                f(n).map_err(|why_not| Suggestion {
-                    name: self.get(n),
-                    why_not,
-                })
-            })
-            .or_else(|mut suggestions| {
-                self.base
-                    .find(name, |n| f(Name::from(n)))
-                    .map_err(|more_suggestions| {
-                        suggestions.extend(more_suggestions.into_iter());
-                        suggestions
-                    })
-            })
+            .map(|n| self.get(n).span().of(n))
+            .chain(self.base.find(name).map(|sn| sn.map(Name::from)))
     }
 
     /// Finds the correct ID associated with the given string in the given module.
-    pub fn find_in<T, F>(
-        &self,
+    pub fn find_in<'c>(
+        &'c self,
         module: ModuleId,
         name: RefHandle<'s, str>,
-        f: F,
-    ) -> Result<T, Vec<Suggestion<'s>>>
-    where
-        F: FnMut(BaseName) -> Result<T, RejectionReason>,
-    {
-        self.base.find_in(module, name, f)
+    ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
+        self.base.find_in(module, name)
     }
 
     /// Converts into variable IDs.

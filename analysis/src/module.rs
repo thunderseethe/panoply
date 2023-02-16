@@ -1,7 +1,6 @@
 use std::slice::Iter;
 
 use aiahr_core::{
-    diagnostic::nameres::{RejectionReason, Suggestion},
     id::{IdGen, Ids, ItemId},
     memory::handle::RefHandle,
     span::{SpanOf, Spanned},
@@ -9,7 +8,6 @@ use aiahr_core::{
 use rustc_hash::FxHashMap;
 
 use crate::{
-    find_or_collect::FindOrCollect,
     name::ModuleName,
     ops::{GensOps, IdOps, InsertResult, MatchesOps},
 };
@@ -111,20 +109,15 @@ pub struct ModuleNames<'s> {
 
 impl<'s> ModuleNames<'s> {
     /// Finds the correct ID associated with the given string.
-    pub fn find<T, F>(&self, name: RefHandle<'s, str>, mut f: F) -> Result<T, Vec<Suggestion<'s>>>
-    where
-        F: FnMut(ModuleName) -> Result<T, RejectionReason>,
-    {
+    pub fn find<'b>(
+        &'b self,
+        name: RefHandle<'s, str>,
+    ) -> impl 'b + Iterator<Item = SpanOf<ModuleName>> {
         self.names
             .get(&name)
             .into_iter()
             .flat_map(|ms| ms.iter())
-            .find_or_collect(|n| {
-                f(n).map_err(|why_not| Suggestion {
-                    name: self.get(n),
-                    why_not,
-                })
-            })
+            .map(|n| self.get(n).span().of(n))
     }
 
     /// Iterates over all IDs in the order that they were generated.

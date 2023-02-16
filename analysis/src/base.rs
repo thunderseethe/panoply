@@ -1,7 +1,6 @@
 use std::slice::Iter;
 
 use aiahr_core::{
-    diagnostic::nameres::{RejectionReason, Suggestion},
     id::ModuleId,
     loc::Loc,
     memory::handle::RefHandle,
@@ -44,59 +43,23 @@ impl<'b, 'a, 's> BaseNames<'b, 'a, 's> {
         }
     }
 
-    fn extend_suggestions<T, F>(
-        &self,
-        module: ModuleId,
-        mut f: F,
-        mut suggestions: Vec<Suggestion<'s>>,
-    ) -> Result<T, Vec<Suggestion<'s>>>
-    where
-        F: FnMut(BaseName) -> Result<T, RejectionReason>,
-    {
-        f(BaseName::Module(module)).map_err(|why_not| {
-            suggestions.push(Suggestion {
-                name: canonical_span(module).of(self.modules.get_name(module)),
-                why_not,
-            });
-            suggestions
-        })
-    }
-
     /// Finds the correct ID associated with the given string.
-    pub fn find<T, F>(&self, name: RefHandle<'s, str>, mut f: F) -> Result<T, Vec<Suggestion<'s>>>
-    where
-        F: FnMut(BaseName) -> Result<T, RejectionReason>,
-    {
-        self.module_names[&self.me]
-            .find(name, |n| f(n.based_in(self.me)))
-            .or_else(|suggestions| {
-                if let Some(m) = self.modules.find_package(name) {
-                    self.extend_suggestions(m, f, suggestions)
-                } else {
-                    Err(suggestions)
-                }
-            })
+    pub fn find<'c>(
+        &'c self,
+        name: RefHandle<'s, str>,
+    ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
+        self.find_in(self.me, name)
     }
 
     /// Finds the correct ID associated with the given string in the given module.
-    pub fn find_in<T, F>(
-        &self,
+    pub fn find_in<'c>(
+        &'c self,
         module: ModuleId,
         name: RefHandle<'s, str>,
-        mut f: F,
-    ) -> Result<T, Vec<Suggestion<'s>>>
-    where
-        F: FnMut(BaseName) -> Result<T, RejectionReason>,
-    {
+    ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
         self.module_names[&module]
-            .find(name, |n| f(n.based_in(module)))
-            .or_else(|suggestions| {
-                if let Some(m) = self.modules.find_package(name) {
-                    self.extend_suggestions(m, f, suggestions)
-                } else {
-                    Err(suggestions)
-                }
-            })
+            .find(name)
+            .map(move |sn| sn.map(|n| n.based_in(module)))
     }
 
     /// Iterates over all IDs defined in this module in the order that they were generated.

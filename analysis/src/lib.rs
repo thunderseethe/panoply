@@ -1,5 +1,4 @@
 pub mod base;
-pub(crate) mod find_or_collect;
 pub mod module;
 pub mod name;
 pub mod names;

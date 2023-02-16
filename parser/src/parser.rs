@@ -751,6 +751,23 @@ mod tests {
     }
 
     #[test]
+    fn test_annotated_bindings() {
+        assert_matches!(
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(BumpArena::new()),
+                "x: a = {}; y: {} = {}; x"
+            ),
+            term_local!(
+                "x",
+                type_named!("a"),
+                term_prod!(),
+                term_local!("y", type_prod!(), term_prod!(), term_sym!("x"))
+            )
+        );
+    }
+
+    #[test]
     fn test_app_precedence() {
         assert_matches!(
             parse_term_unwrap(

@@ -1,22 +1,25 @@
 use crate::{
     base::BaseNames,
-    name::{BaseName, ModuleName, Name},
+    name::{BaseName, ModuleName, Name, NameKinded},
     names::{LocalIds, Names},
+    ops::IdOps,
 };
 use aiahr_core::{
-    cst::{self, Field, IdField, ProductRow, Separated, SumRow},
+    cst::{
+        self, Annotation, Constraint, Field, IdField, ProductRow, Qualifiers, Quantifier, Row,
+        RowAtom, Scheme, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation, TypeRow,
+    },
     diagnostic::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
     },
-    id::{ItemId, ModuleId},
+    id::{ItemId, ModuleId, TyVarId},
     memory::handle::RefHandle,
     nst,
+    option::Transpose,
     span::{Span, SpanOf, Spanned},
 };
 use bumpalo::Bump;
-
-const TERM_KINDS: NameKinds = NameKinds::ITEM.union(NameKinds::VAR);
 
 /// Extension trait to construct not-found errors from find results.
 pub trait OkOrEmit<'s>: Sized {
@@ -162,6 +165,349 @@ where
     })
 }
 
+// A module or some other value.
+#[derive(Clone, Copy, Debug)]
+enum ModuleOr<T> {
+    Module(ModuleId),
+    Value(T),
+}
+
+// Resolves a symbol or suggests names that the user might have intended.
+fn resolve_or_suggest<'s, I, N, T, F>(
+    iterator: I,
+    names: &Names<'_, '_, 's>,
+    mut f: F,
+) -> Result<T, Vec<Suggestion<'s>>>
+where
+    N: Copy,
+    I: Iterator<Item = SpanOf<N>>,
+    F: FnMut(N) -> Result<T, RejectionReason>,
+    Name: From<N>,
+{
+    let mut suggestions = Vec::new();
+    for name in iterator {
+        match f(name.value) {
+            Ok(x) => {
+                return Ok(x);
+            }
+            Err(why_not) => {
+                suggestions.push(Suggestion {
+                    name: names.get(name.value),
+                    why_not,
+                });
+            }
+        }
+    }
+    Err(suggestions)
+}
+
+// Resolves a symbol to a value of type `T`, using the given function to decide which names are
+// valid for the symbol.
+fn resolve_symbol<'s, T, F, E>(
+    var: SpanOf<RefHandle<'s, str>>,
+    names: &Names<'_, '_, 's>,
+    errors: &mut E,
+    f: F,
+) -> Option<T>
+where
+    F: FnMut(Name) -> Result<T, RejectionReason>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    match resolve_or_suggest(names.find(var.value), names, f) {
+        Ok(x) => Some(x),
+        Err(suggestions) => {
+            errors.add(NameResolutionError::NotFound {
+                name: var,
+                context_module: None,
+                suggestions,
+            });
+            None
+        }
+    }
+}
+
+// Resolves a symbol in a given module to a value of type `T`, using the given function to decide
+// which names are valid for the symbol.
+fn resolve_symbol_in<'s, T, F, E>(
+    module: ModuleId,
+    var: SpanOf<RefHandle<'s, str>>,
+    names: &Names<'_, '_, 's>,
+    errors: &mut E,
+    f: F,
+) -> Option<T>
+where
+    F: FnMut(BaseName) -> Result<T, RejectionReason>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    match resolve_or_suggest(names.find_in(module, var.value), names, f) {
+        Ok(x) => Some(x),
+        Err(suggestions) => {
+            errors.add(NameResolutionError::NotFound {
+                name: var,
+                context_module: None,
+                suggestions,
+            });
+            None
+        }
+    }
+}
+
+// Resolves a symbol to a type name.
+fn resolve_type_symbol<'s, E>(
+    var: SpanOf<RefHandle<'s, str>>,
+    names: &mut Names<'_, '_, 's>,
+    errors: &mut E,
+) -> Option<SpanOf<TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(var.map(|v| {
+        let existing = names.find(v).find_map(|sn| match sn.value {
+            Name::TyVar(t) => Some(t),
+            _ => None,
+        });
+        existing.unwrap_or_else(|| {
+            names
+                .insert_ty_var(var)
+                .emit_and_unwrap(var, NameKind::TyVar, errors)
+                .value
+        })
+    }))
+}
+
+// Resolves a type-level row.
+fn resolve_row<'a, 's, C, D, F, E>(
+    arena: &'a Bump,
+    row: &Row<'_, RefHandle<'s, str>, C>,
+    mut f: F,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<Row<'a, TyVarId, D>>
+where
+    F: FnMut(&C, &mut Names<'_, 'a, 's>, &mut E) -> Option<D>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(match row {
+        Row::Concrete(concrete) => {
+            Row::Concrete(resolve_separated(arena, concrete, |c| f(c, names, errors))?)
+        }
+        Row::Variable(variables) => Row::Variable(resolve_separated(arena, variables, |var| {
+            resolve_type_symbol(*var, names, errors)
+        })?),
+        Row::Mixed {
+            concrete,
+            vbar,
+            variables,
+        } => {
+            let concrete = resolve_separated(arena, concrete, |c| f(c, names, errors));
+            let variables = resolve_separated(arena, variables, |var| {
+                resolve_type_symbol(*var, names, errors)
+            });
+            Row::Mixed {
+                concrete: concrete?,
+                vbar: *vbar,
+                variables: variables?,
+            }
+        }
+    })
+}
+
+// Resolves a row of types.
+fn resolve_type_row<'a, 's, E>(
+    arena: &'a Bump,
+    row: &TypeRow<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<TypeRow<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    resolve_row(
+        arena,
+        row,
+        |field, names, errors| resolve_id_field(field, |ty| resolve_type(arena, ty, names, errors)),
+        names,
+        errors,
+    )
+}
+
+/// Resolves an Aiahr type.
+pub fn resolve_type<'a, 's, E>(
+    arena: &'a Bump,
+    type_: &Type<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<&'a Type<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(
+        arena.alloc(match type_ {
+            Type::Named(var) => Type::Named(resolve_type_symbol(*var, names, errors)?),
+            Type::Sum {
+                langle,
+                variants,
+                rangle,
+            } => Type::Sum {
+                langle: *langle,
+                variants: resolve_type_row(arena, variants, names, errors)?,
+                rangle: *rangle,
+            },
+            Type::Product {
+                lbrace,
+                fields,
+                rbrace,
+            } => Type::Product {
+                lbrace: *lbrace,
+                fields: fields
+                    .map(|fields| resolve_type_row(arena, &fields, names, errors))
+                    .transpose()?,
+                rbrace: *rbrace,
+            },
+            Type::Function {
+                domain,
+                arrow,
+                codomain,
+            } => {
+                let domain = resolve_type(arena, domain, names, errors);
+                let codomain = resolve_type(arena, codomain, names, errors);
+                Type::Function {
+                    domain: domain?,
+                    arrow: *arrow,
+                    codomain: codomain?,
+                }
+            }
+            Type::Parenthesized { lpar, type_, rpar } => Type::Parenthesized {
+                lpar: *lpar,
+                type_: resolve_type(arena, type_, names, errors)?,
+                rpar: *rpar,
+            },
+        }) as &_,
+    )
+}
+
+// Resolves a row atom.
+fn resolve_row_atom<'a, 's, E>(
+    arena: &'a Bump,
+    atom: &RowAtom<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<RowAtom<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(match atom {
+        RowAtom::Concrete { lpar, fields, rpar } => RowAtom::Concrete {
+            lpar: *lpar,
+            fields: resolve_separated(arena, fields, |field| {
+                resolve_id_field(field, |ty| resolve_type(arena, ty, names, errors))
+            })?,
+            rpar: *rpar,
+        },
+        RowAtom::Variable(var) => RowAtom::Variable(resolve_type_symbol(*var, names, errors)?),
+    })
+}
+
+// Resolves a type constraint.
+fn resolve_constraint<'a, 's, E>(
+    arena: &'a Bump,
+    constraint: &Constraint<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<Constraint<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(match constraint {
+        Constraint::RowSum {
+            lhs,
+            plus,
+            rhs,
+            eq,
+            goal,
+        } => {
+            let lhs = resolve_row_atom(arena, lhs, names, errors);
+            let rhs = resolve_row_atom(arena, rhs, names, errors);
+            let goal = resolve_row_atom(arena, goal, names, errors);
+            Constraint::RowSum {
+                lhs: lhs?,
+                plus: *plus,
+                rhs: rhs?,
+                eq: *eq,
+                goal: goal?,
+            }
+        }
+    })
+}
+
+// Resolves a quantifier.
+fn resolve_quantifier<'s, E>(
+    quantifier: &Quantifier<RefHandle<'s, str>>,
+    names: &mut Names<'_, '_, 's>,
+    errors: &mut E,
+) -> Quantifier<TyVarId>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Quantifier {
+        forall: quantifier.forall,
+        var: names.insert_ty_var(quantifier.var).emit_and_unwrap(
+            quantifier.var,
+            NameKind::TyVar,
+            errors,
+        ),
+        dot: quantifier.dot,
+    }
+}
+
+// Resolves a set of quantifiers.
+fn resolve_qualifiers<'a, 's, E>(
+    arena: &'a Bump,
+    qualifiers: &Qualifiers<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<Qualifiers<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(Qualifiers {
+        constraints: resolve_separated(arena, &qualifiers.constraints, |constraint| {
+            resolve_constraint(arena, constraint, names, errors)
+        })?,
+        arrow: qualifiers.arrow,
+    })
+}
+
+/// Resolves a polymorphic type.
+pub fn resolve_scheme<'a, 's, E>(
+    arena: &'a Bump,
+    scheme: &Scheme<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<&'a Scheme<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    names.subscope(|scope| {
+        let quantifiers = arena.alloc_slice_fill_iter(
+            scheme
+                .quantifiers
+                .iter()
+                .map(|quant| resolve_quantifier(quant, scope, errors)),
+        ) as &[_];
+        let qualifiers = scheme
+            .qualifiers
+            .map(|quals| resolve_qualifiers(arena, &quals, scope, errors))
+            .transpose();
+        let type_ = resolve_type(arena, scheme.type_, scope, errors);
+        Some(arena.alloc(Scheme {
+            quantifiers,
+            qualifiers: qualifiers?,
+            type_: type_?,
+        }) as &_)
+    })
+}
+
 // The possible meanings of a `DotAccess` term.
 #[derive(Debug)]
 enum DotResolution<'a, 's> {
@@ -204,12 +550,44 @@ where
         cst::Pattern::SumRow(sr) => nst::Pattern::SumRow(resolve_sum_row(sr, |target| {
             resolve_pattern(arena, target, names, errors)
         })?),
-        cst::Pattern::Whole(var) => nst::Pattern::Whole(var.span_map(|var| {
-            names
-                .insert_var(*var)
-                .emit_and_unwrap(*var, NameKind::Var, errors)
-        })),
+        cst::Pattern::Whole(var) => nst::Pattern::Whole(names.insert_var(*var).emit_and_unwrap(
+            *var,
+            NameKind::Var,
+            errors,
+        )),
     }))
+}
+
+// Resolves a type annotation.
+fn resolve_type_annotation<'a, 's, E>(
+    arena: &'a Bump,
+    annotation: &TypeAnnotation<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<TypeAnnotation<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(Annotation {
+        colon: annotation.colon,
+        type_: resolve_type(arena, annotation.type_, names, errors)?,
+    })
+}
+
+// Resolves a scheme annotation.
+fn resolve_scheme_annotation<'a, 's, E>(
+    arena: &'a Bump,
+    annotation: &SchemeAnnotation<'_, 's, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<SchemeAnnotation<'a, 's, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(Annotation {
+        colon: annotation.colon,
+        type_: resolve_scheme(arena, annotation.type_, names, errors)?,
+    })
 }
 
 // Resolves nested `DotAccess` terms.
@@ -232,10 +610,9 @@ where
             field: field2,
         } => match resolve_nested_dots(arena, base2, *dot2, *field2, names, errors)? {
             // m . field
-            DotResolution::Module(m) => names
-                .find_in(m, field.value, |name| Ok(DotResolution::from(name)))
-                .ok_or_emit_in(m, field, errors)?,
-            // (m.i) . field
+            DotResolution::Module(m) => resolve_symbol_in(m, field, names, errors, |name| {
+                Ok(DotResolution::from(name))
+            })?,
             DotResolution::Item(m, i) => DotResolution::FieldAccess {
                 base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
                 dot,
@@ -257,28 +634,24 @@ where
             },
         },
         // n . field
-        cst::Term::SymbolRef(n) => names
-            .find(n.value, |name| match name {
-                Name::Module(m) => Ok(names
-                    .find_in(m, field.value, |n2| Ok(DotResolution::from(n2)))
-                    .ok_or_emit_in(m, field, errors)),
-                Name::Item(m, i) => Ok(Some(DotResolution::FieldAccess {
-                    base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
-                    dot,
-                    field,
-                })),
-                Name::TyVar(_) => Err(RejectionReason::WrongKind {
-                    actual: NameKind::TyVar,
-                    expected: TERM_KINDS | NameKinds::MODULE,
-                }),
-                Name::Var(v) => Ok(Some(DotResolution::FieldAccess {
-                    base: arena.alloc(nst::Term::VariableRef(base.span().of(v))),
-                    dot,
-                    field,
-                })),
-            })
-            .ok_or_emit(*n, errors)
-            .flatten()?,
+        cst::Term::SymbolRef(n) => match resolve_symbol(*n, names, errors, |name| match name {
+            Name::Module(m) => Ok(ModuleOr::Module(m)),
+            Name::Item(m, i) => Ok(ModuleOr::Value(nst::Term::ItemRef(base.span().of((m, i))))),
+            Name::Var(v) => Ok(ModuleOr::Value(nst::Term::VariableRef(base.span().of(v)))),
+            _ => Err(RejectionReason::WrongKind {
+                actual: name.kind(),
+                expected: NameKinds::MODULE | NameKinds::ITEM | NameKinds::VAR,
+            }),
+        })? {
+            ModuleOr::Module(m) => resolve_symbol_in(m, field, names, errors, |name| {
+                Ok(DotResolution::from(name))
+            })?,
+            ModuleOr::Value(value) => DotResolution::FieldAccess {
+                base: arena.alloc(value),
+                dot,
+                field,
+            },
+        },
         // (expr) . field
         _ => DotResolution::FieldAccess {
             base: resolve_term(arena, base, names, errors)?,
@@ -298,151 +671,146 @@ pub fn resolve_term<'a, 's, E>(
 where
     E: DiagnosticSink<NameResolutionError<'s>>,
 {
-    Some(
-        arena.alloc(match term {
-            cst::Term::Binding {
-                var,
-                annotation: _,
-                eq,
-                value,
-                semi,
-                expr,
-            } => {
-                // TODO: resolve annotation.
-                let value = resolve_term(arena, value, names, errors);
+    Some(arena.alloc(match term {
+        cst::Term::Binding {
+            var,
+            annotation,
+            eq,
+            value,
+            semi,
+            expr,
+        } => {
+            let value = resolve_term(arena, value, names, errors);
+            names.subscope(|scope| {
+                let var = scope
+                    .insert_var(*var)
+                    .emit_and_unwrap(*var, NameKind::Var, errors);
+                let annotation = annotation
+                    .map(|annotation| resolve_type_annotation(arena, &annotation, scope, errors))
+                    .transpose();
+                let expr = resolve_term(arena, expr, scope, errors);
 
-                names.subscope(|scope| {
-                    let id = scope
-                        .insert_var(*var)
-                        .emit_and_unwrap(*var, NameKind::Var, errors);
-                    let expr = resolve_term(arena, expr, scope, errors);
-
-                    Some(nst::Term::Binding {
-                        var: var.span().of(id),
-                        eq: *eq,
-                        // TODO: resolve annotation.
-                        annotation: None,
-                        value: value?,
-                        semi: *semi,
-                        expr: expr?,
-                    })
-                })?
-            }
-            cst::Term::Handle {
-                with,
-                handler,
-                do_,
-                expr,
-            } => {
-                let handler = resolve_term(arena, handler, names, errors);
-                let expr = resolve_term(arena, expr, names, errors);
-                nst::Term::Handle {
-                    with: *with,
-                    handler: handler?,
-                    do_: *do_,
+                Some(nst::Term::Binding {
+                    var,
+                    annotation: annotation?,
+                    eq: *eq,
+                    value: value?,
+                    semi: *semi,
                     expr: expr?,
+                })
+            })?
+        }
+        cst::Term::Handle {
+            with,
+            handler,
+            do_,
+            expr,
+        } => {
+            let handler = resolve_term(arena, handler, names, errors);
+            let expr = resolve_term(arena, expr, names, errors);
+            nst::Term::Handle {
+                with: *with,
+                handler: handler?,
+                do_: *do_,
+                expr: expr?,
+            }
+        }
+        cst::Term::Abstraction {
+            lbar,
+            arg,
+            annotation,
+            rbar,
+            body,
+        } => names.subscope(|scope| {
+            let arg = scope
+                .insert_var(*arg)
+                .emit_and_unwrap(*arg, NameKind::Var, errors);
+            let annotation = annotation
+                .map(|annotation| resolve_type_annotation(arena, &annotation, scope, errors))
+                .transpose();
+            let body = resolve_term(arena, body, scope, errors);
+            Some(nst::Term::Abstraction {
+                lbar: *lbar,
+                arg,
+                annotation: annotation?,
+                rbar: *rbar,
+                body: body?,
+            })
+        })?,
+        cst::Term::Application {
+            func,
+            lpar,
+            arg,
+            rpar,
+        } => {
+            let func = resolve_term(arena, func, names, errors);
+            let arg = resolve_term(arena, arg, names, errors);
+            nst::Term::Application {
+                func: func?,
+                lpar: *lpar,
+                arg: arg?,
+                rpar: *rpar,
+            }
+        }
+        cst::Term::ProductRow(pr) => {
+            nst::Term::ProductRow(resolve_product_row(arena, pr, |target| {
+                resolve_term(arena, target, names, errors)
+            })?)
+        }
+        cst::Term::SumRow(sr) => nst::Term::SumRow(resolve_sum_row(sr, |target| {
+            resolve_term(arena, target, names, errors)
+        })?),
+        t @ cst::Term::DotAccess { base, dot, field } => {
+            match resolve_nested_dots(arena, base, *dot, *field, names, errors)? {
+                DotResolution::Module(_) => {
+                    errors.add(NameResolutionError::WrongKind {
+                        expr: t.span(),
+                        actual: NameKind::Module,
+                        expected: NameKinds::ITEM | NameKinds::VAR,
+                    });
+                    return None;
+                }
+                DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
+                DotResolution::FieldAccess { base, dot, field } => {
+                    nst::Term::FieldAccess { base, dot, field }
                 }
             }
-            cst::Term::Abstraction {
-                lbar,
-                arg,
-                annotation: _,
-                rbar,
-                body,
-            } => names.subscope(|scope| {
-                let id = scope
-                    .insert_var(*arg)
-                    .emit_and_unwrap(*arg, NameKind::Var, errors);
-                Some(nst::Term::Abstraction {
-                    lbar: *lbar,
-                    arg: arg.span().of(id),
-                    // TODO: resolve annotation.
-                    annotation: None,
-                    rbar: *rbar,
-                    body: resolve_term(arena, body, scope, errors)?,
+        }
+        cst::Term::Match {
+            match_,
+            langle,
+            cases,
+            rangle,
+        } => nst::Term::Match {
+            match_: *match_,
+            langle: *langle,
+            cases: resolve_separated(arena, cases, |field| {
+                names.subscope(|scope| {
+                    let pattern = resolve_pattern(arena, field.label, scope, errors);
+                    let target = resolve_term(arena, field.target, scope, errors);
+                    Some(Field {
+                        label: pattern?,
+                        sep: field.sep,
+                        target: target?,
+                    })
                 })
             })?,
-            cst::Term::Application {
-                func,
-                lpar,
-                arg,
-                rpar,
-            } => {
-                let func = resolve_term(arena, func, names, errors);
-                let arg = resolve_term(arena, arg, names, errors);
-                nst::Term::Application {
-                    func: func?,
-                    lpar: *lpar,
-                    arg: arg?,
-                    rpar: *rpar,
-                }
-            }
-            cst::Term::ProductRow(pr) => {
-                nst::Term::ProductRow(resolve_product_row(arena, pr, |target| {
-                    resolve_term(arena, target, names, errors)
-                })?)
-            }
-            cst::Term::SumRow(sr) => nst::Term::SumRow(resolve_sum_row(sr, |target| {
-                resolve_term(arena, target, names, errors)
-            })?),
-            t @ cst::Term::DotAccess { base, dot, field } => {
-                match resolve_nested_dots(arena, base, *dot, *field, names, errors)? {
-                    DotResolution::Module(_) => {
-                        errors.add(NameResolutionError::WrongKind {
-                            expr: t.span(),
-                            actual: NameKind::Module,
-                            expected: TERM_KINDS,
-                        });
-                        return None;
-                    }
-                    DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
-                    DotResolution::FieldAccess { base, dot, field } => {
-                        nst::Term::FieldAccess { base, dot, field }
-                    }
-                }
-            }
-            cst::Term::Match {
-                match_,
-                langle,
-                cases,
-                rangle,
-            } => nst::Term::Match {
-                match_: *match_,
-                langle: *langle,
-                cases: resolve_separated(arena, cases, |field| {
-                    names.subscope(|scope| {
-                        let pattern = resolve_pattern(arena, field.label, scope, errors);
-                        let target = resolve_term(arena, field.target, scope, errors);
-                        Some(Field {
-                            label: pattern?,
-                            sep: field.sep,
-                            target: target?,
-                        })
-                    })
-                })?,
-                rangle: *rangle,
-            },
-            cst::Term::SymbolRef(var) => names
-                .find(var.value, |name| match name {
-                    Name::Module(_) => Err(RejectionReason::WrongKind {
-                        actual: NameKind::Module,
-                        expected: TERM_KINDS,
-                    }),
-                    Name::Item(m, i) => Ok(nst::Term::ItemRef(var.span().of((m, i)))),
-                    Name::TyVar(_) => Err(RejectionReason::WrongKind {
-                        actual: NameKind::TyVar,
-                        expected: TERM_KINDS,
-                    }),
-                    Name::Var(v) => Ok(nst::Term::VariableRef(var.span().of(v))),
-                })
-                .ok_or_emit(*var, errors)?,
-            cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
-                lpar: *lpar,
-                term: resolve_term(arena, term, names, errors)?,
-                rpar: *rpar,
-            },
-        }),
-    )
+            rangle: *rangle,
+        },
+        cst::Term::SymbolRef(var) => resolve_symbol(*var, names, errors, |name| match name {
+            Name::Item(m, i) => Ok(nst::Term::ItemRef(var.span().of((m, i)))),
+            Name::Var(v) => Ok(nst::Term::VariableRef(var.span().of(v))),
+            _ => Err(RejectionReason::WrongKind {
+                actual: name.kind(),
+                expected: NameKinds::ITEM | NameKinds::VAR,
+            }),
+        })?,
+        cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
+            lpar: *lpar,
+            term: resolve_term(arena, term, names, errors)?,
+            rpar: *rpar,
+        },
+    }))
 }
 
 /// Resolves the given item.
@@ -459,13 +827,14 @@ where
     Some(match item {
         cst::Item::Term {
             name,
-            annotation: _,
+            annotation,
             eq,
             value,
         } => nst::Item::Term {
             name: name.span().of(id),
-            // TODO: resolve annotation.
-            annotation: None,
+            annotation: annotation
+                .map(|annotation| resolve_scheme_annotation(arena, &annotation, names, errors))
+                .transpose()?,
             eq: *eq,
             value: arena.alloc(resolve_term(arena, value, names, errors)?),
         },
@@ -507,18 +876,17 @@ mod tests {
     use aiahr_core::{
         diagnostic::nameres::{NameKind, NameResolutionError},
         field, h,
-        id::{Ids, ModuleId, VarId},
+        id::ModuleId,
         id_field,
         memory::{
             arena::BumpArena,
-            handle::RefHandle,
             intern::{InternerByRef, SyncInterner},
         },
         modules::ModuleTree,
         nitem_term, npat_prod, npat_var, nst, nterm_abs, nterm_app, nterm_dot, nterm_item,
-        nterm_local, nterm_match, nterm_prod, nterm_sum, nterm_var, nterm_with,
-        span::{Span, SpanOf},
-        span_of,
+        nterm_local, nterm_match, nterm_prod, nterm_sum, nterm_var, nterm_with, quant, scheme,
+        span::Span,
+        span_of, type_func, type_named, type_prod,
     };
     use aiahr_parser::{
         lexer::aiahr_lexer,
@@ -529,7 +897,12 @@ mod tests {
     use chumsky::Parser;
     use rustc_hash::FxHashMap;
 
-    use crate::{module::ModuleNames, names::Names, ops::IdOps, top_level::BaseBuilder};
+    use crate::{
+        module::ModuleNames,
+        names::{LocalIds, Names},
+        ops::IdOps,
+        top_level::BaseBuilder,
+    };
 
     use super::{resolve_module, resolve_term, ModuleResolution};
 
@@ -541,7 +914,7 @@ mod tests {
         input: &str,
     ) -> (
         Option<&'a nst::Term<'a, 's>>,
-        Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>>,
+        LocalIds<'s>,
         Vec<NameResolutionError<'s>>,
     )
     where
@@ -562,7 +935,7 @@ mod tests {
         let mut names = Names::new(&base);
 
         let resolved = resolve_term(arena, unresolved, &mut names, &mut errors);
-        (resolved, names.into_local_ids().vars, errors)
+        (resolved, names.into_local_ids(), errors)
     }
 
     fn parse_resolve_module<'a, 's, S>(
@@ -606,7 +979,8 @@ mod tests {
     fn test_local_binding() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "x = {}; y = {}; x");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "x = {}; y = {}; x");
+        assert_matches!(errs[..], []);
         assert_matches!(
             term,
             Some(nterm_local!(
@@ -614,32 +988,54 @@ mod tests {
                 nterm_prod!(),
                 nterm_local!(y, nterm_prod!(), nterm_var!(x1))
             )) => {
-                assert_eq!(vars[x].value.0, "x");
-                assert_eq!(vars[y].value.0, "y");
+                assert_eq!(locals.vars[x].value.0, "x");
+                assert_eq!(locals.vars[y].value.0, "y");
                 assert_eq!(x1, x);
             }
         );
+    }
+
+    #[test]
+    fn test_local_binding_types() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, locals, errs) =
+            parse_resolve_term(&arena, &interner, "x: a = {}; y: {} = {}; x");
         assert_matches!(errs[..], []);
+        assert_matches!(
+            term,
+            Some(nterm_local!(
+                x,
+                type_named!(a),
+                nterm_prod!(),
+                nterm_local!(y, type_prod!(), nterm_prod!(), nterm_var!(x1))
+            )) => {
+                assert_eq!(locals.ty_vars[a].value.0, "a");
+                assert_eq!(locals.vars[x].value.0, "x");
+                assert_eq!(locals.vars[y].value.0, "y");
+                assert_eq!(x1, x);
+            }
+        );
     }
 
     #[test]
     fn test_local_binding_shadowing() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "x = {}; x = x; x");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "x = {}; x = x; x");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_local!(
                 x_out,
                 nterm_prod!(),
                 nterm_local!(x_in, nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x_out].value.0, "x");
-                assert_eq!(vars[x_in].value.0, "x");
+                assert_eq!(locals.vars[x_out].value.0, "x");
+                assert_eq!(locals.vars[x_in].value.0, "x");
                 assert_eq!(x1, x_out);
                 assert_eq!(x2, x_in);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
@@ -669,19 +1065,19 @@ mod tests {
     fn test_handler() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "x = {}; with x do x");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "x = {}; with x do x");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_local!(
                 x,
                 nterm_prod!(),
                 nterm_with!(nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(locals.vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
@@ -711,7 +1107,8 @@ mod tests {
     fn test_abstraction() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| |y| y(x)");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| |y| y(x)");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_abs!(
                 x,
@@ -720,20 +1117,47 @@ mod tests {
                     nterm_app!(nterm_var!(y1), nterm_var!(x1))
                 )
             )) => {
-                assert_eq!(vars[x].value.0, "x");
-                assert_eq!(vars[y].value.0, "y");
+                assert_eq!(locals.vars[x].value.0, "x");
+                assert_eq!(locals.vars[y].value.0, "y");
                 assert_eq!(x1, x);
                 assert_eq!(y1, y);
             }
         );
+    }
+
+    #[test]
+    fn test_abstraction_types() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+        let (term, locals, errs) =
+            parse_resolve_term(&arena, &interner, "|x: {}| |y: a -> b| y(x)");
         assert_matches!(errs[..], []);
+        assert_matches!(term,
+            Some(nterm_abs!(
+                x,
+                type_prod!(),
+                nterm_abs!(
+                    y,
+                    type_func!(type_named!(a), type_named!(b)),
+                    nterm_app!(nterm_var!(y1), nterm_var!(x1))
+                )
+            )) => {
+                assert_eq!(locals.ty_vars[a].value.0, "a");
+                assert_eq!(locals.ty_vars[b].value.0, "b");
+                assert_eq!(locals.vars[x].value.0, "x");
+                assert_eq!(locals.vars[y].value.0, "y");
+                assert_eq!(x1, x);
+                assert_eq!(y1, y);
+            }
+        );
     }
 
     #[test]
     fn test_abstraction_shadowing() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| |x| x(x)");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| |x| x(x)");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_abs!(
                 x_out,
@@ -742,31 +1166,30 @@ mod tests {
                     nterm_app!(nterm_var!(x1), nterm_var!(x2))
                 )
             )) => {
-                assert_eq!(vars[x_out].value.0, "x");
-                assert_eq!(vars[x_in].value.0, "x");
+                assert_eq!(locals.vars[x_out].value.0, "x");
+                assert_eq!(locals.vars[x_in].value.0, "x");
                 assert_eq!(x1, x_in);
                 assert_eq!(x2, x_in);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
     fn test_application() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| x(x)");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| x(x)");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_abs!(
                 x,
                 nterm_app!(nterm_var!(x1), nterm_var!(x2))
             )) => {
-                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(locals.vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
@@ -796,8 +1219,9 @@ mod tests {
     fn test_product_row() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) =
+        let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "x = {}; {a = x, b = {x = x}}");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_local!(x, nterm_prod!(),
                 nterm_prod!(
@@ -807,12 +1231,11 @@ mod tests {
                     nterm_prod!(id_field!("x", nterm_var!(x2)))
                 ),
             ))) => {
-                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(locals.vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
@@ -842,14 +1265,14 @@ mod tests {
     fn test_sum_row() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "|x| <a = x>");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "|x| <a = x>");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_abs!(x, nterm_sum!(id_field!("a", nterm_var!(x1))))) => {
-                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(locals.vars[x].value.0, "x");
                 assert_eq!(x1, x);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
@@ -872,7 +1295,8 @@ mod tests {
     fn test_dot_access() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) = parse_resolve_term(&arena, &interner, "id = |x| x; {x = id}.x");
+        let (term, locals, errs) = parse_resolve_term(&arena, &interner, "id = |x| x; {x = id}.x");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_local!(
                 id,
@@ -882,13 +1306,12 @@ mod tests {
                     "x"
                 )
             )) => {
-                assert_eq!(vars[id].value.0, "id");
-                assert_eq!(vars[x].value.0, "x");
+                assert_eq!(locals.vars[id].value.0, "id");
+                assert_eq!(locals.vars[x].value.0, "x");
                 assert_eq!(x1, x);
                 assert_eq!(id1, id);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
@@ -911,20 +1334,20 @@ mod tests {
     fn test_match() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) =
+        let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "match <{a = x} => x, y => y>");
+        assert_matches!(errs[..], []);
         assert_matches!(term,
             Some(nterm_match!(
                 field!(npat_prod!(id_field!("a", npat_var!(x))), nterm_var!(x1)),
                 field!(npat_var!(y), nterm_var!(y1))
             )) => {
-                assert_eq!(vars[x].value.0, "x");
-                assert_eq!(vars[y].value.0, "y");
+                assert_eq!(locals.vars[x].value.0, "x");
+                assert_eq!(locals.vars[y].value.0, "y");
                 assert_eq!(x1, x);
                 assert_eq!(y1, y);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
@@ -950,23 +1373,8 @@ mod tests {
             ]
         );
 
-        let (term, vars, errs) =
+        let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "match <{a = x, b = x} => x(x)>");
-        assert_matches!(
-            term,
-            Some(nterm_match!(field!(
-                npat_prod!(
-                    id_field!("a", npat_var!(x)),
-                    id_field!("b", npat_var!(x_again))
-                ),
-                nterm_app!(nterm_var!(x1), nterm_var!(x2))
-            ))) => {
-                assert_eq!(vars[x].value.0, "x");
-                assert_eq!(vars[x_again].value.0, "x");
-                assert_eq!(x1, x);
-                assert_eq!(x2, x);
-            }
-        );
         assert_matches!(
             errs[..],
             [NameResolutionError::Duplicate {
@@ -977,24 +1385,62 @@ mod tests {
             }] => {
                 assert!(end.byte < start.byte, "{} < {}", end.byte, start.byte);
             }
-        )
+        );
+        assert_matches!(
+            term,
+            Some(nterm_match!(field!(
+                npat_prod!(
+                    id_field!("a", npat_var!(x)),
+                    id_field!("b", npat_var!(x_again))
+                ),
+                nterm_app!(nterm_var!(x1), nterm_var!(x2))
+            ))) => {
+                assert_eq!(locals.vars[x].value.0, "x");
+                assert_eq!(locals.vars[x_again].value.0, "x");
+                assert_eq!(x1, x);
+                assert_eq!(x2, x);
+            }
+        );
     }
 
     #[test]
     fn test_mixed_shadowing() {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
-        let (term, vars, errs) =
+        let (term, locals, errs) =
             parse_resolve_term(&arena, &interner, "x = {}; |x| match <x => x>");
-        assert_matches!(term,
+        assert_matches!(errs[..], []);
+        assert_matches!(
+            term,
             Some(nterm_local!(x_top, nterm_prod!(), nterm_abs!(x_mid, nterm_match!(field!(npat_var!(x_bot), nterm_var!(x1)))))) => {
-                assert_eq!(vars[x_top].value.0, "x");
-                assert_eq!(vars[x_mid].value.0, "x");
-                assert_eq!(vars[x_bot].value.0, "x");
+                assert_eq!(locals.vars[x_top].value.0, "x");
+                assert_eq!(locals.vars[x_mid].value.0, "x");
+                assert_eq!(locals.vars[x_bot].value.0, "x");
                 assert_eq!(x1, x_bot);
             }
         );
+    }
+
+    #[test]
+    fn test_schemes() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(BumpArena::new());
+        let (res, ids, errs) =
+            parse_resolve_module(&arena, &interner, "foo : forall a. a -> a = |x| x");
         assert_matches!(errs[..], []);
+        assert_matches!(
+            res.resolved_items[..],
+            [
+                Some(nitem_term!(foo, scheme!(quant!(a), None, type_func!(type_named!(a1), type_named!(a2))), nterm_abs!(x, nterm_var!(x1)))),
+            ] => {
+                assert_eq!(ids.get(foo).value.0, "foo");
+                assert_eq!(res.locals.ty_vars[a].value.0, "a");
+                assert_eq!(res.locals.vars[x].value.0, "x");
+                assert_eq!(a1, a);
+                assert_eq!(a2, a);
+                assert_eq!(x1, x);
+            }
+        );
     }
 
     #[test]
@@ -1002,6 +1448,7 @@ mod tests {
         let arena = Bump::new();
         let interner = SyncInterner::new(BumpArena::new());
         let (res, ids, errs) = parse_resolve_module(&arena, &interner, "foo = bar\nbar = foo");
+        assert_matches!(errs[..], []);
         assert_matches!(
             res.resolved_items[..],
             [
@@ -1016,7 +1463,6 @@ mod tests {
                 assert_eq!(foo1, foo);
             }
         );
-        assert_matches!(errs[..], []);
     }
 
     #[test]
