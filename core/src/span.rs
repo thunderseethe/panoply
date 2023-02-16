@@ -1,9 +1,14 @@
-use std::{fmt::Debug, ops::Range};
+use std::{cmp::Ordering, fmt::Debug, ops::Range};
 
 use crate::loc::Loc;
 
 /// A span of a source text.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The following properties are required:
+///
+///   * `start.module == end.module`
+///   * `start.byte <= end.byte`
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Span {
     pub start: Loc,
     pub end: Loc,
@@ -19,7 +24,7 @@ impl Span {
     }
 
     /// Returns the smallest span containing the left and right spans, where `left` must entirely
-    /// precede `right`.
+    /// precede `right` and both must lie in the same module.
     pub fn join<L, R>(left: &L, right: &R) -> Span
     where
         L: Spanned,
@@ -38,6 +43,16 @@ impl Span {
             value,
             end: self.end,
         }
+    }
+
+    /// Returns a value wrapping `self` but implementing `PartialOrd` by inclusion.
+    pub fn by_inclusion(&self) -> ByInclusion {
+        ByInclusion(*self)
+    }
+
+    /// Returns a value wrapping `self` but implementing `PartialOrd` by precedence.
+    pub fn by_precedence(&self) -> ByPrecedence {
+        ByPrecedence(*self)
     }
 }
 
@@ -60,6 +75,46 @@ impl chumsky::Span for Span {
 
     fn end(&self) -> Self::Offset {
         self.end
+    }
+}
+
+/// Compares spans by inclusion.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ByInclusion(Span);
+
+impl PartialOrd for ByInclusion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (
+            self.0.start.partial_cmp(&other.0.start)?,
+            self.0.end.partial_cmp(&other.0.end)?,
+        ) {
+            (Ordering::Equal, Ordering::Equal) => Some(Ordering::Equal),
+            (Ordering::Less | Ordering::Equal, Ordering::Equal | Ordering::Greater) => {
+                Some(Ordering::Greater)
+            }
+            (Ordering::Equal | Ordering::Greater, Ordering::Less | Ordering::Equal) => {
+                Some(Ordering::Less)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Compares spans by precedence.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ByPrecedence(Span);
+
+impl PartialOrd for ByPrecedence {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self.0 == other.0 {
+            Some(Ordering::Equal)
+        } else if self.0.end <= other.0.start {
+            Some(Ordering::Less)
+        } else if other.0.end <= self.0.start {
+            Some(Ordering::Greater)
+        } else {
+            None
+        }
     }
 }
 

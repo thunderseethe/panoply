@@ -1,4 +1,9 @@
-use std::{marker::PhantomData, str::CharIndices};
+use std::{
+    cmp::Ordering,
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    str::CharIndices,
+};
 
 use crate::id::ModuleId;
 
@@ -6,7 +11,10 @@ use crate::id::ModuleId;
 ///
 /// All source texts have a "one past the end" location which corresponds to a cursor after the last
 /// character.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+///
+/// `Loc` implements `Eq`, `Hash`, `PartialEq`, and `PartialOrd`, but those comparisons only use the
+/// `module` and `byte` fields.
+#[derive(Clone, Copy, Debug)]
 pub struct Loc {
     /// The module ID of the source text.
     pub module: ModuleId,
@@ -32,6 +40,27 @@ impl Loc {
             line: 0,
             col: 0,
         }
+    }
+}
+
+impl Eq for Loc {}
+
+impl Hash for Loc {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.module.hash(state);
+        self.byte.hash(state);
+    }
+}
+
+impl PartialEq for Loc {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module && self.byte == other.byte
+    }
+}
+
+impl PartialOrd for Loc {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (self.module == other.module).then(|| self.byte.cmp(&other.byte))
     }
 }
 
