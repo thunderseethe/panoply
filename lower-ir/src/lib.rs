@@ -1193,7 +1193,7 @@ mod tests {
     #[test]
     fn lower_id() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
         let (db, scheme, ast) = compile_upto_lower(&arena, &interner, &ty_ctx, "|x| x");
         let ir_ctx = IrCtx::new(&arena);
@@ -1207,7 +1207,7 @@ mod tests {
     #[test]
     fn lower_product_literal() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
         let ty_ctx = aiahr_tc::TyCtx::new(&arena);
         let (db, scheme, ast) =
             compile_upto_lower(&arena, &interner, &ty_ctx, "|a| { x = a, y = a }");
