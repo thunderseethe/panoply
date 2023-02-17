@@ -1182,7 +1182,13 @@ mod tests {
         let resolved = resolve_term(arena, unresolved, &mut names, &mut errors)
             .expect("Name resolution to succeed");
 
-        let ast = aiahr_desugar::desugar(arena, resolved);
+        let mut vars = names
+            .into_vars()
+            .into_iter()
+            .map(|span_of| span_of.value)
+            .collect();
+
+        let ast = aiahr_desugar::desugar(arena, &mut vars, resolved).unwrap();
 
         let infer_ctx = aiahr_tc::TyCtx::new(arena);
         let (var_tys, term_tys, scheme, _) =
