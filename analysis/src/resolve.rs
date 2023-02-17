@@ -945,7 +945,7 @@ mod tests {
         Vec<NameResolutionError<'s>>,
     )
     where
-        S: InternerByRef<str>,
+        S: InternerByRef<'s, str>,
     {
         let (m, modules) = {
             let mut modules = ModuleTree::new();
@@ -975,7 +975,7 @@ mod tests {
         Vec<NameResolutionError<'s>>,
     )
     where
-        S: InternerByRef<str>,
+        S: InternerByRef<'s, str>,
     {
         let (m, modules) = {
             let mut modules = ModuleTree::new();

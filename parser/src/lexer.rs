@@ -54,7 +54,7 @@ impl<'s, S> Lexer<'s, S> {
         text: &str,
     ) -> Result<(Vec<SpanOf<Token<'s>>>, Loc), LexError>
     where
-        S: InternerByRef<str>,
+        S: InternerByRef<'s, str>,
     {
         let locator = Locator::new(module, text);
         let mut idx = 0;

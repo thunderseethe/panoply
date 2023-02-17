@@ -14,13 +14,13 @@ use crate::memory::{
 
 /// An interner for values of a given type. Ensures that equal values are represented by the same
 /// pointer.
-pub trait Interner<T: Eq + ?Sized> {
-    fn intern<'a>(&'a self, value: T) -> RefHandle<'a, T>;
+pub trait Interner<'a, T: Eq + ?Sized> {
+    fn intern(&self, value: T) -> RefHandle<'a, T>;
 }
 
 /// As [`Interner`], but where values are provided by reference. Allows interning unsized types.
-pub trait InternerByRef<T: Eq + ?Sized> {
-    fn intern_by_ref<'a>(&'a self, value: &T) -> RefHandle<'a, T>;
+pub trait InternerByRef<'a, T: Eq + ?Sized> {
+    fn intern_by_ref(&self, value: &T) -> RefHandle<'a, T>;
 }
 
 // A wrapper for a pointer whose identity is determined by its pointee. The pointee must not be
@@ -85,12 +85,12 @@ where
     }
 }
 
-impl<'a, T, A> Interner<T> for SyncInterner<'a, T, A>
+impl<'a, T, A> Interner<'a, T> for SyncInterner<'a, T, A>
 where
     T: Eq + Hash,
     A: Arena<T>,
 {
-    fn intern<'b>(&'b self, value: T) -> RefHandle<'b, T> {
+    fn intern(&self, value: T) -> RefHandle<'a, T> {
         let mut shard = self.table.shards()
             [self.table.determine_map(&ByPointee(NonNull::from(&value)))]
         .write();
@@ -104,12 +104,12 @@ where
     }
 }
 
-impl<'a, T, A> InternerByRef<T> for SyncInterner<'a, T, A>
+impl<'a, T, A> InternerByRef<'a, T> for SyncInterner<'a, T, A>
 where
     T: Eq + Hash + ?Sized,
     A: ArenaByRef<T>,
 {
-    fn intern_by_ref<'b>(&'b self, value: &T) -> RefHandle<'b, T> {
+    fn intern_by_ref(&self, value: &T) -> RefHandle<'a, T> {
         let mut shard =
             self.table.shards()[self.table.determine_map(&ByPointee(NonNull::from(value)))].write();
         if let Some((k, _)) = shard.get_key_value(&ByPointee(NonNull::from(value))) {

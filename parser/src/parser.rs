@@ -513,7 +513,7 @@ pub mod test_utils {
 
     const MOD: ModuleId = ModuleId(0);
 
-    pub fn parse_term<'a, S: InternerByRef<str>>(
+    pub fn parse_term<'a, S: InternerByRef<'a, str>>(
         arena: &'a Bump,
         interner: &'a S,
         input: &str,
@@ -553,7 +553,7 @@ mod tests {
 
     const MOD: ModuleId = ModuleId(0);
 
-    fn parse_type_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
+    fn parse_type_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
@@ -565,7 +565,7 @@ mod tests {
             .unwrap()
     }
 
-    fn parse_scheme_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
+    fn parse_scheme_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
@@ -577,7 +577,7 @@ mod tests {
             .unwrap()
     }
 
-    fn parse_term_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
+    fn parse_term_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
@@ -589,7 +589,7 @@ mod tests {
             .unwrap()
     }
 
-    fn parse_file_unwrap<'a, 's: 'a, S: InternerByRef<str>>(
+    fn parse_file_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
         arena: &'a Bump,
         interner: &'s S,
         input: &str,
