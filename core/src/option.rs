@@ -11,6 +11,20 @@ impl<T> IfNone for Option<T> {
     }
 }
 
+/// TODO(rust-lang/rust#93050): Remove in favor of standard library version.
+pub trait IsSomeAnd<T>: Sized {
+    fn is_some_and(self, f: impl FnOnce(T) -> bool) -> bool;
+}
+
+impl<T> IsSomeAnd<T> for Option<T> {
+    fn is_some_and(self, f: impl FnOnce(T) -> bool) -> bool {
+        match self {
+            Some(x) => f(x),
+            None => false,
+        }
+    }
+}
+
 /// Transposes `F<G<T>>` to `G<F<T>>`.
 pub trait Transpose<B>: Sized {
     fn transpose(self) -> Self;
