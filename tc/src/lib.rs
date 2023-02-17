@@ -1,19 +1,15 @@
 use aiahr_core::{
     ast::{Ast, Direction, Term, Term::*},
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
-    memory::handle::{Handle, RefHandle},
+    memory::{
+        handle::{Handle, RefHandle},
+        intern::{Interner, InternerByRef, SyncInterner},
+    },
 };
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey, UnifyValue};
-use parking_lot::RwLock;
-use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
-use std::{
-    borrow::Borrow,
-    cmp::Ordering,
-    convert::Infallible,
-    hash::{BuildHasherDefault, Hash, Hasher},
-    ops::Deref,
-};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::{cmp::Ordering, convert::Infallible, hash::Hash, ops::Deref};
 
 mod ty;
 pub use ty::{
@@ -1996,100 +1992,14 @@ pub struct TyScheme<'ctx, TV> {
     pub ty: Ty<'ctx, TV>,
 }
 
-const SHARD_BITS: usize = 5;
-const SHARDS: usize = 1 << SHARD_BITS;
-
-#[inline]
-fn get_shard_index_by_hash(hash: u64) -> usize {
-    let hash_len = std::mem::size_of::<usize>();
-    let bits = (hash >> (hash_len * 8 - 7 - SHARD_BITS)) as usize;
-    bits % SHARDS
-}
-fn make_hash<K: Hash + ?Sized>(val: &K) -> u64 {
-    let mut state = FxHasher::default();
-    val.hash(&mut state);
-    state.finish()
-}
-
-pub struct Sharded<T> {
-    shards: [parking_lot::RwLock<T>; SHARDS],
-}
-
-impl<T> Sharded<T> {
-    fn new(mut mk_t: impl FnMut() -> T) -> Self {
-        Self {
-            shards: [(); SHARDS].map(|()| RwLock::new(mk_t())),
-        }
-    }
-
-    fn get_shard_by_hash(&self, hash: u64) -> &RwLock<T> {
-        &self.shards[get_shard_index_by_hash(hash)]
-    }
-}
-impl<T: Default> Default for Sharded<T> {
-    fn default() -> Self {
-        Self::new(T::default)
-    }
-}
-
-pub type ShardedHashMap<K, V> = Sharded<hashbrown::HashMap<K, V, BuildHasherDefault<FxHasher>>>;
-
-impl<K: Eq + Hash + Copy> ShardedHashMap<K, ()> {
-    pub fn _intern<Q>(&self, value: Q, make: impl FnOnce(Q) -> K) -> K
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq,
-    {
-        let hash = make_hash(&value);
-        let mut shard = self.get_shard_by_hash(hash).write();
-        let entry = shard.raw_entry_mut().from_key_hashed_nocheck(hash, &value);
-
-        match entry {
-            hashbrown::hash_map::RawEntryMut::Occupied(e) => *e.key(),
-            hashbrown::hash_map::RawEntryMut::Vacant(e) => {
-                let v = make(value);
-                e.insert_hashed_nocheck(hash, v, ());
-                v
-            }
-        }
-    }
-
-    pub fn _intern_ref<Q: ?Sized>(&self, value: &Q, make: impl FnOnce() -> K) -> K
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq,
-    {
-        let hash = make_hash(value);
-        let mut shard = self.get_shard_by_hash(hash).write();
-        let entry = shard.raw_entry_mut().from_key_hashed_nocheck(hash, value);
-
-        match entry {
-            hashbrown::hash_map::RawEntryMut::Occupied(e) => *e.key(),
-            hashbrown::hash_map::RawEntryMut::Vacant(e) => {
-                let v = make();
-                e.insert_hashed_nocheck(hash, v, ());
-                v
-            }
-        }
-    }
-}
-
 // This looks frustratingly close to SyncInterner, except we hold a &'ctx Bump instead of an owned
 // A. Which allows us to produce interned values with lifetime `'ctx` without TyCtx needing to be a
 // `&'ctx TyCtx<...>`.
-// TODO: Look into ways to represent this style of allocation with existing intern stuff.
-//  1. We need to change
-//      `intern<'a>(&'a self, T) -> RefHandle<'a, T>`
-//  to
-//      `intern(&self, T) -> RefHandler<'a, T>`
-//
-//  2. Similarly Arena needs to be decoupled from `&'a self`
 pub struct TyCtx<'ctx, TV> {
-    arena: &'ctx Bump,
-    tys: ShardedHashMap<RefHandle<'ctx, TypeKind<'ctx, TV>>, ()>,
-    labels: ShardedHashMap<RefHandle<'ctx, str>, ()>,
-    row_fields: ShardedHashMap<RefHandle<'ctx, [RowLabel<'ctx>]>, ()>,
-    row_values: ShardedHashMap<RefHandle<'ctx, [Ty<'ctx, TV>]>, ()>,
+    tys: SyncInterner<'ctx, TypeKind<'ctx, TV>, Bump>,
+    labels: SyncInterner<'ctx, str, Bump>,
+    row_fields: SyncInterner<'ctx, [RowLabel<'ctx>], Bump>,
+    row_values: SyncInterner<'ctx, [Ty<'ctx, TV>], Bump>,
 }
 
 impl<'ctx, TV> TyCtx<'ctx, TV>
@@ -2098,34 +2008,11 @@ where
 {
     pub fn new(arena: &'ctx Bump) -> Self {
         Self {
-            arena,
-            tys: ShardedHashMap::default(),
-            row_fields: ShardedHashMap::default(),
-            row_values: ShardedHashMap::default(),
-            labels: ShardedHashMap::default(),
+            tys: SyncInterner::new(arena),
+            labels: SyncInterner::new(arena),
+            row_fields: SyncInterner::new(arena),
+            row_values: SyncInterner::new(arena),
         }
-    }
-
-    fn intern_ty(&self, kind: TypeKind<'ctx, TV>) -> RefHandle<'ctx, TypeKind<'ctx, TV>> {
-        self.tys._intern(kind, |kind| {
-            let kind_ref = self.arena.alloc(kind);
-            Handle(kind_ref)
-        })
-    }
-
-    fn intern_fields(&self, fields: &[RowLabel<'ctx>]) -> RefHandle<'ctx, [RowLabel<'ctx>]> {
-        self.row_fields
-            ._intern_ref(fields, || Handle(self.arena.alloc_slice_copy(fields)))
-    }
-
-    fn intern_values(&self, values: &[Ty<'ctx, TV>]) -> RefHandle<'ctx, [Ty<'ctx, TV>]> {
-        self.row_values
-            ._intern_ref(values, || Handle(self.arena.alloc_slice_copy(values)))
-    }
-
-    fn intern_label(&self, label: &str) -> RowLabel<'ctx> {
-        self.labels
-            ._intern_ref(label, || Handle(self.arena.alloc_str(label)))
     }
 }
 
@@ -2134,11 +2021,11 @@ where
     TV: Eq + Copy + Hash,
 {
     fn mk_ty(&self, kind: TypeKind<'ctx, TV>) -> Ty<'ctx, TV> {
-        Ty(self.intern_ty(kind))
+        Ty(self.tys.intern(kind))
     }
 
     fn mk_label(&self, label: &str) -> RowLabel<'ctx> {
-        self.intern_label(label)
+        self.labels.intern_by_ref(label)
     }
 
     fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV> {
@@ -2153,8 +2040,8 @@ where
             "Expected row fields to be sorted"
         );
         ClosedRow {
-            fields: self.intern_fields(fields),
-            values: self.intern_values(values),
+            fields: self.row_fields.intern_by_ref(fields),
+            values: self.row_values.intern_by_ref(values),
         }
     }
 }

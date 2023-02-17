@@ -1,44 +1,29 @@
 use std::ops::Index;
 
 use aiahr_core::id::{EffectId, EffectOpId};
+use aiahr_core::memory::intern::{Interner, InternerByRef, SyncInterner};
 use aiahr_core::{
     ast::{Ast, Direction, RowTerm, RowTermView, Term},
     id::{Id, IdGen, IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
     ir::{IrKind::*, IrTyKind::*, *},
     memory::handle::{Handle, RefHandle},
 };
-use aiahr_tc::{
-    ClosedRow, EffectInfo, Evidence, Row, ShardedHashMap, Ty, TyChkRes, TyScheme, TypeKind,
-};
+use aiahr_tc::{ClosedRow, EffectInfo, Evidence, Row, Ty, TyChkRes, TyScheme, TypeKind};
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
 struct IrCtx<'ctx> {
-    arena: &'ctx Bump,
-    tys: ShardedHashMap<RefHandle<'ctx, IrTyKind<'ctx>>, ()>,
-    tys_slices: ShardedHashMap<RefHandle<'ctx, [IrTy<'ctx>]>, ()>,
+    tys: SyncInterner<'ctx, IrTyKind<'ctx>, Bump>,
+    tys_slices: SyncInterner<'ctx, [IrTy<'ctx>], Bump>,
 }
 
 impl<'ctx> IrCtx<'ctx> {
     #[allow(dead_code)]
     fn new(arena: &'ctx Bump) -> Self {
         Self {
-            arena,
-            tys: ShardedHashMap::default(),
-            tys_slices: ShardedHashMap::default(),
+            tys: SyncInterner::new(arena),
+            tys_slices: SyncInterner::new(arena),
         }
-    }
-
-    fn intern_ir_ty(&self, kind: IrTyKind<'ctx>) -> RefHandle<'ctx, IrTyKind<'ctx>> {
-        self.tys._intern(kind, |kind| {
-            let kind_ref = self.arena.alloc(kind);
-            Handle(kind_ref)
-        })
-    }
-
-    fn intern_ir_ty_slice(&self, kinds: &[IrTy<'ctx>]) -> RefHandle<'ctx, [IrTy<'ctx>]> {
-        self.tys_slices
-            ._intern_ref(kinds, || Handle(self.arena.alloc_slice_copy(kinds)))
     }
 }
 
@@ -76,15 +61,21 @@ impl<'ctx> IntoIrTy<'ctx> for IrTyKind<'ctx> {
 
 impl<'ctx> MkIrTy<'ctx> for IrCtx<'ctx> {
     fn mk_ir_ty(&self, kind: IrTyKind<'ctx>) -> IrTy<'ctx> {
-        IrTy::new(self.intern_ir_ty(kind))
+        IrTy::new(self.tys.intern(kind))
     }
 
     fn mk_prod_ty(&self, elems: &[IrTy<'ctx>]) -> IrTy<'ctx> {
-        IrTy::new(self.intern_ir_ty(IrTyKind::ProductTy(self.intern_ir_ty_slice(elems))))
+        IrTy::new(
+            self.tys
+                .intern(IrTyKind::ProductTy(self.tys_slices.intern_by_ref(elems))),
+        )
     }
 
     fn mk_coprod_ty(&self, elems: &[IrTy<'ctx>]) -> IrTy<'ctx> {
-        IrTy::new(self.intern_ir_ty(IrTyKind::CoproductTy(self.intern_ir_ty_slice(elems))))
+        IrTy::new(
+            self.tys
+                .intern(IrTyKind::CoproductTy(self.tys_slices.intern_by_ref(elems))),
+        )
     }
 }
 
@@ -1164,7 +1155,7 @@ mod tests {
         input: &str,
     ) -> (LowerDb<'ctx>, TyScheme<'ctx, TyVarId>, Ast<'ctx, VarId>)
     where
-        S: InternerByRef<str>,
+        S: InternerByRef<'ctx, str>,
     {
         let (m, modules) = {
             let mut modules = ModuleTree::new();
