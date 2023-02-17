@@ -560,7 +560,7 @@ mod tests {
     #[test]
     fn test_desugar_product() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
 
         let a = interner.intern_by_ref("abc");
         let b = interner.intern_by_ref("def");
@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn test_desugar_field_access() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
 
         let state = interner.intern_by_ref("state");
 
@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn test_desugar_sum() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
 
         let tru = interner.intern_by_ref("true");
 

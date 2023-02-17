@@ -603,7 +603,7 @@ mod tests {
         assert_matches!(
             parse_type_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "<x: a, y: b>"
             ),
             type_sum!(row_concrete!(
@@ -612,11 +612,11 @@ mod tests {
             ))
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "<r + s>"),
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "<r + s>"),
             type_sum!(row_variable!("r", "s"))
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "<x: a | r>"),
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "<x: a | r>"),
             type_sum!(row_mixed!((id_field!("x", type_named!("a"))), ("r")))
         );
     }
@@ -624,13 +624,13 @@ mod tests {
     #[test]
     fn test_product_types() {
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "{}"),
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{}"),
             type_prod!()
         );
         assert_matches!(
             parse_type_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "{x: a, y: b}"
             ),
             type_prod!(row_concrete!(
@@ -639,11 +639,11 @@ mod tests {
             ))
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "{r + s}"),
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{r + s}"),
             type_prod!(row_variable!("r", "s"))
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "{x: a | r}"),
+            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{x: a | r}"),
             type_prod!(row_mixed!((id_field!("x", type_named!("a"))), ("r")))
         );
     }
@@ -654,7 +654,7 @@ mod tests {
         assert_matches!(
             parse_type_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "(a -> b) -> a -> (b -> c)"
             ),
             type_func!(
@@ -672,7 +672,7 @@ mod tests {
         assert_matches!(
             parse_type_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "{x: a} -> <f: b -> a | r>"
             ),
             type_func!(
@@ -690,7 +690,7 @@ mod tests {
         assert_matches!(
             parse_scheme_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "{x: a} -> <f: b -> a | r>"
             ),
             scheme!(type_func!(
@@ -708,7 +708,7 @@ mod tests {
         assert_matches!(
             parse_scheme_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "r + (y: a) = s => {r} -> a -> {s}"
             ),
             scheme!(
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     fn test_undelimted_closure_fails() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
         let (tokens, eoi) = aiahr_lexer(&interner).lex(MOD, "|x whoops(x)").unwrap();
         assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
@@ -738,7 +738,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "x: a = {}; y: {} = {}; x"
             ),
             term_local!(
@@ -755,7 +755,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "(|x| |w| w)(y)(z)"
             ),
             term_app!(
@@ -773,7 +773,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "with h do a(b)"
             ),
             term_with!(term_sym!("h"), term_app!(term_sym!("a"), term_sym!("b")))
@@ -785,7 +785,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "|x| y = |z| y(z); w = x(y); w"
             ),
             term_abs!(
@@ -808,7 +808,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "|x| |y: a| z = x(y); z"
             ),
             term_abs!(
@@ -829,13 +829,13 @@ mod tests {
     #[test]
     fn test_product_rows() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "{}"),
+            parse_term_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{}"),
             term_prod!()
         );
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "{x = a, y = |t| t}"
             ),
             term_prod!(
@@ -850,7 +850,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "{x = |t| t}({y = |t| u})"
             ),
             term_app!(
@@ -865,7 +865,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "{x = a, y = b}.x"
             ),
             term_dot!(
@@ -881,7 +881,7 @@ mod tests {
     #[test]
     fn test_combined_postfixes() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "a.x(b)"),
+            parse_term_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "a.x(b)"),
             term_app!(term_dot!(term_sym!("a"), "x"), term_sym!("b"))
         );
     }
@@ -889,7 +889,11 @@ mod tests {
     #[test]
     fn test_sum_rows() {
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), &SyncInterner::new(Bump::new()), "<x = |t| t>"),
+            parse_term_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(&Bump::new()),
+                "<x = |t| t>"
+            ),
             term_sum!(id_field!("x", term_abs!("t", term_sym!("t"))))
         );
     }
@@ -899,7 +903,7 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "match < {x = a} => a, <y = b> => b, c => c >"
             ),
             term_match!(
@@ -915,7 +919,7 @@ mod tests {
         assert_matches!(
             parse_file_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "x = a\ny = |b| b\nz = t = x; t"
             ),
             &[
@@ -927,7 +931,7 @@ mod tests {
         assert_matches!(
             parse_file_unwrap(
                 &Bump::new(),
-                &SyncInterner::new(Bump::new()),
+                &SyncInterner::new(&Bump::new()),
                 "x: a = a\ny: forall b. b -> b = |b| b"
             ),
             &[

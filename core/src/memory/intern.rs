@@ -55,16 +55,16 @@ impl<T: PartialEq + ?Sized> PartialEq for ByPointee<T> {
 
 /// A [`Sync`] interner with a small memory footprint. Loosely based on matklad's string interner:
 /// https://matklad.github.io/2020/03/22/fast-simple-rust-interner.html.
-pub struct SyncInterner<T: ?Sized, A> {
-    storage: A,
+pub struct SyncInterner<'a, T: ?Sized, A> {
+    storage: &'a A,
     table: DashSet<ByPointee<T>, BuildHasherDefault<FxHasher>>,
 }
 
-impl<T, A> SyncInterner<T, A>
+impl<'a, T, A> SyncInterner<'a, T, A>
 where
     T: Eq + Hash + ?Sized,
 {
-    pub fn new(storage: A) -> SyncInterner<T, A> {
+    pub fn new(storage: &'a A) -> SyncInterner<'a, T, A> {
         SyncInterner {
             storage,
             table: DashSet::with_hasher(BuildHasherDefault::default()),
@@ -72,7 +72,7 @@ where
     }
 }
 
-impl<T, A> Debug for SyncInterner<T, A>
+impl<'a, T, A> Debug for SyncInterner<'a, T, A>
 where
     T: Debug + Eq + Hash + ?Sized,
     A: Debug,
@@ -85,12 +85,12 @@ where
     }
 }
 
-impl<T, A> Interner<T> for SyncInterner<T, A>
+impl<'a, T, A> Interner<T> for SyncInterner<'a, T, A>
 where
     T: Eq + Hash,
     A: Arena<T>,
 {
-    fn intern<'a>(&'a self, value: T) -> RefHandle<'a, T> {
+    fn intern<'b>(&'b self, value: T) -> RefHandle<'b, T> {
         let mut shard = self.table.shards()
             [self.table.determine_map(&ByPointee(NonNull::from(&value)))]
         .write();
@@ -104,12 +104,12 @@ where
     }
 }
 
-impl<T, A> InternerByRef<T> for SyncInterner<T, A>
+impl<'a, T, A> InternerByRef<T> for SyncInterner<'a, T, A>
 where
     T: Eq + Hash + ?Sized,
     A: ArenaByRef<T>,
 {
-    fn intern_by_ref<'a>(&'a self, value: &T) -> RefHandle<'a, T> {
+    fn intern_by_ref<'b>(&'b self, value: &T) -> RefHandle<'b, T> {
         let mut shard =
             self.table.shards()[self.table.determine_map(&ByPointee(NonNull::from(value)))].write();
         if let Some((k, _)) = shard.get_key_value(&ByPointee(NonNull::from(value))) {
@@ -122,7 +122,7 @@ where
     }
 }
 
-unsafe impl<T, A> Sync for SyncInterner<T, A>
+unsafe impl<'a, T, A> Sync for SyncInterner<'a, T, A>
 where
     T: Send + ?Sized,
     A: Sync,
