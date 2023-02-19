@@ -2,7 +2,6 @@
 //! whose identity corresponds to its pointer value, rather than the pointed-to data.
 
 use std::{
-    borrow::Borrow,
     cmp::Ordering,
     fmt::{self, Debug, Formatter},
     hash::{Hash, Hasher},
@@ -96,18 +95,18 @@ impl<P: Pointer> Deref for Handle<P> {
 /// See `Handle` for further info.
 pub type RefHandle<'a, T> = Handle<&'a T>;
 
-impl<'a, T> Borrow<T> for RefHandle<'a, T> {
-    fn borrow(&self) -> &T {
+impl<'a, T> AsRef<T> for RefHandle<'a, T> {
+    fn as_ref(&self) -> &T {
         self.0
     }
 }
-impl<'a, T> Borrow<[T]> for RefHandle<'a, [T]> {
-    fn borrow(&self) -> &[T] {
+impl<'a, T> AsRef<[T]> for RefHandle<'a, [T]> {
+    fn as_ref(&self) -> &[T] {
         self.0
     }
 }
-impl<'a> Borrow<str> for RefHandle<'a, str> {
-    fn borrow(&self) -> &str {
+impl<'a> AsRef<str> for RefHandle<'a, str> {
+    fn as_ref(&self) -> &str {
         self.0
     }
 }
