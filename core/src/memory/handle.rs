@@ -11,28 +11,12 @@ use std::{
     sync::Arc,
 };
 
-/// A `Clone`-able pointer type. Implements `Deref` and provides a raw pointer to the target.
-pub trait Pointer: Clone + Deref {
-    fn ptr(&self) -> *const Self::Target;
-}
-
-impl<'a, T: ?Sized> Pointer for &'a T {
+trait Ptr: Deref {
     fn ptr(&self) -> *const Self::Target {
-        *self as *const T
+        self.deref()
     }
 }
-
-impl<T: ?Sized> Pointer for Rc<T> {
-    fn ptr(&self) -> *const Self::Target {
-        Rc::as_ptr(self)
-    }
-}
-
-impl<T: ?Sized> Pointer for Arc<T> {
-    fn ptr(&self) -> *const Self::Target {
-        Arc::as_ptr(self)
-    }
-}
+impl<P: Deref> Ptr for P {}
 
 /// A handle to an object of type `T`. `Handle` is a thin wrapper around a pointer type with
 /// slightly different semantics: the identity of a handle is determined by its pointer value, rather
@@ -52,39 +36,39 @@ impl<T: ?Sized> Pointer for Arc<T> {
 #[derive(Clone, Copy)]
 pub struct Handle<P>(pub P);
 
-impl<P: Pointer> Debug for Handle<P> {
+impl<P: Deref> Debug for Handle<P> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Handle").field(&self.0.ptr()).finish()
     }
 }
 
-impl<P: Pointer> Eq for Handle<P> {}
+impl<P: Deref> Eq for Handle<P> {}
 
-impl<P: Pointer> Hash for Handle<P> {
+impl<P: Deref> Hash for Handle<P> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         ptr::hash(self.0.ptr(), state)
     }
 }
 
-impl<P: Pointer> Ord for Handle<P> {
+impl<P: Deref> Ord for Handle<P> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.0.ptr().cmp(&other.0.ptr())
     }
 }
 
-impl<P: Pointer> PartialEq for Handle<P> {
+impl<P: Deref> PartialEq for Handle<P> {
     fn eq(&self, other: &Self) -> bool {
         ptr::eq(self.0.ptr(), other.0.ptr())
     }
 }
 
-impl<P: Pointer> PartialOrd for Handle<P> {
+impl<P: Deref> PartialOrd for Handle<P> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<P: Pointer> Deref for Handle<P> {
+impl<P: Deref> Deref for Handle<P> {
     type Target = P::Target;
 
     fn deref(&self) -> &Self::Target {
@@ -92,30 +76,22 @@ impl<P: Pointer> Deref for Handle<P> {
     }
 }
 
+impl<T: ?Sized, P: AsRef<T> + Deref> AsRef<T> for Handle<P> {
+    fn as_ref(&self) -> &T {
+        self.0.as_ref()
+    }
+}
+
 /// See `Handle` for further info.
 pub type RefHandle<'a, T> = Handle<&'a T>;
 
-impl<'a, T> AsRef<T> for RefHandle<'a, T> {
-    fn as_ref(&self) -> &T {
-        self.0
-    }
-}
-impl<'a, T> AsRef<[T]> for RefHandle<'a, [T]> {
-    fn as_ref(&self) -> &[T] {
-        self.0
-    }
-}
-impl<'a> AsRef<str> for RefHandle<'a, str> {
-    fn as_ref(&self) -> &str {
-        self.0
-    }
-}
 /// See `Handle` for further info.
 pub type RcHandle<T> = Handle<Rc<T>>;
 
 /// See `Handle` for further info.
 pub type ArcHandle<T> = Handle<Arc<T>>;
 
+/// Matches a handle by pointee value.
 #[macro_export]
 macro_rules! h {
     ($ptr:pat) => {
