@@ -12,6 +12,12 @@ pub enum AiahrcError<'s> {
     ParseError(ParseError<'s>),
 }
 
+impl<'s> From<LexError> for AiahrcError<'s> {
+    fn from(err: LexError) -> Self {
+        AiahrcError::LexError(err)
+    }
+}
+
 impl<'s> From<NameResolutionError<'s>> for AiahrcError<'s> {
     fn from(err: NameResolutionError<'s>) -> Self {
         AiahrcError::NameResolutionError(err)
