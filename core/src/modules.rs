@@ -1,6 +1,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
+    displayer::Displayer,
     id::{IdGen, ModuleId},
     memory::handle::RefHandle,
 };
@@ -64,5 +65,13 @@ impl<'s> ModuleTree<'s> {
     pub fn find_submodule(&self, module: ModuleId, name: RefHandle<'s, str>) -> Option<ModuleId> {
         let data = &self.modules[module];
         data.submodules.get(&name).copied()
+    }
+}
+
+impl<'s> Displayer<ModuleId> for ModuleTree<'s> {
+    type Output<'a> = &'s str;
+
+    fn show<'a>(&self, value: &'a ModuleId) -> Self::Output<'a> {
+        self.get_name(*value).0
     }
 }

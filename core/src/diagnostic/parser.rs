@@ -65,7 +65,7 @@ impl<'s> Diagnostic for ParseError<'s> {
 }
 
 #[derive(Debug)]
-pub struct ParseErrors<'s>(LinkedList<ParseError<'s>>);
+pub struct ParseErrors<'s>(pub LinkedList<ParseError<'s>>);
 
 impl<'s> chumsky::Error<Token<'s>> for ParseErrors<'s> {
     type Span = Span;
