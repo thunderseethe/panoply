@@ -1,7 +1,7 @@
 use aiahr_core::{
     cst::{
-        Annotation, Constraint, Field, IdField, Item, Pattern, ProductRow, Qualifiers, Quantifier,
-        Row, RowAtom, Scheme, Separated, SumRow, Term, Type, TypeAnnotation,
+        Annotation, Constraint, EffectOp, Field, IdField, Item, Pattern, ProductRow, Qualifiers,
+        Quantifier, Row, RowAtom, Scheme, Separated, SumRow, Term, Type, TypeAnnotation,
     },
     diagnostic::parser::ParseErrors,
     loc::Loc,
@@ -253,6 +253,14 @@ pub fn scheme<'a, 's: 'a>(
         })
 }
 
+// Returns a parser for an effect operation.
+fn effect_op<'a, 's: 'a>(arena: &'a Bump) -> impl AiahrParser<'s, EffectOp<'a, 's>> {
+    ident()
+        .then(lit(Token::Colon))
+        .then(type_(arena))
+        .map(|((name, colon), type_)| EffectOp { name, colon, type_ })
+}
+
 /// Returns a parser for an annotation with a given type syntax.
 pub fn annotation<'s, T>(ty: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, Annotation<T>> {
     lit(Token::Colon)
@@ -473,6 +481,19 @@ pub fn term<'a, 's: 'a>(
 pub fn aiahr_parser<'a, 's: 'a>(
     arena: &'a Bump,
 ) -> impl Parser<Token<'s>, &'a [Item<'a, 's>], Error = ParseErrors<'s>> {
+    let effect = lit(Token::KwEffect)
+        .then(ident())
+        .then(lit(Token::LBrace))
+        .then(effect_op(arena).repeated())
+        .then(lit(Token::RBrace))
+        .map(|((((effect, name), lbrace), ops), rbrace)| Item::Effect {
+            effect,
+            name,
+            lbrace,
+            ops: arena.alloc_slice_fill_iter(ops),
+            rbrace,
+        });
+
     let term = ident()
         .then(option(annotation(scheme(arena))))
         .then(lit(Token::Equal))
@@ -484,7 +505,7 @@ pub fn aiahr_parser<'a, 's: 'a>(
             value,
         });
 
-    choice((term,))
+    choice((effect, term))
         .repeated()
         .map(|items| arena.alloc_slice_fill_iter(items.into_iter()) as &[_])
         .then_ignore(end())
@@ -531,9 +552,9 @@ pub mod test_utils {
 mod tests {
     use aiahr_core::{
         cst::{Item, Scheme, Term, Type},
-        ct_rowsum, field,
+        ct_rowsum, eff_op, field,
         id::ModuleId,
-        id_field, item_term,
+        id_field, item_effect, item_term,
         memory::{
             handle::RefHandle,
             intern::{InternerByRef, SyncInterner},
@@ -911,6 +932,21 @@ mod tests {
                 field!(pat_sum!(id_field!("y", pat_var!("b"))), term_sym!("b")),
                 field!(pat_var!("c"), term_sym!("c")),
             )
+        );
+    }
+
+    #[test]
+    fn test_effect_items() {
+        assert_matches!(
+            parse_file_unwrap(
+                &Bump::new(),
+                &SyncInterner::new(&Bump::new()),
+                "effect foo { foo: a -> a }"
+            ),
+            &[item_effect!(
+                "foo",
+                eff_op!("foo", type_func!(type_named!("a"), type_named!("a")))
+            )]
         );
     }
 
