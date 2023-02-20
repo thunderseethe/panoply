@@ -79,25 +79,6 @@ impl<'a, T> Iterator for Elements<'a, T> {
     }
 }
 
-pub struct Elements2<'a, T> {
-    first: Option<&'a T>,
-    tail: std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>,
-}
-impl<'a, T> ExactSizeIterator for Elements2<'a, T> {}
-impl<'a, T> FusedIterator for Elements2<'a, T> {}
-impl<'a, T> Iterator for Elements2<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.first.take().or_else(|| self.tail.next())
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let (lower, upper) = self.tail.size_hint();
-        (lower + 1, upper.map(|u| u + 1))
-    }
-}
-
 /// A field with a label in `L`, separator, and target in `T`.
 #[derive(Clone, Copy, Debug)]
 pub struct Field<L, T> {

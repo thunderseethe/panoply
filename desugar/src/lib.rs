@@ -711,7 +711,7 @@ mod tests {
     #[test]
     fn test_desugar_match_sum() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
 
         let a = interner.intern_by_ref("A");
         let b = interner.intern_by_ref("B");
@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn test_desugar_match_sum_with_default() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
 
         let a = interner.intern_by_ref("A");
         let b = interner.intern_by_ref("B");
@@ -956,7 +956,7 @@ mod tests {
     #[test]
     fn test_desugar_match_prod() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
 
         let a = interner.intern_by_ref("A");
         let b = interner.intern_by_ref("B");
@@ -1060,7 +1060,7 @@ mod tests {
     #[test]
     fn test_desugar_match_nested_patterns() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(Bump::new());
+        let interner = SyncInterner::new(&arena);
 
         let a = interner.intern_by_ref("A");
         let b = interner.intern_by_ref("B");
