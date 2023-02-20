@@ -13,7 +13,7 @@ use aiahr_core::{
     span::Span,
 };
 use bumpalo::Bump;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 /// Desugar a NST into an AST.
 /// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
@@ -104,15 +104,11 @@ pub fn desugar<'n, 's: 'a, 'a>(
             }
             // This is gonna take a little more work.
             nst::Term::Match { cases, .. } => {
-                let top_level = vars.push(handle::Handle(""));
-                let matrix/*: ClauseMatrix<'n, 's, 'a>*/ = cases
-                            .elements()
-                            .map(|field| Ok((vec![*field.label], ds(arena, spans, vars, field.target)?)))
-                            .collect::<Result<_, _>>()?;
-                arena.alloc(Abstraction {
-                    arg: top_level,
-                    body: cc(arena, vars, &mut [top_level], matrix)?,
-                })
+                let matrix = cases
+                    .elements()
+                    .map(|field| Ok((vec![*field.label], ds(arena, spans, vars, field.target)?)))
+                    .collect::<Result<_, _>>()?;
+                cc(arena, vars, &mut [], matrix)?
             }
             nst::Term::Handle { .. } => todo!(),
         };
@@ -158,10 +154,13 @@ impl<'p, 's, 't> ClauseMatrix<'p, 's, 't> {
         self.pats[0].as_slice()
     }
 
-    fn col_constr<'a>(&'a self, col_index: usize) -> impl Iterator<Item = Constructor<'s>> + 'a {
+    fn col_constr<'a>(
+        &'a self,
+        col_index: usize,
+    ) -> impl Iterator<Item = (Constructor<'s>, &'a Pattern<'p, 's>)> + 'a {
         self.pats
             .iter()
-            .map(move |col| Constructor::from(&col[col_index]))
+            .map(move |col| (Constructor::from(&col[col_index]), &col[col_index]))
     }
 
     pub(crate) fn specialize(&self, constr: &Constructor<'s>) -> ClauseMatrix<'p, 's, 't> {
@@ -207,23 +206,34 @@ fn cc<'p, 's: 't, 't>(
         Pattern::Whole(_) => true,
         _ => false,
     }) {
-        Ok(matrix.arms.into_iter().next().unwrap())
+        Ok(matrix
+            .first()
+            .into_iter()
+            .rfold(matrix.arms[0], |body, pat| match pat {
+                Pattern::Whole(var) => arena.alloc(Abstraction {
+                    arg: var.value,
+                    body,
+                }),
+                _ => unreachable!(),
+            }))
     } else {
-        let top_level = occurences[0];
-        let constrs = matrix.col_constr(0).collect::<FxHashSet<_>>();
-        let mut matches = constrs.into_iter().map(|c| match c {
+        let constrs = matrix
+            .col_constr(0)
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut matches = constrs.into_iter().map(|(c, p)| match c {
             Constructor::ProductRow(ref lbls) => {
+                let top_level = vars.push(handle::Handle(""));
                 let binders = (0..lbls.len())
                     .map(|_| vars.push(handle::Handle("")))
                     .collect::<Vec<_>>();
                 let mut occs = binders.clone();
                 // replace first occurence by binder introduced here
-                occs.extend_from_slice(&occurences[1..]);
+                occs.extend(occurences.into_iter().skip(1).map(|var| *var));
                 Ok(arena.alloc(Abstraction {
                     arg: top_level,
-                    body: lbls.into_iter().cloned().zip(binders.iter().cloned()).fold(
+                    body: lbls.into_iter().cloned().fold(
                         cc(arena, vars, occs.as_mut_slice(), matrix.specialize(&c))?,
-                        |body, (lbl, var)| {
+                        |body, lbl| {
                             let destructure = arena.alloc(Unlabel {
                                 label: lbl,
                                 term: arena.alloc(Project {
@@ -232,7 +242,7 @@ fn cc<'p, 's: 't, 't>(
                                 }),
                             });
                             arena.alloc(Application {
-                                func: arena.alloc(Abstraction { arg: var, body }),
+                                func: body,
                                 arg: destructure,
                             })
                         },
@@ -241,27 +251,29 @@ fn cc<'p, 's: 't, 't>(
             }
             Constructor::SumRow(lbl) => {
                 let binder = vars.push(handle::Handle(""));
-                occurences[0] = binder;
+                let mut occs = vec![binder];
+                occs.extend(occurences.into_iter().skip(1).map(|var| *var));
                 Ok(arena.alloc(Abstraction {
-                    arg: top_level,
+                    arg: binder,
                     body: arena.alloc(Application {
-                        func: arena.alloc(Abstraction {
-                            arg: binder,
-                            body: cc(arena, vars, occurences, matrix.specialize(&c))?,
-                        }),
+                        func: cc(arena, vars, &mut occs, matrix.specialize(&c))?,
                         arg: arena.alloc(Unlabel {
                             label: lbl,
-                            term: arena.alloc(Variable(top_level)),
+                            term: arena.alloc(Variable(binder)),
                         }),
                     }),
                 }) as &_)
             }
             Constructor::WildCard => {
-                // For a wild card we don't need a let binding so just pass through binder as is
-                Ok(arena.alloc(Abstraction {
-                    arg: top_level,
-                    body: cc(arena, vars, occurences, matrix.default())?,
-                }) as &_)
+                if let Pattern::Whole(var) = p {
+                    // For a wild card we don't need a let binding so just pass through binder as is
+                    Ok(arena.alloc(Abstraction {
+                        arg: var.value,
+                        body: cc(arena, vars, occurences, matrix.default())?,
+                    }) as &_)
+                } else {
+                    unreachable!()
+                }
             }
         });
         // we know this can't be empty
@@ -672,4 +684,356 @@ mod tests {
             }),
         );
     }
+
+    #[test]
+    fn test_desugar_match_sum() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(Bump::new());
+
+        let a = interner.intern_by_ref("A");
+        let b = interner.intern_by_ref("B");
+        let c = interner.intern_by_ref("C");
+
+        let nst = arena.alloc(nst::Term::Match {
+            match_: random_span(),
+            langle: random_span(),
+            rangle: random_span(),
+            cases: Separated {
+                first: Field {
+                    label: arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
+                        langle: random_span(),
+                        field: Field {
+                            label: random_span_of(a),
+                            sep: random_span(),
+                            target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))),
+                        },
+                        rangle: random_span(),
+                    })),
+                    sep: random_span(),
+                    target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
+                },
+                elems: &*arena.alloc_slice_fill_iter([
+                    (
+                        random_span(),
+                        Field {
+                            label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
+                                langle: random_span(),
+                                field: Field {
+                                    label: random_span_of(b),
+                                    sep: random_span(),
+                                    target: arena.alloc(Pattern::Whole(random_span_of(VarId(1)))),
+                                },
+                                rangle: random_span(),
+                            })),
+                            sep: random_span(),
+                            target: &*arena.alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
+                        },
+                    ),
+                    (
+                        random_span(),
+                        Field {
+                            label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
+                                langle: random_span(),
+                                field: Field {
+                                    label: random_span_of(c),
+                                    sep: random_span(),
+                                    target: &*arena.alloc(Pattern::Whole(random_span_of(VarId(2)))),
+                                },
+                                rangle: random_span(),
+                            })),
+                            sep: random_span(),
+                            target: &*arena.alloc(nst::Term::VariableRef(random_span_of(VarId(2)))),
+                        },
+                    ),
+                ]),
+                comma: None,
+            },
+        });
+
+        let mut vars = [a, b, c].into_iter().collect();
+        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        assert_eq!(
+            ast.root(),
+            &Branch {
+                left: &Branch {
+                    left: &Abstraction {
+                        arg: VarId(3),
+                        body: &Application {
+                            func: &Abstraction {
+                                arg: VarId(2),
+                                body: &Variable(VarId(2))
+                            },
+                            arg: &Unlabel {
+                                label: c,
+                                term: &Variable(VarId(3))
+                            }
+                        }
+                    },
+                    right: &Abstraction {
+                        arg: VarId(4),
+                        body: &Application {
+                            func: &Abstraction {
+                                arg: VarId(1),
+                                body: &Variable(VarId(1))
+                            },
+                            arg: &Unlabel {
+                                label: b,
+                                term: &Variable(VarId(4))
+                            }
+                        }
+                    }
+                },
+                right: &Abstraction {
+                    arg: VarId(5),
+                    body: &Application {
+                        func: &Abstraction {
+                            arg: VarId(0),
+                            body: &Variable(VarId(0))
+                        },
+                        arg: &Unlabel {
+                            label: a,
+                            term: &Variable(VarId(5))
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn test_desugar_match_sum_with_default() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(Bump::new());
+
+        let a = interner.intern_by_ref("A");
+        let b = interner.intern_by_ref("B");
+        let c = interner.intern_by_ref("C");
+        let w = interner.intern_by_ref("_");
+
+        let nst = arena.alloc(nst::Term::Match {
+            match_: random_span(),
+            langle: random_span(),
+            rangle: random_span(),
+            cases: Separated {
+                first: Field {
+                    label: arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
+                        langle: random_span(),
+                        field: Field {
+                            label: random_span_of(a),
+                            sep: random_span(),
+                            target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))),
+                        },
+                        rangle: random_span(),
+                    })),
+                    sep: random_span(),
+                    target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
+                },
+                elems: &*arena.alloc_slice_fill_iter([
+                    (
+                        random_span(),
+                        Field {
+                            label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
+                                langle: random_span(),
+                                field: Field {
+                                    label: random_span_of(b),
+                                    sep: random_span(),
+                                    target: arena.alloc(Pattern::Whole(random_span_of(VarId(1)))),
+                                },
+                                rangle: random_span(),
+                            })),
+                            sep: random_span(),
+                            target: &*arena.alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
+                        },
+                    ),
+                    (
+                        random_span(),
+                        Field {
+                            label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
+                                langle: random_span(),
+                                field: Field {
+                                    label: random_span_of(c),
+                                    sep: random_span(),
+                                    target: &*arena.alloc(Pattern::Whole(random_span_of(VarId(2)))),
+                                },
+                                rangle: random_span(),
+                            })),
+                            sep: random_span(),
+                            target: &*arena.alloc(nst::Term::VariableRef(random_span_of(VarId(2)))),
+                        },
+                    ),
+                    (
+                        random_span(),
+                        Field {
+                            label: &*arena.alloc(Pattern::Whole(random_span_of(VarId(3)))),
+                            sep: random_span(),
+                            target: &*arena.alloc(nst::Term::VariableRef(random_span_of(VarId(3)))),
+                        },
+                    ),
+                ]),
+                comma: Some(random_span()),
+            },
+        });
+
+        let mut vars = [a, b, c, w].into_iter().collect();
+        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        assert_eq!(
+            ast.root(),
+            &Branch {
+                left: &Branch {
+                    left: &Branch {
+                        left: &Abstraction {
+                            arg: VarId(4),
+                            body: &Application {
+                                func: &Abstraction {
+                                    arg: VarId(2),
+                                    body: &Variable(VarId(2))
+                                },
+                                arg: &Unlabel {
+                                    label: c,
+                                    term: &Variable(VarId(4))
+                                }
+                            }
+                        },
+                        right: &Abstraction {
+                            arg: VarId(5),
+                            body: &Application {
+                                func: &Abstraction {
+                                    arg: VarId(1),
+                                    body: &Variable(VarId(1))
+                                },
+                                arg: &Unlabel {
+                                    label: b,
+                                    term: &Variable(VarId(5))
+                                }
+                            }
+                        }
+                    },
+                    right: &Abstraction {
+                        arg: VarId(6),
+                        body: &Application {
+                            func: &Abstraction {
+                                arg: VarId(0),
+                                body: &Variable(VarId(0))
+                            },
+                            arg: &Unlabel {
+                                label: a,
+                                term: &Variable(VarId(6))
+                            }
+                        }
+                    }
+                },
+                right: &Abstraction {
+                    arg: VarId(3),
+                    body: &Variable(VarId(3))
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn test_desugar_match_prod() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(Bump::new());
+
+        let a = interner.intern_by_ref("A");
+        let b = interner.intern_by_ref("B");
+        let c = interner.intern_by_ref("C");
+
+        let nst = arena.alloc(nst::Term::Match {
+            match_: random_span(),
+            langle: random_span(),
+            rangle: random_span(),
+            cases: Separated {
+                first: Field {
+                    label: arena.alloc(Pattern::ProductRow(ProductRow {
+                        lbrace: random_span(),
+                        fields: Some(Separated {
+                            first: Field {
+                                label: random_span_of(a),
+                                sep: random_span(),
+                                target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
+                            },
+                            elems: &*arena.alloc_slice_fill_iter([
+                                (
+                                    random_span(),
+                                    Field {
+                                        label: random_span_of(b),
+                                        sep: random_span(),
+                                        target: arena
+                                            .alloc(Pattern::Whole(random_span_of(VarId(1))))
+                                            as &_,
+                                    },
+                                ),
+                                (
+                                    random_span(),
+                                    Field {
+                                        label: random_span_of(c),
+                                        sep: random_span(),
+                                        target: arena
+                                            .alloc(Pattern::Whole(random_span_of(VarId(2))))
+                                            as &_,
+                                    },
+                                ),
+                            ]),
+                            comma: None,
+                        }),
+                        rbrace: random_span(),
+                    })),
+                    sep: random_span(),
+                    target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
+                },
+                elems: &[],
+                comma: None,
+            },
+        });
+
+        let mut vars = [a, b, c].into_iter().collect();
+        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        assert_eq!(
+            ast.root(),
+            &Abstraction {
+                arg: VarId(3),
+                body: &Application {
+                    func: &Application {
+                        func: &Application {
+                            func: &Abstraction {
+                                arg: VarId(0),
+                                body: &Abstraction {
+                                    arg: VarId(1),
+                                    body: &Abstraction {
+                                        arg: VarId(2),
+                                        body: &Variable(VarId(1))
+                                    }
+                                }
+                            },
+                            arg: &Unlabel {
+                                label: a,
+                                term: &Project {
+                                    direction: Direction::Right,
+                                    term: &Variable(VarId(3))
+                                }
+                            }
+                        },
+                        arg: &Unlabel {
+                            label: b,
+                            term: &Project {
+                                direction: Direction::Right,
+                                term: &Variable(VarId(3))
+                            }
+                        }
+                    },
+                    arg: &Unlabel {
+                        label: c,
+                        term: &Project {
+                            direction: Direction::Right,
+                            term: &Variable(VarId(3))
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    #[test]
+    fn test_desugar_match_nested_patterns() {}
 }
