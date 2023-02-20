@@ -352,7 +352,7 @@ impl<'s> From<&Pattern<'_, 's>> for Constructor<'s> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aiahr_core::cst::{Field, IdField, ProductRow, Separated};
+    use aiahr_core::cst::{Field, IdField, ProductRow, Separated, SumRow};
     use aiahr_core::id::ModuleId;
     use aiahr_core::memory::handle as hand;
     use aiahr_core::memory::intern::InternerByRef;
@@ -382,6 +382,29 @@ mod tests {
             start: span.start,
             value,
             end: span.end,
+        }
+    }
+
+    fn random_field<L, T>(label: L, target: T) -> Field<L, T> {
+        Field {
+            label,
+            sep: random_span(),
+            target,
+        }
+    }
+    fn random_sep<'a, T, II>(
+        arena: &'a Bump,
+        elems: impl IntoIterator<IntoIter = II>,
+    ) -> Separated<'a, T>
+    where
+        II: Iterator<Item = T> + ExactSizeIterator,
+    {
+        let mut iter = elems.into_iter();
+        let first = iter.next().unwrap();
+        Separated {
+            first,
+            elems: arena.alloc_slice_fill_iter(iter.map(|t| (random_span(), t))),
+            comma: None,
         }
     }
 
@@ -1035,5 +1058,237 @@ mod tests {
     }
 
     #[test]
-    fn test_desugar_match_nested_patterns() {}
+    fn test_desugar_match_nested_patterns() {
+        let arena = Bump::new();
+        let interner = SyncInterner::new(Bump::new());
+
+        let a = interner.intern_by_ref("A");
+        let b = interner.intern_by_ref("B");
+        let c = interner.intern_by_ref("C");
+        let x = interner.intern_by_ref("x");
+        let y = interner.intern_by_ref("y");
+        let z = interner.intern_by_ref("z");
+
+        let nst = arena.alloc(nst::Term::Match {
+            match_: random_span(),
+            langle: random_span(),
+            rangle: random_span(),
+            cases: random_sep(
+                &arena,
+                [
+                    random_field(
+                        arena.alloc(Pattern::ProductRow(ProductRow {
+                            lbrace: random_span(),
+                            fields: Some(random_sep(
+                                &arena,
+                                [
+                                    random_field(
+                                        random_span_of(x),
+                                        arena.alloc(Pattern::SumRow(SumRow {
+                                            langle: random_span(),
+                                            field: random_field(
+                                                random_span_of(a),
+                                                arena
+                                                    .alloc(Pattern::Whole(random_span_of(VarId(0))))
+                                                    as &_,
+                                            ),
+                                            rangle: random_span(),
+                                        })) as &_,
+                                    ),
+                                    random_field(
+                                        random_span_of(y),
+                                        arena.alloc(Pattern::SumRow(SumRow {
+                                            langle: random_span(),
+                                            field: random_field(
+                                                random_span_of(b),
+                                                arena
+                                                    .alloc(Pattern::Whole(random_span_of(VarId(1))))
+                                                    as &_,
+                                            ),
+                                            rangle: random_span(),
+                                        })) as &_,
+                                    ),
+                                    random_field(
+                                        random_span_of(z),
+                                        arena.alloc(Pattern::Whole(random_span_of(VarId(2)))) as &_,
+                                    ),
+                                ],
+                            )),
+                            rbrace: random_span(),
+                        })) as &_,
+                        arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))) as &_,
+                    ),
+                    random_field(
+                        arena.alloc(Pattern::ProductRow(ProductRow {
+                            lbrace: random_span(),
+                            fields: Some(random_sep(
+                                &arena,
+                                [
+                                    random_field(
+                                        random_span_of(x),
+                                        arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
+                                    ),
+                                    random_field(
+                                        random_span_of(y),
+                                        arena.alloc(Pattern::SumRow(SumRow {
+                                            langle: random_span(),
+                                            field: random_field(
+                                                random_span_of(b),
+                                                arena
+                                                    .alloc(Pattern::Whole(random_span_of(VarId(1))))
+                                                    as &_,
+                                            ),
+                                            rangle: random_span(),
+                                        })) as &_,
+                                    ),
+                                    random_field(
+                                        random_span_of(z),
+                                        arena.alloc(Pattern::Whole(random_span_of(VarId(2)))) as &_,
+                                    ),
+                                ],
+                            )),
+                            rbrace: random_span(),
+                        })) as &_,
+                        arena.alloc(nst::Term::VariableRef(random_span_of(VarId(1)))) as &_,
+                    ),
+                    random_field(
+                        arena.alloc(Pattern::ProductRow(ProductRow {
+                            lbrace: random_span(),
+                            fields: Some(random_sep(
+                                &arena,
+                                [
+                                    random_field(
+                                        random_span_of(x),
+                                        arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
+                                    ),
+                                    random_field(
+                                        random_span_of(y),
+                                        arena.alloc(Pattern::Whole(random_span_of(VarId(1)))) as &_,
+                                    ),
+                                    random_field(
+                                        random_span_of(z),
+                                        arena.alloc(Pattern::SumRow(SumRow {
+                                            langle: random_span(),
+                                            field: random_field(
+                                                random_span_of(c),
+                                                arena
+                                                    .alloc(Pattern::Whole(random_span_of(VarId(2))))
+                                                    as &_,
+                                            ),
+                                            rangle: random_span(),
+                                        })) as &_,
+                                    ),
+                                ],
+                            )),
+                            rbrace: random_span(),
+                        })) as &_,
+                        arena.alloc(nst::Term::VariableRef(random_span_of(VarId(2)))) as &_,
+                    ),
+                ],
+            ),
+        });
+
+        let mut vars = [a, b, c].into_iter().collect();
+        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        assert_eq!(
+            ast.root(),
+            &Abstraction {
+                arg: VarId(3),
+                body: &Application {
+                    func: &Application {
+                        func: &Application {
+                            func: &Branch {
+                                left: &Abstraction {
+                                    arg: VarId(7),
+                                    body: &Application {
+                                        func: &Abstraction {
+                                            arg: VarId(0),
+                                            body: &Abstraction {
+                                                arg: VarId(8),
+                                                body: &Application {
+                                                    func: &Abstraction {
+                                                        arg: VarId(1),
+                                                        body: &Abstraction {
+                                                            arg: VarId(2),
+                                                            body: &Variable(VarId(0))
+                                                        }
+                                                    },
+                                                    arg: &Unlabel {
+                                                        label: b,
+                                                        term: &Variable(VarId(8))
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        arg: &Unlabel {
+                                            label: a,
+                                            term: &Variable(VarId(7))
+                                        }
+                                    }
+                                },
+                                right: &Abstraction {
+                                    arg: VarId(0),
+                                    body: &Branch {
+                                        left: &Abstraction {
+                                            arg: VarId(9),
+                                            body: &Application {
+                                                func: &Abstraction {
+                                                    arg: VarId(1),
+                                                    body: &Abstraction {
+                                                        arg: VarId(2),
+                                                        body: &Variable(VarId(1))
+                                                    }
+                                                },
+                                                arg: &Unlabel {
+                                                    label: b,
+                                                    term: &Variable(VarId(9))
+                                                }
+                                            }
+                                        },
+                                        right: &Abstraction {
+                                            arg: VarId(1),
+                                            body: &Abstraction {
+                                                arg: VarId(10),
+                                                body: &Application {
+                                                    func: &Abstraction {
+                                                        arg: VarId(2),
+                                                        body: &Variable(VarId(2))
+                                                    },
+                                                    arg: &Unlabel {
+                                                        label: c,
+                                                        term: &Variable(VarId(10))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            arg: &Unlabel {
+                                label: x,
+                                term: &Project {
+                                    direction: Direction::Right,
+                                    term: &Variable(VarId(3))
+                                }
+                            }
+                        },
+                        arg: &Unlabel {
+                            label: y,
+                            term: &Project {
+                                direction: Direction::Right,
+                                term: &Variable(VarId(3))
+                            }
+                        }
+                    },
+                    arg: &Unlabel {
+                        label: z,
+                        term: &Project {
+                            direction: Direction::Right,
+                            term: &Variable(VarId(3))
+                        }
+                    }
+                }
+            }
+        )
+    }
 }
