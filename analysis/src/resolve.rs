@@ -855,6 +855,7 @@ where
     E: DiagnosticSink<NameResolutionError<'s>>,
 {
     Some(match item {
+        cst::Item::Effect { .. } => todo!(),
         cst::Item::Term {
             name,
             annotation,
@@ -890,9 +891,15 @@ where
 {
     let mut names = Names::new(&base);
     let resolved_items =
-        arena.alloc_slice_fill_iter(base.iter().zip(items.iter()).map(|pair| match pair {
-            (ModuleName::Item(i), item @ &cst::Item::Term { .. }) => {
-                resolve_item(arena, *i, item, &mut names, errors)
+        arena.alloc_slice_fill_iter(base.iter().zip(items.iter()).map(|(name, item)| {
+            match (name, item) {
+                (ModuleName::Item(i), item @ &cst::Item::Term { .. }) => {
+                    resolve_item(arena, *i, item, &mut names, errors)
+                }
+                _ => panic!(
+                    "Expected same kinds of names, got {:?} and {:?}",
+                    name, item
+                ),
             }
         }));
     ModuleResolution {

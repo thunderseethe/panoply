@@ -169,7 +169,7 @@ pub enum Row<'a, V, C> {
     },
 }
 
-impl<'a, V: Spanned, C: Spanned> Spanned for Row<'a, V, C> {
+impl<'a, V, C: Spanned> Spanned for Row<'a, V, C> {
     fn span(&self) -> Span {
         match self {
             Row::Concrete(c) => c.span(),
@@ -212,7 +212,7 @@ pub enum Type<'a, 's, V> {
     },
 }
 
-impl<'a, 's, V: Spanned> Spanned for Type<'a, 's, V> {
+impl<'a, 's, V> Spanned for Type<'a, 's, V> {
     fn span(&self) -> Span {
         match self {
             Type::Named(n) => n.span(),
@@ -237,7 +237,7 @@ pub enum RowAtom<'a, 's, V> {
     Variable(SpanOf<V>),
 }
 
-impl<'a, 's, V: Spanned> Spanned for RowAtom<'a, 's, V> {
+impl<'a, 's, V> Spanned for RowAtom<'a, 's, V> {
     fn span(&self) -> Span {
         match self {
             RowAtom::Concrete { lpar, rpar, .. } => Span::join(lpar, rpar),
@@ -258,7 +258,7 @@ pub enum Constraint<'a, 's, V> {
     },
 }
 
-impl<'a, 's, V: Spanned> Spanned for Constraint<'a, 's, V> {
+impl<'a, 's, V> Spanned for Constraint<'a, 's, V> {
     fn span(&self) -> Span {
         match self {
             Constraint::RowSum { lhs, goal, .. } => Span::join(lhs, goal),
@@ -287,7 +287,7 @@ pub struct Qualifiers<'a, 's, V> {
     pub arrow: Span,
 }
 
-impl<'a, 's, V: Spanned> Spanned for Qualifiers<'a, 's, V> {
+impl<'a, 's, V> Spanned for Qualifiers<'a, 's, V> {
     fn span(&self) -> Span {
         Span::join(&self.constraints, &self.arrow)
     }
@@ -301,7 +301,7 @@ pub struct Scheme<'a, 's, V> {
     pub type_: &'a Type<'a, 's, V>,
 }
 
-impl<'a, 's, V: Spanned> Spanned for Scheme<'a, 's, V> {
+impl<'a, 's, V> Spanned for Scheme<'a, 's, V> {
     fn span(&self) -> Span {
         Span {
             start: self
@@ -317,6 +317,20 @@ impl<'a, 's, V: Spanned> Spanned for Scheme<'a, 's, V> {
                 .start(),
             end: self.type_.end(),
         }
+    }
+}
+
+/// An effect operation.
+#[derive(Clone, Copy, Debug)]
+pub struct EffectOp<'a, 's> {
+    pub name: SpanOf<RefHandle<'s, str>>,
+    pub colon: Span,
+    pub type_: Type<'a, 's, RefHandle<'s, str>>,
+}
+
+impl<'a, 's> Spanned for EffectOp<'a, 's> {
+    fn span(&self) -> Span {
+        Span::join(&self.name, &self.type_)
     }
 }
 
@@ -422,6 +436,13 @@ impl<'a, 's> Spanned for Term<'a, 's> {
 /// A top-level item in an Aiahr source file.
 #[derive(Clone, Copy, Debug)]
 pub enum Item<'a, 's> {
+    Effect {
+        effect: Span,
+        name: SpanOf<RefHandle<'s, str>>,
+        lbrace: Span,
+        ops: &'a [EffectOp<'a, 's>],
+        rbrace: Span,
+    },
     Term {
         name: SpanOf<RefHandle<'s, str>>,
         annotation: Option<SchemeAnnotation<'a, 's, RefHandle<'s, str>>>,
@@ -434,7 +455,7 @@ impl<'a, 's> Item<'a, 's> {
     /// Returns the name of the item.
     pub fn name(&self) -> SpanOf<RefHandle<'s, str>> {
         match self {
-            Item::Term { name, .. } => *name,
+            Item::Effect { name, .. } | Item::Term { name, .. } => *name,
         }
     }
 }
@@ -442,6 +463,7 @@ impl<'a, 's> Item<'a, 's> {
 impl<'a, 's> Spanned for Item<'a, 's> {
     fn span(&self) -> Span {
         match self {
+            Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
             Item::Term { name, value, .. } => Span::join(name, *value),
         }
     }

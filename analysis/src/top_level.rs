@@ -37,6 +37,7 @@ impl<'s> BaseBuilder<'s> {
     {
         for item in items.iter() {
             match item {
+                Item::Effect { .. } => todo!(),
                 Item::Term { name, .. } => {
                     if let InsertResult {
                         existing: Some(old),
