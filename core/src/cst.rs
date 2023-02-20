@@ -325,12 +325,12 @@ impl<'a, 's, V> Spanned for Scheme<'a, 's, V> {
 pub struct EffectOp<'a, 's> {
     pub name: SpanOf<RefHandle<'s, str>>,
     pub colon: Span,
-    pub type_: Type<'a, 's, RefHandle<'s, str>>,
+    pub type_: &'a Type<'a, 's, RefHandle<'s, str>>,
 }
 
 impl<'a, 's> Spanned for EffectOp<'a, 's> {
     fn span(&self) -> Span {
-        Span::join(&self.name, &self.type_)
+        Span::join(&self.name, self.type_)
     }
 }
 
@@ -681,6 +681,17 @@ macro_rules! scheme {
 }
 
 #[macro_export]
+macro_rules! eff_op {
+    ($name:pat, $type_:pat) => {
+        $crate::cst::EffectOp {
+            name: $crate::span_of!($crate::h!($name)),
+            type_: $type_,
+            ..
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! pat_prod {
     ($($fields:pat),* $(,)?) => {
         &$crate::cst::Pattern::ProductRow($crate::prod!($($fields,)+))
@@ -815,6 +826,17 @@ macro_rules! term_paren {
 }
 
 #[macro_export]
+macro_rules! item_effect {
+    ($name:pat, $($ops:pat),* $(,)?) => {
+        $crate::cst::Item::Effect {
+            name: $crate::span_of!($crate::h!($name)),
+            ops: &[$($ops),*],
+            ..
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! item_term {
     ($name:pat, $value:pat) => {
         $crate::cst::Item::Term {
@@ -829,17 +851,6 @@ macro_rules! item_term {
             name: $crate::span_of!($crate::h!($name)),
             annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! item_effect {
-    ($name:pat, $($ops:pat),* $(,)?) => {
-        $crate::cst::Item::Effect {
-            name: $crate::span_of!($crate::h!($name)),
-            ops: &[$($ops),*],
             ..
         }
     };
