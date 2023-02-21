@@ -1,3 +1,5 @@
+use std::iter;
+
 use crate::{
     base::BaseNames,
     name::{BaseName, ModuleName, Name, NameKinded},
@@ -6,14 +8,14 @@ use crate::{
 };
 use aiahr_core::{
     cst::{
-        self, Annotation, Constraint, Field, IdField, ProductRow, Qualifiers, Quantifier, Row,
-        RowAtom, Scheme, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation, TypeRow,
+        self, Annotation, Constraint, EffectOp, Field, IdField, ProductRow, Qualifiers, Quantifier,
+        Row, RowAtom, Scheme, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation, TypeRow,
     },
     diagnostic::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
     },
-    id::{ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
     memory::handle::RefHandle,
     nst,
     option::Transpose,
@@ -21,70 +23,9 @@ use aiahr_core::{
 };
 use bumpalo::Bump;
 
-/// Extension trait to construct not-found errors from find results.
-pub trait OkOrEmit<'s>: Sized {
-    type Ok;
-
-    fn ok_or_emit<E>(self, name: SpanOf<RefHandle<'s, str>>, errors: &mut E) -> Option<Self::Ok>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>;
-
-    fn ok_or_emit_in<E>(
-        self,
-        module: ModuleId,
-        name: SpanOf<RefHandle<'s, str>>,
-        errors: &mut E,
-    ) -> Option<Self::Ok>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>;
-}
-
-impl<'s, T> OkOrEmit<'s> for Result<T, Vec<Suggestion<'s>>> {
-    type Ok = T;
-
-    fn ok_or_emit<E>(
-        self,
-        name: SpanOf<RefHandle<'s, str>>,
-        errors: &mut E,
-    ) -> Option<<Self as OkOrEmit<'s>>::Ok>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>,
-    {
-        match self {
-            Ok(ret) => Some(ret),
-            Err(suggestions) => {
-                errors.add(NameResolutionError::NotFound {
-                    name,
-                    context_module: None,
-                    suggestions,
-                });
-                None
-            }
-        }
-    }
-
-    fn ok_or_emit_in<E>(
-        self,
-        module: ModuleId,
-        name: SpanOf<RefHandle<'s, str>>,
-        errors: &mut E,
-    ) -> Option<<Self as OkOrEmit<'s>>::Ok>
-    where
-        E: DiagnosticSink<NameResolutionError<'s>>,
-    {
-        match self {
-            Ok(ret) => Some(ret),
-            Err(suggestions) => {
-                errors.add(NameResolutionError::NotFound {
-                    name,
-                    context_module: Some(module),
-                    suggestions,
-                });
-                None
-            }
-        }
-    }
-}
+const TERM_KINDS: NameKinds = NameKinds::EFFECT_OP
+    .union(NameKinds::ITEM)
+    .union(NameKinds::VAR);
 
 // Allocates the items in `iter` on the given arena, but only if they are all `Some(..)`.
 fn alloc_all<'a, T, I>(arena: &'a Bump, iter: I) -> Option<&'a [T]>
@@ -287,6 +228,40 @@ where
     E: DiagnosticSink<NameResolutionError<'s>>,
 {
     match resolve_or_suggest(names.find_in(module, var.value), names, f) {
+        Ok(x) => Some(x),
+        Err(suggestions) => {
+            errors.add(NameResolutionError::NotFound {
+                name: var,
+                context_module: None,
+                suggestions,
+            });
+            None
+        }
+    }
+}
+
+// Resolves an effect operation symbolto a value of type `T`, using the given function to decide
+// which names are valid for the symbol.
+fn resolve_operation_symbol<'s, T, F, E>(
+    module: ModuleId,
+    effect: EffectId,
+    var: SpanOf<RefHandle<'s, str>>,
+    names: &Names<'_, '_, 's>,
+    errors: &mut E,
+    mut f: F,
+) -> Option<T>
+where
+    F: FnMut(EffectOpId) -> Result<T, RejectionReason>,
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    match resolve_or_suggest(
+        names
+            .get_effect(module, effect)
+            .find(var.value)
+            .map(|sn| sn.map(|o| (module, effect, o))),
+        names,
+        |(_, _, o)| f(o),
+    ) {
         Ok(x) => Some(x),
         Err(suggestions) => {
             errors.add(NameResolutionError::NotFound {
@@ -550,6 +525,8 @@ where
 #[derive(Debug)]
 enum DotResolution<'a, 's> {
     Module(ModuleId),
+    Effect(ModuleId, EffectId),
+    EffectOp(ModuleId, EffectId, EffectOpId),
     Item(ModuleId, ItemId),
     FieldAccess {
         base: &'a nst::Term<'a, 's>,
@@ -562,6 +539,8 @@ impl<'a, 's> From<BaseName> for DotResolution<'a, 's> {
     fn from(base: BaseName) -> Self {
         match base {
             BaseName::Module(m) => DotResolution::Module(m),
+            BaseName::Effect(m, e) => DotResolution::Effect(m, e),
+            BaseName::EffectOp(m, e, o) => DotResolution::EffectOp(m, e, o),
             BaseName::Item(m, i) => DotResolution::Item(m, i),
         }
     }
@@ -647,6 +626,19 @@ where
             DotResolution::Module(m) => resolve_symbol_in(m, field, names, errors, |name| {
                 Ok(DotResolution::from(name))
             })?,
+            DotResolution::Effect(m, e) => {
+                resolve_operation_symbol(m, e, field, names, errors, |o| {
+                    Ok(DotResolution::EffectOp(m, e, o))
+                })?
+            }
+            DotResolution::EffectOp(_, _, _) => {
+                errors.add(NameResolutionError::WrongKind {
+                    expr: base.span(),
+                    actual: NameKind::EffectOp,
+                    expected: !NameKinds::EFFECT_OP,
+                });
+                return None;
+            }
             DotResolution::Item(m, i) => DotResolution::FieldAccess {
                 base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
                 dot,
@@ -674,7 +666,7 @@ where
             Name::Var(v) => Ok(ModuleOr::Value(nst::Term::VariableRef(base.span().of(v)))),
             _ => Err(RejectionReason::WrongKind {
                 actual: name.kind(),
-                expected: NameKinds::MODULE | NameKinds::ITEM | NameKinds::VAR,
+                expected: NameKinds::MODULE | TERM_KINDS,
             }),
         })? {
             ModuleOr::Module(m) => resolve_symbol_in(m, field, names, errors, |name| {
@@ -796,10 +788,19 @@ where
                     errors.add(NameResolutionError::WrongKind {
                         expr: t.span(),
                         actual: NameKind::Module,
-                        expected: NameKinds::ITEM | NameKinds::VAR,
+                        expected: TERM_KINDS,
                     });
                     return None;
                 }
+                DotResolution::Effect(_, _) => {
+                    errors.add(NameResolutionError::WrongKind {
+                        expr: t.span(),
+                        actual: NameKind::Effect,
+                        expected: TERM_KINDS,
+                    });
+                    return None;
+                }
+                DotResolution::EffectOp(m, e, o) => nst::Term::EffectOpRef(t.span().of((m, e, o))),
                 DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
                 DotResolution::FieldAccess { base, dot, field } => {
                     nst::Term::FieldAccess { base, dot, field }
@@ -832,7 +833,7 @@ where
             Name::Var(v) => Ok(nst::Term::VariableRef(var.span().of(v))),
             _ => Err(RejectionReason::WrongKind {
                 actual: name.kind(),
-                expected: NameKinds::ITEM | NameKinds::VAR,
+                expected: TERM_KINDS,
             }),
         })?,
         cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
@@ -843,32 +844,80 @@ where
     }))
 }
 
-/// Resolves the given item.
-pub fn resolve_item<'a, 's, E>(
+/// Resolves an effect operation signature.
+fn resolve_effect_op<'a, 's, E>(
     arena: &'a Bump,
-    id: ItemId,
-    item: &cst::Item<'_, 's>,
+    opid: EffectOpId,
+    op: &EffectOp<'_, 's, RefHandle<'s, str>, RefHandle<'s, str>>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<EffectOp<'a, 's, EffectOpId, TyVarId>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(EffectOp {
+        name: op.name.span().of(opid),
+        colon: op.colon,
+        type_: resolve_type(arena, op.type_, names, errors)?,
+    })
+}
+
+/// Resolves the given effect.
+fn resolve_effect<'a, 's, E>(
+    arena: &'a Bump,
+    module: ModuleId,
+    eid: EffectId,
+    effect: Span,
+    name: SpanOf<RefHandle<'s, str>>,
+    lbrace: Span,
+    ops: &[EffectOp<'_, 's, RefHandle<'s, str>, RefHandle<'s, str>>],
+    rbrace: Span,
     names: &mut Names<'_, 'a, 's>,
     errors: &mut E,
 ) -> Option<nst::Item<'a, 's>>
 where
     E: DiagnosticSink<NameResolutionError<'s>>,
 {
-    Some(match item {
-        cst::Item::Effect { .. } => todo!(),
-        cst::Item::Term {
-            name,
-            annotation,
-            eq,
-            value,
-        } => nst::Item::Term {
-            name: name.span().of(id),
-            annotation: annotation
-                .map(|annotation| resolve_scheme_annotation(arena, &annotation, names, errors))
-                .transpose()?,
-            eq: *eq,
-            value: arena.alloc(resolve_term(arena, value, names, errors)?),
-        },
+    Some(nst::Item::Effect {
+        effect,
+        name: name.span().of(eid),
+        lbrace,
+        ops: arena.alloc_slice_fill_iter(
+            iter::zip(
+                names
+                    .get_effect(module, eid)
+                    .iter()
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+                ops.iter(),
+            )
+            .map(|(opid, op)| resolve_effect_op(arena, opid, op, names, errors)),
+        ),
+        rbrace,
+    })
+}
+
+/// Resolves the given item.
+pub fn resolve_term_item<'a, 's, E>(
+    arena: &'a Bump,
+    id: ItemId,
+    name: SpanOf<RefHandle<'s, str>>,
+    annotation: Option<SchemeAnnotation<'a, 's, RefHandle<'s, str>>>,
+    eq: Span,
+    value: &cst::Term<'_, 's>,
+    names: &mut Names<'_, 'a, 's>,
+    errors: &mut E,
+) -> Option<nst::Item<'a, 's>>
+where
+    E: DiagnosticSink<NameResolutionError<'s>>,
+{
+    Some(nst::Item::Term {
+        name: name.span().of(id),
+        annotation: annotation
+            .map(|annotation| resolve_scheme_annotation(arena, &annotation, names, errors))
+            .transpose()?,
+        eq,
+        value: arena.alloc(resolve_term(arena, value, names, errors)?),
     })
 }
 
@@ -880,9 +929,9 @@ pub struct ModuleResolution<'a, 's> {
 }
 
 /// Resolves the given module.
-pub fn resolve_module<'a, 's, E>(
+pub fn resolve_module<'a, 's, 'b: 'a, E>(
     arena: &'a Bump,
-    items: &[cst::Item<'_, 's>],
+    items: &[cst::Item<'b, 's>],
     base: BaseNames<'_, 'a, 's>,
     errors: &mut E,
 ) -> ModuleResolution<'a, 's>
@@ -893,9 +942,36 @@ where
     let resolved_items =
         arena.alloc_slice_fill_iter(base.iter().zip(items.iter()).map(|(name, item)| {
             match (name, item) {
-                (ModuleName::Item(i), item @ &cst::Item::Term { .. }) => {
-                    resolve_item(arena, *i, item, &mut names, errors)
-                }
+                (
+                    ModuleName::Effect(e),
+                    &cst::Item::Effect {
+                        effect,
+                        name,
+                        lbrace,
+                        ops,
+                        rbrace,
+                    },
+                ) => resolve_effect(
+                    arena,
+                    base.me(),
+                    *e,
+                    effect,
+                    name,
+                    lbrace,
+                    ops,
+                    rbrace,
+                    &mut names,
+                    errors,
+                ),
+                (
+                    ModuleName::Item(i),
+                    &cst::Item::Term {
+                        name,
+                        annotation,
+                        eq,
+                        value,
+                    },
+                ) => resolve_term_item(arena, *i, name, annotation, eq, value, &mut names, errors),
                 _ => panic!(
                     "Expected same kinds of names, got {:?} and {:?}",
                     name, item

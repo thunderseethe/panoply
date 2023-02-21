@@ -303,13 +303,13 @@ impl<'a, 's, V> Spanned for Scheme<'a, 's, V> {
 
 /// An effect operation.
 #[derive(Clone, Copy, Debug)]
-pub struct EffectOp<'a, 's> {
-    pub name: SpanOf<RefHandle<'s, str>>,
+pub struct EffectOp<'a, 's, O, V> {
+    pub name: SpanOf<O>,
     pub colon: Span,
-    pub type_: &'a Type<'a, 's, RefHandle<'s, str>>,
+    pub type_: &'a Type<'a, 's, V>,
 }
 
-impl<'a, 's> Spanned for EffectOp<'a, 's> {
+impl<'a, 's, O, V> Spanned for EffectOp<'a, 's, O, V> {
     fn span(&self) -> Span {
         Span::join(&self.name, self.type_)
     }
@@ -421,7 +421,7 @@ pub enum Item<'a, 's> {
         effect: Span,
         name: SpanOf<RefHandle<'s, str>>,
         lbrace: Span,
-        ops: &'a [EffectOp<'a, 's>],
+        ops: &'a [EffectOp<'a, 's, RefHandle<'s, str>, RefHandle<'s, str>>],
         rbrace: Span,
     },
     Term {
@@ -663,9 +663,16 @@ macro_rules! scheme {
 
 #[macro_export]
 macro_rules! eff_op {
-    ($name:pat, $type_:pat) => {
+    ($name:literal, $type_:pat) => {
         $crate::cst::EffectOp {
             name: $crate::span_of!($crate::h!($name)),
+            type_: $type_,
+            ..
+        }
+    };
+    ($name:pat, $type_:pat) => {
+        $crate::cst::EffectOp {
+            name: $crate::span_of!($name),
             type_: $type_,
             ..
         }

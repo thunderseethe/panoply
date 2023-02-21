@@ -1,5 +1,6 @@
 use crate::{
     base::BaseNames,
+    effect::EffectBuilder,
     module::{ModuleNames, ModuleNamesBuilder},
     ops::InsertResult,
 };
@@ -37,7 +38,36 @@ impl<'s> BaseBuilder<'s> {
     {
         for item in items.iter() {
             match item {
-                Item::Effect { .. } => todo!(),
+                Item::Effect { name, ops, .. } => {
+                    let mut effect = EffectBuilder::default();
+                    for op in ops.iter() {
+                        if let InsertResult {
+                            existing: Some(old),
+                            ..
+                        } = effect.insert_op(op.name)
+                        {
+                            errors.add(NameResolutionError::Duplicate {
+                                name: op.name.value,
+                                kind: NameKind::EffectOp,
+                                original: old.span(),
+                                duplicate: op.name.span(),
+                            })
+                        }
+                    }
+
+                    if let InsertResult {
+                        existing: Some(old),
+                        ..
+                    } = self.builder.insert_effect(*name, effect.build())
+                    {
+                        errors.add(NameResolutionError::Duplicate {
+                            name: name.value,
+                            kind: NameKind::Effect,
+                            original: old.span(),
+                            duplicate: name.span(),
+                        })
+                    }
+                }
                 Item::Term { name, .. } => {
                     if let InsertResult {
                         existing: Some(old),
@@ -47,8 +77,8 @@ impl<'s> BaseBuilder<'s> {
                         errors.add(NameResolutionError::Duplicate {
                             name: name.value,
                             kind: NameKind::Item,
-                            original: name.span(),
-                            duplicate: old.span(),
+                            original: old.span(),
+                            duplicate: name.span(),
                         })
                     }
                 }

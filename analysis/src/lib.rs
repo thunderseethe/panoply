@@ -1,4 +1,5 @@
 pub mod base;
+pub mod effect;
 pub mod module;
 pub mod name;
 pub mod names;

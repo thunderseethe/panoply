@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use aiahr_core::{
-    id::{IdGen, Ids, ModuleId, TyVarId, VarId},
+    id::{EffectId, IdGen, Ids, ModuleId, TyVarId, VarId},
     memory::handle::RefHandle,
     span::{SpanOf, Spanned},
 };
@@ -9,6 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     base::BaseNames,
+    effect::EffectNames,
     name::{BaseName, Name},
     ops::{GensOps, IdOps, InsertResult, MatchesOps},
 };
@@ -137,6 +138,11 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
         ret
     }
 
+    /// Gets the effect corresponding to the given ID.
+    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames<'s> {
+        self.base.get_effect(module, effect)
+    }
+
     fn insert<I>(&mut self, name: SpanOf<RefHandle<'s, str>>) -> InsertResult<I>
     where
         I: Copy,
@@ -211,6 +217,8 @@ where
     fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
         match Name::from(id) {
             Name::Module(m) => self.base.get(m),
+            Name::Effect(m, e) => self.base.get((m, e)),
+            Name::EffectOp(m, e, o) => self.base.get((m, e, o)),
             Name::Item(m, i) => self.base.get((m, i)),
             Name::TyVar(t) => self.gens.ty_vars[t],
             Name::Var(v) => self.gens.vars[v],

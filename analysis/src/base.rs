@@ -1,7 +1,7 @@
 use std::slice::Iter;
 
 use aiahr_core::{
-    id::ModuleId,
+    id::{EffectId, ModuleId},
     loc::Loc,
     memory::handle::RefHandle,
     modules::ModuleTree,
@@ -10,6 +10,7 @@ use aiahr_core::{
 use rustc_hash::FxHashMap;
 
 use crate::{
+    effect::EffectNames,
     module::ModuleNames,
     name::{BaseName, ModuleName},
     ops::IdOps,
@@ -41,6 +42,16 @@ impl<'b, 'a, 's> BaseNames<'b, 'a, 's> {
             modules,
             module_names,
         }
+    }
+
+    /// The source module.
+    pub fn me(&self) -> ModuleId {
+        self.me
+    }
+
+    /// Gets the effect corresponding to the given ID.
+    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames<'s> {
+        self.module_names[&module].get_effect(effect)
     }
 
     /// Finds the correct ID associated with the given string.
@@ -75,6 +86,8 @@ where
     fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
         match BaseName::from(id) {
             BaseName::Module(m) => canonical_span(m).of(self.modules.get_name(m)),
+            BaseName::Effect(m, e) => self.module_names[&m].get(e),
+            BaseName::EffectOp(m, e, o) => self.module_names[&m].get_effect(e).get(o),
             BaseName::Item(m, i) => self.module_names[&m].get(i),
         }
     }

@@ -1,6 +1,6 @@
 use crate::{
-    cst::{Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation},
-    id::{ItemId, ModuleId, TyVarId, VarId},
+    cst::{EffectOp, Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation},
+    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
     memory::handle::RefHandle,
     span::{Span, SpanOf, Spanned},
 };
@@ -66,6 +66,7 @@ pub enum Term<'a, 's> {
         cases: Separated<'a, Field<&'a Pattern<'a, 's>, &'a Term<'a, 's>>>,
         rangle: Span,
     },
+    EffectOpRef(SpanOf<(ModuleId, EffectId, EffectOpId)>),
     ItemRef(SpanOf<(ModuleId, ItemId)>),
     VariableRef(SpanOf<VarId>),
     Parenthesized {
@@ -86,6 +87,7 @@ impl<'a, 's> Spanned for Term<'a, 's> {
             Term::SumRow(s) => s.span(),
             Term::FieldAccess { base, field, .. } => Span::join(*base, field),
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
+            Term::EffectOpRef(o) => o.span(),
             Term::ItemRef(i) => i.span(),
             Term::VariableRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
@@ -96,6 +98,13 @@ impl<'a, 's> Spanned for Term<'a, 's> {
 /// A top-level item in an Aiahr source file with names resolved.
 #[derive(Clone, Copy, Debug)]
 pub enum Item<'a, 's> {
+    Effect {
+        effect: Span,
+        name: SpanOf<EffectId>,
+        lbrace: Span,
+        ops: &'a [Option<EffectOp<'a, 's, EffectOpId, TyVarId>>],
+        rbrace: Span,
+    },
     Term {
         name: SpanOf<ItemId>,
         annotation: Option<SchemeAnnotation<'a, 's, TyVarId>>,
@@ -107,6 +116,7 @@ pub enum Item<'a, 's> {
 impl<'a, 's> Spanned for Item<'a, 's> {
     fn span(&self) -> Span {
         match self {
+            Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
             Item::Term { name, value, .. } => Span::join(name, *value),
         }
     }
@@ -255,6 +265,17 @@ macro_rules! nterm_var {
 macro_rules! nterm_paren {
     ($term:pat) => {
         &$crate::nst::Term::Parenthesized { term: $term, .. }
+    };
+}
+
+#[macro_export]
+macro_rules! nitem_effect {
+    ($name:pat, $($ops:pat),* $(,)?) => {
+        $crate::nst::Item::Effect {
+            name: $crate::span_of!($name),
+            ops: &[$($ops),*],
+            ..
+        }
     };
 }
 

@@ -5,7 +5,7 @@
 
 use aiahr_core::{
     diagnostic::nameres::NameKind,
-    id::{ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
 };
 
 /// Names whose kind can be determined.
@@ -16,6 +16,7 @@ pub trait NameKinded {
 /// A name that may appear as a top-level definition within a module.
 #[derive(Clone, Copy, Debug)]
 pub enum ModuleName {
+    Effect(EffectId),
     Item(ItemId),
 }
 
@@ -23,8 +24,15 @@ impl ModuleName {
     /// Converts the name to one scoped to the given module.
     pub fn based_in(&self, m: ModuleId) -> BaseName {
         match self {
+            ModuleName::Effect(e) => BaseName::Effect(m, *e),
             ModuleName::Item(i) => BaseName::Item(m, *i),
         }
+    }
+}
+
+impl From<EffectId> for ModuleName {
+    fn from(e: EffectId) -> Self {
+        ModuleName::Effect(e)
     }
 }
 
@@ -37,6 +45,7 @@ impl From<ItemId> for ModuleName {
 impl NameKinded for ModuleName {
     fn kind(&self) -> NameKind {
         match self {
+            ModuleName::Effect(_) => NameKind::Effect,
             ModuleName::Item(_) => NameKind::Item,
         }
     }
@@ -46,12 +55,26 @@ impl NameKinded for ModuleName {
 #[derive(Clone, Copy, Debug)]
 pub enum BaseName {
     Module(ModuleId),
+    Effect(ModuleId, EffectId),
+    EffectOp(ModuleId, EffectId, EffectOpId),
     Item(ModuleId, ItemId),
 }
 
 impl From<ModuleId> for BaseName {
     fn from(m: ModuleId) -> Self {
         BaseName::Module(m)
+    }
+}
+
+impl From<(ModuleId, EffectId)> for BaseName {
+    fn from((m, e): (ModuleId, EffectId)) -> Self {
+        BaseName::Effect(m, e)
+    }
+}
+
+impl From<(ModuleId, EffectId, EffectOpId)> for BaseName {
+    fn from((m, e, o): (ModuleId, EffectId, EffectOpId)) -> Self {
+        BaseName::EffectOp(m, e, o)
     }
 }
 
@@ -65,6 +88,8 @@ impl NameKinded for BaseName {
     fn kind(&self) -> NameKind {
         match self {
             BaseName::Module(_) => NameKind::Module,
+            BaseName::Effect(_, _) => NameKind::Effect,
+            BaseName::EffectOp(_, _, _) => NameKind::EffectOp,
             BaseName::Item(_, _) => NameKind::Item,
         }
     }
@@ -102,6 +127,8 @@ impl NameKinded for LocalName {
 #[derive(Clone, Copy, Debug)]
 pub enum Name {
     Module(ModuleId),
+    Effect(ModuleId, EffectId),
+    EffectOp(ModuleId, EffectId, EffectOpId),
     Item(ModuleId, ItemId),
     TyVar(TyVarId),
     Var(VarId),
@@ -110,6 +137,18 @@ pub enum Name {
 impl From<ModuleId> for Name {
     fn from(m: ModuleId) -> Self {
         Name::Module(m)
+    }
+}
+
+impl From<(ModuleId, EffectId)> for Name {
+    fn from((m, e): (ModuleId, EffectId)) -> Self {
+        Name::Effect(m, e)
+    }
+}
+
+impl From<(ModuleId, EffectId, EffectOpId)> for Name {
+    fn from((m, e, o): (ModuleId, EffectId, EffectOpId)) -> Self {
+        Name::EffectOp(m, e, o)
     }
 }
 
@@ -135,6 +174,8 @@ impl From<BaseName> for Name {
     fn from(base: BaseName) -> Self {
         match base {
             BaseName::Module(m) => Name::Module(m),
+            BaseName::Effect(m, e) => Name::Effect(m, e),
+            BaseName::EffectOp(m, e, o) => Name::EffectOp(m, e, o),
             BaseName::Item(m, i) => Name::Item(m, i),
         }
     }
@@ -144,6 +185,8 @@ impl NameKinded for Name {
     fn kind(&self) -> NameKind {
         match self {
             Name::Module(_) => NameKind::Module,
+            Name::Effect(_, _) => NameKind::Effect,
+            Name::EffectOp(_, _, _) => NameKind::EffectOp,
             Name::Item(_, _) => NameKind::Item,
             Name::TyVar(_) => NameKind::TyVar,
             Name::Var(_) => NameKind::Var,

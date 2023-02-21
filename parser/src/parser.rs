@@ -254,7 +254,9 @@ pub fn scheme<'a, 's: 'a>(
 }
 
 // Returns a parser for an effect operation.
-fn effect_op<'a, 's: 'a>(arena: &'a Bump) -> impl AiahrParser<'s, EffectOp<'a, 's>> {
+fn effect_op<'a, 's: 'a>(
+    arena: &'a Bump,
+) -> impl AiahrParser<'s, EffectOp<'a, 's, RefHandle<'s, str>, RefHandle<'s, str>>> {
     ident()
         .then(lit(Token::Colon))
         .then(type_(arena))

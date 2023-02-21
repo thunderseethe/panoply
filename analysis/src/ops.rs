@@ -1,4 +1,10 @@
-use aiahr_core::{memory::handle::RefHandle, span::SpanOf};
+use std::ops::Deref;
+
+use aiahr_core::{
+    id::{Id, IdGen, Ids},
+    memory::handle::RefHandle,
+    span::SpanOf,
+};
 
 /// The result of an insert into a name layer.
 #[derive(Clone, Copy, Debug)]
@@ -31,10 +37,31 @@ pub trait IdOps<'s, I> {
     fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>>;
 }
 
+impl<'s, I: Id> IdOps<'s, I> for Ids<I, SpanOf<RefHandle<'s, str>>> {
+    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
+        self[id]
+    }
+}
+
+impl<'s, I: Id, T> IdOps<'s, I> for T
+where
+    T: Deref<Target = Ids<I, SpanOf<RefHandle<'s, str>>>>,
+{
+    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
+        self[id]
+    }
+}
+
 /// Trait for bundles of generators to get and push by ID kind.
 pub(crate) trait GensOps<'s, I>: IdOps<'s, I> {
     /// Generates an ID for a new string.
     fn push(&mut self, name: SpanOf<RefHandle<'s, str>>) -> I;
+}
+
+impl<'s, I: Id> GensOps<'s, I> for IdGen<I, SpanOf<RefHandle<'s, str>>> {
+    fn push(&mut self, name: SpanOf<RefHandle<'s, str>>) -> I {
+        self.push(name)
+    }
 }
 
 /// Trait for match structs to construct and offer mutable access by ID kind.

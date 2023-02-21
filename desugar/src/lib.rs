@@ -1,5 +1,5 @@
 use aiahr_core::ast::Direction;
-use aiahr_core::span::Spanned;
+use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::{
     ast,
     ast::{Ast, Term::*},
@@ -26,6 +26,9 @@ pub fn desugar<'n, 's: 'a, 'a>(arena: &'a Bump, nst: &'n nst::Term<'n, 's>) -> A
         let ast = match nst {
             nst::Term::VariableRef(var) => arena.alloc(ast::Term::Variable(var.value)) as &_,
             nst::Term::ItemRef(item) => arena.alloc(ast::Term::Item(item.value)) as &_,
+            nst::Term::EffectOpRef(SpanOf {
+                value: (_, _, op), ..
+            }) => arena.alloc(ast::Term::Operation(*op)) as &_,
             nst::Term::Binding {
                 var, value, expr, ..
             } => {

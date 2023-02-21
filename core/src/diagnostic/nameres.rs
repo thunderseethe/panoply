@@ -16,9 +16,11 @@ use super::{english::EnglishIterExt, Citation, Diagnostic};
 #[repr(u8)]
 pub enum NameKind {
     Module = 0b1,
-    Item = 0b10,
-    TyVar = 0b100,
-    Var = 0b1000,
+    Effect = 0b10,
+    EffectOp = 0b100,
+    Item = 0b1000,
+    TyVar = 0b10000,
+    Var = 0b100000,
 }
 
 impl NameKind {
@@ -26,6 +28,8 @@ impl NameKind {
     pub fn indefinite_noun(&self) -> &'static str {
         match self {
             NameKind::Module => "a module",
+            NameKind::Effect => "an effect",
+            NameKind::EffectOp => "an effect operation",
             NameKind::Item => "a top-level item",
             NameKind::TyVar => "a type variable",
             NameKind::Var => "a variable",
@@ -37,6 +41,8 @@ bitflags! {
     /// A bitset of name kinds.
     pub struct NameKinds: u8 {
         const MODULE = NameKind::Module as u8;
+        const EFFECT = NameKind::Effect as u8;
+        const EFFECT_OP = NameKind::EffectOp as u8;
         const ITEM = NameKind::Item as u8;
         const TY_VAR = NameKind::TyVar as u8;
         const VAR = NameKind::Var as u8;
@@ -64,6 +70,8 @@ impl From<NameKind> for NameKinds {
     fn from(kind: NameKind) -> Self {
         match kind {
             NameKind::Module => NameKinds::MODULE,
+            NameKind::Effect => NameKinds::EFFECT,
+            NameKind::EffectOp => NameKinds::EFFECT_OP,
             NameKind::Item => NameKinds::ITEM,
             NameKind::TyVar => NameKinds::TY_VAR,
             NameKind::Var => NameKinds::VAR,
