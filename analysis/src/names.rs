@@ -123,6 +123,10 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
         }
     }
 
+    pub fn into_vars(self) -> IdGen<VarId, SpanOf<RefHandle<'s, str>>> {
+        self.gens.vars
+    }
+
     /// Executes the given function on a subscope of the current object.
     pub fn subscope<R, F>(&mut self, f: F) -> R
     where

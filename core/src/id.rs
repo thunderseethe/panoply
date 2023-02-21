@@ -112,6 +112,24 @@ pub struct IdGen<I, T> {
     _phantom: PhantomData<I>,
 }
 
+impl<I, T> IntoIterator for IdGen<I, T> {
+    type Item = T;
+
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.vec.into_iter()
+    }
+}
+impl<I, T> FromIterator<T> for IdGen<I, T> {
+    fn from_iter<II: IntoIterator<Item = T>>(iter: II) -> Self {
+        Self {
+            vec: iter.into_iter().collect(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<I, T> IdGen<I, T> {
     fn from_raw(raw: Vec<T>) -> IdGen<I, T> {
         IdGen {
