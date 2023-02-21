@@ -45,6 +45,10 @@ impl<'ctx, TV> Ord for ClosedRow<'ctx, TV> {
     }
 }
 impl<'ctx, TV> ClosedRow<'ctx, TV> {
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
     pub fn len(&self) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
         self.fields.len()
@@ -256,13 +260,6 @@ impl<'ctx, TV: Copy> Row<'ctx, TV> {
             Row::Closed(row) => ctx.mk_ty(TypeKind::RowTy(row)),
         }
     }
-
-    pub(crate) fn expect_closed(self, msg: &str) -> ClosedRow<'ctx, TV> {
-        match self {
-            Row::Closed(row) => row,
-            Row::Open(_) => panic!("{msg}"),
-        }
-    }
 }
 
 pub type InferRow<'infer> = Row<'infer, TcUnifierVar<'infer>>;
@@ -332,6 +329,25 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for CombineInto<'_, TV> {
 pub enum OrderedRowXorRow<'ctx, TV> {
     ClosedOpen(ClosedRow<'ctx, TV>, TV),
     OpenOpen { min: TV, max: TV },
+}
+pub trait Unifiable<Rhs> {
+    fn unifiable(&self, other: &Rhs) -> bool;
+}
+impl<'ctx, TV: PartialEq> Unifiable<(ClosedRow<'ctx, TV>, TV)> for OrderedRowXorRow<'ctx, TV> {
+    fn unifiable(&self, (closed, open): &(ClosedRow<'ctx, TV>, TV)) -> bool {
+        match self {
+            OrderedRowXorRow::ClosedOpen(c, o) => c.fields == closed.fields || o == open,
+            OrderedRowXorRow::OpenOpen { .. } => false,
+        }
+    }
+}
+impl<'ctx, TV: PartialEq> Unifiable<TV> for OrderedRowXorRow<'ctx, TV> {
+    fn unifiable(&self, other: &TV) -> bool {
+        match self {
+            OrderedRowXorRow::ClosedOpen(_, open) => open == other,
+            OrderedRowXorRow::OpenOpen { min, max } => min == other || max == other,
+        }
+    }
 }
 impl<'ctx, TV: Copy + Debug + Ord> UnifyValue for OrderedRowXorRow<'ctx, TV> {
     type Error = (Self, Self);
@@ -414,79 +430,5 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for OrderedRowXorRow<'_, TV> {
                 (fold.try_fold_row_var(min)?, fold.try_fold_row_var(max)?)
             }
         })
-    }
-}
-
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct RowSet<'ctx, TV, OR = OrderedRowXorRow<'ctx, TV>> {
-    pub(crate) goals: Vec<OR>,
-    pub(crate) comps: Vec<CombineInto<'ctx, TV>>,
-}
-impl<'ctx, TV, OR> Default for RowSet<'ctx, TV, OR> {
-    fn default() -> Self {
-        Self {
-            goals: vec![],
-            comps: vec![],
-        }
-    }
-}
-impl<'ctx, TV> From<RowSet<'ctx, TV>> for RowSet<'ctx, TV, (Row<'ctx, TV>, Row<'ctx, TV>)> {
-    fn from(val: RowSet<'ctx, TV>) -> Self {
-        RowSet {
-            goals: val.goals.into_iter().map(|a| a.into()).collect(),
-            comps: val.comps,
-        }
-    }
-}
-
-impl<'ctx, TV, OR> RowSet<'ctx, TV, OR> {
-    pub(crate) fn goals_iter(&self) -> impl Iterator<Item = &'_ OR> {
-        self.goals.iter()
-    }
-
-    pub(crate) fn comps_iter(&self) -> impl Iterator<Item = &'_ CombineInto<'ctx, TV>> {
-        self.comps.iter()
-    }
-}
-
-impl<'ctx, TV> From<OrderedRowXorRow<'ctx, TV>> for RowSet<'ctx, TV> {
-    fn from(val: OrderedRowXorRow<'ctx, TV>) -> Self {
-        Self {
-            goals: vec![val],
-            comps: vec![],
-        }
-    }
-}
-impl<'ctx, TV> From<CombineInto<'ctx, TV>> for RowSet<'ctx, TV> {
-    fn from(val: CombineInto<'ctx, TV>) -> Self {
-        Self {
-            goals: vec![],
-            comps: vec![val],
-        }
-    }
-}
-
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for RowSet<'_, TV> {
-    type TypeVar = TV;
-    type Out<T: 'ctx> = RowSet<'ctx, T, (Row<'ctx, T>, Row<'ctx, T>)>;
-
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
-        Ok(RowSet {
-            goals: self.goals.try_fold_with(fold)?,
-            comps: self.comps.try_fold_with(fold)?,
-        })
-    }
-}
-
-impl<'ctx, TV: Clone + Debug + PartialEq> UnifyValue for RowSet<'ctx, TV> {
-    type Error = Infallible;
-
-    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
-        let goals = [left.goals.as_slice(), right.goals.as_slice()].concat();
-        let comps = [left.comps.as_slice(), right.comps.as_slice()].concat();
-        Ok(Self { goals, comps })
     }
 }

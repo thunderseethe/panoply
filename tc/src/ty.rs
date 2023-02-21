@@ -12,16 +12,6 @@ use row::*;
 pub mod fold;
 use fold::*;
 
-use crate::Candidate;
-
-/*define_ids!(
-/// A type variable.
-/// These are explicity referred to by the AST and can persist through type checking.
-/// They may not be modified by the type checking process, often referred to as untouchabale.
-#[derive(Default, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub TcVar;
-);*/
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct UnifierToTcVarError {
     index: u32,
@@ -68,7 +58,7 @@ impl<'ctx> Debug for TcUnifierVar<'ctx> {
     }
 }
 impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
-    type Value = Option<Candidate<'ctx, TcUnifierVar<'ctx>>>;
+    type Value = Option<InferTy<'ctx>>;
 
     fn index(&self) -> u32 {
         self.id
