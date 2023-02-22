@@ -33,6 +33,6 @@ where
     S: BuildHasher,
 {
     fn get_span(&self, value: &T) -> Option<Span> {
-        self.get(&value).copied()
+        self.get(value).copied()
     }
 }

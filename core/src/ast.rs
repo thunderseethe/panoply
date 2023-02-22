@@ -214,9 +214,9 @@ impl<'a, Var> Iterator for TermTraverse<'a, Var> {
     type Item = &'a Term<'a, Var>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.stack.pop().and_then(|term| {
+        self.stack.pop().map(|term| {
             self.stack.extend(term.children());
-            Some(term)
+            term
         })
     }
 }

@@ -25,10 +25,7 @@ impl<'a> ListAccumulator<'a> {
             ListAccumulator::ThreeOrMore { firsts, last } => {
                 let mut firsts = firsts;
                 firsts.extend([", ", last]);
-                ListAccumulator::ThreeOrMore {
-                    firsts: firsts,
-                    last: item,
-                }
+                ListAccumulator::ThreeOrMore { firsts, last: item }
             }
         }
     }

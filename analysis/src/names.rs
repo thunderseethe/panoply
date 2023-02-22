@@ -60,7 +60,7 @@ struct Matches {
 }
 
 impl Matches {
-    fn iter<'a>(&'a self) -> impl 'a + Iterator<Item = Name> {
+    fn iter(&self) -> impl '_ + Iterator<Item = Name> {
         self.ty_var
             .into_iter()
             .map(Name::TyVar)
@@ -158,7 +158,7 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
         if scope.contains(&name.value) {
             let ms = self.names.get_mut(&name.value).unwrap().last_mut().unwrap();
             if let Some(old) = ms.get_mut() {
-                InsertResult::err(id, self.gens.get(old.clone()).span().of(*old))
+                InsertResult::err(id, self.gens.get(*old).span().of(*old))
             } else {
                 *ms.get_mut() = Some(id);
                 InsertResult::ok(id)
@@ -167,7 +167,7 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
             scope.insert(name.value);
             self.names
                 .entry(name.value)
-                .or_insert(Vec::new())
+                .or_default()
                 .push(Matches::new(id));
             InsertResult::ok(id)
         }

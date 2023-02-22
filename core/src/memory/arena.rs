@@ -4,12 +4,12 @@ use bumpalo_herd::Member;
 /// An arena for values of a given type.
 pub trait Arena<T> {
     /// Stores the given value, persisting it for the lifetime of this object.
-    fn alloc<'a>(&'a self, value: T) -> &'a T {
+    fn alloc(&self, value: T) -> &T {
         &self.alloc_slice_by_iter([value].into_iter())[0]
     }
 
     /// Stores the given values in a slice, persisting them for the lifetime of this object.
-    fn alloc_slice_by_iter<'a, I>(&'a self, iter: I) -> &'a [T]
+    fn alloc_slice_by_iter<I>(&self, iter: I) -> &[T]
     where
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator;
@@ -22,11 +22,11 @@ pub trait ArenaByRef<T: ?Sized> {
 }
 
 impl<T: Copy> Arena<T> for Bump {
-    fn alloc<'a>(&'a self, value: T) -> &'a T {
+    fn alloc(&self, value: T) -> &T {
         self.alloc(value)
     }
 
-    fn alloc_slice_by_iter<'a, I>(&'a self, iter: I) -> &'a [T]
+    fn alloc_slice_by_iter<I>(&self, iter: I) -> &[T]
     where
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,
@@ -48,11 +48,11 @@ impl ArenaByRef<str> for Bump {
 }
 
 impl<'h, T: Copy> Arena<T> for Member<'h> {
-    fn alloc<'a>(&'a self, value: T) -> &'a T {
+    fn alloc(&self, value: T) -> &T {
         self.alloc(value)
     }
 
-    fn alloc_slice_by_iter<'a, I>(&'a self, iter: I) -> &'a [T]
+    fn alloc_slice_by_iter<I>(&self, iter: I) -> &[T]
     where
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,

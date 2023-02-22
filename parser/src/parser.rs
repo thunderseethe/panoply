@@ -25,7 +25,7 @@ impl<'s, T, A> AiahrParser<'s, T> for A where
 }
 
 // Returns a spanned parser that matches just the given token and returns ().
-fn lit<'s>(token: Token<'s>) -> impl AiahrParser<'s, Span> {
+fn lit(token: Token<'_>) -> impl AiahrParser<'_, Span> {
     just(token).map_with_span(|_, span| span)
 }
 

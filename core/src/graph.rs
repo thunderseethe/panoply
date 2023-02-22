@@ -7,7 +7,7 @@ pub trait Graph {
         Self: 'a;
 
     /// Returns an iterator over the node's neighbors, i.e. those nodes that `self` has edges to.
-    fn neighbors<'a>(&'a self) -> Self::Neighbors<'a>;
+    fn neighbors(&self) -> Self::Neighbors<'_>;
 }
 
 /// A marker trait to indicate that a graph is a tree.

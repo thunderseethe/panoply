@@ -23,6 +23,12 @@ pub struct BaseBuilder<'s> {
     builder: ModuleNamesBuilder<'s>,
 }
 
+impl<'s> Default for BaseBuilder<'s> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'s> BaseBuilder<'s> {
     /// Constructs an empty set of top-level names.
     pub fn new() -> BaseBuilder<'s> {

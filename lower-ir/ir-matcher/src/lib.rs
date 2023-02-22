@@ -112,7 +112,7 @@ impl Parse for IrMatch {
 }
 
 impl IrMatch {
-    fn as_match(
+    fn into_match(
         self,
         id: proc_macro2::TokenStream,
         match_res: proc_macro2::TokenStream,
@@ -141,13 +141,13 @@ impl IrMatch {
             }
             IrMatch::Abs(bindings) => {
                 let tmp = uniq.ident("body");
-                let mut bound = bound.clone();
+                let mut bound = bound;
                 bound.extend(bindings.args.iter().cloned());
                 let mut args = bindings.args.into_iter();
                 let arg = args.next().unwrap();
                 let (tmp, match_res) = args
                     .into_iter()
-                    .rfold((tmp.clone(), bindings.matcher.as_match(quote!(#tmp.kind()), match_res, uniq, bound)),
+                    .rfold((tmp.clone(), bindings.matcher.into_match(quote!(#tmp.kind()), match_res, uniq, bound)),
                     |(tmp, arm), arg| {
                         let id = uniq.ident("body");
                         (id.clone(), quote!(match #id.kind() {
@@ -171,13 +171,14 @@ impl IrMatch {
                 let hd_id = Ident::new(&format!("head{level}"), Span::call_site());
                 let arg_id = Ident::new(&format!("arg{level}"), Span::call_site());
                 let arg_match =
-                    arg.as_match(quote!(#arg_id.kind()), match_res, uniq, bound.clone());
-                let hd_match = head.as_match(quote!(#hd_id.kind()), arg_match, uniq, bound.clone());
+                    arg.into_match(quote!(#arg_id.kind()), match_res, uniq, bound.clone());
+                let hd_match =
+                    head.into_match(quote!(#hd_id.kind()), arg_match, uniq, bound.clone());
                 let (hd, arg, match_res) = spine.into_iter().fold((hd_id, arg_id, hd_match), |(hd, arg, match_), next_arg| {
                     let level = uniq.next();
                     let hd_id = Ident::new(&format!("head{level}"), Span::call_site());
                     let arg_id = Ident::new(&format!("arg{level}"), Span::call_site());
-                    let next_match = next_arg.as_match(quote!(#arg_id.kind()), match_, uniq, bound.clone());
+                    let next_match = next_arg.into_match(quote!(#arg_id.kind()), match_, uniq, bound.clone());
                     (hd_id.clone(), arg_id, quote!(match #hd_id.kind() {
                         IrKind::App(#hd, #arg) => #next_match,
                         ref e => panic!("assertion failed: expected `{}` but found `{:?}`", stringify!(App(head, arg)), e),
@@ -193,7 +194,7 @@ impl IrMatch {
                 let body_match =
                     bindings
                         .matcher
-                        .as_match(quote!(#tmp.kind()), match_res, uniq, bound);
+                        .into_match(quote!(#tmp.kind()), match_res, uniq, bound);
 
                 let mut args = bindings.args.into_iter();
                 let tv = args.next();
@@ -222,7 +223,7 @@ impl IrMatch {
             IrMatch::TyApp(forall, ty) => {
                 let forall_tmp = uniq.ident("forall");
                 let forall_match =
-                    forall.as_match(quote!(#forall_tmp.kind()), match_res, uniq, bound);
+                    forall.into_match(quote!(#forall_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::TyApp(#forall_tmp, #ty) => #forall_match,
@@ -239,7 +240,7 @@ impl IrMatch {
             },
             IrMatch::FieldProj(indx, ir) => {
                 let ir_tmp = uniq.ident("ir");
-                let ir_match = ir.as_match(quote!(#ir_tmp.kind()), match_res, uniq, bound);
+                let ir_match = ir.into_match(quote!(#ir_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::FieldProj(#indx, #ir_tmp) => #ir_match,
@@ -249,7 +250,7 @@ impl IrMatch {
             }
             IrMatch::Tag(tag, ir) => {
                 let ir_tmp = uniq.ident("ir");
-                let ir_match = ir.as_match(quote!(#ir_tmp.kind()), match_res, uniq, bound);
+                let ir_match = ir.into_match(quote!(#ir_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::Tag(#tag, #ir_tmp) => #ir_match,
@@ -259,7 +260,8 @@ impl IrMatch {
             }
             IrMatch::Case(discr, cases) => {
                 let discr_tmp = uniq.ident("discr");
-                let discr_match = discr.as_match(quote!(#discr_tmp.kind()), match_res, uniq, bound);
+                let discr_match =
+                    discr.into_match(quote!(#discr_tmp.kind()), match_res, uniq, bound);
                 quote! {
                     match #id {
                         IrKind::Case(#discr_tmp, #cases) => #discr_match,
@@ -300,7 +302,7 @@ pub fn ir_matcher(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let id = ir_match.actual;
     let mut uniq = Uniq::default();
     let bound = HashSet::default();
-    let t = ir_match.pattern.as_match(
+    let t = ir_match.pattern.into_match(
         quote!(&#id.kind),
         ir_match.body.to_token_stream(),
         &mut uniq,

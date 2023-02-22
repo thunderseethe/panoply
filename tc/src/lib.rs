@@ -1407,8 +1407,8 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                     };
                     let is_unifiable = |cand: &ClosedGoal<'infer, TcUnifierVar<'infer>>| {
                         // If any two components are equal we should unify
-                        (cand.goal.fields == goal_row.fields && cand.min == min_var)
-                            || (cand.goal.fields == goal_row.fields && cand.max == max_var)
+                        (cand.goal.fields == goal_row.fields
+                            && (cand.min == min_var || cand.max == max_var))
                             || (cand.min == min_var && cand.max == max_var)
                     };
                     self.state
@@ -1487,7 +1487,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
              sig: ClosedRow<'infer, TcUnifierVar<'infer>>| {
                 let sig_unify = members_sig
                     .into_iter()
-                    .zip(sig.fields.into_iter().zip(sig.values.into_iter()));
+                    .zip(sig.fields.iter().zip(sig.values.iter()));
                 for ((member_name, scheme), (field_name, ty)) in sig_unify {
                     // Sanity check that our handler fields and effect members line up the way we
                     // expect them to.

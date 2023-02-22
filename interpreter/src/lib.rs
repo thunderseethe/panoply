@@ -111,10 +111,7 @@ impl<'ctx> StackExt for Stack<'ctx> {
                 StackFrame::Prompt(p) => p == &prompt,
                 StackFrame::Eval(_, _) => false,
             })
-            .expect(&format!(
-                "Stuck: could not find prompt {:?} in stack",
-                prompt
-            ));
+            .unwrap_or_else(|| panic!("Stuck: could not find prompt {:?} in stack", prompt));
         self.split_off(idx)
     }
 }
@@ -231,8 +228,8 @@ impl<'ctx> Machine<'ctx> {
     }
 
     fn new_stack_frame(&mut self) {
-        let env = std::mem::replace(&mut self.cur_env, FxHashMap::default());
-        let frame = std::mem::replace(&mut self.cur_frame, vec![]);
+        let env = std::mem::take(&mut self.cur_env);
+        let frame = std::mem::take(&mut self.cur_frame);
 
         match self.stack.last_mut() {
             Some(StackFrame::Eval(ref mut last_env, ref mut last_frame)) => {
@@ -255,7 +252,7 @@ impl<'ctx> Machine<'ctx> {
                     StackFrame::Eval(env, _) => env.get(&v.var),
                 })
             })
-            .expect(&format!("Stuck: Undefined variable {:?}", v))
+            .unwrap_or_else(|| panic!("Stuck: Undefined variable {:?}", v))
             // Todo remove this clone.
             .clone()
     }
@@ -329,10 +326,12 @@ impl<'ctx> Machine<'ctx> {
             }
             IrKind::VectorGet(evv, index) => {
                 let vec = self.lookup_var(evv).unwrap_vector();
-                let val = vec.get(index).expect(&format!(
-                    "Stuck: expected index {} to exist in vector but it did not",
-                    index
-                ));
+                let val = vec.get(index).unwrap_or_else(|| {
+                    panic!(
+                        "Stuck: expected index {} to exist in vector but it did not",
+                        index
+                    )
+                });
                 // Remove this clone
                 self.unwind(val.clone())
             }

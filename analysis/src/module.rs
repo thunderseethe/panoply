@@ -44,7 +44,7 @@ struct Matches {
 }
 
 impl Matches {
-    fn iter<'a>(&'a self) -> impl 'a + Iterator<Item = ModuleName> {
+    fn iter(&self) -> impl '_ + Iterator<Item = ModuleName> {
         self.effect
             .into_iter()
             .map(ModuleName::Effect)
@@ -174,7 +174,7 @@ impl<'s> ModuleNames<'s> {
     }
 
     /// Iterates over all IDs in the order that they were generated.
-    pub fn iter<'a>(&'a self) -> Iter<'a, ModuleName> {
+    pub fn iter(&self) -> Iter<'_, ModuleName> {
         self.id_order.iter()
     }
 }

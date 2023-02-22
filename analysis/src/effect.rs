@@ -57,9 +57,9 @@ impl<'s> EffectNames<'s> {
     }
 
     /// All effect operations, in definition order.
-    pub fn iter<'a>(
-        &'a self,
-    ) -> impl 'a + Iterator<Item = EffectOpId> + DoubleEndedIterator + ExactSizeIterator + FusedIterator
+    pub fn iter(
+        &self,
+    ) -> impl '_ + Iterator<Item = EffectOpId> + DoubleEndedIterator + ExactSizeIterator + FusedIterator
     {
         self.ops.iter_enumerate().map(|(id, _)| id)
     }

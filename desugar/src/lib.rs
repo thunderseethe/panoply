@@ -205,13 +205,14 @@ fn cc<'p, 's: 't, 't>(
     if matrix.is_empty() {
         Err(PatternMatchError::NonExhaustivePatterns)
     // Row is all wild cards
-    } else if matrix.first().iter().all(|pat| match pat {
-        Pattern::Whole(_) => true,
-        _ => false,
-    }) {
+    } else if matrix
+        .first()
+        .iter()
+        .all(|pat| matches!(pat, Pattern::Whole(_)))
+    {
         Ok(matrix
             .first()
-            .into_iter()
+            .iter()
             .rfold(matrix.arms[0], |body, pat| match pat {
                 Pattern::Whole(var) => arena.alloc(Abstraction {
                     arg: var.value,
@@ -229,12 +230,12 @@ fn cc<'p, 's: 't, 't>(
                 let binders = (0..lbls.len())
                     .map(|_| vars.push(handle::Handle("")))
                     .collect::<Vec<_>>();
-                let mut occs = binders.clone();
+                let mut occs = binders;
                 // replace first occurence by binder introduced here
-                occs.extend(occurences.into_iter().skip(1).map(|var| *var));
+                occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                 Ok(arena.alloc(Abstraction {
                     arg: top_level,
-                    body: lbls.into_iter().cloned().fold(
+                    body: lbls.iter().cloned().fold(
                         cc(arena, vars, occs.as_mut_slice(), matrix.specialize(&c))?,
                         |body, lbl| {
                             let destructure = arena.alloc(Unlabel {
@@ -255,7 +256,7 @@ fn cc<'p, 's: 't, 't>(
             Constructor::SumRow(lbl) => {
                 let binder = vars.push(handle::Handle(""));
                 let mut occs = vec![binder];
-                occs.extend(occurences.into_iter().skip(1).map(|var| *var));
+                occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                 Ok(arena.alloc(Abstraction {
                     arg: binder,
                     body: arena.alloc(Application {
@@ -319,7 +320,7 @@ impl<'s> Constructor<'s> {
                 .iter()
                 .flat_map(|fields| fields.elements())
                 .zip(lbls)
-                .map(|(row, lbl)| row.label.value.eq(lbl).then(|| row.target.clone()))
+                .map(|(row, lbl)| row.label.value.eq(lbl).then_some(*row.target))
                 .collect::<Option<Vec<_>>>(),
             (Constructor::SumRow(lbl), Pattern::SumRow(row)) if row.field.label.value.eq(lbl) => {
                 Some(vec![*row.field.target])

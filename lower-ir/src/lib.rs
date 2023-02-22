@@ -1177,7 +1177,7 @@ mod tests {
     use bumpalo::Bump;
     use ir_matcher::ir_matcher;
 
-    const MODNAME: &'static str = "test_module";
+    const MODNAME: &str = "test_module";
 
     /// Compile an input string up to (but not including) the lower stage.
     fn compile_upto_lower<'ctx, S>(

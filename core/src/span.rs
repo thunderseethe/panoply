@@ -128,7 +128,7 @@ pub struct SpanOf<T> {
 
 impl<T> SpanOf<T> {
     /// Converts a `Span<T>` into a `Span<&T>`.
-    pub fn as_ref<'a>(&'a self) -> SpanOf<&'a T> {
+    pub fn as_ref(&self) -> SpanOf<&T> {
         self.span().of(&self.value)
     }
 

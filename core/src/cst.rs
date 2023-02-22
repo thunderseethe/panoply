@@ -17,7 +17,7 @@ pub struct Separated<'a, T> {
 
 impl<'a, T> Separated<'a, T> {
     /// An iterator over the non-separator elements.
-    pub fn elements<'b>(&'b self) -> Elements<'b, T> {
+    pub fn elements(&self) -> Elements<'_, T> {
         self.into_iter()
     }
 }
@@ -41,7 +41,7 @@ impl<'a, T: Spanned> Spanned for Separated<'a, T> {
             start: self.first.start(),
             end: self
                 .comma
-                .or(self.elems.last().map(|e| e.0))
+                .or_else(|| self.elems.last().map(|e| e.0))
                 .unwrap_or_else(|| self.first.span())
                 .end(),
         }

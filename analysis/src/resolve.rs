@@ -28,7 +28,7 @@ const TERM_KINDS: NameKinds = NameKinds::EFFECT_OP
     .union(NameKinds::VAR);
 
 // Allocates the items in `iter` on the given arena, but only if they are all `Some(..)`.
-fn alloc_all<'a, T, I>(arena: &'a Bump, iter: I) -> Option<&'a [T]>
+fn alloc_all<T, I>(arena: &Bump, iter: I) -> Option<&[T]>
 where
     I: Iterator<Item = Option<T>>,
 {
@@ -1016,7 +1016,7 @@ mod tests {
 
     use super::{resolve_module, resolve_term, ModuleResolution};
 
-    const MODNAME: &'static str = "test_module";
+    const MODNAME: &str = "test_module";
 
     fn parse_resolve_term<'a: 's, 's, S>(
         arena: &'a Bump,

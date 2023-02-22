@@ -28,6 +28,12 @@ pub struct ModuleTree<'s> {
     modules: IdGen<ModuleId, ModuleData<'s>>,
 }
 
+impl<'s> Default for ModuleTree<'s> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'s> ModuleTree<'s> {
     /// Constructs an empty module tree.
     pub fn new() -> ModuleTree<'s> {

@@ -104,7 +104,7 @@ where
 }
 
 /// Returns a lexer for the Aiahr language that uses the given interner.
-pub fn aiahr_lexer<'s, S>(interner: &'s S) -> Lexer<'s, S> {
+pub fn aiahr_lexer<S>(interner: &S) -> Lexer<'_, S> {
     // TODO: Do something with comments, or at least doc comments.
     Lexer::new(
         vec![
