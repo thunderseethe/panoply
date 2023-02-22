@@ -865,22 +865,36 @@ where
                     [Ir::new(VectorGet(self.evv_var, eff_index))],
                 )
             }
-            Handle { eff, handler, body } => {
+            Handle { handler, body } => {
                 let prompt_var = IrVar {
                     var: self.var_conv.generate(),
                     ty: self.ctx.mk_ir_ty(IntTy),
                 };
-                let eff_index = self.db.effect_vector_index(*eff);
+                let handler_infer = self.db.lookup_term(handler);
+                let eff_name = match handler_infer.eff {
+                    Row::Closed(eff_row) => {
+                        debug_assert!(eff_row.len() == 1);
+                        eff_row.fields[0]
+                    }
+                    Row::Open(_) => {
+                        unreachable!("Handler effect expect to be closed row, found row variable")
+                    }
+                };
+                let eff = self
+                    .db
+                    .lookup_effect_by_name(&eff_name)
+                    .expect("Invalid effect name should've been caught in type checking");
+                let eff_index = self.db.effect_vector_index(eff);
                 let handler_var = IrVar {
                     var: self.var_conv.generate(),
-                    ty: self.db.effect_handler_ir_ty(*eff),
+                    ty: self.lower_ty(handler_infer.ty),
                 };
                 let handler_ir = self.lower_term(handler);
 
                 let ret_ty = self.lower_ty(self.db.lookup_term(term).ty);
 
                 let body_ty = self.lower_ty(self.db.lookup_term(body).ty);
-                let ret_index = self.db.effect_handler_return_index(*eff);
+                let ret_index = self.db.effect_handler_return_index(eff);
                 let updated_evv = Ir::new(VectorSet(
                     self.evv_var,
                     eff_index,
@@ -926,6 +940,9 @@ where
 /// However this is all calculatable off of the effect definition
 pub trait IrEffectInfo<'ctx> {
     fn lookup_effect_by_member(&self, op_id: EffectOpId) -> EffectId;
+
+    fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId>;
+
     fn effect_handler_return_index(&self, eff_id: EffectId) -> usize;
     fn effect_member_op_index(&self, eff_id: EffectId, op_id: EffectOpId) -> usize;
     fn effect_vector_index(&self, eff_id: EffectId) -> usize;
@@ -1052,6 +1069,17 @@ pub mod test_utils {
         ) -> RefHandle<'static, str> {
             self.eff_info.effect_member_name(eff, member)
         }
+
+        fn lookup_effect_by_member_names<'a>(
+            &self,
+            members: &[RefHandle<'a, str>],
+        ) -> Option<EffectId> {
+            self.eff_info.lookup_effect_by_member_names(members)
+        }
+
+        fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId> {
+            self.eff_info.lookup_effect_by_name(name)
+        }
     }
 
     impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'ctx> {
@@ -1059,18 +1087,18 @@ pub mod test_utils {
             DummyEff.lookup_effect_by_member(op_id)
         }
 
-        fn effect_member_op_index(&self, _eff_id: EffectId, op_id: EffectOpId) -> usize {
-            match op_id {
-                DummyEff::GET_ID | DummyEff::ASK_ID => 0,
-                DummyEff::PUT_ID => 1,
-                _ => unimplemented!(),
-            }
-        }
-
         fn effect_handler_return_index(&self, eff_id: EffectId) -> usize {
             match eff_id {
                 DummyEff::STATE_ID => 2,
                 DummyEff::READER_ID => 1,
+                _ => unimplemented!(),
+            }
+        }
+
+        fn effect_member_op_index(&self, _eff_id: EffectId, op_id: EffectOpId) -> usize {
+            match op_id {
+                DummyEff::GET_ID | DummyEff::ASK_ID => 0,
+                DummyEff::PUT_ID => 1,
                 _ => unimplemented!(),
             }
         }
@@ -1126,6 +1154,10 @@ pub mod test_utils {
                 DummyEff::READER_ID => READER_HANDLER_TY,
                 _ => unimplemented!(),
             }
+        }
+
+        fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId> {
+            DummyEff.lookup_effect_by_name(name)
         }
     }
 }

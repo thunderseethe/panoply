@@ -142,7 +142,11 @@ impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
             .fields
             .iter()
             .zip(self.values.iter())
-            .filter(|(field, _)| sub.fields.binary_search(field).is_err());
+            .filter(|(field, _)| {
+                sub.fields
+                    .binary_search_by(|lbl| str::cmp(lbl, field))
+                    .is_err()
+            });
 
         let (mut fields, mut values) = (Vec::new(), Vec::new());
         for (field, value) in out_row {

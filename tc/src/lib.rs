@@ -41,6 +41,12 @@ pub enum TypeCheckError<'ctx> {
         ClosedRow<'ctx, TcUnifierVar<'ctx>>,
     ),
     RowsNotEqual(InferRow<'ctx>, InferRow<'ctx>),
+    UndefinedEffectSignature(ClosedRow<'ctx, TcUnifierVar<'ctx>>),
+    UndefinedEffect(RefHandle<'ctx, str>),
+    UnsolvedHandle {
+        handler: TcUnifierVar<'ctx>,
+        eff: TcUnifierVar<'ctx>,
+    },
 }
 
 impl<'ty> From<Infallible> for TypeCheckError<'ty> {
@@ -132,6 +138,16 @@ struct RowCombination<'infer> {
     goal: InferRow<'infer>,
 }
 
+/// Constraints that the type of a product `handler` that handles effect `eff`
+struct HandlesConstraint<'infer> {
+    /// Product type that should be a handler
+    handler: InferRow<'infer>,
+    /// Effect that is handled by `handler`
+    eff: InferRow<'infer>,
+    /// The return type of the `handle` construct
+    ret: InferTy<'infer>,
+}
+
 /// List of constraints produced during initial type checking.
 /// These will be solved in the second half of type checking to produce a map from Unifier variables
 /// to their types.
@@ -141,6 +157,7 @@ pub struct Constraints<'infer> {
     tys: Vec<(InferTy<'infer>, InferTy<'infer>)>,
     /// Sets of row combinations predicates that must hold
     rows: Vec<RowCombination<'infer>>,
+    handles: Vec<HandlesConstraint<'infer>>,
 }
 
 impl<'infer> Constraints<'infer> {
@@ -155,6 +172,15 @@ impl<'infer> Constraints<'infer> {
         goal: InferRow<'infer>,
     ) {
         self.rows.push(RowCombination { left, right, goal })
+    }
+
+    fn add_handles(
+        &mut self,
+        handler: InferRow<'infer>,
+        eff: InferRow<'infer>,
+        ret: InferTy<'infer>,
+    ) {
+        self.handles.push(HandlesConstraint { handler, eff, ret })
     }
 }
 
@@ -816,49 +842,46 @@ where
                     )),
                 )
             }
-            Term::Handle { eff, handler, body } => {
+            Term::Handle { handler, body } => {
                 let ret_ty = self.fresh_var();
 
-                let mut row = eff_info
-                    .effect_members(*eff)
-                    .iter()
-                    .map(|mem| {
-                        let sig = self.instantiate(eff_info.effect_member_sig(*eff, *mem));
-                        let name = eff_info.effect_member_name(*eff, *mem);
+                let TyChkRes {
+                    ty: body_ty,
+                    eff: body_eff,
+                } = self._infer(eff_info, body);
 
-                        let (op_arg, op_ret) = sig.ty.try_as_fn_ty().unwrap_or_else(|ty| {
-                            let (arg, ret) = (self.fresh_var(), self.fresh_var());
-                            self.constraints.add_ty_eq(ty, self.mk_ty(FunTy(arg, ret)));
-                            (arg, ret)
-                        });
+                // Ensure there is a return clause in the handler
+                let ret_row = self.mk_row(
+                    &[self.mk_label("return")],
+                    &[self.mk_ty(FunTy(body_ty, ret_ty))],
+                );
+                let eff_sig_row = self.fresh_row();
+                let handler_row = self.fresh_row();
 
-                        let handler_member_type = self.mk_ty(FunTy(
-                            op_arg,
-                            self.mk_ty(FunTy(self.mk_ty(FunTy(op_ret, ret_ty)), ret_ty)),
-                        ));
-                        (self.mk_label(&name), handler_member_type)
-                    })
-                    .collect::<Vec<_>>();
+                // Our handler should be an effect signature plus a return clause
+                self.constraints
+                    .add_row_combine(Row::Closed(ret_row), eff_sig_row, handler_row);
 
-                let body_ty = self.fresh_var();
-
-                // Append the return to our expected handler type as it's not included in effect
-                // definition.
-                row.push((self.mk_label("return"), self.mk_ty(FunTy(body_ty, ret_ty))));
-
-                let eff_handler = self.mk_ty(RowTy(self.construct_row(row)));
+                let handler_eff = self.fresh_row();
                 self._check(
                     eff_info,
                     handler,
-                    InferResult::new(eff_handler, Row::Closed(self.empty_row())),
+                    InferResult::new(self.mk_ty(ProdTy(handler_row)), handler_eff),
                 );
 
-                let body_eff = self.fresh_row();
-                let out_eff = self.fresh_row();
-                self._check(eff_info, body, InferResult::new(body_ty, body_eff));
+                let handled_eff = self.fresh_row();
+                // Mark handler with the effect that it handles
+                self.state.term_tys.insert(
+                    handler,
+                    InferResult::new(self.mk_ty(ProdTy(handler_row)), handled_eff),
+                );
 
-                let handled_eff =
-                    Row::Closed(self.single_row(&eff_info.effect_name(*eff), self.empty_row_ty()));
+                let out_eff = self.fresh_row();
+
+                // We just want to match the signature against our effects, we don't need to
+                // include the return clause.
+                self.constraints
+                    .add_handles(eff_sig_row, handled_eff, ret_ty);
 
                 // Handle removes an effect so our out_eff should be whatever body_eff was minus
                 // our handled effect
@@ -956,8 +979,9 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
 
     /// Solve a list of constraints to a mapping from unifiers to types.
     /// If there is no solution to the list of constraints we return a relevant error.
-    pub(crate) fn solve(
+    pub(crate) fn solve<'s, 'eff, E: EffectInfo<'s, 'eff>>(
         mut self,
+        eff_info: &E,
     ) -> (
         InPlaceUnificationTable<TcUnifierVar<'infer>>,
         <Solution as InferState>::Storage<'ctx, 'infer>,
@@ -971,6 +995,11 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
         }
         for RowCombination { left, right, goal } in constraints.rows {
             self.unify_row_combine(left, right, goal)
+                .map_err(|err| self.errors.push(err))
+                .unwrap_or_default();
+        }
+        for HandlesConstraint { handler, eff, ret } in constraints.handles {
+            self.lookup_effect_and_unify(eff_info, handler, eff, ret)
                 .map_err(|err| self.errors.push(err))
                 .unwrap_or_default();
         }
@@ -1035,37 +1064,44 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
     ) -> Result<(), TypeCheckError<'infer>> {
         // We want any unifications we do as a byproduct of this to see the updated state so we
         // save them here until we've finished our intial removals from state
-        let mut unifications = vec![];
+        println!("dispatch solved: {:?} {:?}", var, row);
+        let mut combos = vec![];
         self.state = self
             .state
             .iter()
             .filter_map(|eq| match eq {
                 UnsolvedRowEquation::ClosedGoal(cand) if cand.min == var => {
-                    let (right_fields, right_values) = cand.goal.difference(row);
-                    let right = self.mk_row(&right_fields, &right_values);
-                    unifications.push((cand.max, self.mk_ty(RowTy(right))));
+                    combos.push(RowCombination {
+                        left: Row::Closed(row),
+                        right: Row::Open(cand.max),
+                        goal: Row::Closed(cand.goal),
+                    });
                     None
                 }
                 UnsolvedRowEquation::ClosedGoal(cand) if cand.max == var => {
-                    let (left_fields, left_values) = cand.goal.difference(row);
-                    let left = self.mk_row(&left_fields, &left_values);
-                    unifications.push((cand.min, self.mk_ty(RowTy(left))));
+                    combos.push(RowCombination {
+                        left: Row::Closed(row),
+                        right: Row::Open(cand.min),
+                        goal: Row::Closed(cand.goal),
+                    });
                     None
                 }
                 UnsolvedRowEquation::OpenGoal(cand) if cand.goal == var => {
                     match cand.orxr {
                         OrderedRowXorRow::OpenOpen { min, max } => {
-                            Some(Ok(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
+                            Some(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
                                 goal: row,
                                 min,
                                 max,
-                            })))
+                            }))
                         }
                         // We can solve for open
                         OrderedRowXorRow::ClosedOpen(closed, open) => {
-                            let (open_fields, open_values) = row.difference(closed);
-                            let open_row = self.mk_row(&open_fields, &open_values);
-                            unifications.push((open, self.mk_ty(RowTy(open_row))));
+                            combos.push(RowCombination {
+                                left: Row::Closed(closed),
+                                right: Row::Open(open),
+                                goal: Row::Closed(row),
+                            });
                             None
                         }
                     }
@@ -1073,34 +1109,35 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 UnsolvedRowEquation::OpenGoal(OpenGoal {
                     goal,
                     orxr: OrderedRowXorRow::ClosedOpen(closed, open),
-                }) if *open == var => row
-                    .disjoint_union(*closed)
-                    .map(|(goal_fields, goal_values)| {
-                        let goal_row = self.mk_row(&goal_fields, &goal_values);
-                        unifications.push((*goal, self.mk_ty(RowTy(goal_row))));
-                    })
-                    .err()
-                    .map(Err),
+                }) if *open == var => {
+                    combos.push(RowCombination {
+                        left: Row::Closed(*closed),
+                        right: Row::Closed(row),
+                        goal: Row::Open(*goal),
+                    });
+                    None
+                }
                 UnsolvedRowEquation::OpenGoal(OpenGoal {
                     goal,
                     orxr: OrderedRowXorRow::OpenOpen { min, max },
-                }) if *min == var => Some(Ok(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                }) if *min == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
                     goal: *goal,
                     orxr: OrderedRowXorRow::ClosedOpen(row, *max),
-                }))),
+                })),
                 UnsolvedRowEquation::OpenGoal(OpenGoal {
                     goal,
                     orxr: OrderedRowXorRow::OpenOpen { min, max },
-                }) if *max == var => Some(Ok(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                }) if *max == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
                     goal: *goal,
                     orxr: OrderedRowXorRow::ClosedOpen(row, *min),
-                }))),
-                eq => Some(Ok(*eq)),
+                })),
+                eq => Some(*eq),
             })
-            .collect::<Result<BTreeSet<_>, _>>()?;
+            .collect::<BTreeSet<_>>();
+
         // Now we can perform our unifications against our new state
-        for (var, row_ty) in unifications {
-            self.unify_var_ty(var, row_ty)?;
+        for RowCombination { left, right, goal } in combos {
+            self.unify_row_combine(left, right, goal)?;
         }
         Ok(())
     }
@@ -1235,6 +1272,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
         let left = self.normalize_row(left);
         let right = self.normalize_row(right);
 
+        //println!("Row Combine\n\t{:?}\n\t{:?}\n\t{:?}", left, right, goal);
         match goal {
             Row::Open(goal_var) => match (left, right) {
                 // With only one open variable we can solve
@@ -1300,36 +1338,39 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                         }));
                         Ok(())
                     }),
-                (Row::Open(left_var), Row::Open(right_var)) => self
-                    .state
-                    .iter()
-                    .find_map(|eq| match eq {
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            orxr: OrderedRowXorRow::OpenOpen { min, max },
-                        }) if *goal == goal_var && (*min == left_var || *max == right_var) => {
-                            Some((min, max))
-                        }
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            orxr: OrderedRowXorRow::OpenOpen { min, max },
-                        }) if *goal == goal_var && (*min == right_var || *max == left_var) => {
-                            Some((max, min))
-                        }
-                        _ => None,
-                    })
-                    .map(|(left, right)| {
-                        self.unifiers.unify_var_var(*left, left_var)?;
-                        self.unifiers.unify_var_var(*right, right_var)?;
-                        Ok(())
-                    })
-                    .unwrap_or_else(|| {
-                        self.state.insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal: goal_var,
-                            orxr: OrderedRowXorRow::with_open_open(left_var, right_var),
-                        }));
-                        Ok(())
-                    }),
+                (Row::Open(left_var), Row::Open(right_var)) => {
+                    let (min_var, max_var) = if left_var <= right_var {
+                        (left_var, right_var)
+                    } else {
+                        (right_var, left_var)
+                    };
+                    self.state
+                        .iter()
+                        .find_map(|eq| match eq {
+                            UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                goal,
+                                orxr: OrderedRowXorRow::OpenOpen { min, max },
+                            }) if (*goal == goal_var && (*min == min_var || *max == right_var))
+                                || (*min == min_var && *max == max_var) =>
+                            {
+                                Some((min, max, goal))
+                            }
+                            _ => None,
+                        })
+                        .map(|(left, right, goal)| {
+                            self.unifiers.unify_var_var(*left, left_var)?;
+                            self.unifiers.unify_var_var(*right, right_var)?;
+                            self.unifiers.unify_var_var(*goal, goal_var)?;
+                            Ok(())
+                        })
+                        .unwrap_or_else(|| {
+                            self.state.insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                goal: goal_var,
+                                orxr: OrderedRowXorRow::with_open_open(left_var, right_var),
+                            }));
+                            Ok(())
+                        })
+                }
             },
             Row::Closed(goal_row) => match (left, right) {
                 // Our rows are all closed, we just need to check they are equal and discharge them
@@ -1341,52 +1382,256 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 // With one open row we solve that row
                 (Row::Open(left_var), Row::Closed(right_row)) => {
                     let (fields, values) = goal_row.difference(right_row);
-                    let row = self.mk_ty(RowTy(self.mk_row(&fields, &values)));
-                    self.unify_var_ty(left_var, row)
+                    let row = self.mk_row(&fields, &values);
+                    let (fields, values) = goal_row.difference(row);
+                    let right_goal_row = self.mk_row(&fields, &values);
+                    self.unify_closedrow_closedrow(right_row, right_goal_row)?;
+                    self.unify_var_ty(left_var, self.mk_ty(RowTy(row)))
                 }
                 (Row::Closed(left_row), Row::Open(right_var)) => {
                     let (fields, values) = goal_row.difference(left_row);
-                    let row = self.mk_ty(RowTy(self.mk_row(&fields, &values)));
-                    self.unify_var_ty(right_var, row)
+                    let row = self.mk_row(&fields, &values);
+                    let (fields, values) = goal_row.difference(row);
+                    let left_goal_row = self.mk_row(&fields, &values);
+                    self.unify_closedrow_closedrow(left_row, left_goal_row)
+                        .unwrap();
+                    self.unify_var_ty(right_var, self.mk_ty(RowTy(row)))
                 }
                 // We can't unify this case as is, we need more information.
                 // And our goal is closed so we can't set it to pending
-                (Row::Open(left_var), Row::Open(right_var)) => self
-                    .state
-                    .iter()
-                    .find_map(|eq| match eq {
-                        UnsolvedRowEquation::ClosedGoal(cand)
-                            if cand.goal.fields == goal_row.fields && cand.min == left_var =>
-                        {
-                            Some(*cand)
-                        }
-                        UnsolvedRowEquation::ClosedGoal(cand)
-                            if cand.goal.fields == goal_row.fields && cand.max == right_var =>
-                        {
-                            Some(*cand)
-                        }
-                        UnsolvedRowEquation::ClosedGoal(cand)
-                            if cand.min == left_var && cand.max == right_var =>
-                        {
-                            Some(*cand)
-                        }
-                        _ => None,
-                    })
-                    .map(|cand| {
-                        self.unifiers.unify_var_var(left_var, cand.min)?;
-                        self.unifiers.unify_var_var(right_var, cand.max)?;
-                        self.unify_closedrow_closedrow(goal_row, cand.goal)
-                    })
-                    .unwrap_or_else(|| {
-                        self.state
-                            .insert(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
-                                goal: goal_row,
-                                min: left_var,
-                                max: right_var,
-                            }));
-                        Ok(())
-                    }),
+                (Row::Open(left_var), Row::Open(right_var)) => {
+                    let (min_var, max_var) = if left_var <= right_var {
+                        (left_var, right_var)
+                    } else {
+                        (right_var, left_var)
+                    };
+                    let is_unifiable = |cand: &ClosedGoal<'infer, TcUnifierVar<'infer>>| {
+                        // If any two components are equal we should unify
+                        (cand.goal.fields == goal_row.fields && cand.min == min_var)
+                            || (cand.goal.fields == goal_row.fields && cand.max == max_var)
+                            || (cand.min == min_var && cand.max == max_var)
+                    };
+                    self.state
+                        .iter()
+                        .find_map(|eq| match eq {
+                            UnsolvedRowEquation::ClosedGoal(cand) if is_unifiable(cand) => {
+                                Some((cand.min, cand.max, Row::Closed(cand.goal)))
+                            }
+                            UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                goal,
+                                orxr: OrderedRowXorRow::OpenOpen { min, max },
+                            }) if min_var.eq(min) && max_var.eq(max) => {
+                                Some((*min, *max, Row::Open(*goal)))
+                            }
+                            _ => None,
+                        })
+                        .map(|(min, max, goal)| {
+                            self.unifiers.unify_var_var(min_var, min)?;
+                            self.unifiers.unify_var_var(max_var, max)?;
+                            match goal {
+                                Row::Open(var) => {
+                                    self.unify_var_ty(var, self.mk_ty(RowTy(goal_row)))
+                                }
+                                Row::Closed(row) => self.unify_closedrow_closedrow(row, goal_row),
+                            }
+                        })
+                        .unwrap_or_else(|| {
+                            self.state
+                                .insert(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
+                                    goal: goal_row,
+                                    min: left_var,
+                                    max: right_var,
+                                }));
+                            Ok(())
+                        })
+                }
             },
+        }
+    }
+
+    fn lookup_effect_and_unify<'s, 'eff, E: EffectInfo<'s, 'eff>>(
+        &mut self,
+        eff_info: &E,
+        handler: InferRow<'infer>,
+        eff: InferRow<'infer>,
+        ret: InferTy<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let normal_handler = self.normalize_row(handler);
+        let normal_eff = self.normalize_row(eff);
+        let normal_ret = self.normalize_ty(ret);
+
+        println!(
+            "Lookup effect:\n\tHandler: {:?}\n\tEffect: {:?}\n\tRet: {:?}",
+            normal_handler, normal_eff, normal_ret
+        );
+        let transform_to_cps_handler_ty = |ctx: &mut Self, ty: InferTy<'infer>| {
+            // Transform our ty into the type a handler should have
+            // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+            match *ty {
+                FunTy(a, b) => {
+                    let kont_ty = ctx.mk_ty(FunTy(b, normal_ret));
+                    Ok(ctx.mk_ty(FunTy(a, ctx.mk_ty(FunTy(kont_ty, normal_ret)))))
+                }
+                _ => {
+                    // TODO: report a better error here.
+                    // We should specialize the error so it's clear it was an
+                    // effect signature with an invalid type that caused it
+                    Err((ty, ctx.mk_ty(FunTy(ctx.mk_ty(ErrorTy), ctx.mk_ty(ErrorTy)))))
+                }
+            }
+        };
+
+        let unify_sig_handler =
+            |ctx: &mut Self,
+             members_sig: Vec<(RefHandle<'_, str>, TyScheme<'eff, TyVarId>)>,
+             sig: ClosedRow<'infer, TcUnifierVar<'infer>>| {
+                let sig_unify = members_sig
+                    .into_iter()
+                    .zip(sig.fields.into_iter().zip(sig.values.into_iter()));
+                for ((member_name, scheme), (field_name, ty)) in sig_unify {
+                    // Sanity check that our handler fields and effect members line up the way we
+                    // expect them to.
+                    let field_str: &str = field_name.as_ref();
+                    debug_assert!(str::eq(&member_name, field_str));
+
+                    let mut inst = Instantiate {
+                        ctx: ctx.ctx,
+                        unifiers: scheme
+                            .bound
+                            .into_iter()
+                            .map(|_| ctx.unifiers.new_key(None))
+                            .collect(),
+                    };
+
+                    // Transform our scheme ty into the type a handler should have
+                    // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+                    let member_ty = transform_to_cps_handler_ty(
+                        ctx,
+                        scheme.ty.try_fold_with(&mut inst).unwrap(),
+                    )?;
+
+                    // Unify our instantiated and transformed member type agaisnt the handler field
+                    // type.
+                    println!("unify_ty_ty\n\t{:?}\n\t{:?}", member_ty, ty);
+                    ctx.unify_ty_ty(member_ty, *ty)?;
+
+                    // We want to check constrs after we unify our scheme type so that we've alread
+                    // unified as many fresh variables into handler field variables as possible.
+                    for constrs in scheme.constrs {
+                        match constrs.try_fold_with(&mut inst).unwrap() {
+                            Evidence::Row { left, right, goal } => {
+                                ctx.unify_row_combine(left, right, goal)?
+                            }
+                        }
+                    }
+                    // TODO: We should check scheme.eff here as well, at least to confirm they are
+                    // all the same
+                }
+                Ok(())
+            };
+
+        match (normal_handler, normal_eff) {
+            (Row::Closed(handler), Row::Open(eff_var)) => {
+                let eff_id = eff_info
+                    .lookup_effect_by_member_names(&handler.fields)
+                    .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
+                let mut members_sig = eff_info
+                    .effect_members(eff_id)
+                    .iter()
+                    .map(|eff_op_id| {
+                        (
+                            eff_info.effect_member_name(eff_id, *eff_op_id),
+                            eff_info.effect_member_sig(eff_id, *eff_op_id),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                // Sort our members so they are in the same order as sig.fields
+                // TODO: Should we have an invariant that effect_members returns members "in
+                // order"?
+                members_sig.sort_by(|(a, _), (b, _)| str::cmp(a, b));
+
+                println!("Effect Id: {:?}", eff_id);
+
+                unify_sig_handler(self, members_sig, handler)?;
+
+                // We succesfully unified the handler against it's expected signature.
+                // That means we can unify our eff_var against our effect
+                let eff_name = eff_info.effect_name(eff_id);
+                let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
+                let eff_row = self.mk_row(&[self.mk_label(&eff_name)], &[unit_ty]);
+                self.unify_var_ty(eff_var, self.mk_ty(RowTy(eff_row)))
+            }
+            (Row::Closed(handler), Row::Closed(eff)) => {
+                debug_assert!(eff.len() == 1);
+                let eff_id = eff_info
+                    .lookup_effect_by_name(&eff.fields[0])
+                    .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
+                let mut members_sig = eff_info
+                    .effect_members(eff_id)
+                    .iter()
+                    .map(|eff_op_id| {
+                        (
+                            eff_info.effect_member_name(eff_id, *eff_op_id),
+                            eff_info.effect_member_sig(eff_id, *eff_op_id),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+
+                // Sort our members so they are in the same order as sig.fields
+                // TODO: Should we have an invariant that effect_members returns members "in
+                // order"?
+                members_sig.sort_by(|(a, _), (b, _)| str::cmp(a, b));
+
+                unify_sig_handler(self, members_sig, handler)
+            }
+            (Row::Open(handler_var), Row::Closed(eff)) => {
+                debug_assert!(eff.len() == 1);
+                let eff_id = eff_info
+                    .lookup_effect_by_name(&eff.fields[0])
+                    .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
+                let members_sig = eff_info
+                    .effect_members(eff_id)
+                    .iter()
+                    .map(|eff_op_id| {
+                        let scheme = eff_info.effect_member_sig(eff_id, *eff_op_id);
+                        let mut inst = Instantiate {
+                            ctx: self.ctx,
+                            unifiers: scheme
+                                .bound
+                                .into_iter()
+                                .map(|_| self.unifiers.new_key(None))
+                                .collect(),
+                        };
+
+                        for constr in scheme.constrs {
+                            match constr.try_fold_with(&mut inst).unwrap() {
+                                Evidence::Row { left, right, goal } => {
+                                    self.unify_row_combine(left, right, goal)?
+                                }
+                            }
+                        }
+
+                        let member_ty = transform_to_cps_handler_ty(
+                            self,
+                            scheme.ty.try_fold_with(&mut inst).unwrap(),
+                        )?;
+
+                        Ok((
+                            self.mk_label(&eff_info.effect_member_name(eff_id, *eff_op_id)),
+                            member_ty,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
+
+                let member_row = self.construct_row(members_sig);
+                self.unify_var_ty(handler_var, self.mk_ty(RowTy(member_row)))
+            }
+            // We didn't learn enough info to solve our handle term, this is an error
+            (Row::Open(handler_var), Row::Open(eff_var)) => Err(TypeCheckError::UnsolvedHandle {
+                handler: handler_var,
+                eff: eff_var,
+            }),
         }
     }
 }
@@ -1503,6 +1748,11 @@ pub trait EffectInfo<'s, 'ctx> {
 
     /// Reverse index lookup, find an effect's ID from one of it's operation
     fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId;
+    /// Look up an effect by the name of it's members, this may fail if an invalid list of member
+    /// names is passed.
+    fn lookup_effect_by_member_names<'a>(&self, members: &[RefHandle<'a, str>])
+        -> Option<EffectId>;
+    fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId>;
     /// Lookup the type signature of an effect's member
     fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId>;
     /// Lookup the name of an effect's member
@@ -1550,15 +1800,19 @@ where
     let (infer, gen_storage, result) = infer.infer(eff_info, term);
 
     // Solve constraints into the unifiers mapping.
-    let (mut unifiers, unsolved_eqs, errors) = infer.solve();
+    let (mut unifiers, unsolved_eqs, errors) = infer.solve(eff_info);
 
+    //print_root_unifiers(&mut unifiers);
     // Zonk the variable -> type mapping and the root term type.
     let mut zonker = Zonker {
         ctx: ty_ctx,
         unifiers: &mut unifiers,
         free_vars: vec![],
     };
+    println!("Infer result: {:?}", result);
     let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
+    println!("Zonked result: {:?}", zonked_infer);
+
     let zonked_var_tys = gen_storage
         .var_tys
         .into_iter()
@@ -1750,12 +2004,7 @@ pub mod test_utils {
         fn mk_project(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_branch(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var>;
         fn mk_inject(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_handler(
-            &'a self,
-            eff: EffectId,
-            handler: Term<'a, Var>,
-            body: Term<'a, Var>,
-        ) -> Term<'a, Var>;
+        fn mk_handler(&'a self, handler: Term<'a, Var>, body: Term<'a, Var>) -> Term<'a, Var>;
 
         fn mk_abss<II>(&'a self, args: II, body: Term<'a, Var>) -> Term<'a, Var>
         where
@@ -1810,14 +2059,8 @@ pub mod test_utils {
             }
         }
 
-        fn mk_handler(
-            &'a self,
-            eff: EffectId,
-            handler: Term<'a, Var>,
-            body: Term<'a, Var>,
-        ) -> Term<'a, Var> {
+        fn mk_handler(&'a self, handler: Term<'a, Var>, body: Term<'a, Var>) -> Term<'a, Var> {
             Term::Handle {
-                eff,
                 handler: self.alloc(handler),
                 body: self.alloc(body),
             }
@@ -1869,6 +2112,27 @@ pub mod test_utils {
                 DummyEff::GET_ID | DummyEff::PUT_ID => DummyEff::STATE_ID,
                 DummyEff::ASK_ID => DummyEff::READER_ID,
                 _ => unimplemented!(),
+            }
+        }
+
+        fn lookup_effect_by_member_names<'a>(
+            &self,
+            members: &[RefHandle<'a, str>],
+        ) -> Option<EffectId> {
+            match members {
+                [Handle("put"), Handle("get")] | [Handle("get"), Handle("put")] => {
+                    Some(DummyEff::STATE_ID)
+                }
+                [Handle("ask")] => Some(DummyEff::READER_ID),
+                _ => None,
+            }
+        }
+
+        fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId> {
+            match name {
+                "State" => Some(DummyEff::STATE_ID),
+                "Reader" => Some(DummyEff::READER_ID),
+                _ => None,
             }
         }
 
@@ -2259,30 +2523,24 @@ mod tests {
         let untyped_ast = Ast::new(
             FxHashMap::default(),
             arena.alloc(arena.mk_handler(
-                EffectId(0),
                 handler,
                 arena.mk_app(
-                    Operation(EffectOpId(1)),
-                    arena.mk_app(Operation(EffectOpId(2)), Unit),
+                    Operation(DummyEff::PUT_ID),
+                    arena.mk_app(Operation(DummyEff::ASK_ID), Unit),
                 ),
             )),
         );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, errors) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
+        assert_eq!(errors, vec![]);
         assert_matches!(
             scheme.eff,
             Row::Closed(row!(["Reader"], [ty!(ty_pat!({}))]))
         );
-        assert_matches!(
-            scheme.ty,
-            ty!(RowTy(ClosedRow {
-                fields: Handle(&[]),
-                values: Handle(&[])
-            }))
-        )
+        assert_matches!(scheme.ty, ty!(RowTy(row!([], []))));
     }
 
     #[test]
