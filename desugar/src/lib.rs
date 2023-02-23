@@ -361,7 +361,7 @@ mod tests {
     use aiahr_core::memory::intern::InternerByRef;
     use aiahr_core::memory::intern::SyncInterner;
     use aiahr_core::{id::VarId, nst};
-    use aiahr_test::{span::*, cst::*};
+    use aiahr_test::{cst::*, span::*};
     use bumpalo::Bump;
 
     #[test]

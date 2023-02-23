@@ -3,7 +3,6 @@ use bumpalo::Bump;
 
 use crate::span::random_span;
 
-
 pub fn random_field<L, T>(label: L, target: T) -> Field<L, T> {
     Field {
         label,

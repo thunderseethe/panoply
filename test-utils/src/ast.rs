@@ -1,12 +1,12 @@
 use aiahr_core::{
-    ast::{Direction, Term, Term::*, Ast},
-    memory::intern::{SyncInterner, InternerByRef},
+    ast::{Ast, Direction, Term, Term::*},
+    memory::intern::{InternerByRef, SyncInterner},
     span::Span,
 };
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
-use std::{hash::Hash, cell::RefCell};
+use std::{cell::RefCell, hash::Hash};
 
 use crate::span::random_span;
 
@@ -65,7 +65,10 @@ impl<'a, Var: Eq + Hash> AstBuilder<'a, Var> {
         (Ast::new(self.spans.into_inner(), root), self.interner)
     }
 
-    pub fn with_builder(arena: &'a Bump, op: impl FnOnce(&Self) -> Term<'a, Var>) -> (Ast<'a, Var>, SyncInterner<'a, str, Bump>) {
+    pub fn with_builder(
+        arena: &'a Bump,
+        op: impl FnOnce(&Self) -> Term<'a, Var>,
+    ) -> (Ast<'a, Var>, SyncInterner<'a, str, Bump>) {
         let builder = Self::new(arena);
         let root = op(&builder);
         builder.build(root)
@@ -73,38 +76,65 @@ impl<'a, Var: Eq + Hash> AstBuilder<'a, Var> {
 }
 impl<'a, Var: Eq + Hash> MkTerm<'a, Var> for AstBuilder<'a, Var> {
     fn mk_abs(&self, arg: Var, body: Term<'a, Var>) -> Term<'a, Var> {
-        Abstraction { arg, body: self.mk_term(body) }
+        Abstraction {
+            arg,
+            body: self.mk_term(body),
+        }
     }
 
     fn mk_app(&self, fun: Term<'a, Var>, arg: Term<'a, Var>) -> Term<'a, Var> {
-        Application { func: self.mk_term(fun), arg: self.mk_term(arg) }
+        Application {
+            func: self.mk_term(fun),
+            arg: self.mk_term(arg),
+        }
     }
 
     fn mk_label(&self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
-        Label { label: self.interner.intern_by_ref(label), term: self.mk_term(term) }
+        Label {
+            label: self.interner.intern_by_ref(label),
+            term: self.mk_term(term),
+        }
     }
 
     fn mk_unlabel(&self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
-        Unlabel { label: self.interner.intern_by_ref(label), term: self.mk_term(term) }
+        Unlabel {
+            label: self.interner.intern_by_ref(label),
+            term: self.mk_term(term),
+        }
     }
 
     fn mk_concat(&self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var> {
-        Concat { left: self.mk_term(left), right: self.mk_term(right) }
+        Concat {
+            left: self.mk_term(left),
+            right: self.mk_term(right),
+        }
     }
 
     fn mk_project(&self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var> {
-        Project { direction, term: self.mk_term(term) }
+        Project {
+            direction,
+            term: self.mk_term(term),
+        }
     }
 
     fn mk_branch(&self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var> {
-        Branch { left: self.mk_term(left), right: self.mk_term(right) }
+        Branch {
+            left: self.mk_term(left),
+            right: self.mk_term(right),
+        }
     }
 
     fn mk_inject(&self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var> {
-        Inject { direction, term: self.mk_term(term) }
+        Inject {
+            direction,
+            term: self.mk_term(term),
+        }
     }
 
     fn mk_handler(&self, handler: Term<'a, Var>, body: Term<'a, Var>) -> Term<'a, Var> {
-        Handle { handler: self.mk_term(handler), body: self.mk_term(body) }
+        Handle {
+            handler: self.mk_term(handler),
+            body: self.mk_term(body),
+        }
     }
 }

@@ -1,4 +1,8 @@
-use aiahr_core::{id::ModuleId, loc::Loc, span::{Span, SpanOf}};
+use aiahr_core::{
+    id::ModuleId,
+    loc::Loc,
+    span::{Span, SpanOf},
+};
 
 pub const MOD: ModuleId = ModuleId(0);
 

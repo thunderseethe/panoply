@@ -1265,8 +1265,7 @@ mod tests {
         let ir_ctx = IrCtx::new(&arena);
         let m = VarId(0);
         let n = VarId(1);
-        let (ast, _) = AstBuilder::with_builder(&arena,
-            |builder|
+        let (ast, _) = AstBuilder::with_builder(&arena, |builder| {
             builder.mk_abss(
                 [m, n],
                 builder.mk_unlabel(
@@ -1276,7 +1275,8 @@ mod tests {
                         builder.mk_concat(Term::Variable(m), Term::Variable(n)),
                     ),
                 ),
-            ));
+            )
+        });
         let (var_tys, term_ress, scheme, _) =
             aiahr_tc::type_check(&ty_ctx, &infer_ctx, &aiahr_tc::test_utils::DummyEff, &ast);
 

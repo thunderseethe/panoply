@@ -2153,10 +2153,12 @@ mod tests {
     fn test_tc_unlabel() {
         let arena = Bump::new();
         let x = VarId(0);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(
-            x,
-            builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
-        ));
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_abs(
+                x,
+                builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
+            )
+        });
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2172,10 +2174,12 @@ mod tests {
     fn test_tc_unlabel_fails_on_wrong_label() {
         let arena = Bump::new();
         let x = VarId(0);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(
-            x,
-            builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
-        ));
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_abs(
+                x,
+                builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
+            )
+        });
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2194,8 +2198,9 @@ mod tests {
     fn test_tc_label() {
         let arena = Bump::new();
         let x = VarId(0);
-        let (untyped_ast, _) =
-            AstBuilder::with_builder(&arena, |builder| builder.mk_abs(x, builder.mk_label("start", Variable(x))));
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_abs(x, builder.mk_label("start", Variable(x)))
+        });
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2218,7 +2223,9 @@ mod tests {
         let arena = Bump::new();
         let x = VarId(0);
         let y = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(x, builder.mk_abs(y, Variable(x))));
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
+        });
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2241,10 +2248,12 @@ mod tests {
         let arena = Bump::new();
         let t = VarId(0);
         let f = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_branch(
-            builder.mk_abs(t, builder.mk_unlabel("true", Variable(t))),
-            builder.mk_abs(f, builder.mk_unlabel("false", Variable(f))),
-        ));
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_branch(
+                builder.mk_abs(t, builder.mk_unlabel("true", Variable(t))),
+                builder.mk_abs(f, builder.mk_unlabel("false", Variable(f))),
+            )
+        });
 
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
@@ -2270,19 +2279,21 @@ mod tests {
         let ty_intern = TyCtx::new(&arena);
 
         let x = VarId(0);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(
-            x,
-            builder.mk_concat(
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_abs(
+                x,
                 builder.mk_concat(
-                    builder.mk_label("a", Variable(x)),
-                    builder.mk_label("b", Variable(x)),
+                    builder.mk_concat(
+                        builder.mk_label("a", Variable(x)),
+                        builder.mk_label("b", Variable(x)),
+                    ),
+                    builder.mk_concat(
+                        builder.mk_label("c", Variable(x)),
+                        builder.mk_label("d", Variable(x)),
+                    ),
                 ),
-                builder.mk_concat(
-                    builder.mk_label("c", Variable(x)),
-                    builder.mk_label("d", Variable(x)),
-                ),
-            ),
-        ));
+            )
+        });
 
         let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
@@ -2311,16 +2322,18 @@ mod tests {
 
         let m = VarId(0);
         let n = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abss(
-            [m, n],
-            builder.mk_unlabel(
-                "x",
-                builder.mk_project(
-                    Direction::Right,
-                    builder.mk_concat(Variable(m), Variable(n)),
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_abss(
+                [m, n],
+                builder.mk_unlabel(
+                    "x",
+                    builder.mk_project(
+                        Direction::Right,
+                        builder.mk_concat(Variable(m), Variable(n)),
+                    ),
                 ),
-            ),
-        ));
+            )
+        });
 
         let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
@@ -2356,19 +2369,21 @@ mod tests {
 
         let m = VarId(0);
         let n = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_app(
-            builder.mk_abss(
-                [m, n],
-                builder.mk_unlabel(
-                    "x",
-                    builder.mk_project(
-                        Direction::Right,
-                        builder.mk_concat(Variable(m), Variable(n)),
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_app(
+                builder.mk_abss(
+                    [m, n],
+                    builder.mk_unlabel(
+                        "x",
+                        builder.mk_project(
+                            Direction::Right,
+                            builder.mk_concat(Variable(m), Variable(n)),
+                        ),
                     ),
                 ),
-            ),
-            builder.mk_label("x", Unit),
-        ));
+                builder.mk_label("x", Unit),
+            )
+        });
 
         let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 

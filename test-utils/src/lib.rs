@@ -1,3 +1,3 @@
-pub mod span;
-pub mod cst;
 pub mod ast;
+pub mod cst;
+pub mod span;
