@@ -1172,7 +1172,8 @@ mod tests {
     use aiahr_analysis::top_level::BaseBuilder;
     use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
     use aiahr_core::modules::ModuleTree;
-    use aiahr_tc::test_utils::{DummyEff, MkTerm};
+    use aiahr_tc::test_utils::DummyEff;
+    use aiahr_test::ast::*;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
     use ir_matcher::ir_matcher;
@@ -1264,19 +1265,18 @@ mod tests {
         let ir_ctx = IrCtx::new(&arena);
         let m = VarId(0);
         let n = VarId(1);
-        let ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_abss(
+        let (ast, _) = AstBuilder::with_builder(&arena,
+            |builder|
+            builder.mk_abss(
                 [m, n],
-                arena.mk_unlabel(
+                builder.mk_unlabel(
                     "x",
-                    arena.mk_project(
+                    builder.mk_project(
                         Direction::Left,
-                        arena.mk_concat(Term::Variable(m), Term::Variable(n)),
+                        builder.mk_concat(Term::Variable(m), Term::Variable(n)),
                     ),
                 ),
-            )),
-        );
+            ));
         let (var_tys, term_ress, scheme, _) =
             aiahr_tc::type_check(&ty_ctx, &infer_ctx, &aiahr_tc::test_utils::DummyEff, &ast);
 

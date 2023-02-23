@@ -1991,95 +1991,13 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
 }
 
 pub mod test_utils {
-    use super::*;
+    use aiahr_core::id::{EffectId, EffectOpId, TyVarId};
+    use aiahr_core::memory::handle::{self, RefHandle};
+
+    use crate::{ClosedRow, EffectInfo, Row, Ty, TyScheme};
 
     // Utility trait to remove a lot of the intermediate allocation when creating ASTs
     // Helps make tests a little more readable
-    pub trait MkTerm<'a, Var> {
-        fn mk_abs(&'a self, arg: Var, body: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_app(&'a self, fun: Term<'a, Var>, arg: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_label(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_unlabel(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_concat(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_project(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_branch(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_inject(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var>;
-        fn mk_handler(&'a self, handler: Term<'a, Var>, body: Term<'a, Var>) -> Term<'a, Var>;
-
-        fn mk_abss<II>(&'a self, args: II, body: Term<'a, Var>) -> Term<'a, Var>
-        where
-            II: IntoIterator,
-            II::IntoIter: DoubleEndedIterator<Item = Var>,
-        {
-            args.into_iter()
-                .rfold(body, |body, arg| self.mk_abs(arg, body))
-        }
-    }
-
-    impl<'a, Var> MkTerm<'a, Var> for Bump {
-        fn mk_abs(&'a self, arg: Var, body: Term<'a, Var>) -> Term<'a, Var> {
-            Abstraction {
-                arg,
-                body: self.alloc(body),
-            }
-        }
-
-        fn mk_app(&'a self, fun: Term<'a, Var>, arg: Term<'a, Var>) -> Term<'a, Var> {
-            Application {
-                func: self.alloc(fun),
-                arg: self.alloc(arg),
-            }
-        }
-
-        fn mk_label(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
-            Label {
-                label: Handle(self.alloc_str(label)),
-                term: self.alloc(term),
-            }
-        }
-
-        fn mk_unlabel(&'a self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
-            Unlabel {
-                label: Handle(self.alloc_str(label)),
-                term: self.alloc(term),
-            }
-        }
-
-        fn mk_concat(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var> {
-            Concat {
-                left: self.alloc(left),
-                right: self.alloc(right),
-            }
-        }
-
-        fn mk_project(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var> {
-            Project {
-                direction,
-                term: self.alloc(term),
-            }
-        }
-
-        fn mk_handler(&'a self, handler: Term<'a, Var>, body: Term<'a, Var>) -> Term<'a, Var> {
-            Term::Handle {
-                handler: self.alloc(handler),
-                body: self.alloc(body),
-            }
-        }
-
-        fn mk_branch(&'a self, left: Term<'a, Var>, right: Term<'a, Var>) -> Term<'a, Var> {
-            Branch {
-                left: self.alloc(left),
-                right: self.alloc(right),
-            }
-        }
-
-        fn mk_inject(&'a self, direction: Direction, term: Term<'a, Var>) -> Term<'a, Var> {
-            Inject {
-                direction,
-                term: self.alloc(term),
-            }
-        }
-    }
 
     pub struct DummyEff;
     impl DummyEff {
@@ -2093,16 +2011,16 @@ pub mod test_utils {
     impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff {
         fn effect_name(&self, eff: EffectId) -> RefHandle<'s, str> {
             match eff {
-                DummyEff::STATE_ID => Handle("State"),
-                DummyEff::READER_ID => Handle("Reader"),
+                DummyEff::STATE_ID => handle::Handle("State"),
+                DummyEff::READER_ID => handle::Handle("Reader"),
                 _ => unimplemented!(),
             }
         }
 
         fn effect_members(&self, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]> {
             match eff {
-                DummyEff::STATE_ID => Handle(&[DummyEff::GET_ID, DummyEff::PUT_ID]),
-                DummyEff::READER_ID => Handle(&[DummyEff::ASK_ID]),
+                DummyEff::STATE_ID => handle::Handle(&[DummyEff::GET_ID, DummyEff::PUT_ID]),
+                DummyEff::READER_ID => handle::Handle(&[DummyEff::ASK_ID]),
                 _ => unimplemented!(),
             }
         }
@@ -2120,10 +2038,9 @@ pub mod test_utils {
             members: &[RefHandle<'a, str>],
         ) -> Option<EffectId> {
             match members {
-                [Handle("put"), Handle("get")] | [Handle("get"), Handle("put")] => {
-                    Some(DummyEff::STATE_ID)
-                }
-                [Handle("ask")] => Some(DummyEff::READER_ID),
+                [handle::Handle("put"), handle::Handle("get")]
+                | [handle::Handle("get"), handle::Handle("put")] => Some(DummyEff::STATE_ID),
+                [handle::Handle("ask")] => Some(DummyEff::READER_ID),
                 _ => None,
             }
         }
@@ -2137,18 +2054,19 @@ pub mod test_utils {
         }
 
         fn effect_member_sig(&self, _eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId> {
+            use crate::TypeKind::*;
             match member {
                 // get: forall 0 . {} -{0}-> Int
                 DummyEff::GET_ID => TyScheme {
                     bound: vec![TyVarId(0)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
-                    ty: Ty(Handle(&FunTy(
-                        Ty(Handle(&RowTy(ClosedRow {
-                            fields: Handle(&[]),
-                            values: Handle(&[]),
+                    ty: Ty(handle::Handle(&FunTy(
+                        Ty(handle::Handle(&RowTy(ClosedRow {
+                            fields: handle::Handle(&[]),
+                            values: handle::Handle(&[]),
                         }))),
-                        Ty(Handle(&IntTy)),
+                        Ty(handle::Handle(&IntTy)),
                     ))),
                 },
                 // put: forall 0 . Int -{0}-> {}
@@ -2156,11 +2074,11 @@ pub mod test_utils {
                     bound: vec![TyVarId(0)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
-                    ty: Ty(Handle(&FunTy(
-                        Ty(Handle(&IntTy)),
-                        Ty(Handle(&RowTy(ClosedRow {
-                            fields: Handle(&[]),
-                            values: Handle(&[]),
+                    ty: Ty(handle::Handle(&FunTy(
+                        Ty(handle::Handle(&IntTy)),
+                        Ty(handle::Handle(&RowTy(ClosedRow {
+                            fields: handle::Handle(&[]),
+                            values: handle::Handle(&[]),
                         }))),
                     ))),
                 },
@@ -2169,12 +2087,12 @@ pub mod test_utils {
                     bound: vec![TyVarId(0), TyVarId(1)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
-                    ty: Ty(Handle(&FunTy(
-                        Ty(Handle(&RowTy(ClosedRow {
-                            fields: Handle(&[]),
-                            values: Handle(&[]),
+                    ty: Ty(handle::Handle(&FunTy(
+                        Ty(handle::Handle(&RowTy(ClosedRow {
+                            fields: handle::Handle(&[]),
+                            values: handle::Handle(&[]),
                         }))),
-                        Ty(Handle(&VarTy(TyVarId(1)))),
+                        Ty(handle::Handle(&VarTy(TyVarId(1)))),
                     ))),
                 },
                 _ => unimplemented!(),
@@ -2183,9 +2101,9 @@ pub mod test_utils {
 
         fn effect_member_name(&self, _eff: EffectId, member: EffectOpId) -> RefHandle<'s, str> {
             match member {
-                DummyEff::GET_ID => Handle("get"),
-                DummyEff::PUT_ID => Handle("put"),
-                DummyEff::ASK_ID => Handle("ask"),
+                DummyEff::GET_ID => handle::Handle("get"),
+                DummyEff::PUT_ID => handle::Handle("put"),
+                DummyEff::ASK_ID => handle::Handle("ask"),
                 _ => unimplemented!(),
             }
         }
@@ -2196,13 +2114,11 @@ pub mod test_utils {
 mod tests {
     use aiahr_core::ast::Ast;
     use aiahr_core::id::TyVarId;
+    use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
     use bumpalo::Bump;
 
-    use super::{
-        test_utils::{DummyEff, MkTerm},
-        *,
-    };
+    use super::{test_utils::DummyEff, *};
 
     macro_rules! ty {
         ({}) => {
@@ -2237,13 +2153,10 @@ mod tests {
     fn test_tc_unlabel() {
         let arena = Bump::new();
         let x = VarId(0);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_abs(
-                x,
-                arena.mk_unlabel("start", arena.mk_label("start", Variable(x))),
-            )),
-        );
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(
+            x,
+            builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
+        ));
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2259,13 +2172,10 @@ mod tests {
     fn test_tc_unlabel_fails_on_wrong_label() {
         let arena = Bump::new();
         let x = VarId(0);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_abs(
-                x,
-                arena.mk_unlabel("start", arena.mk_label("end", Variable(x))),
-            )),
-        );
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(
+            x,
+            builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
+        ));
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2284,10 +2194,8 @@ mod tests {
     fn test_tc_label() {
         let arena = Bump::new();
         let x = VarId(0);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_abs(x, arena.mk_label("start", Variable(x)))),
-        );
+        let (untyped_ast, _) =
+            AstBuilder::with_builder(&arena, |builder| builder.mk_abs(x, builder.mk_label("start", Variable(x))));
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2310,10 +2218,7 @@ mod tests {
         let arena = Bump::new();
         let x = VarId(0);
         let y = VarId(1);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_abs(x, arena.mk_abs(y, Variable(x)))),
-        );
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(x, builder.mk_abs(y, Variable(x))));
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
@@ -2336,13 +2241,10 @@ mod tests {
         let arena = Bump::new();
         let t = VarId(0);
         let f = VarId(1);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_branch(
-                arena.mk_abs(t, arena.mk_unlabel("true", Variable(t))),
-                arena.mk_abs(f, arena.mk_unlabel("false", Variable(f))),
-            )),
-        );
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_branch(
+            builder.mk_abs(t, builder.mk_unlabel("true", Variable(t))),
+            builder.mk_abs(f, builder.mk_unlabel("false", Variable(f))),
+        ));
 
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
@@ -2364,25 +2266,23 @@ mod tests {
     #[test]
     fn test_tc_product_literal() {
         let arena = Bump::new();
-        let x = VarId(0);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_abs(
-                x,
-                arena.mk_concat(
-                    arena.mk_concat(
-                        arena.mk_label("a", Variable(x)),
-                        arena.mk_label("b", Variable(x)),
-                    ),
-                    arena.mk_concat(
-                        arena.mk_label("c", Variable(x)),
-                        arena.mk_label("d", Variable(x)),
-                    ),
-                ),
-            )),
-        );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
+
+        let x = VarId(0);
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abs(
+            x,
+            builder.mk_concat(
+                builder.mk_concat(
+                    builder.mk_label("a", Variable(x)),
+                    builder.mk_label("b", Variable(x)),
+                ),
+                builder.mk_concat(
+                    builder.mk_label("c", Variable(x)),
+                    builder.mk_label("d", Variable(x)),
+                ),
+            ),
+        ));
 
         let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
@@ -2406,20 +2306,21 @@ mod tests {
     #[test]
     fn test_tc_product_wand() {
         let arena = Bump::new();
-        let m = VarId(0);
-        let n = VarId(1);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_abss(
-                [m, n],
-                arena.mk_unlabel(
-                    "x",
-                    arena.mk_project(Direction::Right, arena.mk_concat(Variable(m), Variable(n))),
-                ),
-            )),
-        );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
+
+        let m = VarId(0);
+        let n = VarId(1);
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_abss(
+            [m, n],
+            builder.mk_unlabel(
+                "x",
+                builder.mk_project(
+                    Direction::Right,
+                    builder.mk_concat(Variable(m), Variable(n)),
+                ),
+            ),
+        ));
 
         let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
@@ -2450,26 +2351,24 @@ mod tests {
     #[test]
     fn test_tc_applied_wand() {
         let arena = Bump::new();
-        let m = VarId(0);
-        let n = VarId(1);
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_app(
-                arena.mk_abss(
-                    [m, n],
-                    arena.mk_unlabel(
-                        "x",
-                        arena.mk_project(
-                            Direction::Right,
-                            arena.mk_concat(Variable(m), Variable(n)),
-                        ),
-                    ),
-                ),
-                arena.mk_label("x", Unit),
-            )),
-        );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
+
+        let m = VarId(0);
+        let n = VarId(1);
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| builder.mk_app(
+            builder.mk_abss(
+                [m, n],
+                builder.mk_unlabel(
+                    "x",
+                    builder.mk_project(
+                        Direction::Right,
+                        builder.mk_concat(Variable(m), Variable(n)),
+                    ),
+                ),
+            ),
+            builder.mk_label("x", Unit),
+        ));
 
         let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
@@ -2488,13 +2387,12 @@ mod tests {
     #[test]
     fn test_tc_eff_operation_infers_correct_effect() {
         let arena = Bump::new();
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_app(Operation(EffectOpId(0)), Unit)),
-        );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
 
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_app(Operation(EffectOpId(0)), Unit)
+        });
         let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 
         assert_matches!(scheme.eff, Row::Closed(row!(["State"], [ty!(ty_pat!({}))])));
@@ -2504,34 +2402,36 @@ mod tests {
     #[test]
     fn test_tc_eff_handler_removes_correct_effect() {
         let arena = Bump::new();
-        let handler = arena.mk_concat(
-            arena.mk_concat(
-                arena.mk_label(
-                    "get",
-                    arena.mk_abss(
-                        [VarId(0), VarId(3)],
-                        arena.mk_app(Variable(VarId(3)), Int(3)),
-                    ),
-                ),
-                arena.mk_label(
-                    "put",
-                    arena.mk_abss([VarId(1), VarId(3)], arena.mk_app(Variable(VarId(3)), Unit)),
-                ),
-            ),
-            arena.mk_label("return", arena.mk_abs(VarId(2), Variable(VarId(2)))),
-        );
-        let untyped_ast = Ast::new(
-            FxHashMap::default(),
-            arena.alloc(arena.mk_handler(
-                handler,
-                arena.mk_app(
-                    Operation(DummyEff::PUT_ID),
-                    arena.mk_app(Operation(DummyEff::ASK_ID), Unit),
-                ),
-            )),
-        );
         let infer_intern = TyCtx::new(&arena);
         let ty_intern = TyCtx::new(&arena);
+
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+            builder.mk_handler(
+                builder.mk_concat(
+                    builder.mk_concat(
+                        builder.mk_label(
+                            "get",
+                            builder.mk_abss(
+                                [VarId(0), VarId(3)],
+                                builder.mk_app(Variable(VarId(3)), Int(3)),
+                            ),
+                        ),
+                        builder.mk_label(
+                            "put",
+                            builder.mk_abss(
+                                [VarId(1), VarId(3)],
+                                builder.mk_app(Variable(VarId(3)), Unit),
+                            ),
+                        ),
+                    ),
+                    builder.mk_label("return", builder.mk_abs(VarId(2), Variable(VarId(2)))),
+                ),
+                builder.mk_app(
+                    Operation(DummyEff::PUT_ID),
+                    builder.mk_app(Operation(DummyEff::ASK_ID), Unit),
+                ),
+            )
+        });
 
         let (_, _, scheme, errors) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
 

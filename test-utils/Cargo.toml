@@ -1,15 +1,12 @@
 [package]
-name = "aiahr-tc"
+name = "aiahr-test"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[dev-dependencies]
-aiahr-test = { path = "../test-utils" }
-assert_matches = "1.5.0"
 
 [dependencies]
 aiahr-core = { path = "../core" }
-bumpalo = "3.1.0"
-ena = "0.14.0"
+bumpalo = "3.10"
+rand = "0.8.5"
 rustc-hash = "1.1.0"

@@ -357,60 +357,12 @@ impl<'s> From<&Pattern<'_, 's>> for Constructor<'s> {
 mod tests {
     use super::*;
     use aiahr_core::cst::{Field, IdField, ProductRow, Separated, SumRow};
-    use aiahr_core::id::ModuleId;
     use aiahr_core::memory::handle as hand;
     use aiahr_core::memory::intern::InternerByRef;
     use aiahr_core::memory::intern::SyncInterner;
-    use aiahr_core::{id::VarId, loc::Loc, nst, span::SpanOf};
+    use aiahr_core::{id::VarId, nst};
+    use aiahr_test::{span::*, cst::*};
     use bumpalo::Bump;
-
-    const MOD: ModuleId = ModuleId(0);
-
-    fn random_loc() -> Loc {
-        Loc {
-            module: MOD,
-            byte: rand::random(),
-            line: rand::random(),
-            col: rand::random(),
-        }
-    }
-    fn random_span() -> Span {
-        Span {
-            start: random_loc(),
-            end: random_loc(),
-        }
-    }
-    fn random_span_of<T>(value: T) -> SpanOf<T> {
-        let span = random_span();
-        SpanOf {
-            start: span.start,
-            value,
-            end: span.end,
-        }
-    }
-
-    fn random_field<L, T>(label: L, target: T) -> Field<L, T> {
-        Field {
-            label,
-            sep: random_span(),
-            target,
-        }
-    }
-    fn random_sep<'a, T, II>(
-        arena: &'a Bump,
-        elems: impl IntoIterator<IntoIter = II>,
-    ) -> Separated<'a, T>
-    where
-        II: Iterator<Item = T> + ExactSizeIterator,
-    {
-        let mut iter = elems.into_iter();
-        let first = iter.next().unwrap();
-        Separated {
-            first,
-            elems: arena.alloc_slice_fill_iter(iter.map(|t| (random_span(), t))),
-            comma: None,
-        }
-    }
 
     #[test]
     fn test_desugar_var() {

@@ -9,4 +9,5 @@ bumpalo = "3.1.0"
 rustc-hash = "1.1.0"
 
 [dev-dependencies]
+aiahr-test = { path = "../test-utils" }
 rand = "0.8.5"

@@ -7,5 +7,6 @@ members = [
     "lower-ir",
     "lower-ir/ir-matcher",
     "parser",
+    "test-utils",
     "tc",
 ]
