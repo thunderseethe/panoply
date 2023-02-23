@@ -171,6 +171,13 @@ pub trait Spanned {
     {
         self.span().of(f(self))
     }
+
+    fn join_spans<Rhs: Spanned>(&self, other: &Rhs) -> Span
+    where
+        Self: Sized,
+    {
+        Span::join(self, other)
+    }
 }
 
 impl Spanned for Span {

@@ -29,6 +29,11 @@ pub fn desugar<'n, 's: 'a, 'a>(
         vars: &mut IdGen<VarId, RefHandle<'s, str>>,
         nst: &'n nst::Term<'n, 's>,
     ) -> Result<&'a ast::Term<'a, VarId>, PatternMatchError> {
+        let mk_term = |term, spans: &mut FxHashMap<&'a ast::Term<'a, VarId>, Span>| {
+            let t = arena.alloc(term) as &_;
+            spans.insert(t, nst.span());
+            t
+        };
         // TODO: Finish this impl
         // This is a stub of functionality right now. Mostly to act as a gate to what can reach the
         // type checker. Anything not implemented in this function isn't handled by the typechecker
@@ -44,10 +49,13 @@ pub fn desugar<'n, 's: 'a, 'a>(
             } => {
                 let value = ds(arena, spans, vars, value)?;
                 let expr = ds(arena, spans, vars, expr)?;
-                let func = arena.alloc(Abstraction {
-                    arg: var.value,
-                    body: expr,
-                });
+                let func = mk_term(
+                    Abstraction {
+                        arg: var.value,
+                        body: expr,
+                    },
+                    spans,
+                );
                 arena.alloc(Application { func, arg: value }) as &_
             }
             nst::Term::Abstraction { arg, body, .. } => {
@@ -72,12 +80,14 @@ pub fn desugar<'n, 's: 'a, 'a>(
                     let head = arena.alloc(Label {
                         label: fields.first.label.value,
                         term: ds(arena, spans, vars, fields.first.target)?,
-                    });
+                    }) as &_;
+                    spans.insert(head, fields.first.label.join_spans(fields.first.target));
                     fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
                         let right = arena.alloc(Label {
                             label: field.label.value,
                             term: ds(arena, spans, vars, field.target)?,
-                        });
+                        }) as &_;
+                        spans.insert(right, field.label.join_spans(field.target));
                         Ok(arena.alloc(Concat {
                             left: concat?,
                             right,
@@ -89,20 +99,26 @@ pub fn desugar<'n, 's: 'a, 'a>(
                 let term = ds(arena, spans, vars, base)?;
                 arena.alloc(Unlabel {
                     label: field.value,
-                    term: arena.alloc(Project {
-                        direction: Direction::Right,
-                        term,
-                    }),
+                    term: mk_term(
+                        Project {
+                            direction: Direction::Right,
+                            term,
+                        },
+                        spans,
+                    ),
                 })
             }
             nst::Term::SumRow(sum) => {
                 let term = ds(arena, spans, vars, sum.field.target)?;
                 arena.alloc(Inject {
                     direction: Direction::Right,
-                    term: arena.alloc(Label {
-                        label: sum.field.label.value,
-                        term,
-                    }),
+                    term: mk_term(
+                        Label {
+                            label: sum.field.label.value,
+                            term,
+                        },
+                        spans,
+                    ),
                 })
             }
             // This is gonna take a little more work.
@@ -111,7 +127,7 @@ pub fn desugar<'n, 's: 'a, 'a>(
                     .elements()
                     .map(|field| Ok((vec![*field.label], ds(arena, spans, vars, field.target)?)))
                     .collect::<Result<_, _>>()?;
-                cc(arena, vars, &mut [], matrix)?
+                cc(arena, vars, spans, &mut [], matrix)?
             }
             nst::Term::Handle { .. } => todo!(),
         };
@@ -196,12 +212,19 @@ pub enum PatternMatchError {
     NonExhaustivePatterns,
 }
 
+/// Compile a matrix of patterns into an AST term that performs pattern matching.
 fn cc<'p, 's: 't, 't>(
     arena: &'t Bump,
     vars: &mut IdGen<VarId, RefHandle<'s, str>>,
+    spans: &mut FxHashMap<&'t ast::Term<'t, VarId>, Span>,
     occurences: &mut [VarId],
     matrix: ClauseMatrix<'p, 's, 't>,
 ) -> Result<&'t ast::Term<'t, VarId>, PatternMatchError> {
+    let mk_term = |spans: &mut FxHashMap<&'t ast::Term<'t, VarId>, Span>, term, span| {
+        let t = arena.alloc(term) as &_;
+        spans.insert(t, span);
+        t
+    };
     if matrix.is_empty() {
         Err(PatternMatchError::NonExhaustivePatterns)
     // Row is all wild cards
@@ -233,48 +256,61 @@ fn cc<'p, 's: 't, 't>(
                 let mut occs = binders;
                 // replace first occurence by binder introduced here
                 occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
-                Ok(arena.alloc(Abstraction {
-                    arg: top_level,
-                    body: lbls.iter().cloned().fold(
-                        cc(arena, vars, occs.as_mut_slice(), matrix.specialize(&c))?,
-                        |body, lbl| {
-                            let destructure = arena.alloc(Unlabel {
-                                label: lbl,
-                                term: arena.alloc(Project {
-                                    direction: Direction::Right,
-                                    term: arena.alloc(Variable(top_level)),
-                                }),
-                            });
-                            arena.alloc(Application {
-                                func: body,
-                                arg: destructure,
-                            })
+                let init = cc(
+                    arena,
+                    vars,
+                    spans,
+                    occs.as_mut_slice(),
+                    matrix.specialize(&c),
+                )?;
+                let body = lbls.iter().cloned().fold(init, |body, lbl| {
+                    let destructure = arena.alloc(Unlabel {
+                        label: lbl,
+                        term: arena.alloc(Project {
+                            direction: Direction::Right,
+                            term: arena.alloc(Variable(top_level)),
+                        }),
+                    });
+                    mk_term(
+                        spans,
+                        Application {
+                            func: body,
+                            arg: destructure,
                         },
-                    ),
-                }) as &_)
+                        p.span(),
+                    )
+                });
+                Ok(mk_term(
+                    spans,
+                    Abstraction {
+                        arg: top_level,
+                        body,
+                    },
+                    p.span(),
+                ))
             }
-            Constructor::SumRow(lbl) => {
+            Constructor::SumRow(label) => {
                 let binder = vars.push(handle::Handle(""));
                 let mut occs = vec![binder];
                 occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
-                Ok(arena.alloc(Abstraction {
-                    arg: binder,
-                    body: arena.alloc(Application {
-                        func: cc(arena, vars, &mut occs, matrix.specialize(&c))?,
-                        arg: arena.alloc(Unlabel {
-                            label: lbl,
-                            term: arena.alloc(Variable(binder)),
-                        }),
-                    }),
-                }) as &_)
+                let func = cc(arena, vars, spans, &mut occs, matrix.specialize(&c))?;
+                let term = mk_term(spans, Variable(binder), p.span());
+                let arg = mk_term(spans, Unlabel { label, term }, p.span());
+                let body = mk_term(spans, Application { func, arg }, p.span());
+                Ok(mk_term(spans, Abstraction { arg: binder, body }, p.span()))
             }
             Constructor::WildCard => {
                 if let Pattern::Whole(var) = p {
                     // For a wild card we don't need a let binding so just pass through binder as is
-                    Ok(arena.alloc(Abstraction {
-                        arg: var.value,
-                        body: cc(arena, vars, occurences, matrix.default())?,
-                    }) as &_)
+                    let body = cc(arena, vars, spans, occurences, matrix.default())?;
+                    Ok(mk_term(
+                        spans,
+                        Abstraction {
+                            arg: var.value,
+                            body,
+                        },
+                        p.span(),
+                    ))
                 } else {
                     unreachable!()
                 }
@@ -282,11 +318,12 @@ fn cc<'p, 's: 't, 't>(
         });
         // we know this can't be empty
         let head: Result<&'t ast::Term<'t, VarId>, PatternMatchError> = matches.next().unwrap();
-        matches.fold(head, |a, b| {
-            Ok(arena.alloc(Branch {
-                left: a?,
-                right: b?,
-            }) as &_)
+        let rest = matches.collect::<Vec<_>>();
+        rest.into_iter().fold(head, |a, b| {
+            let a = a?;
+            let b = b?;
+            let span = Span::join(&spans[a], &spans[b]);
+            Ok(mk_term(spans, Branch { left: a, right: b }, span))
         })
     }
 }
