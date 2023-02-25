@@ -18,7 +18,7 @@ pub enum DiagnosticKind {
 }
 
 /// An annotated citation from source code.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Citation {
     /// The span of the citation in source code.
     pub span: Span,

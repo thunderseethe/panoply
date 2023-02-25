@@ -112,7 +112,7 @@ impl<'ctx, TV> ClosedRow<'ctx, TV> {
     fn _disjoint_union<E>(
         self,
         right: Self,
-        mk_err: impl FnOnce(Self, Self) -> E,
+        mk_err: impl FnOnce(Self, Self, &RowLabel<'ctx>) -> E,
     ) -> Result<RowInternals<'ctx, TV>, E> {
         use std::cmp::Ordering::*;
 
@@ -136,7 +136,7 @@ impl<'ctx, TV> ClosedRow<'ctx, TV> {
                             values.push(*left_values.next().unwrap());
                         }
                         // Because these are disjoint rows overlapping labels are an error
-                        Equal => return Err(mk_err(self, right)),
+                        Equal => return Err(mk_err(self, right, left_lbl)),
                         // Push right
                         Greater => {
                             fields.push(*right_fields.next().unwrap());
@@ -195,8 +195,8 @@ impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
         self,
         right: Self,
     ) -> Result<RowInternals<'ctx, TcUnifierVar<'ctx>>, TypeCheckError<'ctx>> {
-        self._disjoint_union(right, |left, right| {
-            TypeCheckError::RowsNotDisjoint(left, right)
+        self._disjoint_union(right, |left, right, lbl| {
+            TypeCheckError::RowsNotDisjoint(left, right, lbl.clone())
         })
     }
 }
@@ -204,7 +204,7 @@ impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
 impl<'ctx> ClosedRow<'ctx, TyVarId> {
     /// Invariant: These rows have already been typed checked so we cannot fail at union.
     pub fn disjoint_union(self, right: Self) -> RowInternals<'ctx, TyVarId> {
-        self._disjoint_union::<Infallible>(right, |_, _| unreachable!())
+        self._disjoint_union::<Infallible>(right, |_, _, _| unreachable!())
             .unwrap()
     }
 }

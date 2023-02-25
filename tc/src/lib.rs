@@ -1,5 +1,7 @@
 use aiahr_core::{
     ast::{Ast, Direction, Term, Term::*},
+    diagnostic::{Citation, Diagnostic},
+    displayer::Displayer,
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     memory::{
         handle::{Handle, RefHandle},
@@ -9,6 +11,7 @@ use aiahr_core::{
 };
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
+use pretty::{docs, DocAllocator, Pretty};
 use rustc_hash::FxHashMap;
 use std::{cmp::Ordering, collections::BTreeSet, convert::Infallible, hash::Hash};
 
@@ -32,11 +35,12 @@ pub enum TypeCheckError<'ctx> {
     VarNotDefined(VarId),
     ItemNotDefined((ModuleId, ItemId)),
     TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
-    OccursCheckFailed(TcUnifierVar<'ctx>),
+    OccursCheckFailed(TcUnifierVar<'ctx>, InferTy<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),
     RowsNotDisjoint(
         ClosedRow<'ctx, TcUnifierVar<'ctx>>,
         ClosedRow<'ctx, TcUnifierVar<'ctx>>,
+        RowLabel<'ctx>,
     ),
     RowsNotEqual(InferRow<'ctx>, InferRow<'ctx>),
     UndefinedEffectSignature(ClosedRow<'ctx, TcUnifierVar<'ctx>>),
@@ -45,6 +49,146 @@ pub enum TypeCheckError<'ctx> {
         handler: TcUnifierVar<'ctx>,
         eff: TcUnifierVar<'ctx>,
     },
+}
+
+fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
+    let d: pretty::Arena<'_, ()> = pretty::Arena::new();
+    // TODO: We should probably store the doc in diagnostic directly so we can lay it out at print
+    // time when we have more info
+    let width = 80;
+    match err {
+        TypeCheckError::TypeMismatch(left, right) => {
+            let doc = d
+                .as_string("Type mismatch:")
+                .append(d.softline())
+                .append(docs![&d, &left, d.softline(), "!=", d.softline(), &right].nest(2))
+                .into_doc();
+            let mut message = String::new();
+            doc.render_fmt(width, &mut message).unwrap();
+            TypeCheckDiagnostic {
+                name: "Type Mismatch",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::OccursCheckFailed(var, ty) => {
+            let doc = d
+                .intersperse(
+                    [
+                        d.text("cycle detected for type variable"),
+                        var.pretty(&d),
+                        d.text("with inferred type"),
+                        ty.pretty(&d),
+                    ],
+                    d.space(),
+                )
+                .into_doc();
+            let mut message = String::new();
+            doc.render_fmt(width, &mut message).unwrap();
+            TypeCheckDiagnostic {
+                name: "Infinite Type",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::RowsNotDisjoint(left, right, lbl) => {
+            let doc = d
+                .text("rows overlap on label:")
+                .append(d.space())
+                .append(d.text(&*lbl))
+                .append(
+                    d.hardline()
+                        .append(left.pretty(&d))
+                        .append(d.hardline())
+                        .append(right.pretty(&d))
+                        .nest(2),
+                );
+            let mut message = String::new();
+            doc.render_fmt(width, &mut message).unwrap();
+            TypeCheckDiagnostic {
+                name: "Data Rows not Disjoint",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::RowsNotEqual(left, right) => {
+            let doc = d
+                .text("expected rows to be equal")
+                .append(d.hardline())
+                .append(
+                    left.pretty(&d)
+                        .append(d.hardline())
+                        .append(right.pretty(&d))
+                        .nest(2),
+                );
+            let mut message = String::new();
+            doc.render_fmt(width, &mut message).unwrap();
+            TypeCheckDiagnostic {
+                name: "Rows Mismatch",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::UndefinedEffectSignature(signature) => {
+            let doc = d
+                .text("could not find an effect signature matching handler:")
+                .append(d.softline())
+                .append(signature.pretty(&d));
+            let mut message = String::new();
+            doc.render_fmt(width, &mut message).unwrap();
+            TypeCheckDiagnostic {
+                name: "Unexpected Handler",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::UndefinedEffect(eff_name) => TypeCheckDiagnostic {
+            name: "Undefined Effect",
+            principal: Citation {
+                span,
+                message: format!("could not find an effect defintion for: {}", eff_name.0),
+            },
+        },
+        TypeCheckError::UnsolvedHandle { .. } => {
+            // TODO figure out a better error message this
+            TypeCheckDiagnostic {
+                name: "Ambiguous Handler Type",
+                principal: Citation {
+                    span,
+                    message: "could not infer a type of handler, consider adding an annotation"
+                        .to_string(),
+                },
+            }
+        }
+        // ICE
+        TypeCheckError::UnifierToTcVar(_) => {
+            panic!("InternalCompilerError: UnifierToTcVar encountered")
+        }
+        // TODO: Requires being able to map IDs back to names
+        TypeCheckError::VarNotDefined(var) => TypeCheckDiagnostic {
+            name: "Undefined Variable",
+            principal: Citation {
+                span,
+                message: format!("undefined variable v<{}>", var.0),
+            },
+        },
+        TypeCheckError::ItemNotDefined(_) => todo!(),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeCheckDiagnostic {
+    name: &'static str,
+    principal: Citation,
+}
+impl Diagnostic for TypeCheckDiagnostic {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn principal<M: Displayer<ModuleId>>(&self, _: &M) -> Citation {
+        self.principal.clone()
+    }
+
+    fn additional<M: Displayer<ModuleId>>(&self, _: &M) -> Vec<Citation> {
+        // TODO: allow for additional citations
+        vec![]
+    }
 }
 
 impl<'ty> From<Infallible> for TypeCheckError<'ty> {
@@ -129,7 +273,7 @@ impl<'inf, I> FallibleTypeFold<'inf> for OccursCheck<'_, 'inf, I>
 where
     I: MkTy<'inf, TcUnifierVar<'inf>>,
 {
-    type Error = TypeCheckError<'inf>;
+    type Error = TcUnifierVar<'inf>;
     type TypeVar = TcUnifierVar<'inf>;
     type InTypeVar = TcUnifierVar<'inf>;
 
@@ -139,7 +283,7 @@ where
 
     fn try_fold_var(&mut self, var: Self::TypeVar) -> Result<Ty<'inf, Self::TypeVar>, Self::Error> {
         if var == self.var {
-            Err(TypeCheckError::OccursCheckFailed(var))
+            Err(var)
         } else {
             Ok(self.ctx.mk_ty(VarTy(var)))
         }
@@ -359,7 +503,7 @@ struct InferCtx<'a, 'ctx, 'infer, I, State: InferState = Generation> {
     /// Constraints that have to be true for this inference context.
     constraints: Constraints<'infer>,
     /// Errors that arise during type checking
-    errors: Vec<TypeCheckError<'infer>>,
+    errors: Vec<TypeCheckDiagnostic>,
     /// Allocator for types created during inference
     ctx: &'a I,
     ast: &'a Ast<'ctx, VarId>,
@@ -465,20 +609,23 @@ where
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
                 if row.fields.len() != 1 {
-                    self.errors
-                        .push((self.single_row_ty(label, self.mk_ty(ErrorTy)), expected.ty).into());
+                    self.errors.push(into_diag(
+                        (self.single_row_ty(label, self.mk_ty(ErrorTy)), expected.ty).into(),
+                        current_span(),
+                    ));
                     return;
                 }
                 let field = self.mk_label(label);
                 // If our singleton row is a different field name, fail
                 if field != row.fields[0] {
-                    self.errors.push(
+                    self.errors.push(into_diag(
                         (
                             self.single_row_ty(field.as_ref(), self.mk_ty(ErrorTy)),
                             expected.ty,
                         )
                             .into(),
-                    )
+                        current_span(),
+                    ))
                 }
 
                 // If this is a singleton row with the right label check it's value type matches
@@ -676,7 +823,10 @@ where
                     self.state.var_tys.insert(*var, ty);
                     InferResult::new(ty, Row::Closed(self.empty_row()))
                 } else {
-                    self.errors.push(TypeCheckError::VarNotDefined(*var));
+                    self.errors.push(into_diag(
+                        TypeCheckError::VarNotDefined(*var),
+                        current_span(),
+                    ));
                     let err_ty = self.mk_ty(ErrorTy);
                     self.state.var_tys.insert(*var, err_ty);
                     InferResult::new(err_ty, Row::Closed(self.empty_row()))
@@ -985,22 +1135,22 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
     ) -> (
         InPlaceUnificationTable<TcUnifierVar<'infer>>,
         <Solution as InferState>::Storage<'ctx, 'infer>,
-        Vec<TypeCheckError<'infer>>,
+        Vec<TypeCheckDiagnostic>,
     ) {
         let constraints = std::mem::take(&mut self.constraints);
-        for (left, right, _) in constraints.tys {
+        for (left, right, span) in constraints.tys {
             self.unify_ty_ty(left, right)
-                .map_err(|err| self.errors.push(err))
+                .map_err(|err| self.errors.push(into_diag(err, span)))
                 .unwrap_or_default();
         }
-        for (RowCombination { left, right, goal }, _) in constraints.rows {
+        for (RowCombination { left, right, goal }, span) in constraints.rows {
             self.unify_row_combine(left, right, goal)
-                .map_err(|err| self.errors.push(err))
+                .map_err(|err| self.errors.push(into_diag(err, span)))
                 .unwrap_or_default();
         }
-        for (HandlesConstraint { handler, eff, ret }, _) in constraints.handles {
+        for (HandlesConstraint { handler, eff, ret }, span) in constraints.handles {
             self.lookup_effect_and_unify(eff_info, handler, eff, ret)
-                .map_err(|err| self.errors.push(err))
+                .map_err(|err| self.errors.push(into_diag(err, span)))
                 .unwrap_or_default();
         }
         (self.unifiers, self.state, self.errors)
@@ -1151,7 +1301,9 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
         var: TcUnifierVar<'infer>,
         ty: InferTy<'infer>,
     ) -> Result<(), TypeCheckError<'infer>> {
-        let ty_ = ty.try_fold_with(&mut OccursCheck { ctx: self.ctx, var })?;
+        let ty_ = ty
+            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
+            .map_err(|var| TypeCheckError::OccursCheckFailed(var, ty))?;
         // If we're unifying a variable and a row check if this solves any exisiting equations
         if let RowTy(row) = *ty_ {
             self.dispatch_solved_eqs(var, row)?;
@@ -1768,7 +1920,7 @@ pub fn type_check<'ty, 'infer, 's, 'eff, I, II, E>(
     FxHashMap<VarId, Ty<'ty, TyVarId>>,
     FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<'ty, TyVarId>>,
     TyScheme<'ty, TyVarId>,
-    Vec<TypeCheckError<'infer>>,
+    Vec<TypeCheckDiagnostic>,
 )
 where
     I: MkTy<'ty, TyVarId>,
@@ -1787,7 +1939,7 @@ fn tc_term<'ty, 'infer, 's, 'eff, I, II, E>(
     FxHashMap<VarId, Ty<'ty, TyVarId>>,
     FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<'ty, TyVarId>>,
     TyScheme<'ty, TyVarId>,
-    Vec<TypeCheckError<'infer>>,
+    Vec<TypeCheckDiagnostic>,
 )
 where
     I: MkTy<'ty, TyVarId>,
@@ -2114,7 +2266,6 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::ast::Ast;
     use aiahr_core::id::TyVarId;
     use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
@@ -2189,10 +2340,11 @@ mod tests {
 
         assert_matches!(
             errors[0],
-            TypeCheckError::TypeMismatch(
-                ty!(RowTy(row!(["end"], [ty!(ErrorTy)]))),
-                ty!(RowTy(row!(["start"], [ty!(VarTy(_))])))
-            )
+            // TODO: Figure out how to check these errors
+            TypeCheckDiagnostic {
+                name: "Type Mismatch",
+                principal: _
+            }
         );
     }
 
@@ -2463,12 +2615,18 @@ mod tests {
     #[test]
     fn test_tc_undefined_var_fails() {
         let arena = Bump::new();
-        let untyped_ast = Ast::new(FxHashMap::default(), arena.alloc(Variable(VarId(0))));
+        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |_| Variable(VarId(0)));
         let infer_ctx = TyCtx::new(&arena);
         let ty_ctx = TyCtx::new(&arena);
 
         let (_, _, _, errors) = type_check(&infer_ctx, &ty_ctx, &DummyEff, &untyped_ast);
 
-        assert!(errors.contains(&TypeCheckError::VarNotDefined(VarId(0))))
+        assert_matches!(
+            &errors[0],
+            TypeCheckDiagnostic {
+                name: "Undefined Variable",
+                principal: _,
+            }
+        );
     }
 }

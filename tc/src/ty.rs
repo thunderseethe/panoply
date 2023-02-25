@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::fmt::{self, Debug};
 use std::ops::Deref;
 
@@ -56,6 +57,11 @@ pub struct TcUnifierVar<'ctx> {
 impl<'ctx> Debug for TcUnifierVar<'ctx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("TcUnifierVar").field(&self.id).finish()
+    }
+}
+impl<'ctx> From<Infallible> for TcUnifierVar<'ctx> {
+    fn from(_: Infallible) -> Self {
+        unreachable!()
     }
 }
 
