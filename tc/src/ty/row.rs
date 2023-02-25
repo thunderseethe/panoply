@@ -1,6 +1,7 @@
 use aiahr_core::id::TyVarId;
 use aiahr_core::memory::handle::RefHandle;
 use ena::unify::{EqUnifyValue, UnifyValue};
+use pretty::{docs, DocAllocator, Pretty};
 
 use crate::TypeCheckError;
 
@@ -26,6 +27,37 @@ pub type RowLabel<'ctx> = RefHandle<'ctx, str>;
 pub struct ClosedRow<'ctx, TV> {
     pub fields: RefHandle<'ctx, [RowLabel<'ctx>]>,
     pub values: RefHandle<'ctx, [Ty<'ctx, TV>]>,
+}
+
+impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &ClosedRow<'ctx, TV>
+where
+    A: 'a + Clone,
+    D: ?Sized + DocAllocator<'a, A>,
+    D::Doc: Pretty<'a, D, A> + Clone,
+    TV: Pretty<'a, D, A> + Clone,
+{
+    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        let docs = self
+            .fields
+            .iter()
+            .zip(self.values.iter())
+            .map(|(field, value)| {
+                docs![
+                    a,
+                    a.as_string(field.0),
+                    a.space(),
+                    "|>",
+                    a.softline(),
+                    value.pretty(a)
+                ]
+                .group()
+            });
+        a.intersperse(
+            docs,
+            a.concat([a.softline_(), a.as_string(","), a.space()])
+                .into_doc(),
+        )
+    }
 }
 impl<'ctx, TV: Debug> EqUnifyValue for ClosedRow<'ctx, TV> {}
 impl<'ctx, TV> PartialEq for ClosedRow<'ctx, TV> {
@@ -262,6 +294,21 @@ impl<'ctx, TV: Copy> Row<'ctx, TV> {
         match self {
             Row::Open(var) => ctx.mk_ty(TypeKind::VarTy(var)),
             Row::Closed(row) => ctx.mk_ty(TypeKind::RowTy(row)),
+        }
+    }
+}
+
+impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &Row<'ctx, TV>
+where
+    A: 'a + Clone,
+    D: ?Sized + DocAllocator<'a, A>,
+    D::Doc: Pretty<'a, D, A> + Clone,
+    TV: Pretty<'a, D, A> + Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        match self {
+            Row::Open(tv) => tv.clone().pretty(allocator),
+            Row::Closed(row) => row.pretty(allocator),
         }
     }
 }

@@ -8,9 +8,9 @@ use aiahr_core::{
     span::Span,
 };
 use bumpalo::Bump;
-use ena::unify::{InPlaceUnificationTable, UnifyKey, UnifyValue};
+use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use rustc_hash::FxHashMap;
-use std::{cmp::Ordering, collections::BTreeSet, convert::Infallible, hash::Hash, ops::Deref};
+use std::{cmp::Ordering, collections::BTreeSet, convert::Infallible, hash::Hash};
 
 mod ty;
 pub use ty::{
@@ -31,10 +31,7 @@ pub enum TypeCheckError<'ctx> {
     /// A variable we expected to exist with a type, did not
     VarNotDefined(VarId),
     ItemNotDefined((ModuleId, ItemId)),
-    TypeMismatch(
-        Candidate<'ctx, TcUnifierVar<'ctx>>,
-        Candidate<'ctx, TcUnifierVar<'ctx>>,
-    ),
+    TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
     OccursCheckFailed(TcUnifierVar<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),
     RowsNotDisjoint(
@@ -60,76 +57,9 @@ impl<'ty> From<UnifierToTcVarError> for TypeCheckError<'ty> {
         Self::UnifierToTcVar(err)
     }
 }
-impl<'ctx>
-    From<(
-        Candidate<'ctx, TcUnifierVar<'ctx>>,
-        Candidate<'ctx, TcUnifierVar<'ctx>>,
-    )> for TypeCheckError<'ctx>
-{
-    fn from(
-        (left, right): (
-            Candidate<'ctx, TcUnifierVar<'ctx>>,
-            Candidate<'ctx, TcUnifierVar<'ctx>>,
-        ),
-    ) -> Self {
-        TypeCheckError::TypeMismatch(left, right)
-    }
-}
 impl<'ctx> From<(InferTy<'ctx>, InferTy<'ctx>)> for TypeCheckError<'ctx> {
     fn from((left, right): (InferTy<'ctx>, InferTy<'ctx>)) -> Self {
-        TypeCheckError::from((Candidate::Ty(left), Candidate::Ty(right)))
-    }
-}
-
-/// A candidate solution for a unification variable.
-/// This acts as the value in the unification table for a unification variable.
-#[derive(Debug, Hash, PartialEq, Eq, Clone)]
-pub enum Candidate<'ctx, TV> {
-    /// Our unifier represents a type
-    Ty(Ty<'ctx, TV>),
-    /// Our unifier represents a row
-    Row(ClosedRow<'ctx, TV>),
-}
-pub type InferCandidate<'infer> = Candidate<'infer, TcUnifierVar<'infer>>;
-impl<'ctx> UnifyValue for Candidate<'ctx, TcUnifierVar<'ctx>> {
-    type Error = (Self, Self);
-
-    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
-        match (left, right) {
-            (Candidate::Ty(left), Candidate::Ty(right)) => Ty::unify_values(left, right)
-                .map(Candidate::Ty)
-                .map_err(|(a, b)| (Candidate::Ty(a), Candidate::Ty(b))),
-            (Candidate::Ty(ty), Candidate::Row(_)) | (Candidate::Row(_), Candidate::Ty(ty)) => {
-                match ty.deref() {
-                    // A solved row replaces a row set when unified
-                    TypeKind::RowTy(_) => Ok(Candidate::Ty(*ty)),
-                    _ => Err((left.clone(), right.clone())),
-                }
-            }
-            (Candidate::Row(left), Candidate::Row(right)) => ClosedRow::unify_values(left, right)
-                .map(Candidate::Row)
-                .map_err(|_| unreachable!()),
-        }
-    }
-}
-
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Candidate<'ctx, TV> {
-    type TypeVar = TV;
-    type Out<T: 'ctx> = Candidate<'ctx, T /*, (Row<'ctx, T>, Row<'ctx, T>)*/>;
-
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
-        match self {
-            Candidate::Ty(ty) => ty.try_fold_with(fold).map(Candidate::Ty),
-            Candidate::Row(row) => row.try_fold_with(fold).map(Candidate::Row),
-        }
-    }
-}
-impl<'ctx, TV> From<Ty<'ctx, TV>> for Candidate<'ctx, TV> {
-    fn from(ty: Ty<'ctx, TV>) -> Self {
-        Candidate::Ty(ty)
+        TypeCheckError::TypeMismatch(left, right)
     }
 }
 
@@ -1995,9 +1925,10 @@ where
             "Expected row fields and valuse to be the same length"
         );
         debug_assert!(
-            fields
-                .iter()
-                .considered_sorted_by(|a, b| str::partial_cmp(a, b)),
+            fields.iter().considered_sorted_by(|a, b| {
+                let b: &str = b.as_ref();
+                str::partial_cmp(a, b)
+            }),
             "Expected row fields to be sorted"
         );
         ClosedRow {
@@ -2259,8 +2190,8 @@ mod tests {
         assert_matches!(
             errors[0],
             TypeCheckError::TypeMismatch(
-                Candidate::Ty(ty!(RowTy(row!(["end"], [ty!(ErrorTy)])))),
-                Candidate::Ty(ty!(RowTy(row!(["start"], [ty!(VarTy(_))]))))
+                ty!(RowTy(row!(["end"], [ty!(ErrorTy)]))),
+                ty!(RowTy(row!(["start"], [ty!(VarTy(_))])))
             )
         );
     }

@@ -7,6 +7,7 @@ use aiahr_core::memory::handle::RefHandle;
 use ena::unify::{EqUnifyValue, UnifyKey};
 
 pub mod row;
+use pretty::{docs, DocAllocator, Pretty};
 use row::*;
 
 pub mod fold;
@@ -57,6 +58,17 @@ impl<'ctx> Debug for TcUnifierVar<'ctx> {
         f.debug_tuple("TcUnifierVar").field(&self.id).finish()
     }
 }
+
+impl<'a, 'ctx, A, D> Pretty<'a, D, A> for TcUnifierVar<'ctx>
+where
+    A: 'a,
+    D: ?Sized + DocAllocator<'a, A>,
+{
+    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        "tv".pretty(a).append(a.as_string(self.id).angles()).group()
+    }
+}
+
 impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
     type Value = Option<InferTy<'ctx>>;
 
@@ -174,6 +186,17 @@ impl<'ctx, TV: fmt::Debug> fmt::Debug for Ty<'ctx, TV> {
         self.0 .0.fmt(f)
     }
 }
+impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &Ty<'ctx, TV>
+where
+    A: 'a + Clone,
+    D: ?Sized + DocAllocator<'a, A>,
+    D::Doc: Pretty<'a, D, A> + Clone,
+    TV: Pretty<'a, D, A> + Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        self.0 .0.pretty(allocator)
+    }
+}
 
 /// During inference our type variables are all unification variables.
 /// This is an alias to make inference types easy to talk about.
@@ -207,6 +230,36 @@ pub enum TypeKind<'ctx, TV> {
     ProdTy(Row<'ctx, TV>),
     /// A sum type. This is purely a wrapper type to coerce a row type to be a sum.
     SumTy(Row<'ctx, TV>),
+}
+
+impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &TypeKind<'ctx, TV>
+where
+    A: 'a + Clone,
+    D: ?Sized + DocAllocator<'a, A>,
+    D::Doc: Pretty<'a, D, A> + Clone,
+    TV: Pretty<'a, D, A> + Clone,
+{
+    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        match self {
+            TypeKind::ErrorTy => a.as_string("Error"),
+            TypeKind::IntTy => a.as_string("Int"),
+            TypeKind::VarTy(tv) => tv.clone().pretty(a),
+            TypeKind::RowTy(closed_row) => closed_row.pretty(a).nest(2).parens().group(),
+            TypeKind::FunTy(arg, ret) => arg
+                .pretty(a)
+                .append(docs![a, a.softline(), "->", a.softline(), ret].nest(2)),
+            TypeKind::ProdTy(row) => row
+                .pretty(a)
+                .enclose(a.softline(), a.softline())
+                .braces()
+                .group(),
+            TypeKind::SumTy(row) => row
+                .pretty(a)
+                .enclose(a.softline(), a.softline())
+                .angles()
+                .group(),
+        }
+    }
 }
 
 impl<'ty, TV: Clone> DefaultFold for Ty<'ty, TV> {
@@ -253,5 +306,59 @@ impl<'ctx, 'ty, TV: Clone> TypeFoldable<'ctx> for Ty<'ty, TV> {
         // If fold method is not specified we default to visiting every type via the `DefaultFold`
         // method.
         self.try_default_fold(fold)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bumpalo::Bump;
+    use ena::unify::UnifyKey;
+    use pretty::Pretty;
+
+    use crate::TypeKind::*;
+    use crate::{MkTy, Row, TyCtx};
+
+    use super::TcUnifierVar;
+
+    #[test]
+    fn test_ty_pretty_printing() {
+        let arena = Bump::new();
+        let ctx: TyCtx<'_, TcUnifierVar<'_>> = TyCtx::new(&arena);
+
+        let int = ctx.mk_ty(IntTy);
+        let row = ctx.mk_row(
+            &[ctx.mk_label("x"), ctx.mk_label("y"), ctx.mk_label("z")],
+            &[int, int, int],
+        );
+
+        let ty = ctx.mk_ty(FunTy(
+            ctx.mk_ty(ProdTy(Row::Closed(row))),
+            ctx.mk_ty(VarTy(TcUnifierVar::from_index(0))),
+        ));
+        let arena: pretty::Arena<'_, ()> = pretty::Arena::new();
+        let mut out = String::new();
+        (&ty)
+            .pretty(&arena)
+            .into_doc()
+            .render_fmt(32, &mut out)
+            .unwrap();
+        assert_eq!(
+            out,
+            r#"{ x |> Int, y |> Int, z |> Int }
+  -> tv<0>"#
+        );
+        let mut out = String::new();
+        (&ty)
+            .pretty(&arena)
+            .into_doc()
+            .render_fmt(10, &mut out)
+            .unwrap();
+        assert_eq!(
+            out,
+            r#"{ x |> Int
+, y |> Int
+, z |> Int
+} -> tv<0>"#
+        );
     }
 }
