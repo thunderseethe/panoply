@@ -1,16 +1,16 @@
 [package]
 name = "aiahr-tc"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dev-dependencies]
-aiahr-test = { path = "../test-utils" }
-assert_matches = "1.5.0"
+aiahr-test.workspace = true
+assert_matches.workspace = true
 
 [dependencies]
-aiahr-core = { path = "../core" }
-bumpalo = "3.1.0"
-ena = "0.14.0"
-pretty = "0.11.3"
-rustc-hash = "1.1.0"
+aiahr-core.workspace = true
+bumpalo.workspace = true
+ena.workspace = true
+pretty.workspace = true
+rustc-hash.workspace = true

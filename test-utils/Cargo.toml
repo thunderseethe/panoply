@@ -1,12 +1,12 @@
 [package]
 name = "aiahr-test"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aiahr-core = { path = "../core" }
-bumpalo = "3.10"
-rand = "0.8.5"
-rustc-hash = "1.1.0"
+aiahr-core.workspace = true
+bumpalo.workspace = true
+rand.workspace = true
+rustc-hash.workspace = true

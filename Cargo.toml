@@ -10,3 +10,39 @@ members = [
     "test-utils",
     "tc",
 ]
+
+[workspace.package]
+edition = "2021"
+
+# Add all new dependencies here so that we keep the versions consistent across crates.
+#
+# Unless necessary, don't specify patch numbers for dependencies whose major version number is
+# non-zero.
+[workspace.dependencies]
+aiahr-analysis = { path = "analysis" }
+aiahr-core = { path = "core" }
+aiahr-desugar = { path = "desugar" }
+aiahr-parser = { path = "parser" }
+aiahr-tc = { path = "tc" }
+aiahr-test = { path = "test-utils" }
+assert_matches = "1.5" # TODO: use `std` version when stabilized.
+bitflags = "1.3"
+bumpalo = "3.10"
+bumpalo-herd = "0.1.2"
+chumsky = "0.8"
+dashmap = "5.4"
+ena = "0.14.0"
+expect-test = "1.4"
+hashbrown = "0.13.1"
+im = "15.1"
+im-rc = "15.1.0"
+interpreter = { path = "interpreter" }
+ir-matcher = { path = "lower-ir/ir-matcher" }
+lower-ir = { path = "lower-ir" }
+pretty = "0.11.3"
+proc-macro2 = "1.0"
+quote = "1.0"
+rand = "0.8.5"
+regex = "1.6"
+rustc-hash = "1.1"
+syn = "1.0"

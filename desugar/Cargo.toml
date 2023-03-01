@@ -1,13 +1,13 @@
 [package]
 name = "aiahr-desugar"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
-aiahr-core = { path = "../core" }
-bumpalo = "3.1.0"
-rustc-hash = "1.1.0"
+aiahr-core.workspace = true
+bumpalo.workspace = true
+rustc-hash.workspace = true
 
 [dev-dependencies]
-aiahr-test = { path = "../test-utils" }
-rand = "0.8.5"
+aiahr-test.workspace = true
+rand.workspace = true

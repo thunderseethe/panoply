@@ -1,15 +1,15 @@
 [package]
 name = "aiahr-parser"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aiahr-core = { path = "../core" }
-bumpalo = "3.10"
-chumsky = "0.8"
-regex = "1.6"
+aiahr-core.workspace = true
+bumpalo.workspace = true
+chumsky.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
-assert_matches = "1.5" # TODO: use `std` version when stabilized.
+assert_matches.workspace = true
