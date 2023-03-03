@@ -21,6 +21,15 @@ pub trait ArenaByRef<T: ?Sized> {
     fn alloc_by_ref<'a>(&'a self, value: &T) -> &'a T;
 }
 
+impl<A, T: Clone> ArenaByRef<[T]> for A
+where
+    A: Arena<T>,
+{
+    fn alloc_by_ref<'a>(&'a self, value: &[T]) -> &'a [T] {
+        self.alloc_slice_by_iter(value.iter().cloned())
+    }
+}
+
 impl<T: Copy> Arena<T> for Bump {
     fn alloc(&self, value: T) -> &T {
         self.alloc(value)
@@ -32,12 +41,6 @@ impl<T: Copy> Arena<T> for Bump {
         I::IntoIter: ExactSizeIterator,
     {
         self.alloc_slice_fill_iter(iter)
-    }
-}
-
-impl<T: Copy> ArenaByRef<[T]> for Bump {
-    fn alloc_by_ref<'a>(&'a self, value: &[T]) -> &'a [T] {
-        self.alloc_slice_copy(value)
     }
 }
 
@@ -58,12 +61,6 @@ impl<'h, T: Copy> Arena<T> for Member<'h> {
         I::IntoIter: ExactSizeIterator,
     {
         self.alloc_slice_fill_iter(iter)
-    }
-}
-
-impl<'h, T: Copy> ArenaByRef<[T]> for Member<'h> {
-    fn alloc_by_ref<'a>(&'a self, value: &[T]) -> &'a [T] {
-        self.alloc_slice_copy(value)
     }
 }
 
