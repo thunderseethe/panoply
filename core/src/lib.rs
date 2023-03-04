@@ -15,6 +15,20 @@ pub mod span;
 pub mod spanner;
 pub mod token;
 
+pub mod ident {
+    /// An interned identifier.
+    #[salsa::interned]
+    pub struct Ident {
+        #[return_ref]
+        pub text: String,
+    }
+}
+
+#[salsa::jar(db = Db)]
+pub struct Jar(ident::Ident, modules::Module);
+pub trait Db: salsa::DbWithJar<Jar> {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
+
 #[cfg(test)]
 mod tests {
     #[test]

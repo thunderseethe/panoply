@@ -81,3 +81,17 @@ impl<'s> Displayer<ModuleId> for ModuleTree<'s> {
         self.get_name(*value).0
     }
 }
+
+/// A tracked module.
+///
+/// This stores input for a module and ties together the metadata produced by each pass for a given
+/// module.
+#[salsa::tracked]
+pub struct Module {
+    #[id]
+    #[return_ref]
+    name: String,
+
+    #[return_ref]
+    uri: String,
+}

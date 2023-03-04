@@ -43,4 +43,5 @@ quote = "1.0"
 rand = "0.8.5"
 regex = "1.6"
 rustc-hash = "1.1"
+salsa = { git = "https://github.com/salsa-rs/salsa/", branch = "master", package = "salsa-2022" }
 syn = "1.0"
