@@ -22,6 +22,8 @@ edition = "2021"
 aiahr-analysis = { path = "analysis" }
 aiahr-core = { path = "core" }
 aiahr-desugar = { path = "desugar" }
+aiahr-interpreter = { path = "interpreter" }
+aiahr-lower-ir = { path = "lower-ir" }
 aiahr-parser = { path = "parser" }
 aiahr-tc = { path = "tc" }
 aiahr-test = { path = "test-utils" }
@@ -35,9 +37,7 @@ ena = "0.14.0"
 expect-test = "1.4"
 hashbrown = "0.13.1"
 im = "15.1"
-interpreter = { path = "interpreter" }
 ir-matcher = { path = "lower-ir/ir-matcher" }
-lower-ir = { path = "lower-ir" }
 pretty = "0.11.3"
 proc-macro2 = "1.0"
 quote = "1.0"
