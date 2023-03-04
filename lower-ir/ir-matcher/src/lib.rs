@@ -1,6 +1,6 @@
 extern crate proc_macro;
 
-use im_rc::HashSet;
+use im::HashSet;
 use proc_macro2::Span;
 use quote::{quote, ToTokens};
 use syn::{parse::Parse, punctuated::Punctuated, *};

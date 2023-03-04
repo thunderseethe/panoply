@@ -35,7 +35,6 @@ ena = "0.14.0"
 expect-test = "1.4"
 hashbrown = "0.13.1"
 im = "15.1"
-im-rc = "15.1.0"
 interpreter = { path = "interpreter" }
 ir-matcher = { path = "lower-ir/ir-matcher" }
 lower-ir = { path = "lower-ir" }
