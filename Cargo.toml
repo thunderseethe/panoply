@@ -35,7 +35,6 @@ chumsky = "0.8"
 dashmap = "5.4"
 ena = "0.14.0"
 expect-test = "1.4"
-hashbrown = "0.13.1"
 im = "15.1"
 ir-matcher = { path = "lower-ir/ir-matcher" }
 pretty = "0.11.3"
