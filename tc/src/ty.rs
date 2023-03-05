@@ -3,12 +3,13 @@ use std::fmt::{self, Debug};
 use std::ops::Deref;
 
 use aiahr_core::id::TyVarId;
+use aiahr_core::ident::Ident;
 use aiahr_core::memory::handle::RefHandle;
 
 use ena::unify::{EqUnifyValue, UnifyKey};
 
 pub mod row;
-use pretty::{docs, DocAllocator, Pretty};
+use pretty::{docs, DocAllocator, DocBuilder};
 use row::*;
 
 pub mod fold;
@@ -65,7 +66,7 @@ impl<'ctx> From<Infallible> for TcUnifierVar<'ctx> {
     }
 }
 
-impl<'a, 'ctx, A, D> Pretty<'a, D, A> for TcUnifierVar<'ctx>
+impl<'a, 'ctx, A, D> pretty::Pretty<'a, D, A> for TcUnifierVar<'ctx>
 where
     A: 'a,
     D: ?Sized + DocAllocator<'a, A>,
@@ -106,16 +107,15 @@ pub trait MkTy<'ctx, TV> {
     fn empty_row_ty(&self) -> Ty<'ctx, TV> {
         self.mk_ty(TypeKind::RowTy(self.empty_row()))
     }
-    fn single_row(&self, label: &str, value: Ty<'ctx, TV>) -> ClosedRow<'ctx, TV> {
-        let field = self.mk_label(label);
-        self.mk_row(&[field], &[value])
+    fn single_row(&self, label: Ident, value: Ty<'ctx, TV>) -> ClosedRow<'ctx, TV> {
+        self.mk_row(&[label], &[value])
     }
-    fn single_row_ty(&self, label: &str, value: Ty<'ctx, TV>) -> Ty<'ctx, TV> {
+    fn single_row_ty(&self, label: Ident, value: Ty<'ctx, TV>) -> Ty<'ctx, TV> {
         self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
     }
 
     fn construct_row(&self, mut row: Vec<(RowLabel<'ctx>, Ty<'ctx, TV>)>) -> ClosedRow<'ctx, TV> {
-        row.sort_by(|a, b| str::cmp(&a.0, &b.0));
+        row.sort_by(|a, b| Ident::cmp(&a.0, &b.0));
 
         let fields = row.iter().map(|(k, _)| k).cloned().collect::<Vec<_>>();
         let values = row.iter().map(|(_, v)| v).cloned().collect::<Vec<_>>();
@@ -192,15 +192,14 @@ impl<'ctx, TV: fmt::Debug> fmt::Debug for Ty<'ctx, TV> {
         self.0 .0.fmt(f)
     }
 }
-impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &Ty<'ctx, TV>
-where
-    A: 'a + Clone,
-    D: ?Sized + DocAllocator<'a, A>,
-    D::Doc: Pretty<'a, D, A> + Clone,
-    TV: Pretty<'a, D, A> + Clone,
-{
-    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, A> {
-        self.0 .0.pretty(allocator)
+impl<'ctx, TV> Ty<'ctx, TV> {
+    pub fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
+    where
+        D: ?Sized + DocAllocator<'a>,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+        TV: pretty::Pretty<'a, D> + Clone,
+    {
+        self.0 .0.pretty(a, db)
     }
 }
 
@@ -238,29 +237,28 @@ pub enum TypeKind<'ctx, TV> {
     SumTy(Row<'ctx, TV>),
 }
 
-impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &TypeKind<'ctx, TV>
-where
-    A: 'a + Clone,
-    D: ?Sized + DocAllocator<'a, A>,
-    D::Doc: Pretty<'a, D, A> + Clone,
-    TV: Pretty<'a, D, A> + Clone,
-{
-    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
+impl<'ctx, TV> TypeKind<'ctx, TV> {
+    fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
+    where
+        D: ?Sized + DocAllocator<'a>,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+        TV: pretty::Pretty<'a, D> + Clone,
+    {
         match self {
             TypeKind::ErrorTy => a.as_string("Error"),
             TypeKind::IntTy => a.as_string("Int"),
             TypeKind::VarTy(tv) => tv.clone().pretty(a),
-            TypeKind::RowTy(closed_row) => closed_row.pretty(a).nest(2).parens().group(),
+            TypeKind::RowTy(closed_row) => closed_row.pretty(a, db).nest(2).parens().group(),
             TypeKind::FunTy(arg, ret) => arg
-                .pretty(a)
-                .append(docs![a, a.softline(), "->", a.softline(), ret].nest(2)),
+                .pretty(a, db)
+                .append(docs![a, a.softline(), "->", a.softline(), ret.pretty(a, db)].nest(2)),
             TypeKind::ProdTy(row) => row
-                .pretty(a)
+                .pretty(a, db)
                 .enclose(a.softline(), a.softline())
                 .braces()
                 .group(),
             TypeKind::SumTy(row) => row
-                .pretty(a)
+                .pretty(a, db)
                 .enclose(a.softline(), a.softline())
                 .angles()
                 .group(),
@@ -319,8 +317,8 @@ impl<'ctx, 'ty, TV: Clone> TypeFoldable<'ctx> for Ty<'ty, TV> {
 mod tests {
     use bumpalo::Bump;
     use ena::unify::UnifyKey;
-    use pretty::Pretty;
 
+    use crate::tests::TestDatabase;
     use crate::TypeKind::*;
     use crate::{MkTy, Row, TyCtx};
 
@@ -329,7 +327,8 @@ mod tests {
     #[test]
     fn test_ty_pretty_printing() {
         let arena = Bump::new();
-        let ctx: TyCtx<'_, TcUnifierVar<'_>> = TyCtx::new(&arena);
+        let db = TestDatabase::default();
+        let ctx: TyCtx<'_, TcUnifierVar<'_>> = TyCtx::new(&db, &arena);
 
         let int = ctx.mk_ty(IntTy);
         let row = ctx.mk_row(
@@ -344,7 +343,7 @@ mod tests {
         let arena: pretty::Arena<'_, ()> = pretty::Arena::new();
         let mut out = String::new();
         (&ty)
-            .pretty(&arena)
+            .pretty(&arena, &db)
             .into_doc()
             .render_fmt(32, &mut out)
             .unwrap();
@@ -355,7 +354,7 @@ mod tests {
         );
         let mut out = String::new();
         (&ty)
-            .pretty(&arena)
+            .pretty(&arena, &db)
             .into_doc()
             .render_fmt(10, &mut out)
             .unwrap();

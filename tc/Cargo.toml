@@ -14,3 +14,4 @@ bumpalo.workspace = true
 ena.workspace = true
 pretty.workspace = true
 rustc-hash.workspace = true
+salsa.workspace = true

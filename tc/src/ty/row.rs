@@ -1,7 +1,10 @@
 use aiahr_core::id::TyVarId;
+use aiahr_core::ident::Ident;
 use aiahr_core::memory::handle::RefHandle;
+use aiahr_core::AsCoreDb;
 use ena::unify::{EqUnifyValue, UnifyValue};
-use pretty::{docs, DocAllocator, Pretty};
+use pretty::{docs, DocAllocator, DocBuilder};
+use salsa::DebugWithDb;
 
 use crate::TypeCheckError;
 
@@ -13,7 +16,7 @@ use std::fmt::{self, Debug};
 use super::{FallibleTypeFold, MkTy, TypeKind};
 
 /// A label of a row field
-pub type RowLabel<'ctx> = RefHandle<'ctx, str>;
+pub type RowLabel<'ctx> = Ident;
 
 /// A closed row is a map of labels to types where all labels are known.
 /// Counterpart to an open row where the set of labels is polymorphic
@@ -23,20 +26,19 @@ pub type RowLabel<'ctx> = RefHandle<'ctx, str>;
 /// 1. fields and values are the same length
 /// 2. The field at index i is the key for the type at index i in values
 /// 3. fields is sorted lexographically
-#[derive(Hash)]
+#[derive(Hash, Debug)]
 pub struct ClosedRow<'ctx, TV> {
     pub fields: RefHandle<'ctx, [RowLabel<'ctx>]>,
     pub values: RefHandle<'ctx, [Ty<'ctx, TV>]>,
 }
 
-impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &ClosedRow<'ctx, TV>
-where
-    A: 'a + Clone,
-    D: ?Sized + DocAllocator<'a, A>,
-    D::Doc: Pretty<'a, D, A> + Clone,
-    TV: Pretty<'a, D, A> + Clone,
-{
-    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
+impl<'ctx, TV> ClosedRow<'ctx, TV> {
+    pub(crate) fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
+    where
+        D: ?Sized + DocAllocator<'a>,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+        TV: pretty::Pretty<'a, D> + Clone,
+    {
         let docs = self
             .fields
             .iter()
@@ -44,11 +46,11 @@ where
             .map(|(field, value)| {
                 docs![
                     a,
-                    a.as_string(field.0),
+                    a.as_string(field.text(db.as_core_db())),
                     a.space(),
                     "|>",
                     a.softline(),
-                    value.pretty(a)
+                    value.pretty(a, db)
                 ]
                 .group()
             });
@@ -59,6 +61,7 @@ where
         )
     }
 }
+
 impl<'ctx, TV: Debug> EqUnifyValue for ClosedRow<'ctx, TV> {}
 impl<'ctx, TV> PartialEq for ClosedRow<'ctx, TV> {
     fn eq(&self, other: &Self) -> bool {
@@ -129,7 +132,7 @@ impl<'ctx, TV> ClosedRow<'ctx, TV> {
             match (left_fields.peek(), right_fields.peek()) {
                 (Some(left_lbl), Some(right_lbl)) => {
                     // This ensures we don't use Handle::ord on accident
-                    match str::cmp(left_lbl, right_lbl) {
+                    match left_lbl.cmp(right_lbl) {
                         // Push left
                         Less => {
                             fields.push(*left_fields.next().unwrap());
@@ -174,11 +177,7 @@ impl<'ctx> ClosedRow<'ctx, TcUnifierVar<'ctx>> {
             .fields
             .iter()
             .zip(self.values.iter())
-            .filter(|(field, _)| {
-                sub.fields
-                    .binary_search_by(|lbl| str::cmp(lbl, field))
-                    .is_err()
-            });
+            .filter(|(field, _)| sub.fields.binary_search_by(|lbl| lbl.cmp(field)).is_err());
 
         let (mut fields, mut values) = (Vec::new(), Vec::new());
         for (field, value) in out_row {
@@ -219,13 +218,16 @@ impl<'ctx, TV> Clone for ClosedRow<'ctx, TV> {
 }
 impl<'ctx, TV> Copy for ClosedRow<'ctx, TV> {}
 
-impl<'ctx, TV: Debug> Debug for ClosedRow<'ctx, TV> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl<'ctx, TV: Debug, Db> DebugWithDb<Db> for ClosedRow<'ctx, TV>
+where
+    Db: AsCoreDb,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
         f.debug_map()
             .entries(
                 self.fields
                     .iter()
-                    .map(|handle| &handle.0)
+                    .map(|handle| handle.text(db.as_core_db()))
                     .zip(self.values.iter()),
             )
             .finish()
@@ -240,17 +242,12 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for ClosedRow<'_, TV> {
         self,
         fold: &mut F,
     ) -> Result<Self::Out<F::TypeVar>, F::Error> {
-        let labels = self
-            .fields
-            .iter()
-            .map(|lbl| fold.ctx().mk_label(lbl))
-            .collect::<Vec<_>>();
         let values = self
             .values
             .iter()
             .map(|ty| ty.try_fold_with(fold))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(fold.ctx().mk_row(labels.as_slice(), values.as_slice()))
+        Ok(fold.ctx().mk_row(&self.fields, values.as_slice()))
     }
 }
 
@@ -297,18 +294,20 @@ impl<'ctx, TV: Copy> Row<'ctx, TV> {
         }
     }
 }
-
-impl<'a, 'ctx, D, A, TV> Pretty<'a, D, A> for &Row<'ctx, TV>
-where
-    A: 'a + Clone,
-    D: ?Sized + DocAllocator<'a, A>,
-    D::Doc: Pretty<'a, D, A> + Clone,
-    TV: Pretty<'a, D, A> + Clone,
-{
-    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, A> {
+impl<'ctx, TV> Row<'ctx, TV> {
+    pub(crate) fn pretty<'a, D>(
+        &self,
+        allocator: &'a D,
+        db: &dyn crate::Db,
+    ) -> pretty::DocBuilder<'a, D>
+    where
+        D: ?Sized + DocAllocator<'a>,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+        TV: pretty::Pretty<'a, D> + Clone,
+    {
         match self {
             Row::Open(tv) => tv.clone().pretty(allocator),
-            Row::Closed(row) => row.pretty(allocator),
+            Row::Closed(row) => row.pretty(allocator, db),
         }
     }
 }

@@ -3,11 +3,13 @@ use aiahr_core::{
     diagnostic::{Citation, Diagnostic},
     displayer::Displayer,
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
+    ident::Ident,
     memory::{
         handle::{Handle, RefHandle},
         intern::{Interner, InternerByRef, SyncInterner},
     },
     span::Span,
+    AsCoreDb,
 };
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
@@ -44,14 +46,14 @@ pub enum TypeCheckError<'ctx> {
     ),
     RowsNotEqual(InferRow<'ctx>, InferRow<'ctx>),
     UndefinedEffectSignature(ClosedRow<'ctx, TcUnifierVar<'ctx>>),
-    UndefinedEffect(RefHandle<'ctx, str>),
+    UndefinedEffect(Ident),
     UnsolvedHandle {
         handler: TcUnifierVar<'ctx>,
         eff: TcUnifierVar<'ctx>,
     },
 }
 
-fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
+fn into_diag(db: &dyn crate::Db, err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
     let d: pretty::Arena<'_, ()> = pretty::Arena::new();
     // TODO: We should probably store the doc in diagnostic directly so we can lay it out at print
     // time when we have more info
@@ -61,7 +63,17 @@ fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
             let doc = d
                 .as_string("Type mismatch:")
                 .append(d.softline())
-                .append(docs![&d, &left, d.softline(), "!=", d.softline(), &right].nest(2))
+                .append(
+                    docs![
+                        &d,
+                        left.pretty(&d, db),
+                        d.softline(),
+                        "!=",
+                        d.softline(),
+                        right.pretty(&d, db)
+                    ]
+                    .nest(2),
+                )
                 .into_doc();
             let mut message = String::new();
             doc.render_fmt(width, &mut message).unwrap();
@@ -77,7 +89,7 @@ fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
                         d.text("cycle detected for type variable"),
                         var.pretty(&d),
                         d.text("with inferred type"),
-                        ty.pretty(&d),
+                        ty.pretty(&d, db),
                     ],
                     d.space(),
                 )
@@ -93,12 +105,12 @@ fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
             let doc = d
                 .text("rows overlap on label:")
                 .append(d.space())
-                .append(d.text(&*lbl))
+                .append(d.text(lbl.text(db.as_core_db())))
                 .append(
                     d.hardline()
-                        .append(left.pretty(&d))
+                        .append(left.pretty(&d, db))
                         .append(d.hardline())
-                        .append(right.pretty(&d))
+                        .append(right.pretty(&d, db))
                         .nest(2),
                 );
             let mut message = String::new();
@@ -113,9 +125,9 @@ fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
                 .text("expected rows to be equal")
                 .append(d.hardline())
                 .append(
-                    left.pretty(&d)
+                    left.pretty(&d, db)
                         .append(d.hardline())
-                        .append(right.pretty(&d))
+                        .append(right.pretty(&d, db))
                         .nest(2),
                 );
             let mut message = String::new();
@@ -129,7 +141,7 @@ fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
             let doc = d
                 .text("could not find an effect signature matching handler:")
                 .append(d.softline())
-                .append(signature.pretty(&d));
+                .append(signature.pretty(&d, db));
             let mut message = String::new();
             doc.render_fmt(width, &mut message).unwrap();
             TypeCheckDiagnostic {
@@ -141,7 +153,10 @@ fn into_diag(err: TypeCheckError<'_>, span: Span) -> TypeCheckDiagnostic {
             name: "Undefined Effect",
             principal: Citation {
                 span,
-                message: format!("could not find an effect defintion for: {}", eff_name.0),
+                message: format!(
+                    "could not find an effect defintion for: {}",
+                    eff_name.text(db.as_core_db())
+                ),
             },
         },
         TypeCheckError::UnsolvedHandle { .. } => {
@@ -506,6 +521,7 @@ struct InferCtx<'a, 'ctx, 'infer, I, State: InferState = Generation> {
     errors: Vec<TypeCheckDiagnostic>,
     /// Allocator for types created during inference
     ctx: &'a I,
+    db: &'a dyn Db,
     ast: &'a Ast<'ctx, VarId>,
     state: State::Storage<'ctx, 'infer>,
     _marker: std::marker::PhantomData<State>,
@@ -535,13 +551,14 @@ impl<'a, 'ctx, 'infer, I> InferCtx<'a, 'ctx, 'infer, I>
 where
     I: MkTy<'infer, TcUnifierVar<'infer>>,
 {
-    pub(crate) fn new(ctx: &'a I, ast: &'a Ast<'ctx, VarId>) -> Self {
+    pub(crate) fn new(db: &'a dyn crate::Db, ctx: &'a I, ast: &'a Ast<'ctx, VarId>) -> Self {
         Self {
             local_env: FxHashMap::default(),
             unifiers: InPlaceUnificationTable::default(),
             errors: vec![],
             constraints: Constraints::default(),
             ctx,
+            db,
             ast,
             state: GenerationStorage {
                 var_tys: FxHashMap::default(),
@@ -610,7 +627,12 @@ where
                 // If our row is too small or too big, fail
                 if row.fields.len() != 1 {
                     self.errors.push(into_diag(
-                        (self.single_row_ty(label, self.mk_ty(ErrorTy)), expected.ty).into(),
+                        self.db,
+                        (
+                            self.single_row_ty(self.mk_label(label), self.mk_ty(ErrorTy)),
+                            expected.ty,
+                        )
+                            .into(),
                         current_span(),
                     ));
                     return;
@@ -619,11 +641,8 @@ where
                 // If our singleton row is a different field name, fail
                 if field != row.fields[0] {
                     self.errors.push(into_diag(
-                        (
-                            self.single_row_ty(field.as_ref(), self.mk_ty(ErrorTy)),
-                            expected.ty,
-                        )
-                            .into(),
+                        self.db,
+                        (self.single_row_ty(field, self.mk_ty(ErrorTy)), expected.ty).into(),
                         current_span(),
                     ))
                 }
@@ -638,7 +657,7 @@ where
                 current_span(),
             ),
             (Unlabel { label, term }, _) => {
-                let expected_ty = self.single_row_ty(label, expected.ty);
+                let expected_ty = self.single_row_ty(self.mk_label(label), expected.ty);
                 self._check(eff_info, term, expected.with_ty(expected_ty))
             }
             (Concat { .. }, RowTy(row)) => {
@@ -824,6 +843,7 @@ where
                     InferResult::new(ty, Row::Closed(self.empty_row()))
                 } else {
                     self.errors.push(into_diag(
+                        self.db,
                         TypeCheckError::VarNotDefined(*var),
                         current_span(),
                     ));
@@ -834,7 +854,7 @@ where
             }
             Label { label, term } => {
                 let infer = self._infer(eff_info, term);
-                infer.map_ty(|ty| self.single_row_ty(label, ty))
+                infer.map_ty(|ty| self.single_row_ty(self.mk_label(label), ty))
             }
             Unlabel { label, term } => {
                 let term_infer = self._infer(eff_info, term);
@@ -970,7 +990,7 @@ where
                 InferResult::new(
                     sig.ty,
                     Row::Closed(self.single_row(
-                        &eff_info.effect_name(eff_id),
+                        eff_info.effect_name(eff_id),
                         self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
                     )),
                 )
@@ -1120,6 +1140,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 errors: prior.errors,
                 constraints: prior.constraints,
                 ctx: prior.ctx,
+                db: prior.db,
                 ast: prior.ast,
                 state: BTreeSet::new(),
                 _marker: std::marker::PhantomData,
@@ -1140,17 +1161,17 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
         let constraints = std::mem::take(&mut self.constraints);
         for (left, right, span) in constraints.tys {
             self.unify_ty_ty(left, right)
-                .map_err(|err| self.errors.push(into_diag(err, span)))
+                .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
         for (RowCombination { left, right, goal }, span) in constraints.rows {
             self.unify_row_combine(left, right, goal)
-                .map_err(|err| self.errors.push(into_diag(err, span)))
+                .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
         for (HandlesConstraint { handler, eff, ret }, span) in constraints.handles {
             self.lookup_effect_and_unify(eff_info, handler, eff, ret)
-                .map_err(|err| self.errors.push(into_diag(err, span)))
+                .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
         (self.unifiers, self.state, self.errors)
@@ -1635,7 +1656,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
 
         let unify_sig_handler =
             |ctx: &mut Self,
-             members_sig: Vec<(RefHandle<'_, str>, TyScheme<'eff, TyVarId>)>,
+             members_sig: Vec<(Ident, TyScheme<'eff, TyVarId>)>,
              sig: ClosedRow<'infer, TcUnifierVar<'infer>>| {
                 let sig_unify = members_sig
                     .into_iter()
@@ -1643,8 +1664,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 for ((member_name, scheme), (field_name, ty)) in sig_unify {
                     // Sanity check that our handler fields and effect members line up the way we
                     // expect them to.
-                    let field_str: &str = field_name.as_ref();
-                    debug_assert!(str::eq(&member_name, field_str));
+                    debug_assert_eq!(&member_name, field_name);
 
                     let mut inst = Instantiate {
                         ctx: ctx.ctx,
@@ -1701,7 +1721,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 // Sort our members so they are in the same order as sig.fields
                 // TODO: Should we have an invariant that effect_members returns members "in
                 // order"?
-                members_sig.sort_by(|(a, _), (b, _)| str::cmp(a, b));
+                members_sig.sort_by(|(a, _), (b, _)| a.cmp(b));
 
                 println!("Effect Id: {:?}", eff_id);
 
@@ -1711,13 +1731,13 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 // That means we can unify our eff_var against our effect
                 let eff_name = eff_info.effect_name(eff_id);
                 let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
-                let eff_row = self.mk_row(&[self.mk_label(&eff_name)], &[unit_ty]);
+                let eff_row = self.mk_row(&[eff_name], &[unit_ty]);
                 self.unify_var_ty(eff_var, self.mk_ty(RowTy(eff_row)))
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len() == 1);
                 let eff_id = eff_info
-                    .lookup_effect_by_name(&eff.fields[0])
+                    .lookup_effect_by_name(eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let mut members_sig = eff_info
                     .effect_members(eff_id)
@@ -1733,14 +1753,14 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 // Sort our members so they are in the same order as sig.fields
                 // TODO: Should we have an invariant that effect_members returns members "in
                 // order"?
-                members_sig.sort_by(|(a, _), (b, _)| str::cmp(a, b));
+                members_sig.sort_by_key(|(id, _)| *id);
 
                 unify_sig_handler(self, members_sig, handler)
             }
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len() == 1);
                 let eff_id = eff_info
-                    .lookup_effect_by_name(&eff.fields[0])
+                    .lookup_effect_by_name(eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let members_sig = eff_info
                     .effect_members(eff_id)
@@ -1769,10 +1789,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                             scheme.ty.try_fold_with(&mut inst).unwrap(),
                         )?;
 
-                        Ok((
-                            self.mk_label(&eff_info.effect_member_name(eff_id, *eff_op_id)),
-                            member_ty,
-                        ))
+                        Ok((eff_info.effect_member_name(eff_id, *eff_op_id), member_ty))
                     })
                     .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
 
@@ -1894,7 +1911,7 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
 /// Information we need about effects during type checking
 pub trait EffectInfo<'s, 'ctx> {
     /// Lookup the name of an effect from it's ID
-    fn effect_name(&self, eff: EffectId) -> RefHandle<'s, str>;
+    fn effect_name(&self, eff: EffectId) -> Ident;
     /// Lookup effect members from it's ID
     fn effect_members(&self, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]>;
 
@@ -1902,16 +1919,16 @@ pub trait EffectInfo<'s, 'ctx> {
     fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId;
     /// Look up an effect by the name of it's members, this may fail if an invalid list of member
     /// names is passed.
-    fn lookup_effect_by_member_names<'a>(&self, members: &[RefHandle<'a, str>])
-        -> Option<EffectId>;
-    fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId>;
+    fn lookup_effect_by_member_names<'a>(&self, members: &[Ident]) -> Option<EffectId>;
+    fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId>;
     /// Lookup the type signature of an effect's member
     fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId>;
     /// Lookup the name of an effect's member
-    fn effect_member_name(&self, eff: EffectId, member: EffectOpId) -> RefHandle<'s, str>;
+    fn effect_member_name(&self, eff: EffectId, member: EffectOpId) -> Ident;
 }
 
 pub fn type_check<'ty, 'infer, 's, 'eff, I, II, E>(
+    db: &dyn crate::Db,
     ty_ctx: &I,
     infer_ctx: &II, // TODO: Consider removing this to ensure inference don't escape type checking.
     eff_info: &E,
@@ -1927,10 +1944,11 @@ where
     II: MkTy<'infer, TcUnifierVar<'infer>>,
     E: EffectInfo<'s, 'eff>,
 {
-    tc_term(ty_ctx, infer_ctx, eff_info, ast)
+    tc_term(db, ty_ctx, infer_ctx, eff_info, ast)
 }
 
 fn tc_term<'ty, 'infer, 's, 'eff, I, II, E>(
+    db: &dyn crate::Db,
     ty_ctx: &I,
     infer_ctx: &II,
     eff_info: &E,
@@ -1947,7 +1965,7 @@ where
     E: EffectInfo<'s, 'eff>,
 {
     let term = ast.root();
-    let infer = InferCtx::new(infer_ctx, ast);
+    let infer = InferCtx::new(db, infer_ctx, ast);
 
     // Infer types for all our variables and the root term.
     let (infer, gen_storage, result) = infer.infer(eff_info, term);
@@ -2043,18 +2061,20 @@ pub struct TyCtx<'ctx, TV> {
     labels: SyncInterner<'ctx, str, Bump>,
     row_fields: SyncInterner<'ctx, [RowLabel<'ctx>], Bump>,
     row_values: SyncInterner<'ctx, [Ty<'ctx, TV>], Bump>,
+    db: &'ctx dyn crate::Db,
 }
 
 impl<'ctx, TV> TyCtx<'ctx, TV>
 where
     TV: Eq + Copy + Hash,
 {
-    pub fn new(arena: &'ctx Bump) -> Self {
+    pub fn new(db: &'ctx dyn crate::Db, arena: &'ctx Bump) -> Self {
         Self {
             tys: SyncInterner::new(arena),
             labels: SyncInterner::new(arena),
             row_fields: SyncInterner::new(arena),
             row_values: SyncInterner::new(arena),
+            db,
         }
     }
 }
@@ -2068,7 +2088,7 @@ where
     }
 
     fn mk_label(&self, label: &str) -> RowLabel<'ctx> {
-        self.labels.intern_by_ref(label)
+        Ident::new(self.db.as_core_db(), label.to_string())
     }
 
     fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV> {
@@ -2077,10 +2097,7 @@ where
             "Expected row fields and valuse to be the same length"
         );
         debug_assert!(
-            fields.iter().considered_sorted_by(|a, b| {
-                let b: &str = b.as_ref();
-                str::partial_cmp(a, b)
-            }),
+            fields.iter().considered_sorted(),
             "Expected row fields to be sorted"
         );
         ClosedRow {
@@ -2144,17 +2161,30 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
     println!("]");
 }
 
+#[salsa::jar(db = Db)]
+pub struct Jar();
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+
+impl aiahr_core::AsCoreDb for dyn crate::Db + '_ {
+    fn as_core_db<'a>(&'a self) -> &'a dyn aiahr_core::Db {
+        <Self as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
+    }
+}
+
 pub mod test_utils {
     use aiahr_core::id::{EffectId, EffectOpId, TyVarId};
+    use aiahr_core::ident::Ident;
     use aiahr_core::memory::handle::{self, RefHandle};
+    use aiahr_core::AsCoreDb;
 
     use crate::{ClosedRow, EffectInfo, Row, Ty, TyScheme};
 
     // Utility trait to remove a lot of the intermediate allocation when creating ASTs
     // Helps make tests a little more readable
 
-    pub struct DummyEff;
-    impl DummyEff {
+    pub struct DummyEff<'a>(pub &'a dyn crate::Db);
+    impl<'a> DummyEff<'a> {
         pub const STATE_ID: EffectId = EffectId(0);
         pub const READER_ID: EffectId = EffectId(1);
 
@@ -2162,11 +2192,11 @@ pub mod test_utils {
         pub const PUT_ID: EffectOpId = EffectOpId(1);
         pub const ASK_ID: EffectOpId = EffectOpId(2);
     }
-    impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff {
-        fn effect_name(&self, eff: EffectId) -> RefHandle<'s, str> {
+    impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff<'_> {
+        fn effect_name(&self, eff: EffectId) -> Ident {
             match eff {
-                DummyEff::STATE_ID => handle::Handle("State"),
-                DummyEff::READER_ID => handle::Handle("Reader"),
+                DummyEff::STATE_ID => Ident::new(self.0.as_core_db(), "State".to_string()),
+                DummyEff::READER_ID => Ident::new(self.0.as_core_db(), "Reader".to_string()),
                 _ => unimplemented!(),
             }
         }
@@ -2187,20 +2217,33 @@ pub mod test_utils {
             }
         }
 
-        fn lookup_effect_by_member_names<'a>(
-            &self,
-            members: &[RefHandle<'a, str>],
-        ) -> Option<EffectId> {
-            match members {
-                [handle::Handle("put"), handle::Handle("get")]
-                | [handle::Handle("get"), handle::Handle("put")] => Some(DummyEff::STATE_ID),
-                [handle::Handle("ask")] => Some(DummyEff::READER_ID),
-                _ => None,
-            }
+        fn lookup_effect_by_member_names<'a>(&self, members: &[Ident]) -> Option<EffectId> {
+            members
+                .get(0)
+                .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
+                    "ask" => Some(DummyEff::READER_ID),
+                    "get" => {
+                        members
+                            .get(1)
+                            .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
+                                "put" => Some(DummyEff::STATE_ID),
+                                _ => None,
+                            })
+                    }
+                    "put" => {
+                        members
+                            .get(1)
+                            .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
+                                "get" => Some(DummyEff::STATE_ID),
+                                _ => None,
+                            })
+                    }
+                    _ => None,
+                })
         }
 
-        fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId> {
-            match name {
+        fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId> {
+            match name.text(self.0.as_core_db()).as_str() {
                 "State" => Some(DummyEff::STATE_ID),
                 "Reader" => Some(DummyEff::READER_ID),
                 _ => None,
@@ -2253,12 +2296,12 @@ pub mod test_utils {
             }
         }
 
-        fn effect_member_name(&self, _eff: EffectId, member: EffectOpId) -> RefHandle<'s, str> {
+        fn effect_member_name(&self, _eff: EffectId, member: EffectOpId) -> Ident {
             match member {
-                DummyEff::GET_ID => handle::Handle("get"),
-                DummyEff::PUT_ID => handle::Handle("put"),
-                DummyEff::ASK_ID => handle::Handle("ask"),
-                _ => unimplemented!(),
+                DummyEff::GET_ID => Ident::new(self.0.as_core_db(), "get".to_string()),
+                DummyEff::PUT_ID => Ident::new(self.0.as_core_db(), "put".to_string()),
+                DummyEff::ASK_ID => Ident::new(self.0.as_core_db(), "ask".to_string()),
+                _ => unreachable!(),
             }
         }
     }
@@ -2288,7 +2331,7 @@ mod tests {
     macro_rules! row {
         ([$($field:pat),*], [$($value:pat),*]) => {
             ClosedRow {
-                fields: Handle([$(Handle($field)),*]),
+                fields: Handle([$($field),*]),
                 values: Handle([$($value),*]),
             }
         };
@@ -2300,11 +2343,24 @@ mod tests {
             tmp.sort();
             assert_matches!(tmp.as_slice(), [$($elem),*]);
         }};
+        ($vec: expr, [$($elem:pat),*] => $body:expr) => {{
+            let mut tmp = $vec;
+            tmp.sort();
+            assert_matches!(tmp.as_slice(), [$($elem),*] => $body);
+        }};
     }
+
+    #[derive(Default)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    pub(crate) struct TestDatabase {
+        storage: salsa::Storage<Self>,
+    }
+    impl salsa::Database for TestDatabase {}
 
     #[test]
     fn test_tc_unlabel() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let x = VarId(0);
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
             builder.mk_abs(
@@ -2312,10 +2368,11 @@ mod tests {
                 builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
             )
         });
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, _) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             scheme.ty,
@@ -2326,6 +2383,7 @@ mod tests {
     #[test]
     fn test_tc_unlabel_fails_on_wrong_label() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let x = VarId(0);
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
             builder.mk_abs(
@@ -2333,10 +2391,11 @@ mod tests {
                 builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
             )
         });
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (_, _, _, errors) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, _, errors) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             errors[0],
@@ -2351,40 +2410,45 @@ mod tests {
     #[test]
     fn test_tc_label() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let x = VarId(0);
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, _) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
                 ty!(VarTy(TyVarId(0))),
                 ty!(RowTy(ClosedRow {
-                    fields: Handle(&[Handle("start")]),
+                    fields: Handle(&[start]),
                     values: Handle(&[ty!(VarTy(TyVarId(0)))])
                 })),
-            ))
+            )) => {
+                assert_eq!(start.text(&db), "start");
+            }
         );
     }
 
     #[test]
     fn test_tc_abs() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let x = VarId(0);
         let y = VarId(1);
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
         let (var_to_tys, _, scheme, _) =
-            type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TyVarId(0)))));
         assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TyVarId(1)))));
@@ -2400,6 +2464,7 @@ mod tests {
     #[test]
     fn test_tc_sum_literal() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let t = VarId(0);
         let f = VarId(1);
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
@@ -2409,28 +2474,33 @@ mod tests {
             )
         });
 
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, _) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
                 ty!(SumTy(Row::Closed(row!(
-                    ["false", "true"],
+                    [true_, false_],
                     [ty!(VarTy(TyVarId(0))), ty!(VarTy(TyVarId(0)))]
                 )))),
                 ty!(VarTy(TyVarId(0)))
-            ))
+            )) => {
+                assert_eq!(false_.text(&db), "false");
+                assert_eq!(true_.text(&db), "true");
+            }
         );
     }
 
     #[test]
     fn test_tc_product_literal() {
         let arena = Bump::new();
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let db = TestDatabase::default();
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
         let x = VarId(0);
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
@@ -2449,14 +2519,15 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, _) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             scheme.ty,
             ty!(FunTy(
                 ty!(VarTy(TyVarId(0))),
                 ty!(ProdTy(Row::Closed(row!(
-                    ["a", "b", "c", "d"],
+                    [a, b, c, d],
                     [
                         ty!(VarTy(TyVarId(0))),
                         ty!(VarTy(TyVarId(0))),
@@ -2464,15 +2535,21 @@ mod tests {
                         ty!(VarTy(TyVarId(0)))
                     ]
                 ))))
-            ))
+            )) => {
+                assert_eq!(a.text(&db), "a");
+                assert_eq!(b.text(&db), "b");
+                assert_eq!(c.text(&db), "c");
+                assert_eq!(d.text(&db), "d");
+            }
         )
     }
 
     #[test]
     fn test_tc_product_wand() {
         let arena = Bump::new();
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let db = TestDatabase::default();
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
         let m = VarId(0);
         let n = VarId(1);
@@ -2489,13 +2566,14 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, _) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
             [
                 Evidence::Row {
-                    left: Row::Closed(row!(["x"], [ty!(VarTy(TyVarId(2)))])),
+                    left: Row::Closed(row!([x], [ty!(VarTy(TyVarId(2)))])),
                     right: Row::Open(_),
                     goal: Row::Open(TyVarId(3))
                 },
@@ -2504,7 +2582,9 @@ mod tests {
                     right: Row::Open(_),
                     goal: Row::Open(TyVarId(3))
                 }
-            ]
+            ] => {
+                assert_eq!(x.text(&db), "x");
+            }
         );
         assert_matches!(
             scheme.ty,
@@ -2518,8 +2598,9 @@ mod tests {
     #[test]
     fn test_tc_applied_wand() {
         let arena = Bump::new();
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let db = TestDatabase::default();
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
         let m = VarId(0);
         let n = VarId(1);
@@ -2539,15 +2620,18 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, _) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
             [Evidence::Row {
-                left: Row::Closed(row!(["x"], [ty!({})])),
+                left: Row::Closed(row!([x], [ty!({})])),
                 right: Row::Open(_),
                 goal: Row::Open(_),
-            }]
+            }] => {
+                assert_eq!(x.text(&db), "x");
+            }
         );
 
         assert_matches!(scheme.ty, ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!({}))))
@@ -2556,23 +2640,28 @@ mod tests {
     #[test]
     fn test_tc_eff_operation_infers_correct_effect() {
         let arena = Bump::new();
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let db = TestDatabase::default();
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
             builder.mk_app(Operation(EffectOpId(0)), Unit)
         });
-        let (_, _, scheme, _) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, _) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
-        assert_matches!(scheme.eff, Row::Closed(row!(["State"], [ty!(ty_pat!({}))])));
+        assert_matches!(scheme.eff, Row::Closed(row!([state], [ty!(ty_pat!({}))])) => {
+            assert_eq!(state.text(&db), "State");
+        });
         assert_matches!(scheme.ty, ty!(IntTy))
     }
 
     #[test]
     fn test_tc_eff_handler_removes_correct_effect() {
         let arena = Bump::new();
-        let infer_intern = TyCtx::new(&arena);
-        let ty_intern = TyCtx::new(&arena);
+        let db = TestDatabase::default();
+        let infer_intern = TyCtx::new(&db, &arena);
+        let ty_intern = TyCtx::new(&db, &arena);
 
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
             builder.mk_handler(
@@ -2602,12 +2691,15 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, errors) = type_check(&ty_intern, &infer_intern, &DummyEff, &untyped_ast);
+        let (_, _, scheme, errors) =
+            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
 
         assert_eq!(errors, vec![]);
         assert_matches!(
             scheme.eff,
-            Row::Closed(row!(["Reader"], [ty!(ty_pat!({}))]))
+            Row::Closed(row!([reader], [ty!(ty_pat!({}))])) => {
+                assert_eq!(reader.text(&db), "Reader");
+            }
         );
         assert_matches!(scheme.ty, ty!(RowTy(row!([], []))));
     }
@@ -2615,11 +2707,12 @@ mod tests {
     #[test]
     fn test_tc_undefined_var_fails() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let (untyped_ast, _) = AstBuilder::with_builder(&arena, |_| Variable(VarId(0)));
-        let infer_ctx = TyCtx::new(&arena);
-        let ty_ctx = TyCtx::new(&arena);
+        let infer_ctx = TyCtx::new(&db, &arena);
+        let ty_ctx = TyCtx::new(&db, &arena);
 
-        let (_, _, _, errors) = type_check(&infer_ctx, &ty_ctx, &DummyEff, &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, &infer_ctx, &ty_ctx, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             &errors[0],

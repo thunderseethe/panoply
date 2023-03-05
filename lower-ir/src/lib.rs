@@ -1,6 +1,7 @@
 use std::ops::Index;
 
 use aiahr_core::id::{EffectId, EffectOpId};
+use aiahr_core::ident::Ident;
 use aiahr_core::memory::intern::{Interner, InternerByRef, SyncInterner};
 use aiahr_core::{
     ast::{Ast, Direction, RowTerm, RowTermView, Term},
@@ -882,7 +883,7 @@ where
                 };
                 let eff = self
                     .db
-                    .lookup_effect_by_name(&eff_name)
+                    .lookup_effect_by_name(eff_name)
                     .expect("Invalid effect name should've been caught in type checking");
                 let eff_index = self.db.effect_vector_index(eff);
                 let handler_var = IrVar {
@@ -941,7 +942,7 @@ where
 pub trait IrEffectInfo<'ctx> {
     fn lookup_effect_by_member(&self, op_id: EffectOpId) -> EffectId;
 
-    fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId>;
+    fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId>;
 
     fn effect_handler_return_index(&self, eff_id: EffectId) -> usize;
     fn effect_member_op_index(&self, eff_id: EffectId, op_id: EffectOpId) -> usize;
@@ -1002,41 +1003,42 @@ pub mod test_utils {
         }};
     }
 
-    pub struct LowerDb<'ctx> {
+    pub struct LowerDb<'a, 'ctx> {
         var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
         term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<'ctx, TyVarId>>,
-        eff_info: DummyEff,
+        eff_info: DummyEff<'a>,
     }
 
-    impl<'ctx> LowerDb<'ctx> {
+    impl<'a, 'ctx> LowerDb<'a, 'ctx> {
         pub fn new(
+            db: &'a dyn aiahr_tc::Db,
             var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
             term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<'ctx, TyVarId>>,
         ) -> Self {
             Self {
                 var_tys,
                 term_tys,
-                eff_info: DummyEff,
+                eff_info: DummyEff(db),
             }
         }
     }
-    impl<'ctx> VarTys<'ctx> for LowerDb<'ctx> {
+    impl<'ctx> VarTys<'ctx> for LowerDb<'_, 'ctx> {
         fn lookup_var(&self, var_id: VarId) -> Ty<'ctx, TyVarId> {
             self.var_tys[&var_id]
         }
     }
-    impl<'ctx> TermTys<'ctx> for LowerDb<'ctx> {
+    impl<'ctx> TermTys<'ctx> for LowerDb<'_, 'ctx> {
         fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<'ctx, TyVarId> {
             self.term_tys[term]
         }
     }
-    impl<'ctx> ItemSchemes<'ctx> for LowerDb<'ctx> {
+    impl<'ctx> ItemSchemes<'ctx> for LowerDb<'_, 'ctx> {
         fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme<'ctx, TyVarId> {
             todo!()
         }
     }
-    impl<'ctx> EffectInfo<'ctx, 'ctx> for LowerDb<'ctx> {
-        fn effect_name(&self, eff: aiahr_core::id::EffectId) -> RefHandle<'static, str> {
+    impl<'ctx> EffectInfo<'ctx, 'ctx> for LowerDb<'_, 'ctx> {
+        fn effect_name(&self, eff: aiahr_core::id::EffectId) -> Ident {
             self.eff_info.effect_name(eff)
         }
 
@@ -1066,25 +1068,22 @@ pub mod test_utils {
             &self,
             eff: aiahr_core::id::EffectId,
             member: aiahr_core::id::EffectOpId,
-        ) -> RefHandle<'static, str> {
+        ) -> Ident {
             self.eff_info.effect_member_name(eff, member)
         }
 
-        fn lookup_effect_by_member_names<'a>(
-            &self,
-            members: &[RefHandle<'a, str>],
-        ) -> Option<EffectId> {
+        fn lookup_effect_by_member_names<'a>(&self, members: &[Ident]) -> Option<EffectId> {
             self.eff_info.lookup_effect_by_member_names(members)
         }
 
-        fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId> {
+        fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId> {
             self.eff_info.lookup_effect_by_name(name)
         }
     }
 
-    impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'ctx> {
+    impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'_, 'ctx> {
         fn lookup_effect_by_member(&self, op_id: EffectOpId) -> EffectId {
-            DummyEff.lookup_effect_by_member(op_id)
+            self.eff_info.lookup_effect_by_member(op_id)
         }
 
         fn effect_handler_return_index(&self, eff_id: EffectId) -> usize {
@@ -1156,8 +1155,8 @@ pub mod test_utils {
             }
         }
 
-        fn lookup_effect_by_name(&self, name: &str) -> Option<EffectId> {
-            DummyEff.lookup_effect_by_name(name)
+        fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId> {
+            self.eff_info.lookup_effect_by_name(name)
         }
     }
 }
@@ -1180,13 +1179,21 @@ mod tests {
 
     const MODNAME: &str = "test_module";
 
+    #[derive(Default)]
+    #[salsa::db(aiahr_core::Jar, aiahr_tc::Jar)]
+    struct TestDatabase {
+        storage: salsa::Storage<Self>,
+    }
+    impl salsa::Database for TestDatabase {}
+
     /// Compile an input string up to (but not including) the lower stage.
-    fn compile_upto_lower<'ctx, S>(
+    fn compile_upto_lower<'a, 'ctx, S>(
+        db: &'a TestDatabase,
         arena: &'ctx Bump,
         interner: &'ctx S,
         ty_ctx: &aiahr_tc::TyCtx<'ctx, TyVarId>,
         input: &str,
-    ) -> (LowerDb<'ctx>, TyScheme<'ctx, TyVarId>, Ast<'ctx, VarId>)
+    ) -> (LowerDb<'a, 'ctx>, TyScheme<'ctx, TyVarId>, Ast<'ctx, VarId>)
     where
         S: InternerByRef<'ctx, str>,
     {
@@ -1214,18 +1221,19 @@ mod tests {
 
         let ast = aiahr_desugar::desugar(arena, &mut vars, resolved).unwrap();
 
-        let infer_ctx = aiahr_tc::TyCtx::new(arena);
+        let infer_ctx = aiahr_tc::TyCtx::new(db, arena);
         let (var_tys, term_tys, scheme, _) =
-            aiahr_tc::type_check(ty_ctx, &infer_ctx, &DummyEff, &ast);
-        (LowerDb::new(var_tys, term_tys), scheme, ast)
+            aiahr_tc::type_check(db, ty_ctx, &infer_ctx, &DummyEff(db), &ast);
+        (LowerDb::new(db, var_tys, term_tys), scheme, ast)
     }
 
     #[test]
     fn lower_id() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let interner = SyncInterner::new(&arena);
-        let ty_ctx = aiahr_tc::TyCtx::new(&arena);
-        let (db, scheme, ast) = compile_upto_lower(&arena, &interner, &ty_ctx, "|x| x");
+        let ty_ctx = aiahr_tc::TyCtx::new(&db, &arena);
+        let (db, scheme, ast) = compile_upto_lower(&db, &arena, &interner, &ty_ctx, "|x| x");
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
 
@@ -1237,10 +1245,11 @@ mod tests {
     #[test]
     fn lower_product_literal() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let interner = SyncInterner::new(&arena);
-        let ty_ctx = aiahr_tc::TyCtx::new(&arena);
+        let ty_ctx = aiahr_tc::TyCtx::new(&db, &arena);
         let (db, scheme, ast) =
-            compile_upto_lower(&arena, &interner, &ty_ctx, "|a| { x = a, y = a }");
+            compile_upto_lower(&db, &arena, &interner, &ty_ctx, "|a| { x = a, y = a }");
 
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
@@ -1260,8 +1269,9 @@ mod tests {
     #[test]
     fn lower_wand() {
         let arena = Bump::new();
-        let ty_ctx = aiahr_tc::TyCtx::new(&arena);
-        let infer_ctx = aiahr_tc::TyCtx::new(&arena);
+        let db = TestDatabase::default();
+        let ty_ctx = aiahr_tc::TyCtx::new(&db, &arena);
+        let infer_ctx = aiahr_tc::TyCtx::new(&db, &arena);
         let ir_ctx = IrCtx::new(&arena);
         let m = VarId(0);
         let n = VarId(1);
@@ -1277,10 +1287,20 @@ mod tests {
                 ),
             )
         });
-        let (var_tys, term_ress, scheme, _) =
-            aiahr_tc::type_check(&ty_ctx, &infer_ctx, &aiahr_tc::test_utils::DummyEff, &ast);
+        let (var_tys, term_ress, scheme, _) = aiahr_tc::type_check(
+            &db,
+            &ty_ctx,
+            &infer_ctx,
+            &aiahr_tc::test_utils::DummyEff(&db),
+            &ast,
+        );
 
-        let ir = lower(&LowerDb::new(var_tys, term_ress), &ir_ctx, &scheme, &ast);
+        let ir = lower(
+            &LowerDb::new(&db, var_tys, term_ress),
+            &ir_ctx,
+            &scheme,
+            &ast,
+        );
 
         ir_matcher!(
             ir,
