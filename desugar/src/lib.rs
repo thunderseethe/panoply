@@ -15,6 +15,245 @@ use aiahr_core::{
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
+struct DesugarCtx<'a, 'ctx, 's> {
+    arena: &'ctx Bump,
+    vars: &'a mut IdGen<VarId, RefHandle<'s, str>>,
+    spans: FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>,
+}
+
+impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
+    fn new(arena: &'ctx Bump, vars: &'a mut IdGen<VarId, RefHandle<'s, str>>) -> Self {
+        Self {
+            arena,
+            vars,
+            spans: FxHashMap::default(),
+        }
+    }
+
+    /// Desugar a NST Term into it's corresponding AST Term.
+    fn ds_term<'n>(
+        &mut self,
+        nst: &'n nst::Term<'n, 's>,
+    ) -> Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> {
+        let mk_term = |term, spans: &mut FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>| {
+            let t = self.arena.alloc(term) as &_;
+            spans.insert(t, nst.span());
+            t
+        };
+        let ast = match nst {
+            nst::Term::VariableRef(var) => self.arena.alloc(ast::Term::Variable(var.value)) as &_,
+            nst::Term::ItemRef(item) => self.arena.alloc(ast::Term::Item(item.value)) as &_,
+            nst::Term::EffectOpRef(SpanOf {
+                value: (_, _, op), ..
+            }) => self.arena.alloc(ast::Term::Operation(*op)) as &_,
+            nst::Term::Binding {
+                var, value, expr, ..
+            } => {
+                let value = self.ds_term(value)?;
+                let expr = self.ds_term(expr)?;
+                let func = mk_term(
+                    Abstraction {
+                        arg: var.value,
+                        body: expr,
+                    },
+                    &mut self.spans,
+                );
+                self.arena.alloc(Application { func, arg: value }) as &_
+            }
+            nst::Term::Abstraction { arg, body, .. } => {
+                let body = self.ds_term(body)?;
+                self.arena.alloc(Abstraction {
+                    arg: arg.value,
+                    body,
+                }) as &_
+            }
+            nst::Term::Application { func, arg, .. } => {
+                let func = self.ds_term(func)?;
+                let arg = self.ds_term(arg)?;
+                self.arena.alloc(Application { func, arg }) as &_
+            }
+            nst::Term::Parenthesized { term, .. } => {
+                // We'll replace the span of this node with the parenthesized span
+                self.ds_term(term)?
+            }
+            nst::Term::ProductRow(product) => match product.fields {
+                None => self.arena.alloc(Unit),
+                Some(fields) => {
+                    let head = self.arena.alloc(Label {
+                        label: fields.first.label.value,
+                        term: self.ds_term(fields.first.target)?,
+                    }) as &_;
+                    self.spans
+                        .insert(head, fields.first.label.join_spans(fields.first.target));
+                    fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
+                        let right = self.arena.alloc(Label {
+                            label: field.label.value,
+                            term: self.ds_term(field.target)?,
+                        }) as &_;
+                        self.spans
+                            .insert(right, field.label.join_spans(field.target));
+                        Ok(self.arena.alloc(Concat {
+                            left: concat?,
+                            right,
+                        }))
+                    })?
+                }
+            },
+            nst::Term::FieldAccess { base, field, .. } => {
+                let term = self.ds_term(base)?;
+                self.arena.alloc(Unlabel {
+                    label: field.value,
+                    term: mk_term(
+                        Project {
+                            direction: Direction::Right,
+                            term,
+                        },
+                        &mut self.spans,
+                    ),
+                })
+            }
+            nst::Term::SumRow(sum) => {
+                let term = self.ds_term(sum.field.target)?;
+                self.arena.alloc(Inject {
+                    direction: Direction::Right,
+                    term: mk_term(
+                        Label {
+                            label: sum.field.label.value,
+                            term,
+                        },
+                        &mut self.spans,
+                    ),
+                })
+            }
+            // This is gonna take a little more work.
+            nst::Term::Match { cases, .. } => {
+                let matrix = cases
+                    .elements()
+                    .map(|field| Ok((vec![*field.label], self.ds_term(field.target)?)))
+                    .collect::<Result<_, _>>()?;
+                self.desugar_pattern_matrix(&mut [], matrix)?
+            }
+            nst::Term::Handle { .. } => todo!(),
+        };
+        self.spans.insert(ast, nst.span());
+        Ok(ast)
+    }
+
+    /// Compile a matrix of patterns into an AST term that performs pattern matching.
+    fn desugar_pattern_matrix<'p>(
+        &mut self,
+        occurences: &mut [VarId],
+        matrix: ClauseMatrix<'p, 's, 'ctx>,
+    ) -> Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> {
+        let mk_term = |spans: &mut FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>, term, span| {
+            let t = self.arena.alloc(term) as &_;
+            spans.insert(t, span);
+            t
+        };
+        if matrix.is_empty() {
+            Err(PatternMatchError::NonExhaustivePatterns)
+        // Row is all wild cards
+        } else if matrix
+            .first()
+            .iter()
+            .all(|pat| matches!(pat, Pattern::Whole(_)))
+        {
+            Ok(matrix
+                .first()
+                .iter()
+                .rfold(matrix.arms[0], |body, pat| match pat {
+                    Pattern::Whole(var) => self.arena.alloc(Abstraction {
+                        arg: var.value,
+                        body,
+                    }),
+                    _ => unreachable!(),
+                }))
+        } else {
+            let constrs = matrix
+                .col_constr(0)
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let mut matches = constrs.into_iter().map(|(c, p)| match c {
+                Constructor::ProductRow(ref lbls) => {
+                    let top_level = self.vars.push(handle::Handle(""));
+                    let binders = (0..lbls.len())
+                        .map(|_| self.vars.push(handle::Handle("")))
+                        .collect::<Vec<_>>();
+                    let mut occs = binders;
+                    // replace first occurence by binder introduced here
+                    occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
+                    let init =
+                        self.desugar_pattern_matrix(occs.as_mut_slice(), matrix.specialize(&c))?;
+                    let body = lbls.iter().cloned().fold(init, |body, lbl| {
+                        let destructure = self.arena.alloc(Unlabel {
+                            label: lbl,
+                            term: self.arena.alloc(Project {
+                                direction: Direction::Right,
+                                term: self.arena.alloc(Variable(top_level)),
+                            }),
+                        });
+                        mk_term(
+                            &mut self.spans,
+                            Application {
+                                func: body,
+                                arg: destructure,
+                            },
+                            p.span(),
+                        )
+                    });
+                    Ok(mk_term(
+                        &mut self.spans,
+                        Abstraction {
+                            arg: top_level,
+                            body,
+                        },
+                        p.span(),
+                    ))
+                }
+                Constructor::SumRow(label) => {
+                    let binder = self.vars.push(handle::Handle(""));
+                    let mut occs = vec![binder];
+                    occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
+                    let func = self.desugar_pattern_matrix(&mut occs, matrix.specialize(&c))?;
+                    let term = mk_term(&mut self.spans, Variable(binder), p.span());
+                    let arg = mk_term(&mut self.spans, Unlabel { label, term }, p.span());
+                    let body = mk_term(&mut self.spans, Application { func, arg }, p.span());
+                    Ok(mk_term(
+                        &mut self.spans,
+                        Abstraction { arg: binder, body },
+                        p.span(),
+                    ))
+                }
+                Constructor::WildCard => {
+                    if let Pattern::Whole(var) = p {
+                        // For a wild card we don't need a let binding so just pass through binder as is
+                        let body = self.desugar_pattern_matrix(occurences, matrix.default())?;
+                        Ok(mk_term(
+                            &mut self.spans,
+                            Abstraction {
+                                arg: var.value,
+                                body,
+                            },
+                            p.span(),
+                        ))
+                    } else {
+                        unreachable!()
+                    }
+                }
+            });
+            // we know this can't be empty
+            let head: Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> =
+                matches.next().unwrap();
+            let rest = matches.collect::<Vec<_>>();
+            rest.into_iter().fold(head, |a, b| {
+                let a = a?;
+                let b = b?;
+                let span = Span::join(&self.spans[a], &self.spans[b]);
+                Ok(mk_term(&mut self.spans, Branch { left: a, right: b }, span))
+            })
+        }
+    }
+}
+
 /// Desugar a NST into an AST.
 /// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
 /// the NST.
@@ -23,120 +262,9 @@ pub fn desugar<'n, 's: 'a, 'a>(
     vars: &mut IdGen<VarId, RefHandle<'s, str>>,
     nst: &'n nst::Term<'n, 's>,
 ) -> Result<Ast<'a, VarId>, PatternMatchError> {
-    fn ds<'n, 's: 'a, 'a>(
-        arena: &'a Bump,
-        spans: &mut FxHashMap<&'a ast::Term<'a, VarId>, Span>,
-        vars: &mut IdGen<VarId, RefHandle<'s, str>>,
-        nst: &'n nst::Term<'n, 's>,
-    ) -> Result<&'a ast::Term<'a, VarId>, PatternMatchError> {
-        let mk_term = |term, spans: &mut FxHashMap<&'a ast::Term<'a, VarId>, Span>| {
-            let t = arena.alloc(term) as &_;
-            spans.insert(t, nst.span());
-            t
-        };
-        // TODO: Finish this impl
-        // This is a stub of functionality right now. Mostly to act as a gate to what can reach the
-        // type checker. Anything not implemented in this function isn't handled by the typechecker
-        // yet.
-        let ast = match nst {
-            nst::Term::VariableRef(var) => arena.alloc(ast::Term::Variable(var.value)) as &_,
-            nst::Term::ItemRef(item) => arena.alloc(ast::Term::Item(item.value)) as &_,
-            nst::Term::EffectOpRef(SpanOf {
-                value: (_, _, op), ..
-            }) => arena.alloc(ast::Term::Operation(*op)) as &_,
-            nst::Term::Binding {
-                var, value, expr, ..
-            } => {
-                let value = ds(arena, spans, vars, value)?;
-                let expr = ds(arena, spans, vars, expr)?;
-                let func = mk_term(
-                    Abstraction {
-                        arg: var.value,
-                        body: expr,
-                    },
-                    spans,
-                );
-                arena.alloc(Application { func, arg: value }) as &_
-            }
-            nst::Term::Abstraction { arg, body, .. } => {
-                let body = ds(arena, spans, vars, body)?;
-                arena.alloc(Abstraction {
-                    arg: arg.value,
-                    body,
-                }) as &_
-            }
-            nst::Term::Application { func, arg, .. } => {
-                let func = ds(arena, spans, vars, func)?;
-                let arg = ds(arena, spans, vars, arg)?;
-                arena.alloc(Application { func, arg }) as &_
-            }
-            nst::Term::Parenthesized { term, .. } => {
-                // We'll replace the span of this node with the parenthesized span
-                ds(arena, spans, vars, term)? as &_
-            }
-            nst::Term::ProductRow(product) => match product.fields {
-                None => arena.alloc(Unit),
-                Some(fields) => {
-                    let head = arena.alloc(Label {
-                        label: fields.first.label.value,
-                        term: ds(arena, spans, vars, fields.first.target)?,
-                    }) as &_;
-                    spans.insert(head, fields.first.label.join_spans(fields.first.target));
-                    fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
-                        let right = arena.alloc(Label {
-                            label: field.label.value,
-                            term: ds(arena, spans, vars, field.target)?,
-                        }) as &_;
-                        spans.insert(right, field.label.join_spans(field.target));
-                        Ok(arena.alloc(Concat {
-                            left: concat?,
-                            right,
-                        }))
-                    })?
-                }
-            },
-            nst::Term::FieldAccess { base, field, .. } => {
-                let term = ds(arena, spans, vars, base)?;
-                arena.alloc(Unlabel {
-                    label: field.value,
-                    term: mk_term(
-                        Project {
-                            direction: Direction::Right,
-                            term,
-                        },
-                        spans,
-                    ),
-                })
-            }
-            nst::Term::SumRow(sum) => {
-                let term = ds(arena, spans, vars, sum.field.target)?;
-                arena.alloc(Inject {
-                    direction: Direction::Right,
-                    term: mk_term(
-                        Label {
-                            label: sum.field.label.value,
-                            term,
-                        },
-                        spans,
-                    ),
-                })
-            }
-            // This is gonna take a little more work.
-            nst::Term::Match { cases, .. } => {
-                let matrix = cases
-                    .elements()
-                    .map(|field| Ok((vec![*field.label], ds(arena, spans, vars, field.target)?)))
-                    .collect::<Result<_, _>>()?;
-                cc(arena, vars, spans, &mut [], matrix)?
-            }
-            nst::Term::Handle { .. } => todo!(),
-        };
-        spans.insert(ast, nst.span());
-        Ok(ast)
-    }
-    let mut spans = FxHashMap::default();
-    let tree = ds(arena, &mut spans, vars, nst)?;
-    Ok(Ast::new(spans, tree))
+    let mut ds_ctx = DesugarCtx::new(arena, vars);
+    let tree = ds_ctx.ds_term(nst)?;
+    Ok(Ast::new(ds_ctx.spans, tree))
 }
 
 struct ClauseMatrix<'p, 's, 't> {
@@ -210,122 +338,6 @@ impl<'p, 's, 't> ClauseMatrix<'p, 's, 't> {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PatternMatchError {
     NonExhaustivePatterns,
-}
-
-/// Compile a matrix of patterns into an AST term that performs pattern matching.
-fn cc<'p, 's: 't, 't>(
-    arena: &'t Bump,
-    vars: &mut IdGen<VarId, RefHandle<'s, str>>,
-    spans: &mut FxHashMap<&'t ast::Term<'t, VarId>, Span>,
-    occurences: &mut [VarId],
-    matrix: ClauseMatrix<'p, 's, 't>,
-) -> Result<&'t ast::Term<'t, VarId>, PatternMatchError> {
-    let mk_term = |spans: &mut FxHashMap<&'t ast::Term<'t, VarId>, Span>, term, span| {
-        let t = arena.alloc(term) as &_;
-        spans.insert(t, span);
-        t
-    };
-    if matrix.is_empty() {
-        Err(PatternMatchError::NonExhaustivePatterns)
-    // Row is all wild cards
-    } else if matrix
-        .first()
-        .iter()
-        .all(|pat| matches!(pat, Pattern::Whole(_)))
-    {
-        Ok(matrix
-            .first()
-            .iter()
-            .rfold(matrix.arms[0], |body, pat| match pat {
-                Pattern::Whole(var) => arena.alloc(Abstraction {
-                    arg: var.value,
-                    body,
-                }),
-                _ => unreachable!(),
-            }))
-    } else {
-        let constrs = matrix
-            .col_constr(0)
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let mut matches = constrs.into_iter().map(|(c, p)| match c {
-            Constructor::ProductRow(ref lbls) => {
-                let top_level = vars.push(handle::Handle(""));
-                let binders = (0..lbls.len())
-                    .map(|_| vars.push(handle::Handle("")))
-                    .collect::<Vec<_>>();
-                let mut occs = binders;
-                // replace first occurence by binder introduced here
-                occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
-                let init = cc(
-                    arena,
-                    vars,
-                    spans,
-                    occs.as_mut_slice(),
-                    matrix.specialize(&c),
-                )?;
-                let body = lbls.iter().cloned().fold(init, |body, lbl| {
-                    let destructure = arena.alloc(Unlabel {
-                        label: lbl,
-                        term: arena.alloc(Project {
-                            direction: Direction::Right,
-                            term: arena.alloc(Variable(top_level)),
-                        }),
-                    });
-                    mk_term(
-                        spans,
-                        Application {
-                            func: body,
-                            arg: destructure,
-                        },
-                        p.span(),
-                    )
-                });
-                Ok(mk_term(
-                    spans,
-                    Abstraction {
-                        arg: top_level,
-                        body,
-                    },
-                    p.span(),
-                ))
-            }
-            Constructor::SumRow(label) => {
-                let binder = vars.push(handle::Handle(""));
-                let mut occs = vec![binder];
-                occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
-                let func = cc(arena, vars, spans, &mut occs, matrix.specialize(&c))?;
-                let term = mk_term(spans, Variable(binder), p.span());
-                let arg = mk_term(spans, Unlabel { label, term }, p.span());
-                let body = mk_term(spans, Application { func, arg }, p.span());
-                Ok(mk_term(spans, Abstraction { arg: binder, body }, p.span()))
-            }
-            Constructor::WildCard => {
-                if let Pattern::Whole(var) = p {
-                    // For a wild card we don't need a let binding so just pass through binder as is
-                    let body = cc(arena, vars, spans, occurences, matrix.default())?;
-                    Ok(mk_term(
-                        spans,
-                        Abstraction {
-                            arg: var.value,
-                            body,
-                        },
-                        p.span(),
-                    ))
-                } else {
-                    unreachable!()
-                }
-            }
-        });
-        // we know this can't be empty
-        let head: Result<&'t ast::Term<'t, VarId>, PatternMatchError> = matches.next().unwrap();
-        let rest = matches.collect::<Vec<_>>();
-        rest.into_iter().fold(head, |a, b| {
-            let a = a?;
-            let b = b?;
-            let span = Span::join(&spans[a], &spans[b]);
-            Ok(mk_term(spans, Branch { left: a, right: b }, span))
-        })
-    }
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]

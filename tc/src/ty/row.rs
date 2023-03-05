@@ -222,7 +222,7 @@ impl<'ctx, TV: Debug, Db> DebugWithDb<Db> for ClosedRow<'ctx, TV>
 where
     Db: AsCoreDb,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
         f.debug_map()
             .entries(
                 self.fields

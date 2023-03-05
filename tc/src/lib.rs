@@ -2058,7 +2058,6 @@ pub struct TyScheme<'ctx, TV> {
 // `&'ctx TyCtx<...>`.
 pub struct TyCtx<'ctx, TV> {
     tys: SyncInterner<'ctx, TypeKind<'ctx, TV>, Bump>,
-    labels: SyncInterner<'ctx, str, Bump>,
     row_fields: SyncInterner<'ctx, [RowLabel<'ctx>], Bump>,
     row_values: SyncInterner<'ctx, [Ty<'ctx, TV>], Bump>,
     db: &'ctx dyn crate::Db,
@@ -2071,7 +2070,6 @@ where
     pub fn new(db: &'ctx dyn crate::Db, arena: &'ctx Bump) -> Self {
         Self {
             tys: SyncInterner::new(arena),
-            labels: SyncInterner::new(arena),
             row_fields: SyncInterner::new(arena),
             row_values: SyncInterner::new(arena),
             db,

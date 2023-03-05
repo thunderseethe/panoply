@@ -1,5 +1,3 @@
-use self::diagnostic::aiahr;
-
 pub mod ast;
 pub mod cst;
 pub mod diagnostic;
