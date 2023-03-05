@@ -1,3 +1,5 @@
+use self::diagnostic::aiahr;
+
 pub mod ast;
 pub mod cst;
 pub mod diagnostic;
@@ -28,6 +30,16 @@ pub mod ident {
 pub struct Jar(ident::Ident, modules::Module);
 pub trait Db: salsa::DbWithJar<Jar> {}
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
+
+// TODO: We can remove this once trait upcasting is stabilized.
+pub trait AsCoreDb {
+    fn as_core_db(&self) -> &dyn crate::Db;
+}
+impl AsCoreDb for dyn crate::Db {
+    fn as_core_db(&self) -> &dyn crate::Db {
+        self
+    }
+}
 
 #[cfg(test)]
 mod tests {
