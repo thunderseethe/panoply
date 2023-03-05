@@ -31,9 +31,13 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
 
 // TODO: We can remove this once trait upcasting is stabilized.
 pub trait AsCoreDb {
-    fn as_core_db(&self) -> &dyn crate::Db;
+    fn as_core_db<'a>(&'a self) -> &'a dyn crate::Db;
+
+    fn ident<S: ToString>(&self, text: S) -> ident::Ident {
+        ident::Ident::new(self.as_core_db(), text.to_string())
+    }
 }
-impl AsCoreDb for dyn crate::Db {
+impl AsCoreDb for dyn crate::Db + '_ {
     fn as_core_db(&self) -> &dyn crate::Db {
         self
     }

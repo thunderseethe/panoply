@@ -1171,6 +1171,7 @@ mod tests {
     use aiahr_analysis::top_level::BaseBuilder;
     use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
     use aiahr_core::modules::ModuleTree;
+    use aiahr_core::AsCoreDb;
     use aiahr_tc::test_utils::DummyEff;
     use aiahr_test::ast::*;
     use assert_matches::assert_matches;
@@ -1180,11 +1181,16 @@ mod tests {
     const MODNAME: &str = "test_module";
 
     #[derive(Default)]
-    #[salsa::db(aiahr_core::Jar, aiahr_tc::Jar)]
+    #[salsa::db(aiahr_core::Jar, aiahr_tc::Jar, aiahr_desugar::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
     impl salsa::Database for TestDatabase {}
+    impl AsCoreDb for TestDatabase {
+        fn as_core_db<'a>(&'a self) -> &'a dyn aiahr_core::Db {
+            <TestDatabase as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
+        }
+    }
 
     /// Compile an input string up to (but not including) the lower stage.
     fn compile_upto_lower<'a, 'ctx, S>(
@@ -1216,10 +1222,10 @@ mod tests {
         let mut vars = names
             .into_vars()
             .into_iter()
-            .map(|span_of| span_of.value)
+            .map(|span_of| db.ident(span_of.value.0))
             .collect();
 
-        let ast = aiahr_desugar::desugar(arena, &mut vars, resolved).unwrap();
+        let ast = aiahr_desugar::desugar(db, arena, &mut vars, resolved).unwrap();
 
         let infer_ctx = aiahr_tc::TyCtx::new(db, arena);
         let (var_tys, term_tys, scheme, _) =
@@ -1275,7 +1281,7 @@ mod tests {
         let ir_ctx = IrCtx::new(&arena);
         let m = VarId(0);
         let n = VarId(1);
-        let (ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abss(
                 [m, n],
                 builder.mk_unlabel(

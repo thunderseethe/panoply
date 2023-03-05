@@ -1,7 +1,7 @@
 use aiahr_core::{
     ast::{Ast, Direction, Term, Term::*},
-    memory::intern::{InternerByRef, SyncInterner},
     span::Span,
+    AsCoreDb,
 };
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
@@ -36,8 +36,8 @@ pub trait MkTerm<'a, Var> {
 /// It will arena allocate all nodes in the AST and create random spans for them in the final
 /// AST.
 pub struct AstBuilder<'a, Var> {
+    db: &'a dyn aiahr_core::Db,
     arena: &'a Bump,
-    interner: SyncInterner<'a, str, Bump>,
     // TODO: This is bad but it's annoying to fix because rust won't let you take a mutable borrow
     // and then a second mutable borrow passed as a parameter to the original. Even though that'll
     // work if you store the value in a temporary.
@@ -45,10 +45,10 @@ pub struct AstBuilder<'a, Var> {
 }
 
 impl<'a, Var> AstBuilder<'a, Var> {
-    pub fn new(arena: &'a Bump) -> Self {
+    pub fn new(db: &'a dyn aiahr_core::Db, arena: &'a Bump) -> Self {
         Self {
+            db,
             arena,
-            interner: SyncInterner::new(arena),
             spans: RefCell::new(FxHashMap::default()),
         }
     }
@@ -60,16 +60,17 @@ impl<'a, Var: Eq + Hash> AstBuilder<'a, Var> {
         t
     }
 
-    pub fn build(self, root: Term<'a, Var>) -> (Ast<'a, Var>, SyncInterner<'a, str, Bump>) {
+    pub fn build(self, root: Term<'a, Var>) -> Ast<'a, Var> {
         let root = self.mk_term(root);
-        (Ast::new(self.spans.into_inner(), root), self.interner)
+        Ast::new(self.spans.into_inner(), root)
     }
 
     pub fn with_builder(
+        db: &'a dyn aiahr_core::Db,
         arena: &'a Bump,
         op: impl FnOnce(&Self) -> Term<'a, Var>,
-    ) -> (Ast<'a, Var>, SyncInterner<'a, str, Bump>) {
-        let builder = Self::new(arena);
+    ) -> Ast<'a, Var> {
+        let builder = Self::new(db, arena);
         let root = op(&builder);
         builder.build(root)
     }
@@ -91,14 +92,14 @@ impl<'a, Var: Eq + Hash> MkTerm<'a, Var> for AstBuilder<'a, Var> {
 
     fn mk_label(&self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
         Label {
-            label: self.interner.intern_by_ref(label),
+            label: self.db.ident(label),
             term: self.mk_term(term),
         }
     }
 
     fn mk_unlabel(&self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
         Unlabel {
-            label: self.interner.intern_by_ref(label),
+            label: self.db.ident(label),
             term: self.mk_term(term),
         }
     }

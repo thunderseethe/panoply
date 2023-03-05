@@ -628,21 +628,16 @@ where
                 if row.fields.len() != 1 {
                     self.errors.push(into_diag(
                         self.db,
-                        (
-                            self.single_row_ty(self.mk_label(label), self.mk_ty(ErrorTy)),
-                            expected.ty,
-                        )
-                            .into(),
+                        (self.single_row_ty(*label, self.mk_ty(ErrorTy)), expected.ty).into(),
                         current_span(),
                     ));
                     return;
                 }
-                let field = self.mk_label(label);
                 // If our singleton row is a different field name, fail
-                if field != row.fields[0] {
+                if *label != row.fields[0] {
                     self.errors.push(into_diag(
                         self.db,
-                        (self.single_row_ty(field, self.mk_ty(ErrorTy)), expected.ty).into(),
+                        (self.single_row_ty(*label, self.mk_ty(ErrorTy)), expected.ty).into(),
                         current_span(),
                     ))
                 }
@@ -657,7 +652,7 @@ where
                 current_span(),
             ),
             (Unlabel { label, term }, _) => {
-                let expected_ty = self.single_row_ty(self.mk_label(label), expected.ty);
+                let expected_ty = self.single_row_ty(*label, expected.ty);
                 self._check(eff_info, term, expected.with_ty(expected_ty))
             }
             (Concat { .. }, RowTy(row)) => {
@@ -854,11 +849,11 @@ where
             }
             Label { label, term } => {
                 let infer = self._infer(eff_info, term);
-                infer.map_ty(|ty| self.single_row_ty(self.mk_label(label), ty))
+                infer.map_ty(|ty| self.single_row_ty(*label, ty))
             }
             Unlabel { label, term } => {
                 let term_infer = self._infer(eff_info, term);
-                let field = self.mk_label(label);
+                let field = *label;
                 term_infer.map_ty(|ty| match *ty {
                     // If our output type is already a singleton row of without a label, use it
                     // directly. This avoids introducing needless unifiers
@@ -2360,7 +2355,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let x = VarId(0);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abs(
                 x,
                 builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
@@ -2383,7 +2378,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let x = VarId(0);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abs(
                 x,
                 builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
@@ -2410,7 +2405,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let x = VarId(0);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
         let infer_intern = TyCtx::new(&db, &arena);
@@ -2439,7 +2434,7 @@ mod tests {
         let db = TestDatabase::default();
         let x = VarId(0);
         let y = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
         let infer_intern = TyCtx::new(&db, &arena);
@@ -2465,7 +2460,7 @@ mod tests {
         let db = TestDatabase::default();
         let t = VarId(0);
         let f = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_branch(
                 builder.mk_abs(t, builder.mk_unlabel("true", Variable(t))),
                 builder.mk_abs(f, builder.mk_unlabel("false", Variable(f))),
@@ -2501,7 +2496,7 @@ mod tests {
         let ty_intern = TyCtx::new(&db, &arena);
 
         let x = VarId(0);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abs(
                 x,
                 builder.mk_concat(
@@ -2551,7 +2546,7 @@ mod tests {
 
         let m = VarId(0);
         let n = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abss(
                 [m, n],
                 builder.mk_unlabel(
@@ -2602,7 +2597,7 @@ mod tests {
 
         let m = VarId(0);
         let n = VarId(1);
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_app(
                 builder.mk_abss(
                     [m, n],
@@ -2642,7 +2637,7 @@ mod tests {
         let infer_intern = TyCtx::new(&db, &arena);
         let ty_intern = TyCtx::new(&db, &arena);
 
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_app(Operation(EffectOpId(0)), Unit)
         });
         let (_, _, scheme, _) =
@@ -2661,7 +2656,7 @@ mod tests {
         let infer_intern = TyCtx::new(&db, &arena);
         let ty_intern = TyCtx::new(&db, &arena);
 
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |builder| {
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_handler(
                 builder.mk_concat(
                     builder.mk_concat(
@@ -2706,7 +2701,7 @@ mod tests {
     fn test_tc_undefined_var_fails() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (untyped_ast, _) = AstBuilder::with_builder(&arena, |_| Variable(VarId(0)));
+        let untyped_ast = AstBuilder::with_builder(&db, &arena, |_| Variable(VarId(0)));
         let infer_ctx = TyCtx::new(&db, &arena);
         let ty_ctx = TyCtx::new(&db, &arena);
 

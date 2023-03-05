@@ -2,9 +2,11 @@ use std::ops::Not;
 
 use aiahr_core::ast::Direction;
 use aiahr_core::id::{Id, IdGen};
-use aiahr_core::memory::handle::{self, RefHandle};
+use aiahr_core::ident::Ident;
+use aiahr_core::memory::handle::RefHandle;
 use aiahr_core::nst::Pattern;
 use aiahr_core::span::{SpanOf, Spanned};
+use aiahr_core::AsCoreDb;
 use aiahr_core::{
     ast,
     ast::{Ast, Term::*},
@@ -15,15 +17,27 @@ use aiahr_core::{
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
-struct DesugarCtx<'a, 'ctx, 's> {
+#[salsa::jar(db = Db)]
+pub struct Jar();
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+impl AsCoreDb for dyn crate::Db + '_ {
+    fn as_core_db(&self) -> &dyn aiahr_core::Db {
+        <dyn crate::Db as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
+    }
+}
+
+struct DesugarCtx<'a, 'ctx> {
+    db: &'a dyn crate::Db,
     arena: &'ctx Bump,
-    vars: &'a mut IdGen<VarId, RefHandle<'s, str>>,
+    vars: &'a mut IdGen<VarId, Ident>,
     spans: FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>,
 }
 
-impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
-    fn new(arena: &'ctx Bump, vars: &'a mut IdGen<VarId, RefHandle<'s, str>>) -> Self {
+impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
+    fn new(db: &'a dyn crate::Db, arena: &'ctx Bump, vars: &'a mut IdGen<VarId, Ident>) -> Self {
         Self {
+            db,
             arena,
             vars,
             spans: FxHashMap::default(),
@@ -31,7 +45,7 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
     }
 
     /// Desugar a NST Term into it's corresponding AST Term.
-    fn ds_term<'n>(
+    fn ds_term<'n, 's: 'ctx>(
         &mut self,
         nst: &'n nst::Term<'n, 's>,
     ) -> Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> {
@@ -80,14 +94,14 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
                 None => self.arena.alloc(Unit),
                 Some(fields) => {
                     let head = self.arena.alloc(Label {
-                        label: fields.first.label.value,
+                        label: self.db.ident(fields.first.label.value.0),
                         term: self.ds_term(fields.first.target)?,
                     }) as &_;
                     self.spans
                         .insert(head, fields.first.label.join_spans(fields.first.target));
                     fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
                         let right = self.arena.alloc(Label {
-                            label: field.label.value,
+                            label: self.db.ident(field.label.value.0),
                             term: self.ds_term(field.target)?,
                         }) as &_;
                         self.spans
@@ -102,7 +116,7 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
             nst::Term::FieldAccess { base, field, .. } => {
                 let term = self.ds_term(base)?;
                 self.arena.alloc(Unlabel {
-                    label: field.value,
+                    label: self.db.ident(field.value.0),
                     term: mk_term(
                         Project {
                             direction: Direction::Right,
@@ -118,7 +132,7 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
                     direction: Direction::Right,
                     term: mk_term(
                         Label {
-                            label: sum.field.label.value,
+                            label: self.db.ident(sum.field.label.value.0),
                             term,
                         },
                         &mut self.spans,
@@ -140,7 +154,7 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
     }
 
     /// Compile a matrix of patterns into an AST term that performs pattern matching.
-    fn desugar_pattern_matrix<'p>(
+    fn desugar_pattern_matrix<'p, 's: 'ctx>(
         &mut self,
         occurences: &mut [VarId],
         matrix: ClauseMatrix<'p, 's, 'ctx>,
@@ -174,9 +188,10 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
                 .collect::<std::collections::BTreeMap<_, _>>();
             let mut matches = constrs.into_iter().map(|(c, p)| match c {
                 Constructor::ProductRow(ref lbls) => {
-                    let top_level = self.vars.push(handle::Handle(""));
+                    let generated_var = self.db.ident("__generated__");
+                    let top_level = self.vars.push(generated_var);
                     let binders = (0..lbls.len())
-                        .map(|_| self.vars.push(handle::Handle("")))
+                        .map(|_| self.vars.push(generated_var))
                         .collect::<Vec<_>>();
                     let mut occs = binders;
                     // replace first occurence by binder introduced here
@@ -185,7 +200,7 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
                         self.desugar_pattern_matrix(occs.as_mut_slice(), matrix.specialize(&c))?;
                     let body = lbls.iter().cloned().fold(init, |body, lbl| {
                         let destructure = self.arena.alloc(Unlabel {
-                            label: lbl,
+                            label: self.db.ident(lbl.0),
                             term: self.arena.alloc(Project {
                                 direction: Direction::Right,
                                 term: self.arena.alloc(Variable(top_level)),
@@ -210,12 +225,19 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
                     ))
                 }
                 Constructor::SumRow(label) => {
-                    let binder = self.vars.push(handle::Handle(""));
+                    let binder = self.vars.push(self.db.ident("__generated__"));
                     let mut occs = vec![binder];
                     occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                     let func = self.desugar_pattern_matrix(&mut occs, matrix.specialize(&c))?;
                     let term = mk_term(&mut self.spans, Variable(binder), p.span());
-                    let arg = mk_term(&mut self.spans, Unlabel { label, term }, p.span());
+                    let arg = mk_term(
+                        &mut self.spans,
+                        Unlabel {
+                            label: self.db.ident(label.0),
+                            term,
+                        },
+                        p.span(),
+                    );
                     let body = mk_term(&mut self.spans, Application { func, arg }, p.span());
                     Ok(mk_term(
                         &mut self.spans,
@@ -258,11 +280,12 @@ impl<'a, 'ctx, 's: 'ctx> DesugarCtx<'a, 'ctx, 's> {
 /// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
 /// the NST.
 pub fn desugar<'n, 's: 'a, 'a>(
+    db: &dyn crate::Db,
     arena: &'a Bump,
-    vars: &mut IdGen<VarId, RefHandle<'s, str>>,
+    vars: &mut IdGen<VarId, Ident>,
     nst: &'n nst::Term<'n, 's>,
 ) -> Result<Ast<'a, VarId>, PatternMatchError> {
-    let mut ds_ctx = DesugarCtx::new(arena, vars);
+    let mut ds_ctx = DesugarCtx::new(db, arena, vars);
     let tree = ds_ctx.ds_term(nst)?;
     Ok(Ast::new(ds_ctx.spans, tree))
 }
@@ -406,20 +429,31 @@ impl<'s> From<&Pattern<'_, 's>> for Constructor<'s> {
 mod tests {
     use super::*;
     use aiahr_core::cst::{Field, IdField, ProductRow, Separated, SumRow};
-    use aiahr_core::memory::handle as hand;
-    use aiahr_core::memory::intern::InternerByRef;
-    use aiahr_core::memory::intern::SyncInterner;
-    use aiahr_core::{id::VarId, nst};
+    use aiahr_core::memory::handle;
+    use aiahr_core::{id::VarId, nst, AsCoreDb};
     use aiahr_test::{cst::*, span::*};
     use bumpalo::Bump;
+
+    #[derive(Default)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    struct TestDatabase {
+        storage: salsa::Storage<Self>,
+    }
+    impl salsa::Database for TestDatabase {}
+    impl AsCoreDb for TestDatabase {
+        fn as_core_db(&self) -> &dyn aiahr_core::Db {
+            <TestDatabase as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
+        }
+    }
 
     #[test]
     fn test_desugar_var() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let mut vars = IdGen::new();
-        let var = random_span_of(vars.push(hand::Handle("0")));
+        let var = random_span_of(vars.push(db.ident("0")));
         let nst = arena.alloc(nst::Term::VariableRef(var));
-        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
 
         assert_eq!(ast.tree, &Variable(var.value));
         assert_eq!(
@@ -434,9 +468,10 @@ mod tests {
     #[test]
     fn test_desugar_abs() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let mut vars = IdGen::new();
         let start = random_span();
-        let x = vars.push(hand::Handle("0"));
+        let x = vars.push(db.ident("0"));
         let span_of_var = random_span_of(x);
         let nst = arena.alloc(nst::Term::Abstraction {
             lbar: start,
@@ -445,7 +480,7 @@ mod tests {
             rbar: random_span(),
             body: arena.alloc(nst::Term::VariableRef(span_of_var)),
         });
-        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
 
         assert_eq!(
             ast.tree,
@@ -466,10 +501,12 @@ mod tests {
     #[test]
     fn test_desugar_app() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let mut vars = IdGen::new();
         let start = random_span_of(VarId(0));
         let end = random_span();
         let ast = desugar(
+            &db,
             &arena,
             &mut vars,
             &nst::Term::Application {
@@ -500,10 +537,12 @@ mod tests {
     #[test]
     fn test_desugar_binding() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let mut vars = IdGen::new();
         let start = random_span_of(VarId(2));
         let end = random_span_of(VarId(123));
         let ast = desugar(
+            &db,
             &arena,
             &mut vars,
             arena.alloc(nst::Term::Binding {
@@ -539,9 +578,11 @@ mod tests {
     #[test]
     fn test_desugar_unit() {
         let arena = Bump::new();
+        let db = TestDatabase::default();
         let start = random_span();
         let end = random_span();
         let ast = desugar(
+            &db,
             &arena,
             &mut IdGen::new(),
             arena.alloc(nst::Term::ProductRow(ProductRow {
@@ -565,22 +606,23 @@ mod tests {
     #[test]
     fn test_desugar_product() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
+        let db = TestDatabase::default();
 
-        let a = interner.intern_by_ref("abc");
-        let b = interner.intern_by_ref("def");
-        let c = interner.intern_by_ref("ghi");
+        let a = db.ident("abc");
+        let b = db.ident("def");
+        let c = db.ident("ghi");
 
         let start = random_span();
         let end = random_span();
         let ast = desugar(
+            &db,
             &arena,
             &mut IdGen::new(),
             arena.alloc(nst::Term::ProductRow(ProductRow {
                 lbrace: start,
                 fields: Some(Separated {
                     first: IdField {
-                        label: random_span_of(a),
+                        label: random_span_of(handle::Handle("abc")),
                         sep: random_span(),
                         target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
                     },
@@ -588,7 +630,7 @@ mod tests {
                         (
                             random_span(),
                             IdField {
-                                label: random_span_of(b),
+                                label: random_span_of(handle::Handle("def")),
                                 sep: random_span(),
                                 target: arena
                                     .alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
@@ -597,7 +639,7 @@ mod tests {
                         (
                             random_span(),
                             IdField {
-                                label: random_span_of(c),
+                                label: random_span_of(handle::Handle("ghi")),
                                 sep: random_span(),
                                 target: arena
                                     .alloc(nst::Term::VariableRef(random_span_of(VarId(2)))),
@@ -642,19 +684,19 @@ mod tests {
     #[test]
     fn test_desugar_field_access() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
+        let db = TestDatabase::default();
 
-        let state = interner.intern_by_ref("state");
+        let state = db.ident("state");
 
         let base = random_span_of(VarId(0));
-        let field = random_span_of(state);
+        let field = random_span_of(handle::Handle("state"));
         let nst = arena.alloc(nst::Term::FieldAccess {
             base: arena.alloc(nst::Term::VariableRef(base)),
             dot: random_span(),
             field,
         });
 
-        let ast = desugar(&arena, &mut IdGen::new(), nst).unwrap();
+        let ast = desugar(&db, &arena, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
             ast.tree,
             &Unlabel {
@@ -677,23 +719,23 @@ mod tests {
     #[test]
     fn test_desugar_sum() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
+        let db = TestDatabase::default();
 
-        let tru = interner.intern_by_ref("true");
+        let tru = db.ident("true");
 
         let langle = random_span();
         let rangle = random_span();
         let nst = arena.alloc(nst::Term::SumRow(aiahr_core::cst::SumRow {
             langle,
             field: Field {
-                label: random_span_of(tru),
+                label: random_span_of(handle::Handle("true")),
                 sep: random_span(),
                 target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
             },
             rangle,
         }));
 
-        let ast = desugar(&arena, &mut IdGen::new(), nst).unwrap();
+        let ast = desugar(&db, &arena, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
             ast.tree,
             &Inject {
@@ -716,11 +758,11 @@ mod tests {
     #[test]
     fn test_desugar_match_sum() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
+        let db = TestDatabase::default();
 
-        let a = interner.intern_by_ref("A");
-        let b = interner.intern_by_ref("B");
-        let c = interner.intern_by_ref("C");
+        let a = db.ident("A");
+        let b = db.ident("B");
+        let c = db.ident("C");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -731,7 +773,7 @@ mod tests {
                     label: arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                         langle: random_span(),
                         field: Field {
-                            label: random_span_of(a),
+                            label: random_span_of(handle::Handle("A")),
                             sep: random_span(),
                             target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))),
                         },
@@ -747,7 +789,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(b),
+                                    label: random_span_of(handle::Handle("B")),
                                     sep: random_span(),
                                     target: arena.alloc(Pattern::Whole(random_span_of(VarId(1)))),
                                 },
@@ -763,7 +805,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(c),
+                                    label: random_span_of(handle::Handle("C")),
                                     sep: random_span(),
                                     target: &*arena.alloc(Pattern::Whole(random_span_of(VarId(2)))),
                                 },
@@ -779,7 +821,7 @@ mod tests {
         });
 
         let mut vars = [a, b, c].into_iter().collect();
-        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
         assert_eq!(
             ast.root(),
             &Branch {
@@ -788,11 +830,11 @@ mod tests {
                         arg: VarId(3),
                         body: &Application {
                             func: &Abstraction {
-                                arg: VarId(2),
-                                body: &Variable(VarId(2))
+                                arg: VarId(0),
+                                body: &Variable(VarId(0))
                             },
                             arg: &Unlabel {
-                                label: c,
+                                label: a,
                                 term: &Variable(VarId(3))
                             }
                         }
@@ -815,11 +857,11 @@ mod tests {
                     arg: VarId(5),
                     body: &Application {
                         func: &Abstraction {
-                            arg: VarId(0),
-                            body: &Variable(VarId(0))
+                            arg: VarId(2),
+                            body: &Variable(VarId(2))
                         },
                         arg: &Unlabel {
-                            label: a,
+                            label: c,
                             term: &Variable(VarId(5))
                         }
                     }
@@ -831,12 +873,12 @@ mod tests {
     #[test]
     fn test_desugar_match_sum_with_default() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
+        let db = TestDatabase::default();
 
-        let a = interner.intern_by_ref("A");
-        let b = interner.intern_by_ref("B");
-        let c = interner.intern_by_ref("C");
-        let w = interner.intern_by_ref("_");
+        let a = db.ident("A");
+        let b = db.ident("B");
+        let c = db.ident("C");
+        let w = db.ident("_");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -847,7 +889,7 @@ mod tests {
                     label: arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                         langle: random_span(),
                         field: Field {
-                            label: random_span_of(a),
+                            label: random_span_of(handle::Handle("A")),
                             sep: random_span(),
                             target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))),
                         },
@@ -863,7 +905,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(b),
+                                    label: random_span_of(handle::Handle("B")),
                                     sep: random_span(),
                                     target: arena.alloc(Pattern::Whole(random_span_of(VarId(1)))),
                                 },
@@ -879,7 +921,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(c),
+                                    label: random_span_of(handle::Handle("C")),
                                     sep: random_span(),
                                     target: &*arena.alloc(Pattern::Whole(random_span_of(VarId(2)))),
                                 },
@@ -903,7 +945,7 @@ mod tests {
         });
 
         let mut vars = [a, b, c, w].into_iter().collect();
-        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
         assert_eq!(
             ast.root(),
             &Branch {
@@ -913,11 +955,11 @@ mod tests {
                             arg: VarId(4),
                             body: &Application {
                                 func: &Abstraction {
-                                    arg: VarId(2),
-                                    body: &Variable(VarId(2))
+                                    arg: VarId(0),
+                                    body: &Variable(VarId(0))
                                 },
                                 arg: &Unlabel {
-                                    label: c,
+                                    label: a,
                                     term: &Variable(VarId(4))
                                 }
                             }
@@ -940,11 +982,11 @@ mod tests {
                         arg: VarId(6),
                         body: &Application {
                             func: &Abstraction {
-                                arg: VarId(0),
-                                body: &Variable(VarId(0))
+                                arg: VarId(2),
+                                body: &Variable(VarId(2))
                             },
                             arg: &Unlabel {
-                                label: a,
+                                label: c,
                                 term: &Variable(VarId(6))
                             }
                         }
@@ -961,11 +1003,11 @@ mod tests {
     #[test]
     fn test_desugar_match_prod() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
+        let db = TestDatabase::default();
 
-        let a = interner.intern_by_ref("A");
-        let b = interner.intern_by_ref("B");
-        let c = interner.intern_by_ref("C");
+        let a = db.ident("A");
+        let b = db.ident("B");
+        let c = db.ident("C");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -977,7 +1019,7 @@ mod tests {
                         lbrace: random_span(),
                         fields: Some(Separated {
                             first: Field {
-                                label: random_span_of(a),
+                                label: random_span_of(handle::Handle("A")),
                                 sep: random_span(),
                                 target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
                             },
@@ -985,7 +1027,7 @@ mod tests {
                                 (
                                     random_span(),
                                     Field {
-                                        label: random_span_of(b),
+                                        label: random_span_of(handle::Handle("B")),
                                         sep: random_span(),
                                         target: arena
                                             .alloc(Pattern::Whole(random_span_of(VarId(1))))
@@ -995,7 +1037,7 @@ mod tests {
                                 (
                                     random_span(),
                                     Field {
-                                        label: random_span_of(c),
+                                        label: random_span_of(handle::Handle("C")),
                                         sep: random_span(),
                                         target: arena
                                             .alloc(Pattern::Whole(random_span_of(VarId(2))))
@@ -1016,7 +1058,7 @@ mod tests {
         });
 
         let mut vars = [a, b, c].into_iter().collect();
-        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
         assert_eq!(
             ast.root(),
             &Abstraction {
@@ -1065,14 +1107,14 @@ mod tests {
     #[test]
     fn test_desugar_match_nested_patterns() {
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
+        let db = TestDatabase::default();
 
-        let a = interner.intern_by_ref("A");
-        let b = interner.intern_by_ref("B");
-        let c = interner.intern_by_ref("C");
-        let x = interner.intern_by_ref("x");
-        let y = interner.intern_by_ref("y");
-        let z = interner.intern_by_ref("z");
+        let a = db.ident("A");
+        let b = db.ident("B");
+        let c = db.ident("C");
+        let x = db.ident("x");
+        let y = db.ident("y");
+        let z = db.ident("z");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -1088,11 +1130,11 @@ mod tests {
                                 &arena,
                                 [
                                     random_field(
-                                        random_span_of(x),
+                                        random_span_of(handle::Handle("x")),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(a),
+                                                random_span_of(handle::Handle("A")),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(0))))
                                                     as &_,
@@ -1101,11 +1143,11 @@ mod tests {
                                         })) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(y),
+                                        random_span_of(handle::Handle("y")),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(b),
+                                                random_span_of(handle::Handle("B")),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(1))))
                                                     as &_,
@@ -1114,7 +1156,7 @@ mod tests {
                                         })) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(z),
+                                        random_span_of(handle::Handle("z")),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(2)))) as &_,
                                     ),
                                 ],
@@ -1130,15 +1172,15 @@ mod tests {
                                 &arena,
                                 [
                                     random_field(
-                                        random_span_of(x),
+                                        random_span_of(handle::Handle("x")),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(y),
+                                        random_span_of(handle::Handle("y")),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(b),
+                                                random_span_of(handle::Handle("B")),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(1))))
                                                     as &_,
@@ -1147,7 +1189,7 @@ mod tests {
                                         })) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(z),
+                                        random_span_of(handle::Handle("z")),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(2)))) as &_,
                                     ),
                                 ],
@@ -1163,19 +1205,19 @@ mod tests {
                                 &arena,
                                 [
                                     random_field(
-                                        random_span_of(x),
+                                        random_span_of(handle::Handle("x")),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(y),
+                                        random_span_of(handle::Handle("y")),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(1)))) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(z),
+                                        random_span_of(handle::Handle("z")),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(c),
+                                                random_span_of(handle::Handle("C")),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(2))))
                                                     as &_,
@@ -1193,23 +1235,23 @@ mod tests {
             ),
         });
 
-        let mut vars = [a, b, c].into_iter().collect();
-        let ast = desugar(&arena, &mut vars, nst).unwrap();
+        let mut vars = [a, b, c, x, y, z].into_iter().collect();
+        let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
         assert_eq!(
             ast.root(),
             &Abstraction {
-                arg: VarId(3),
+                arg: VarId(6),
                 body: &Application {
                     func: &Application {
                         func: &Application {
                             func: &Branch {
                                 left: &Abstraction {
-                                    arg: VarId(7),
+                                    arg: VarId(10),
                                     body: &Application {
                                         func: &Abstraction {
                                             arg: VarId(0),
                                             body: &Abstraction {
-                                                arg: VarId(8),
+                                                arg: VarId(11),
                                                 body: &Application {
                                                     func: &Abstraction {
                                                         arg: VarId(1),
@@ -1220,14 +1262,14 @@ mod tests {
                                                     },
                                                     arg: &Unlabel {
                                                         label: b,
-                                                        term: &Variable(VarId(8))
+                                                        term: &Variable(VarId(11))
                                                     }
                                                 }
                                             }
                                         },
                                         arg: &Unlabel {
                                             label: a,
-                                            term: &Variable(VarId(7))
+                                            term: &Variable(VarId(10))
                                         }
                                     }
                                 },
@@ -1235,7 +1277,7 @@ mod tests {
                                     arg: VarId(0),
                                     body: &Branch {
                                         left: &Abstraction {
-                                            arg: VarId(9),
+                                            arg: VarId(12),
                                             body: &Application {
                                                 func: &Abstraction {
                                                     arg: VarId(1),
@@ -1246,14 +1288,14 @@ mod tests {
                                                 },
                                                 arg: &Unlabel {
                                                     label: b,
-                                                    term: &Variable(VarId(9))
+                                                    term: &Variable(VarId(12))
                                                 }
                                             }
                                         },
                                         right: &Abstraction {
                                             arg: VarId(1),
                                             body: &Abstraction {
-                                                arg: VarId(10),
+                                                arg: VarId(13),
                                                 body: &Application {
                                                     func: &Abstraction {
                                                         arg: VarId(2),
@@ -1261,7 +1303,7 @@ mod tests {
                                                     },
                                                     arg: &Unlabel {
                                                         label: c,
-                                                        term: &Variable(VarId(10))
+                                                        term: &Variable(VarId(13))
                                                     }
                                                 }
                                             }
@@ -1273,7 +1315,7 @@ mod tests {
                                 label: x,
                                 term: &Project {
                                     direction: Direction::Right,
-                                    term: &Variable(VarId(3))
+                                    term: &Variable(VarId(6))
                                 }
                             }
                         },
@@ -1281,7 +1323,7 @@ mod tests {
                             label: y,
                             term: &Project {
                                 direction: Direction::Right,
-                                term: &Variable(VarId(3))
+                                term: &Variable(VarId(6))
                             }
                         }
                     },
@@ -1289,7 +1331,7 @@ mod tests {
                         label: z,
                         term: &Project {
                             direction: Direction::Right,
-                            term: &Variable(VarId(3))
+                            term: &Variable(VarId(6))
                         }
                     }
                 }

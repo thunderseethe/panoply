@@ -1,5 +1,5 @@
 use crate::id::{EffectOpId, ItemId, ModuleId};
-use crate::memory::handle::RefHandle;
+use crate::ident::Ident;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
 
@@ -62,12 +62,12 @@ pub enum Term<'a, Var> {
     Unit,
     // Label a term, used in construction of Product and Sum types.
     Label {
-        label: RefHandle<'a, str>,
+        label: Ident,
         term: &'a Term<'a, Var>,
     },
     // Unlabel a term, this is used to project a product into one of it's fields.
     Unlabel {
-        label: RefHandle<'a, str>,
+        label: Ident,
         term: &'a Term<'a, Var>,
     },
     // Concat two rows into a larger row
