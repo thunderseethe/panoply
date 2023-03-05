@@ -88,7 +88,6 @@ impl<'s> Displayer<ModuleId> for ModuleTree<'s> {
 /// module.
 #[salsa::tracked]
 pub struct Module {
-    #[id]
     #[return_ref]
     name: String,
 
