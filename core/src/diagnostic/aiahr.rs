@@ -1,5 +1,8 @@
 //! This module defines a unified error type for errors from all stages.
 
+use crate::displayer::Displayer;
+use crate::ident::Ident;
+
 use super::{
     lexer::LexError, nameres::NameResolutionError, parser::ParseError, Citation, Diagnostic,
 };
@@ -8,7 +11,7 @@ use super::{
 #[derive(Debug)]
 pub enum AiahrcError<'s> {
     LexError(LexError),
-    NameResolutionError(NameResolutionError<'s>),
+    NameResolutionError(NameResolutionError),
     ParseError(ParseError<'s>),
 }
 
@@ -18,8 +21,8 @@ impl<'s> From<LexError> for AiahrcError<'s> {
     }
 }
 
-impl<'s> From<NameResolutionError<'s>> for AiahrcError<'s> {
-    fn from(err: NameResolutionError<'s>) -> Self {
+impl<'s> From<NameResolutionError> for AiahrcError<'s> {
+    fn from(err: NameResolutionError) -> Self {
         AiahrcError::NameResolutionError(err)
     }
 }
@@ -39,10 +42,10 @@ impl<'s> Diagnostic for AiahrcError<'s> {
         }
     }
 
-    fn principal<M: crate::displayer::Displayer<crate::id::ModuleId>>(
-        &self,
-        modules: &M,
-    ) -> Citation {
+    fn principal<M>(&self, modules: &M) -> Citation
+    where
+        M: Displayer<crate::id::ModuleId> + Displayer<Ident>,
+    {
         match self {
             AiahrcError::LexError(err) => err.principal(modules),
             AiahrcError::NameResolutionError(err) => err.principal(modules),
@@ -50,10 +53,10 @@ impl<'s> Diagnostic for AiahrcError<'s> {
         }
     }
 
-    fn additional<M: crate::displayer::Displayer<crate::id::ModuleId>>(
-        &self,
-        modules: &M,
-    ) -> Vec<Citation> {
+    fn additional<M>(&self, modules: &M) -> Vec<Citation>
+    where
+        M: Displayer<crate::id::ModuleId> + Displayer<Ident>,
+    {
         match self {
             AiahrcError::LexError(err) => err.additional(modules),
             AiahrcError::NameResolutionError(err) => err.additional(modules),

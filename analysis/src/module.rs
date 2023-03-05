@@ -2,7 +2,7 @@ use std::slice::Iter;
 
 use aiahr_core::{
     id::{EffectId, IdGen, Ids, ItemId},
-    memory::handle::RefHandle,
+    ident::Ident,
     span::{SpanOf, Spanned},
 };
 use rustc_hash::FxHashMap;
@@ -14,25 +14,25 @@ use crate::{
 };
 
 #[derive(Debug, Default)]
-struct Gens<'s> {
-    effects: IdGen<EffectId, (SpanOf<RefHandle<'s, str>>, EffectNames<'s>)>,
-    items: IdGen<ItemId, SpanOf<RefHandle<'s, str>>>,
+struct Gens {
+    effects: IdGen<EffectId, (SpanOf<Ident>, EffectNames)>,
+    items: IdGen<ItemId, SpanOf<Ident>>,
 }
 
-impl<'s> IdOps<'s, EffectId> for Gens<'s> {
-    fn get(&self, id: EffectId) -> SpanOf<RefHandle<'s, str>> {
+impl IdOps<EffectId> for Gens {
+    fn get(&self, id: EffectId) -> SpanOf<Ident> {
         self.effects[id].0
     }
 }
 
-impl<'s> IdOps<'s, ItemId> for Gens<'s> {
-    fn get(&self, id: ItemId) -> SpanOf<RefHandle<'s, str>> {
+impl IdOps<ItemId> for Gens {
+    fn get(&self, id: ItemId) -> SpanOf<Ident> {
         self.items[id]
     }
 }
 
-impl<'s> GensOps<'s, ItemId> for Gens<'s> {
-    fn push(&mut self, name: SpanOf<RefHandle<'s, str>>) -> ItemId {
+impl GensOps<ItemId> for Gens {
+    fn push(&mut self, name: SpanOf<Ident>) -> ItemId {
         self.items.push(name)
     }
 }
@@ -80,18 +80,18 @@ impl MatchesOps<ItemId> for Matches {
 
 /// An accumulator for top-level names in a module.
 #[derive(Debug, Default)]
-pub struct ModuleNamesBuilder<'s> {
-    gens: Gens<'s>,
-    names: FxHashMap<RefHandle<'s, str>, Matches>,
+pub struct ModuleNamesBuilder {
+    gens: Gens,
+    names: FxHashMap<Ident, Matches>,
     id_order: Vec<ModuleName>,
 }
 
-impl<'s> ModuleNamesBuilder<'s> {
-    fn insert<I>(&mut self, name: SpanOf<RefHandle<'s, str>>) -> InsertResult<I>
+impl ModuleNamesBuilder {
+    fn insert<I>(&mut self, name: SpanOf<Ident>) -> InsertResult<I>
     where
         I: Copy,
         ModuleName: From<I>,
-        Gens<'s>: GensOps<'s, I>,
+        Gens: GensOps<I>,
         Matches: MatchesOps<I>,
     {
         let id = self.gens.push(name);
@@ -112,8 +112,8 @@ impl<'s> ModuleNamesBuilder<'s> {
     /// Inserts an effect into the top-level scope.
     pub fn insert_effect(
         &mut self,
-        name: SpanOf<RefHandle<'s, str>>,
-        ops: EffectNames<'s>,
+        name: SpanOf<Ident>,
+        ops: EffectNames,
     ) -> InsertResult<EffectId> {
         let id = self.gens.effects.push((name, ops));
         self.id_order.push(ModuleName::Effect(id));
@@ -131,12 +131,12 @@ impl<'s> ModuleNamesBuilder<'s> {
     }
 
     /// Inserts an item into the top-level scope.
-    pub fn insert_item(&mut self, name: SpanOf<RefHandle<'s, str>>) -> InsertResult<ItemId> {
+    pub fn insert_item(&mut self, name: SpanOf<Ident>) -> InsertResult<ItemId> {
         self.insert(name)
     }
 
     /// Finalizes the names.
-    pub fn build(self) -> ModuleNames<'s> {
+    pub fn build(self) -> ModuleNames {
         ModuleNames {
             effects: self.gens.effects.into_boxed_ids(),
             items: self.gens.items.into_boxed_ids(),
@@ -148,24 +148,21 @@ impl<'s> ModuleNamesBuilder<'s> {
 
 /// A leaf module in the module tree. Holds top-level names.
 #[derive(Debug)]
-pub struct ModuleNames<'s> {
-    effects: Box<Ids<EffectId, (SpanOf<RefHandle<'s, str>>, EffectNames<'s>)>>,
-    items: Box<Ids<ItemId, SpanOf<RefHandle<'s, str>>>>,
-    names: FxHashMap<RefHandle<'s, str>, Matches>,
+pub struct ModuleNames {
+    effects: Box<Ids<EffectId, (SpanOf<Ident>, EffectNames)>>,
+    items: Box<Ids<ItemId, SpanOf<Ident>>>,
+    names: FxHashMap<Ident, Matches>,
     id_order: Box<[ModuleName]>,
 }
 
-impl<'s> ModuleNames<'s> {
+impl ModuleNames {
     /// Gets the operations associated with an effect.
-    pub fn get_effect(&self, id: EffectId) -> &EffectNames<'s> {
+    pub fn get_effect(&self, id: EffectId) -> &EffectNames {
         &self.effects[id].1
     }
 
     /// Finds the correct ID associated with the given string.
-    pub fn find<'a>(
-        &'a self,
-        name: RefHandle<'s, str>,
-    ) -> impl 'a + Iterator<Item = SpanOf<ModuleName>> {
+    pub fn find<'a>(&'a self, name: Ident) -> impl 'a + Iterator<Item = SpanOf<ModuleName>> {
         self.names
             .get(&name)
             .into_iter()
@@ -179,11 +176,11 @@ impl<'s> ModuleNames<'s> {
     }
 }
 
-impl<'s, I> IdOps<'s, I> for ModuleNames<'s>
+impl<I> IdOps<I> for ModuleNames
 where
     ModuleName: From<I>,
 {
-    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
+    fn get(&self, id: I) -> SpanOf<Ident> {
         match ModuleName::from(id) {
             ModuleName::Effect(e) => self.effects[e].0,
             ModuleName::Item(i) => self.items[i],

@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use aiahr_core::{
     id::{Id, IdGen, Ids},
-    memory::handle::RefHandle,
+    ident::Ident,
     span::SpanOf,
 };
 
@@ -32,34 +32,34 @@ impl<I> InsertResult<I> {
 }
 
 /// Trait for name layers to lookup IDs.
-pub trait IdOps<'s, I> {
+pub trait IdOps<I> {
     /// Gets the string associated with a given ID.
-    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>>;
+    fn get(&self, id: I) -> SpanOf<Ident>;
 }
 
-impl<'s, I: Id> IdOps<'s, I> for Ids<I, SpanOf<RefHandle<'s, str>>> {
-    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
+impl<'s, I: Id> IdOps<I> for Ids<I, SpanOf<Ident>> {
+    fn get(&self, id: I) -> SpanOf<Ident> {
         self[id]
     }
 }
 
-impl<'s, I: Id, T> IdOps<'s, I> for T
+impl<'s, I: Id, T> IdOps<I> for T
 where
-    T: Deref<Target = Ids<I, SpanOf<RefHandle<'s, str>>>>,
+    T: Deref<Target = Ids<I, SpanOf<Ident>>>,
 {
-    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
+    fn get(&self, id: I) -> SpanOf<Ident> {
         self[id]
     }
 }
 
 /// Trait for bundles of generators to get and push by ID kind.
-pub(crate) trait GensOps<'s, I>: IdOps<'s, I> {
+pub(crate) trait GensOps<I>: IdOps<I> {
     /// Generates an ID for a new string.
-    fn push(&mut self, name: SpanOf<RefHandle<'s, str>>) -> I;
+    fn push(&mut self, name: SpanOf<Ident>) -> I;
 }
 
-impl<'s, I: Id> GensOps<'s, I> for IdGen<I, SpanOf<RefHandle<'s, str>>> {
-    fn push(&mut self, name: SpanOf<RefHandle<'s, str>>) -> I {
+impl<'s, I: Id> GensOps<I> for IdGen<I, SpanOf<Ident>> {
+    fn push(&mut self, name: SpanOf<Ident>) -> I {
         self.push(name)
     }
 }

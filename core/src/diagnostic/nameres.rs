@@ -4,8 +4,9 @@ use bitflags::bitflags;
 use std::{array, iter::Flatten, option};
 
 use crate::{
+    displayer::Displayer,
     id::ModuleId,
-    memory::handle::RefHandle,
+    ident::Ident,
     span::{Span, SpanOf, Spanned},
 };
 
@@ -111,20 +112,20 @@ impl RejectionReason {
 
 /// A suggestion for what name the user might have intended to refer to.
 #[derive(Clone, Copy, Debug)]
-pub struct Suggestion<'s> {
+pub struct Suggestion {
     /// The suggested name.
-    pub name: SpanOf<RefHandle<'s, str>>,
+    pub name: SpanOf<Ident>,
     /// Why the name wasn't matched.
     pub why_not: RejectionReason,
 }
 
 /// A name resolution error.
 #[derive(Debug)]
-pub enum NameResolutionError<'s> {
+pub enum NameResolutionError {
     /// A duplicate name in the same layer, where the new name is not allowed to shadow the old one.
     Duplicate {
         /// The duplicated name.
-        name: RefHandle<'s, str>,
+        name: Ident,
         /// The kind of both names.
         kind: NameKind,
         /// The original definition site.
@@ -135,11 +136,11 @@ pub enum NameResolutionError<'s> {
     /// A reference to a name that isn't defined.
     NotFound {
         /// The name that isn't defined.
-        name: SpanOf<RefHandle<'s, str>>,
+        name: SpanOf<Ident>,
         /// The module that was expected to contain the given name as a member.
         context_module: Option<ModuleId>,
         /// Possible names that the user could have intended.
-        suggestions: Vec<Suggestion<'s>>,
+        suggestions: Vec<Suggestion>,
     },
     /// A compound name has the wrong kind for the context in which it is used.
     WrongKind {
@@ -152,7 +153,7 @@ pub enum NameResolutionError<'s> {
     },
 }
 
-impl<'s> Diagnostic for NameResolutionError<'s> {
+impl<'s> Diagnostic for NameResolutionError {
     fn name(&self) -> &'static str {
         match self {
             NameResolutionError::Duplicate { .. } => "name-resolution-duplicate-definition",
@@ -161,13 +162,13 @@ impl<'s> Diagnostic for NameResolutionError<'s> {
         }
     }
 
-    fn principal<M: crate::displayer::Displayer<ModuleId>>(&self, modules: &M) -> Citation {
+    fn principal<M: Displayer<ModuleId> + Displayer<Ident>>(&self, modules: &M) -> Citation {
         match self {
             NameResolutionError::Duplicate {
                 name, duplicate, ..
             } => Citation {
                 span: *duplicate,
-                message: format!("Duplicate definition of symbol '{}'", name.0),
+                message: format!("Duplicate definition of symbol '{}'", modules.show(name)),
             },
             NameResolutionError::NotFound {
                 name,
@@ -178,10 +179,10 @@ impl<'s> Diagnostic for NameResolutionError<'s> {
                 message: match context_module {
                     Some(m) => format!(
                         "Symbol '{}' not found in module {}",
-                        name.value.0,
+                        modules.show(&name.value),
                         modules.show(m)
                     ),
-                    None => format!("Symbol '{}' not found", name.value.0),
+                    None => format!("Symbol '{}' not found", modules.show(&name.value)),
                 },
             },
             NameResolutionError::WrongKind {
@@ -202,7 +203,7 @@ impl<'s> Diagnostic for NameResolutionError<'s> {
         }
     }
 
-    fn additional<M: crate::displayer::Displayer<ModuleId>>(&self, _: &M) -> Vec<Citation> {
+    fn additional<M: Displayer<ModuleId> + Displayer<Ident>>(&self, modules: &M) -> Vec<Citation> {
         match self {
             NameResolutionError::Duplicate { original, .. } => vec![Citation {
                 span: *original,
@@ -214,7 +215,7 @@ impl<'s> Diagnostic for NameResolutionError<'s> {
                     span: sugg.name.span(),
                     message: format!(
                         "Did you mean '{}'? (rejected because {})",
-                        sugg.name.value.0,
+                        modules.show(&sugg.name.value),
                         sugg.why_not.dependent_clause()
                     ),
                 })

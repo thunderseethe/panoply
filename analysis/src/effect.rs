@@ -2,7 +2,7 @@ use std::iter::FusedIterator;
 
 use aiahr_core::{
     id::{EffectOpId, IdGen, Ids},
-    memory::handle::RefHandle,
+    ident::Ident,
     span::{SpanOf, Spanned},
 };
 use rustc_hash::FxHashMap;
@@ -11,14 +11,14 @@ use crate::ops::{IdOps, InsertResult};
 
 /// Accumulates operations of an effect definition.
 #[derive(Debug, Default)]
-pub struct EffectBuilder<'s> {
-    ops: IdGen<EffectOpId, SpanOf<RefHandle<'s, str>>>,
-    names: FxHashMap<RefHandle<'s, str>, EffectOpId>,
+pub struct EffectBuilder {
+    ops: IdGen<EffectOpId, SpanOf<Ident>>,
+    names: FxHashMap<Ident, EffectOpId>,
 }
 
-impl<'s> EffectBuilder<'s> {
+impl EffectBuilder {
     /// Adds an operation to the effect.
-    pub fn insert_op(&mut self, name: SpanOf<RefHandle<'s, str>>) -> InsertResult<EffectOpId> {
+    pub fn insert_op(&mut self, name: SpanOf<Ident>) -> InsertResult<EffectOpId> {
         let id = self.ops.push(name);
         if let Some(old) = self.names.get(&name.value) {
             InsertResult::err(id, self.ops[*old].span().of(*old))
@@ -29,7 +29,7 @@ impl<'s> EffectBuilder<'s> {
     }
 
     /// Finalizes the definition.
-    pub fn build(self) -> EffectNames<'s> {
+    pub fn build(self) -> EffectNames {
         EffectNames {
             ops: self.ops.into_boxed_ids(),
             names: self.names,
@@ -39,17 +39,14 @@ impl<'s> EffectBuilder<'s> {
 
 /// The operation names of an effect.
 #[derive(Debug)]
-pub struct EffectNames<'s> {
-    ops: Box<Ids<EffectOpId, SpanOf<RefHandle<'s, str>>>>,
-    names: FxHashMap<RefHandle<'s, str>, EffectOpId>,
+pub struct EffectNames {
+    ops: Box<Ids<EffectOpId, SpanOf<Ident>>>,
+    names: FxHashMap<Ident, EffectOpId>,
 }
 
-impl<'s> EffectNames<'s> {
+impl EffectNames {
     /// An iterator over all operations matching the given name.
-    pub fn find<'a>(
-        &'a self,
-        name: RefHandle<'s, str>,
-    ) -> impl 'a + Iterator<Item = SpanOf<EffectOpId>> {
+    pub fn find<'a>(&'a self, name: Ident) -> impl 'a + Iterator<Item = SpanOf<EffectOpId>> {
         self.names
             .get(&name)
             .map(|n| self.get(*n).span().of(*n))
@@ -65,8 +62,8 @@ impl<'s> EffectNames<'s> {
     }
 }
 
-impl<'s> IdOps<'s, EffectOpId> for EffectNames<'s> {
-    fn get(&self, id: EffectOpId) -> SpanOf<RefHandle<'s, str>> {
+impl IdOps<EffectOpId> for EffectNames {
+    fn get(&self, id: EffectOpId) -> SpanOf<Ident> {
         self.ops[id]
     }
 }

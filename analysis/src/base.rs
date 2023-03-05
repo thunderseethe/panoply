@@ -2,8 +2,8 @@ use std::slice::Iter;
 
 use aiahr_core::{
     id::{EffectId, ModuleId},
+    ident::Ident,
     loc::Loc,
-    memory::handle::RefHandle,
     modules::ModuleTree,
     span::{Span, SpanOf},
 };
@@ -24,20 +24,20 @@ fn canonical_span(m: ModuleId) -> Span {
 /// A collection of names visible throughout a module. Also accumulates the local variable IDs of
 /// the module.
 #[derive(Debug)]
-pub struct BaseNames<'b, 'a, 's> {
+pub struct BaseNames<'b, 'a> {
     me: ModuleId,
-    modules: &'b ModuleTree<'s>,
-    module_names: &'b FxHashMap<ModuleId, &'a ModuleNames<'s>>,
+    modules: &'b ModuleTree,
+    module_names: &'b FxHashMap<ModuleId, &'a ModuleNames>,
 }
 
-impl<'b, 'a, 's> BaseNames<'b, 'a, 's> {
+impl<'b, 'a, 's> BaseNames<'b, 'a> {
     /// Creates a new `BaseNames`.
     pub fn new(
         me: ModuleId,
-        modules: &'b ModuleTree<'s>,
-        module_names: &'b FxHashMap<ModuleId, &'a ModuleNames<'s>>,
-    ) -> BaseNames<'b, 'a, 's> {
-        BaseNames {
+        modules: &'b ModuleTree,
+        module_names: &'b FxHashMap<ModuleId, &'a ModuleNames>,
+    ) -> Self {
+        Self {
             me,
             modules,
             module_names,
@@ -50,15 +50,12 @@ impl<'b, 'a, 's> BaseNames<'b, 'a, 's> {
     }
 
     /// Gets the effect corresponding to the given ID.
-    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames<'s> {
+    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames {
         self.module_names[&module].get_effect(effect)
     }
 
     /// Finds the correct ID associated with the given string.
-    pub fn find<'c>(
-        &'c self,
-        name: RefHandle<'s, str>,
-    ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
+    pub fn find<'c>(&'c self, name: Ident) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
         self.find_in(self.me, name)
     }
 
@@ -66,7 +63,7 @@ impl<'b, 'a, 's> BaseNames<'b, 'a, 's> {
     pub fn find_in<'c>(
         &'c self,
         module: ModuleId,
-        name: RefHandle<'s, str>,
+        name: Ident,
     ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
         self.module_names[&module]
             .find(name)
@@ -79,11 +76,11 @@ impl<'b, 'a, 's> BaseNames<'b, 'a, 's> {
     }
 }
 
-impl<'b, 'a, 's, I> IdOps<'s, I> for BaseNames<'b, 'a, 's>
+impl<'b, 'a, 's, I> IdOps<I> for BaseNames<'b, 'a>
 where
     BaseName: From<I>,
 {
-    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
+    fn get(&self, id: I) -> SpanOf<Ident> {
         match BaseName::from(id) {
             BaseName::Module(m) => canonical_span(m).of(self.modules.get_name(m)),
             BaseName::Effect(m, e) => self.module_names[&m].get(e),

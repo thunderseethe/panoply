@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use aiahr_core::{
     id::{EffectId, IdGen, Ids, ModuleId, TyVarId, VarId},
-    memory::handle::RefHandle,
+    ident::Ident,
     span::{SpanOf, Spanned},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -15,13 +15,13 @@ use crate::{
 };
 
 #[derive(Debug)]
-struct Gens<'s> {
-    ty_vars: IdGen<TyVarId, SpanOf<RefHandle<'s, str>>>,
-    vars: IdGen<VarId, SpanOf<RefHandle<'s, str>>>,
+struct Gens {
+    ty_vars: IdGen<TyVarId, SpanOf<Ident>>,
+    vars: IdGen<VarId, SpanOf<Ident>>,
 }
 
-impl<'s> Gens<'s> {
-    fn into_ids(self) -> LocalIds<'s> {
+impl Gens {
+    fn into_ids(self) -> LocalIds {
         LocalIds {
             ty_vars: self.ty_vars.into_boxed_ids(),
             vars: self.vars.into_boxed_ids(),
@@ -29,26 +29,26 @@ impl<'s> Gens<'s> {
     }
 }
 
-impl<'s> IdOps<'s, TyVarId> for Gens<'s> {
-    fn get(&self, id: TyVarId) -> SpanOf<RefHandle<'s, str>> {
+impl IdOps<TyVarId> for Gens {
+    fn get(&self, id: TyVarId) -> SpanOf<Ident> {
         self.ty_vars[id]
     }
 }
 
-impl<'s> IdOps<'s, VarId> for Gens<'s> {
-    fn get(&self, id: VarId) -> SpanOf<RefHandle<'s, str>> {
+impl IdOps<VarId> for Gens {
+    fn get(&self, id: VarId) -> SpanOf<Ident> {
         self.vars[id]
     }
 }
 
-impl<'s> GensOps<'s, TyVarId> for Gens<'s> {
-    fn push(&mut self, name: SpanOf<RefHandle<'s, str>>) -> TyVarId {
+impl GensOps<TyVarId> for Gens {
+    fn push(&mut self, name: SpanOf<Ident>) -> TyVarId {
         self.ty_vars.push(name)
     }
 }
 
-impl<'s> GensOps<'s, VarId> for Gens<'s> {
-    fn push(&mut self, name: SpanOf<RefHandle<'s, str>>) -> VarId {
+impl GensOps<VarId> for Gens {
+    fn push(&mut self, name: SpanOf<Ident>) -> VarId {
         self.vars.push(name)
     }
 }
@@ -95,23 +95,23 @@ impl MatchesOps<VarId> for Matches {
 }
 
 #[derive(Debug)]
-pub struct LocalIds<'s> {
-    pub ty_vars: Box<Ids<TyVarId, SpanOf<RefHandle<'s, str>>>>,
-    pub vars: Box<Ids<VarId, SpanOf<RefHandle<'s, str>>>>,
+pub struct LocalIds {
+    pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,
+    pub vars: Box<Ids<VarId, SpanOf<Ident>>>,
 }
 
 /// The names visible from a given context in a module. Supports shadowing.
 #[derive(Debug)]
-pub struct Names<'b, 'a, 's> {
-    base: &'b BaseNames<'b, 'a, 's>,
-    gens: Gens<'s>,
-    names: FxHashMap<RefHandle<'s, str>, Vec<Matches>>,
-    scopes: Vec<FxHashSet<RefHandle<'s, str>>>,
+pub struct Names<'b, 'a> {
+    base: &'b BaseNames<'b, 'a>,
+    gens: Gens,
+    names: FxHashMap<Ident, Vec<Matches>>,
+    scopes: Vec<FxHashSet<Ident>>,
 }
 
-impl<'b, 'a, 's> Names<'b, 'a, 's> {
+impl<'b, 'a, 's> Names<'b, 'a> {
     /// Constructs a new `Names` with the given base.
-    pub fn new(base: &'b BaseNames<'b, 'a, 's>) -> Names<'b, 'a, 's> {
+    pub fn new(base: &'b BaseNames<'b, 'a>) -> Names<'b, 'a> {
         Names {
             base,
             gens: Gens {
@@ -123,14 +123,14 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
         }
     }
 
-    pub fn into_vars(self) -> IdGen<VarId, SpanOf<RefHandle<'s, str>>> {
+    pub fn into_vars(self) -> IdGen<VarId, SpanOf<Ident>> {
         self.gens.vars
     }
 
     /// Executes the given function on a subscope of the current object.
     pub fn subscope<R, F>(&mut self, f: F) -> R
     where
-        F: FnOnce(&mut Names<'b, 'a, 's>) -> R,
+        F: FnOnce(&mut Names<'b, 'a>) -> R,
     {
         self.scopes.push(FxHashSet::default());
         let ret = f(self);
@@ -143,14 +143,14 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
     }
 
     /// Gets the effect corresponding to the given ID.
-    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames<'s> {
+    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames {
         self.base.get_effect(module, effect)
     }
 
-    fn insert<I>(&mut self, name: SpanOf<RefHandle<'s, str>>) -> InsertResult<I>
+    fn insert<I>(&mut self, name: SpanOf<Ident>) -> InsertResult<I>
     where
         I: Copy,
-        Gens<'s>: GensOps<'s, I>,
+        Gens: GensOps<I>,
         Matches: MatchesOps<I>,
     {
         let id = self.gens.push(name);
@@ -177,7 +177,7 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
     ///
     /// If the variable is a duplicate in the current scope, returns an error
     /// with the original name. Otherwise, returns the ID of the new variable.
-    pub fn insert_ty_var(&mut self, name: SpanOf<RefHandle<'s, str>>) -> InsertResult<TyVarId> {
+    pub fn insert_ty_var(&mut self, name: SpanOf<Ident>) -> InsertResult<TyVarId> {
         self.insert(name)
     }
 
@@ -185,12 +185,12 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
     ///
     /// If the variable is a duplicate in the current scope, returns an error
     /// with the original name. Otherwise, returns the ID of the new variable.
-    pub fn insert_var(&mut self, name: SpanOf<RefHandle<'s, str>>) -> InsertResult<VarId> {
+    pub fn insert_var(&mut self, name: SpanOf<Ident>) -> InsertResult<VarId> {
         self.insert(name)
     }
 
     /// Finds the correct ID associated with the given string.
-    pub fn find<'c>(&'c self, name: RefHandle<'s, str>) -> impl 'c + Iterator<Item = SpanOf<Name>> {
+    pub fn find<'c>(&'c self, name: Ident) -> impl 'c + Iterator<Item = SpanOf<Name>> {
         self.names
             .get(&name)
             .into_iter()
@@ -203,22 +203,22 @@ impl<'b, 'a, 's> Names<'b, 'a, 's> {
     pub fn find_in<'c>(
         &'c self,
         module: ModuleId,
-        name: RefHandle<'s, str>,
+        name: Ident,
     ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
         self.base.find_in(module, name)
     }
 
     /// Converts into variable IDs.
-    pub fn into_local_ids(self) -> LocalIds<'s> {
+    pub fn into_local_ids(self) -> LocalIds {
         self.gens.into_ids()
     }
 }
 
-impl<'b, 'a, 's, I> IdOps<'s, I> for Names<'b, 'a, 's>
+impl<'b, 'a, 's, I> IdOps<I> for Names<'b, 'a>
 where
     Name: From<I>,
 {
-    fn get(&self, id: I) -> SpanOf<RefHandle<'s, str>> {
+    fn get(&self, id: I) -> SpanOf<Ident> {
         match Name::from(id) {
             Name::Module(m) => self.base.get(m),
             Name::Effect(m, e) => self.base.get((m, e)),

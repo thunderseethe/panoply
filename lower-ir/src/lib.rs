@@ -1181,7 +1181,12 @@ mod tests {
     const MODNAME: &str = "test_module";
 
     #[derive(Default)]
-    #[salsa::db(aiahr_core::Jar, aiahr_tc::Jar, aiahr_desugar::Jar)]
+    #[salsa::db(
+        aiahr_core::Jar,
+        aiahr_tc::Jar,
+        aiahr_desugar::Jar,
+        aiahr_analysis::Jar
+    )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
@@ -1200,24 +1205,24 @@ mod tests {
     {
         let (m, modules) = {
             let mut modules = ModuleTree::new();
-            let m = modules.add_package(interner.intern_by_ref(MODNAME));
+            let m = modules.add_package(db.ident_str(MODNAME));
             (m, modules)
         };
 
         let unresolved = aiahr_parser::parser::test_utils::parse_term(arena, interner, input);
-        let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError<'_>> = Vec::new();
+        let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = Vec::new();
 
         let mut module_names = FxHashMap::default();
-        let base = BaseBuilder::new().build(arena, m, &modules, &mut module_names);
+        let base = BaseBuilder::new(db).build(arena, m, &modules, &mut module_names);
         let mut names = Names::new(&base);
 
-        let resolved = resolve_term(arena, unresolved, &mut names, &mut errors)
+        let resolved = resolve_term(db, arena, unresolved, &mut names, &mut errors)
             .expect("Name resolution to succeed");
 
         let mut vars = names
             .into_vars()
             .into_iter()
-            .map(|span_of| db.ident(span_of.value.to_string()))
+            .map(|span_of| span_of.value)
             .collect();
 
         let ast = aiahr_desugar::desugar(db, arena, &mut vars, resolved).unwrap();

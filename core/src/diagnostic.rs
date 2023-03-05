@@ -6,6 +6,7 @@ pub mod lexer;
 pub mod nameres;
 pub mod parser;
 
+use crate::ident::Ident;
 use crate::{displayer::Displayer, id::ModuleId, span::Span};
 
 /// Kinds of diagnostic messages.
@@ -33,10 +34,10 @@ pub trait Diagnostic {
     fn name(&self) -> &'static str;
 
     /// The principal source of the diagnostic.
-    fn principal<M: Displayer<ModuleId>>(&self, modules: &M) -> Citation;
+    fn principal<M: Displayer<ModuleId> + Displayer<Ident>>(&self, modules: &M) -> Citation;
 
     /// Additional citations contributing to the diagnostic.
-    fn additional<M: Displayer<ModuleId>>(&self, modules: &M) -> Vec<Citation>;
+    fn additional<M: Displayer<ModuleId> + Displayer<Ident>>(&self, modules: &M) -> Vec<Citation>;
 }
 
 /// A sink for diagnostic messages of a given type.
