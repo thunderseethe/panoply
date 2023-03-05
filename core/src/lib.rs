@@ -26,22 +26,22 @@ pub mod ident {
 
 #[salsa::jar(db = Db)]
 pub struct Jar(ident::Ident, modules::Module);
-pub trait Db: salsa::DbWithJar<Jar> {}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
-
-// TODO: We can remove this once trait upcasting is stabilized.
-pub trait AsCoreDb {
-    fn as_core_db<'a>(&'a self) -> &'a dyn crate::Db;
-
-    fn ident<S: ToString>(&self, text: S) -> ident::Ident {
-        ident::Ident::new(self.as_core_db(), text.to_string())
-    }
-}
-impl AsCoreDb for dyn crate::Db + '_ {
+pub trait Db: salsa::DbWithJar<Jar> {
     fn as_core_db(&self) -> &dyn crate::Db {
-        self
+        <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
+    }
+
+    fn ident(&self, text: String) -> ident::Ident {
+        ident::Ident::new(self.as_core_db(), text)
+    }
+
+    // Since this must be trait object safe we're not allowed to use generics.
+    // So instead we have a manual specialization for `&str`
+    fn ident_str(&self, text: &str) -> ident::Ident {
+        self.ident(text.to_string())
     }
 }
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
 
 #[cfg(test)]
 mod tests {

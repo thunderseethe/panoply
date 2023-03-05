@@ -6,7 +6,6 @@ use aiahr_core::ident::Ident;
 use aiahr_core::memory::handle::RefHandle;
 use aiahr_core::nst::Pattern;
 use aiahr_core::span::{SpanOf, Spanned};
-use aiahr_core::AsCoreDb;
 use aiahr_core::{
     ast,
     ast::{Ast, Term::*},
@@ -21,11 +20,6 @@ use rustc_hash::FxHashMap;
 pub struct Jar();
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
-impl AsCoreDb for dyn crate::Db + '_ {
-    fn as_core_db(&self) -> &dyn aiahr_core::Db {
-        <dyn crate::Db as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
-    }
-}
 
 struct DesugarCtx<'a, 'ctx> {
     db: &'a dyn crate::Db,
@@ -94,14 +88,14 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 None => self.arena.alloc(Unit),
                 Some(fields) => {
                     let head = self.arena.alloc(Label {
-                        label: self.db.ident(fields.first.label.value.0),
+                        label: self.db.ident(fields.first.label.value.to_string()),
                         term: self.ds_term(fields.first.target)?,
                     }) as &_;
                     self.spans
                         .insert(head, fields.first.label.join_spans(fields.first.target));
                     fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
                         let right = self.arena.alloc(Label {
-                            label: self.db.ident(field.label.value.0),
+                            label: self.db.ident(field.label.value.to_string()),
                             term: self.ds_term(field.target)?,
                         }) as &_;
                         self.spans
@@ -116,7 +110,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
             nst::Term::FieldAccess { base, field, .. } => {
                 let term = self.ds_term(base)?;
                 self.arena.alloc(Unlabel {
-                    label: self.db.ident(field.value.0),
+                    label: self.db.ident(field.value.to_string()),
                     term: mk_term(
                         Project {
                             direction: Direction::Right,
@@ -132,7 +126,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     direction: Direction::Right,
                     term: mk_term(
                         Label {
-                            label: self.db.ident(sum.field.label.value.0),
+                            label: self.db.ident(sum.field.label.value.to_string()),
                             term,
                         },
                         &mut self.spans,
@@ -188,7 +182,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 .collect::<std::collections::BTreeMap<_, _>>();
             let mut matches = constrs.into_iter().map(|(c, p)| match c {
                 Constructor::ProductRow(ref lbls) => {
-                    let generated_var = self.db.ident("__generated__");
+                    let generated_var = self.db.ident_str("__generated__");
                     let top_level = self.vars.push(generated_var);
                     let binders = (0..lbls.len())
                         .map(|_| self.vars.push(generated_var))
@@ -200,7 +194,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                         self.desugar_pattern_matrix(occs.as_mut_slice(), matrix.specialize(&c))?;
                     let body = lbls.iter().cloned().fold(init, |body, lbl| {
                         let destructure = self.arena.alloc(Unlabel {
-                            label: self.db.ident(lbl.0),
+                            label: self.db.ident(lbl.to_string()),
                             term: self.arena.alloc(Project {
                                 direction: Direction::Right,
                                 term: self.arena.alloc(Variable(top_level)),
@@ -225,7 +219,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     ))
                 }
                 Constructor::SumRow(label) => {
-                    let binder = self.vars.push(self.db.ident("__generated__"));
+                    let binder = self.vars.push(self.db.ident_str("__generated__"));
                     let mut occs = vec![binder];
                     occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                     let func = self.desugar_pattern_matrix(&mut occs, matrix.specialize(&c))?;
@@ -233,7 +227,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     let arg = mk_term(
                         &mut self.spans,
                         Unlabel {
-                            label: self.db.ident(label.0),
+                            label: self.db.ident(label.to_string()),
                             term,
                         },
                         p.span(),
@@ -430,7 +424,8 @@ mod tests {
     use super::*;
     use aiahr_core::cst::{Field, IdField, ProductRow, Separated, SumRow};
     use aiahr_core::memory::handle;
-    use aiahr_core::{id::VarId, nst, AsCoreDb};
+    use aiahr_core::Db;
+    use aiahr_core::{id::VarId, nst};
     use aiahr_test::{cst::*, span::*};
     use bumpalo::Bump;
 
@@ -440,18 +435,13 @@ mod tests {
         storage: salsa::Storage<Self>,
     }
     impl salsa::Database for TestDatabase {}
-    impl AsCoreDb for TestDatabase {
-        fn as_core_db(&self) -> &dyn aiahr_core::Db {
-            <TestDatabase as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
-        }
-    }
 
     #[test]
     fn test_desugar_var() {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let mut vars = IdGen::new();
-        let var = random_span_of(vars.push(db.ident("0")));
+        let var = random_span_of(vars.push(db.ident_str("0")));
         let nst = arena.alloc(nst::Term::VariableRef(var));
         let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
 
@@ -471,7 +461,7 @@ mod tests {
         let db = TestDatabase::default();
         let mut vars = IdGen::new();
         let start = random_span();
-        let x = vars.push(db.ident("0"));
+        let x = vars.push(db.ident_str("0"));
         let span_of_var = random_span_of(x);
         let nst = arena.alloc(nst::Term::Abstraction {
             lbar: start,
@@ -608,9 +598,9 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
 
-        let a = db.ident("abc");
-        let b = db.ident("def");
-        let c = db.ident("ghi");
+        let a = db.ident_str("abc");
+        let b = db.ident_str("def");
+        let c = db.ident_str("ghi");
 
         let start = random_span();
         let end = random_span();
@@ -686,7 +676,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
 
-        let state = db.ident("state");
+        let state = db.ident_str("state");
 
         let base = random_span_of(VarId(0));
         let field = random_span_of(handle::Handle("state"));
@@ -721,7 +711,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
 
-        let tru = db.ident("true");
+        let tru = db.ident_str("true");
 
         let langle = random_span();
         let rangle = random_span();
@@ -760,9 +750,9 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
 
-        let a = db.ident("A");
-        let b = db.ident("B");
-        let c = db.ident("C");
+        let a = db.ident_str("A");
+        let b = db.ident_str("B");
+        let c = db.ident_str("C");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -875,10 +865,10 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
 
-        let a = db.ident("A");
-        let b = db.ident("B");
-        let c = db.ident("C");
-        let w = db.ident("_");
+        let a = db.ident_str("A");
+        let b = db.ident_str("B");
+        let c = db.ident_str("C");
+        let w = db.ident_str("_");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -1005,9 +995,9 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
 
-        let a = db.ident("A");
-        let b = db.ident("B");
-        let c = db.ident("C");
+        let a = db.ident_str("A");
+        let b = db.ident_str("B");
+        let c = db.ident_str("C");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -1109,12 +1099,12 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
 
-        let a = db.ident("A");
-        let b = db.ident("B");
-        let c = db.ident("C");
-        let x = db.ident("x");
-        let y = db.ident("y");
-        let z = db.ident("z");
+        let a = db.ident_str("A");
+        let b = db.ident_str("B");
+        let c = db.ident_str("C");
+        let x = db.ident_str("x");
+        let y = db.ident_str("y");
+        let z = db.ident_str("z");
 
         let nst = arena.alloc(nst::Term::Match {
             match_: random_span(),

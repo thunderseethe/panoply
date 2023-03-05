@@ -1171,7 +1171,7 @@ mod tests {
     use aiahr_analysis::top_level::BaseBuilder;
     use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
     use aiahr_core::modules::ModuleTree;
-    use aiahr_core::AsCoreDb;
+    use aiahr_core::Db;
     use aiahr_tc::test_utils::DummyEff;
     use aiahr_test::ast::*;
     use assert_matches::assert_matches;
@@ -1186,11 +1186,6 @@ mod tests {
         storage: salsa::Storage<Self>,
     }
     impl salsa::Database for TestDatabase {}
-    impl AsCoreDb for TestDatabase {
-        fn as_core_db<'a>(&'a self) -> &'a dyn aiahr_core::Db {
-            <TestDatabase as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
-        }
-    }
 
     /// Compile an input string up to (but not including) the lower stage.
     fn compile_upto_lower<'a, 'ctx, S>(
@@ -1222,7 +1217,7 @@ mod tests {
         let mut vars = names
             .into_vars()
             .into_iter()
-            .map(|span_of| db.ident(span_of.value.0))
+            .map(|span_of| db.ident(span_of.value.to_string()))
             .collect();
 
         let ast = aiahr_desugar::desugar(db, arena, &mut vars, resolved).unwrap();

@@ -9,7 +9,6 @@ use aiahr_core::{
         intern::{Interner, InternerByRef, SyncInterner},
     },
     span::Span,
-    AsCoreDb,
 };
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
@@ -2081,7 +2080,7 @@ where
     }
 
     fn mk_label(&self, label: &str) -> RowLabel<'ctx> {
-        Ident::new(self.db.as_core_db(), label.to_string())
+        self.db.ident_str(label)
     }
 
     fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV> {
@@ -2159,17 +2158,10 @@ pub struct Jar();
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 
-impl aiahr_core::AsCoreDb for dyn crate::Db + '_ {
-    fn as_core_db<'a>(&'a self) -> &'a dyn aiahr_core::Db {
-        <Self as salsa::DbWithJar<aiahr_core::Jar>>::as_jar_db(self)
-    }
-}
-
 pub mod test_utils {
     use aiahr_core::id::{EffectId, EffectOpId, TyVarId};
     use aiahr_core::ident::Ident;
     use aiahr_core::memory::handle::{self, RefHandle};
-    use aiahr_core::AsCoreDb;
 
     use crate::{ClosedRow, EffectInfo, Row, Ty, TyScheme};
 
@@ -2188,8 +2180,8 @@ pub mod test_utils {
     impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff<'_> {
         fn effect_name(&self, eff: EffectId) -> Ident {
             match eff {
-                DummyEff::STATE_ID => Ident::new(self.0.as_core_db(), "State".to_string()),
-                DummyEff::READER_ID => Ident::new(self.0.as_core_db(), "Reader".to_string()),
+                DummyEff::STATE_ID => self.0.ident_str("State"),
+                DummyEff::READER_ID => self.0.ident_str("Reader"),
                 _ => unimplemented!(),
             }
         }
@@ -2291,9 +2283,9 @@ pub mod test_utils {
 
         fn effect_member_name(&self, _eff: EffectId, member: EffectOpId) -> Ident {
             match member {
-                DummyEff::GET_ID => Ident::new(self.0.as_core_db(), "get".to_string()),
-                DummyEff::PUT_ID => Ident::new(self.0.as_core_db(), "put".to_string()),
-                DummyEff::ASK_ID => Ident::new(self.0.as_core_db(), "ask".to_string()),
+                DummyEff::GET_ID => self.0.ident_str("get"),
+                DummyEff::PUT_ID => self.0.ident_str("put"),
+                DummyEff::ASK_ID => self.0.ident_str("ask"),
                 _ => unreachable!(),
             }
         }

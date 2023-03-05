@@ -1,7 +1,6 @@
 use aiahr_core::{
     ast::{Ast, Direction, Term, Term::*},
     span::Span,
-    AsCoreDb,
 };
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
@@ -92,14 +91,14 @@ impl<'a, Var: Eq + Hash> MkTerm<'a, Var> for AstBuilder<'a, Var> {
 
     fn mk_label(&self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
         Label {
-            label: self.db.ident(label),
+            label: self.db.ident(label.to_string()),
             term: self.mk_term(term),
         }
     }
 
     fn mk_unlabel(&self, label: &str, term: Term<'a, Var>) -> Term<'a, Var> {
         Unlabel {
-            label: self.db.ident(label),
+            label: self.db.ident(label.to_string()),
             term: self.mk_term(term),
         }
     }

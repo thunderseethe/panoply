@@ -1,7 +1,6 @@
 use aiahr_core::id::TyVarId;
 use aiahr_core::ident::Ident;
 use aiahr_core::memory::handle::RefHandle;
-use aiahr_core::AsCoreDb;
 use ena::unify::{EqUnifyValue, UnifyValue};
 use pretty::{docs, DocAllocator, DocBuilder};
 use salsa::DebugWithDb;
@@ -220,7 +219,7 @@ impl<'ctx, TV> Copy for ClosedRow<'ctx, TV> {}
 
 impl<'ctx, TV: Debug, Db> DebugWithDb<Db> for ClosedRow<'ctx, TV>
 where
-    Db: AsCoreDb,
+    Db: aiahr_core::Db,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
         f.debug_map()
