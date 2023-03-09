@@ -9,7 +9,9 @@ use aiahr_core::{
     ir::{IrKind::*, IrTyKind::*, *},
     memory::handle::{Handle, RefHandle},
 };
-use aiahr_tc::{ClosedRow, EffectInfo, Evidence, Row, Ty, TyChkRes, TyScheme, TypeKind};
+use aiahr_tc::{
+    AccessTy, ClosedRow, EffectInfo, Evidence, InDb, MkTy, Row, Ty, TyChkRes, TyScheme, TypeKind,
+};
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
@@ -81,13 +83,13 @@ impl<'ctx> MkIrTy<'ctx> for IrCtx<'ctx> {
 }
 
 pub trait ItemSchemes<'ctx> {
-    fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme<'ctx, TyVarId>;
+    fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme<InDb>;
 }
 pub trait VarTys<'ctx> {
-    fn lookup_var(&self, var_id: VarId) -> Ty<'ctx, TyVarId>;
+    fn lookup_var(&self, var_id: VarId) -> Ty<InDb>;
 }
 pub trait TermTys<'ctx> {
-    fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<'ctx, TyVarId>;
+    fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<InDb>;
 }
 
 struct IdConverter<VarIn, VarOut> {
@@ -118,11 +120,12 @@ where
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
-struct PartialEv<'ctx> {
-    other: Row<'ctx, TyVarId>,
-    goal: Row<'ctx, TyVarId>,
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Debug)]
+struct PartialEv {
+    other: Row<InDb>,
+    goal: Row<InDb>,
 }
+impl Copy for PartialEv where InDb: Copy {}
 
 #[derive(Default, Debug)]
 struct EvidenceMap<'ctx> {
@@ -130,11 +133,11 @@ struct EvidenceMap<'ctx> {
     params: Vec<IrVar<'ctx>>,
     // Find evidence when we only have partial information about it.
     // Like when we encounter a Project or Inject node.
-    partial_map: FxHashMap<PartialEv<'ctx>, usize>,
-    complete_map: FxHashMap<Evidence<'ctx, TyVarId>, usize>,
+    partial_map: FxHashMap<PartialEv, usize>,
+    complete_map: FxHashMap<Evidence<InDb>, usize>,
 }
 impl<'ctx> EvidenceMap<'ctx> {
-    fn insert(&mut self, ev: Evidence<'ctx, TyVarId>, param: IrVar<'ctx>) {
+    fn insert(&mut self, ev: Evidence<InDb>, param: IrVar<'ctx>) {
         let idx = self
             .params
             .iter()
@@ -167,17 +170,17 @@ impl<'ctx> EvidenceMap<'ctx> {
         self.complete_map.insert(ev, idx);
     }
 }
-impl<'ctx> Index<&Evidence<'ctx, TyVarId>> for EvidenceMap<'ctx> {
+impl<'ctx> Index<&Evidence<InDb>> for EvidenceMap<'ctx> {
     type Output = IrVar<'ctx>;
 
-    fn index(&self, index: &Evidence<'ctx, TyVarId>) -> &Self::Output {
+    fn index(&self, index: &Evidence<InDb>) -> &Self::Output {
         &self.params[self.complete_map[index]]
     }
 }
-impl<'ctx> Index<&PartialEv<'ctx>> for EvidenceMap<'ctx> {
+impl<'ctx> Index<&PartialEv> for EvidenceMap<'ctx> {
     type Output = IrVar<'ctx>;
 
-    fn index(&self, index: &PartialEv<'ctx>) -> &Self::Output {
+    fn index(&self, index: &PartialEv) -> &Self::Output {
         &self.params[*self.partial_map.get(index).unwrap_or_else(|| {
             panic!(
                 "Could not find partial ev: {:?} in\n{:#?}",
@@ -191,16 +194,16 @@ impl<'ctx> Index<&PartialEv<'ctx>> for EvidenceMap<'ctx> {
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_prod_ty<TV: Clone>(ty: Ty<'_, TV>) -> Row<'_, TV> {
-    ty.try_as_prod_row().unwrap_or_else(|_| unreachable!())
+fn expect_prod_ty<'a, A: AccessTy<'a, InDb>>(db: &A, ty: Ty<InDb>) -> Row<InDb> {
+    ty.try_as_prod_row(db).unwrap_or_else(|_| unreachable!())
 }
 
 /// Unwrap a type into a sum and return the sum's row.
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_sum_ty<TV: Clone>(ty: Ty<'_, TV>) -> Row<'_, TV> {
-    ty.try_as_sum_row().unwrap_or_else(|_| unreachable!())
+fn expect_sum_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty<InDb>) -> Row<InDb> {
+    ty.try_as_sum_row(db).unwrap_or_else(|_| unreachable!())
 }
 
 /// Unwrap a type as a branch type, returning the row of the branch.
@@ -209,21 +212,21 @@ fn expect_sum_ty<TV: Clone>(ty: Ty<'_, TV>) -> Row<'_, TV> {
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_branch_ty<TV: Clone>(ty: Ty<'_, TV>) -> Row<'_, TV> {
-    ty.try_as_fn_ty()
-        .and_then(|(arg, _)| arg.try_as_sum_row())
+fn expect_branch_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty<InDb>) -> Row<InDb> {
+    ty.try_as_fn_ty(db)
+        .and_then(|(arg, _)| arg.try_as_sum_row(db))
         .unwrap_or_else(|_| unreachable!())
 }
 
 /// Row evidence where every row is closed.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-struct SolvedRowEv<'ctx> {
-    goal: ClosedRow<'ctx, TyVarId>,
-    left: ClosedRow<'ctx, TyVarId>,
-    right: ClosedRow<'ctx, TyVarId>,
+struct SolvedRowEv {
+    goal: ClosedRow<InDb>,
+    left: ClosedRow<InDb>,
+    right: ClosedRow<InDb>,
 }
-impl<'ctx> From<SolvedRowEv<'ctx>> for Evidence<'ctx, TyVarId> {
-    fn from(val: SolvedRowEv<'ctx>) -> Self {
+impl<'ctx> From<SolvedRowEv> for Evidence<InDb> {
+    fn from(val: SolvedRowEv) -> Self {
         Evidence::Row {
             left: Row::Closed(val.left),
             right: Row::Closed(val.right),
@@ -231,12 +234,8 @@ impl<'ctx> From<SolvedRowEv<'ctx>> for Evidence<'ctx, TyVarId> {
         }
     }
 }
-impl<'ctx> SolvedRowEv<'ctx> {
-    fn new(
-        left: ClosedRow<'ctx, TyVarId>,
-        right: ClosedRow<'ctx, TyVarId>,
-        goal: ClosedRow<'ctx, TyVarId>,
-    ) -> Self {
+impl SolvedRowEv {
+    fn new(left: ClosedRow<InDb>, right: ClosedRow<InDb>, goal: ClosedRow<InDb>) -> Self {
         Self { goal, left, right }
     }
 }
@@ -245,49 +244,52 @@ impl<'ctx> SolvedRowEv<'ctx> {
 struct Evidenceless;
 struct Evidentfull;
 
-struct LowerCtx<'a, 'ctx, Db, I, State = Evidenceless> {
+struct LowerCtx<'a, 'b, 'ctx, Db, I, State = Evidenceless> {
     db: &'a Db,
     ctx: &'a I,
-    var_conv: &'a mut IdConverter<VarId, IrVarId>,
-    tyvar_conv: &'a mut IdConverter<TyVarId, IrTyVarId>,
+    var_conv: &'b mut IdConverter<VarId, IrVarId>,
+    tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
     ev_map: EvidenceMap<'ctx>,
     evv_var: IrVar<'ctx>,
     _marker: std::marker::PhantomData<State>,
 }
 
-impl<'ctx, Db, I, S> LowerCtx<'_, 'ctx, Db, I, S>
+impl<'a, 'ctx, Db, I, S> LowerCtx<'a, '_, 'ctx, Db, I, S>
 where
+    Db: AccessTy<'a, InDb>,
     I: MkIrTy<'ctx>,
 {
-    fn lower_ty(&mut self, ty: Ty<'_, TyVarId>) -> IrTy<'ctx> {
-        match *ty {
+    fn lower_ty(&mut self, ty: Ty<InDb>) -> IrTy<'ctx> {
+        match self.db.kind(&ty) {
             TypeKind::RowTy(_) => panic!("This should not be allowed"),
             TypeKind::ErrorTy => unreachable!(),
             TypeKind::IntTy => self.ctx.mk_ir_ty(IrTyKind::IntTy),
             TypeKind::VarTy(var) => self.ctx.mk_ir_ty(IrTyKind::VarTy(IrVarTy {
-                var: self.tyvar_conv.convert(var),
+                var: self.tyvar_conv.convert(*var),
                 kind: Kind::Type,
             })),
             TypeKind::FunTy(arg, ret) => self
                 .ctx
-                .mk_ir_ty(IrTyKind::FunTy(self.lower_ty(arg), self.lower_ty(ret))),
+                .mk_ir_ty(IrTyKind::FunTy(self.lower_ty(*arg), self.lower_ty(*ret))),
             TypeKind::SumTy(Row::Open(row_var)) | TypeKind::ProdTy(Row::Open(row_var)) => {
                 self.ctx.mk_ir_ty(IrTyKind::VarTy(IrVarTy {
-                    var: self.tyvar_conv.convert(row_var),
+                    var: self.tyvar_conv.convert(*row_var),
                     kind: Kind::Row,
                 }))
             }
             TypeKind::ProdTy(Row::Closed(row)) => {
-                let elems = row
-                    .values
+                let elems = self
+                    .db
+                    .row_values(&row.values)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
                 self.ctx.mk_prod_ty(elems.as_slice())
             }
             TypeKind::SumTy(Row::Closed(row)) => {
-                let elems = row
-                    .values
+                let elems = self
+                    .db
+                    .row_values(&row.values)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
@@ -298,9 +300,9 @@ where
 
     fn row_evidence_ir(
         &mut self,
-        left: ClosedRow<'ctx, TyVarId>,
-        right: ClosedRow<'ctx, TyVarId>,
-        goal: ClosedRow<'ctx, TyVarId>,
+        left: ClosedRow<InDb>,
+        right: ClosedRow<InDb>,
+        goal: ClosedRow<InDb>,
     ) -> Ir<'ctx> {
         let (left_prod, left_coprod) = self.row_ir_tys(&Row::Closed(left));
         let (right_prod, right_coprod) = self.row_ir_tys(&Row::Closed(right));
@@ -335,29 +337,32 @@ where
                 Ir::new(FieldProj(index, P::new(prod)))
             }
         };
+        let left_len = left.len(self.db);
+        let right_len = right.len(self.db);
+        let goal_len = goal.len(self.db);
         let concat = P::new(Ir::abss(
             [left_prod_var, right_prod_var],
-            Ir::new(match (left.fields.is_empty(), right.fields.is_empty()) {
+            Ir::new(match (left.is_empty(self.db), right.is_empty(self.db)) {
                 (true, true) => Struct(vec![]),
                 (true, false) => Var(right_prod_var),
                 (false, true) => Var(left_prod_var),
                 (false, false) => {
                     let left_elems =
-                        (0..left.len()).map(|i| prj(i, left.len(), Ir::var(left_prod_var)));
+                        (0..left_len).map(|i| prj(i, left_len, Ir::var(left_prod_var)));
                     let right_elems =
-                        (0..right.len()).map(|i| prj(i, right.len(), Ir::var(right_prod_var)));
+                        (0..right_len).map(|i| prj(i, right_len, Ir::var(right_prod_var)));
                     Struct(left_elems.chain(right_elems).map(P::new).collect())
                 }
             }),
         ));
         let prj_l = P::new(Ir::abss(
             [goal_prod_var],
-            if left.len() == 1 {
-                prj(0, goal.len(), Ir::var(goal_prod_var))
+            if left_len == 1 {
+                prj(0, goal_len, Ir::var(goal_prod_var))
             } else {
                 Ir::new(Struct(
-                    (0..left.len())
-                        .map(|i| prj(i, goal.len(), Ir::var(goal_prod_var)))
+                    (0..left_len)
+                        .map(|i| prj(i, goal_len, Ir::var(goal_prod_var)))
                         .map(P::new)
                         .collect(),
                 ))
@@ -365,13 +370,13 @@ where
         ));
         let prj_r = P::new(Ir::abss(
             [goal_prod_var],
-            if right.len() == 1 {
-                prj(goal.len() - 1, goal.len(), Ir::var(goal_prod_var))
+            if right_len == 1 {
+                prj(goal_len - 1, goal_len, Ir::var(goal_prod_var))
             } else {
-                let range = (goal.len() - right.len())..goal.len();
+                let range = (goal_len - right_len)..goal_len;
                 Ir::new(Struct(
                     range
-                        .map(|i| prj(i, goal.len(), Ir::var(goal_prod_var)))
+                        .map(|i| prj(i, goal_len, Ir::var(goal_prod_var)))
                         .map(P::new)
                         .collect(),
                 ))
@@ -405,30 +410,27 @@ where
             branch_tyvar,
             P::new(Ir::abss(
                 [left_branch_var, right_branch_var, goal_branch_var],
-                match (left.fields.is_empty(), right.fields.is_empty()) {
+                match (left.is_empty(self.db), right.is_empty(self.db)) {
                     // we're discriminating void, produce a case with no branches
                     (true, true) => Ir::case_on_var(goal_branch_var, vec![]),
                     (true, false) => Ir::app(Ir::var(left_branch_var), [Ir::var(goal_branch_var)]),
                     (false, true) => Ir::app(Ir::var(right_branch_var), [Ir::var(goal_branch_var)]),
                     (false, false) => {
-                        debug_assert!(left.len() + right.len() == goal.len());
+                        debug_assert!(left_len + right_len == goal_len);
 
                         let case_var_id = self.var_conv.generate();
-                        let elems = left
-                            .values
+                        let elems = self
+                            .db
+                            .row_values(&left.values)
                             .iter()
-                            .chain(right.values.iter())
+                            .chain(self.db.row_values(&right.values).iter())
                             .enumerate()
                             .map(|(i, ty)| {
                                 let case_var = IrVar {
                                     var: case_var_id,
                                     ty: self.lower_ty(*ty),
                                 };
-                                let length = if i < left.len() {
-                                    left.len()
-                                } else {
-                                    right.len()
-                                };
+                                let length = if i < left_len { left_len } else { right_len };
                                 Ir::abss(
                                     [case_var],
                                     Ir::app(Ir::var(case_var), [inj(i, length, Ir::var(case_var))]),
@@ -451,40 +453,45 @@ where
         };
         let inj_l = P::new(Ir::abss(
             [left_coprod_var],
-            if left.len() == 1 {
-                inj(0, goal.len(), Ir::var(left_coprod_var))
+            if left_len == 1 {
+                inj(0, goal_len, Ir::var(left_coprod_var))
             } else {
                 let case_var_id = self.var_conv.generate();
                 Ir::case_on_var(
                     left_coprod_var,
-                    left.values.iter().enumerate().map(|(i, ty)| {
-                        let y = IrVar {
-                            var: case_var_id,
-                            ty: self.lower_ty(*ty),
-                        };
-                        Ir::abss([y], inj(i, goal.len(), Ir::var(y)))
-                    }),
+                    self.db
+                        .row_values(&left.values)
+                        .iter()
+                        .enumerate()
+                        .map(|(i, ty)| {
+                            let y = IrVar {
+                                var: case_var_id,
+                                ty: self.lower_ty(*ty),
+                            };
+                            Ir::abss([y], inj(i, goal_len, Ir::var(y)))
+                        }),
                 )
             },
         ));
         let inj_r = P::new(Ir::abss(
             [right_coprod_var],
-            if right.len() == 1 {
-                inj(goal.len() - 1, goal.len(), Ir::var(right_coprod_var))
+            if right_len == 1 {
+                inj(goal_len - 1, goal_len, Ir::var(right_coprod_var))
             } else {
                 let case_var_id = self.var_conv.generate();
                 Ir::case_on_var(
                     right_coprod_var,
-                    right.values.iter().enumerate().map(|(i, ty)| {
-                        let y = IrVar {
-                            var: case_var_id,
-                            ty: self.lower_ty(*ty),
-                        };
-                        Ir::abss(
-                            [y],
-                            inj(goal.len() - right.len() + i, goal.len(), Ir::var(y)),
-                        )
-                    }),
+                    self.db
+                        .row_values(&right.values)
+                        .iter()
+                        .enumerate()
+                        .map(|(i, ty)| {
+                            let y = IrVar {
+                                var: case_var_id,
+                                ty: self.lower_ty(*ty),
+                            };
+                            Ir::abss([y], inj(goal_len - right_len + i, goal_len, Ir::var(y)))
+                        }),
                 )
             },
         ));
@@ -497,7 +504,7 @@ where
         ]))
     }
 
-    fn row_ir_tys(&mut self, row: &Row<'ctx, TyVarId>) -> (IrTy<'ctx>, IrTy<'ctx>) {
+    fn row_ir_tys(&mut self, row: &Row<InDb>) -> (IrTy<'ctx>, IrTy<'ctx>) {
         match row {
             Row::Open(row_var) => {
                 let var = self.ctx.mk_ir_ty(VarTy(IrVarTy {
@@ -507,8 +514,9 @@ where
                 (var, var)
             }
             Row::Closed(row) => {
-                let elems = row
-                    .values
+                let elems = self
+                    .db
+                    .row_values(&row.values)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
@@ -520,7 +528,7 @@ where
         }
     }
 
-    fn row_evidence_ir_ty(&mut self, ev: &Evidence<'ctx, TyVarId>) -> IrTy<'ctx> {
+    fn row_evidence_ir_ty(&mut self, ev: &Evidence<InDb>) -> IrTy<'ctx> {
         match ev {
             Evidence::Row { left, right, goal } => {
                 let (left_prod, left_coprod) = self.row_ir_tys(left);
@@ -557,16 +565,17 @@ where
     }
 }
 
-impl<'a, 'ctx, Db, I> LowerCtx<'a, 'ctx, Db, I, Evidenceless>
+impl<'a, 'b, 'ctx, Db, I> LowerCtx<'a, 'b, 'ctx, Db, I, Evidenceless>
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
+    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx> + MkTy<InDb>,
+    Db: AccessTy<'a, InDb>,
     I: MkIrTy<'ctx>,
 {
     pub fn new(
         db: &'a Db,
         ctx: &'a I,
-        var_conv: &'a mut IdConverter<VarId, IrVarId>,
-        tyvar_conv: &'a mut IdConverter<TyVarId, IrTyVarId>,
+        var_conv: &'b mut IdConverter<VarId, IrVarId>,
+        tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
     ) -> Self {
         let evv_id = var_conv.generate();
         Self {
@@ -586,25 +595,22 @@ where
     fn solved_row_ev<'ev>(
         &self,
         term_rows: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
-    ) -> Vec<SolvedRowEv<'ctx>>
+    ) -> Vec<SolvedRowEv>
     where
         'ctx: 'ev,
     {
         // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
         // Since we type-checked successfully we know nothing refers to that variable and we can use
         // whatever row type for it.
-        let unit_row: ClosedRow<'ctx, TyVarId> = ClosedRow {
-            fields: Handle(&[]),
-            values: Handle(&[]),
-        };
+        let unit_row: ClosedRow<InDb> = self.db.mk_row(&[], &[]);
 
         let mut solved_ev = term_rows
             .into_iter()
             .filter_map(|row_view| match row_view.view {
                 RowTerm::Concat { left, right } => {
-                    let left_row = expect_prod_ty(self.db.lookup_term(left).ty);
-                    let right_row = expect_prod_ty(self.db.lookup_term(right).ty);
-                    let goal_row = expect_prod_ty(self.db.lookup_term(row_view.parent).ty);
+                    let left_row = expect_prod_ty(self.db, self.db.lookup_term(left).ty);
+                    let right_row = expect_prod_ty(self.db, self.db.lookup_term(right).ty);
+                    let goal_row = expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
 
                     match (left_row, right_row, goal_row) {
                         (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
@@ -614,9 +620,10 @@ where
                     }
                 }
                 RowTerm::Branch { left, right } => {
-                    let left_row = expect_branch_ty(self.db.lookup_term(left).ty);
-                    let right_row = expect_branch_ty(self.db.lookup_term(right).ty);
-                    let goal_row = expect_branch_ty(self.db.lookup_term(row_view.parent).ty);
+                    let left_row = expect_branch_ty(self.db, self.db.lookup_term(left).ty);
+                    let right_row = expect_branch_ty(self.db, self.db.lookup_term(right).ty);
+                    let goal_row =
+                        expect_branch_ty(self.db, self.db.lookup_term(row_view.parent).ty);
 
                     match (left_row, right_row, goal_row) {
                         (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
@@ -626,8 +633,8 @@ where
                     }
                 }
                 RowTerm::Project { direction, term } => {
-                    let sub_row = expect_prod_ty(self.db.lookup_term(term).ty);
-                    let goal_row = expect_prod_ty(self.db.lookup_term(row_view.parent).ty);
+                    let sub_row = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
+                    let goal_row = expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
 
                     match (sub_row, goal_row) {
                         (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
@@ -638,8 +645,8 @@ where
                     }
                 }
                 RowTerm::Inject { direction, term } => {
-                    let sub_row = expect_sum_ty(self.db.lookup_term(term).ty);
-                    let goal_row = expect_sum_ty(self.db.lookup_term(row_view.parent).ty);
+                    let sub_row = expect_sum_ty(self.db, self.db.lookup_term(term).ty);
+                    let goal_row = expect_sum_ty(self.db, self.db.lookup_term(row_view.parent).ty);
 
                     match (sub_row, goal_row) {
                         (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
@@ -658,9 +665,9 @@ where
     fn collect_evidence_params<'ev>(
         mut self,
         term_evs: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
-        scheme_constrs: impl IntoIterator<Item = &'ev Evidence<'ctx, TyVarId>>,
+        scheme_constrs: impl IntoIterator<Item = &'ev Evidence<InDb>>,
     ) -> (
-        LowerCtx<'a, 'ctx, Db, I, Evidentfull>,
+        LowerCtx<'a, 'b, 'ctx, Db, I, Evidentfull>,
         Vec<(IrVar<'ctx>, Ir<'ctx>)>,
         Vec<IrVar<'ctx>>,
     )
@@ -692,7 +699,7 @@ where
         (LowerCtx::with_evidenceless(self), locals, params)
     }
 
-    fn lower_evidence(&mut self, ev: &Evidence<'ctx, TyVarId>) -> IrVar<'ctx> {
+    fn lower_evidence(&mut self, ev: &Evidence<InDb>) -> IrVar<'ctx> {
         let ev_term = self.var_conv.generate();
         let row_ev_ty = self.row_evidence_ir_ty(ev);
         IrVar {
@@ -702,12 +709,13 @@ where
     }
 }
 
-impl<'a, 'ctx, Db, I> LowerCtx<'a, 'ctx, Db, I, Evidentfull>
+impl<'a, 'b, 'ctx, Db, I> LowerCtx<'a, 'b, 'ctx, Db, I, Evidentfull>
 where
     Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
+    Db: AccessTy<'a, InDb>,
     I: MkIrTy<'ctx>,
 {
-    fn with_evidenceless(prior: LowerCtx<'a, 'ctx, Db, I, Evidenceless>) -> Self {
+    fn with_evidenceless(prior: LowerCtx<'a, 'b, 'ctx, Db, I, Evidenceless>) -> Self {
         Self {
             db: prior.db,
             ctx: prior.ctx,
@@ -750,9 +758,9 @@ where
             Unlabel { term, .. } => self.lower_term(term),
             // Row stuff
             Concat { left, right } => {
-                let goal_row = expect_prod_ty(self.db.lookup_term(term).ty);
-                let left_row = expect_prod_ty(self.db.lookup_term(left).ty);
-                let right_row = expect_prod_ty(self.db.lookup_term(right).ty);
+                let goal_row = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
+                let left_row = expect_prod_ty(self.db, self.db.lookup_term(left).ty);
+                let right_row = expect_prod_ty(self.db, self.db.lookup_term(right).ty);
                 let ev = Evidence::Row {
                     left: left_row,
                     right: right_row,
@@ -764,9 +772,9 @@ where
                 Ir::app(concat, [self.lower_term(left), self.lower_term(right)])
             }
             Branch { left, right } => {
-                let left_row = expect_branch_ty(self.db.lookup_term(left).ty);
-                let right_row = expect_branch_ty(self.db.lookup_term(right).ty);
-                let goal_row = expect_branch_ty(self.db.lookup_term(term).ty);
+                let left_row = expect_branch_ty(self.db, self.db.lookup_term(left).ty);
+                let right_row = expect_branch_ty(self.db, self.db.lookup_term(right).ty);
+                let goal_row = expect_branch_ty(self.db, self.db.lookup_term(term).ty);
 
                 let param = self.ev_map[&(Evidence::Row {
                     left: left_row,
@@ -781,8 +789,8 @@ where
                 direction,
                 term: subterm,
             } => {
-                let goal = expect_prod_ty(self.db.lookup_term(subterm).ty);
-                let other = expect_prod_ty(self.db.lookup_term(term).ty);
+                let goal = expect_prod_ty(self.db, self.db.lookup_term(subterm).ty);
+                let other = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
 
                 let param = self.ev_map[&PartialEv { goal, other }];
                 let idx = match direction {
@@ -800,8 +808,8 @@ where
                 direction,
                 term: subterm,
             } => {
-                let goal = expect_sum_ty(self.db.lookup_term(term).ty);
-                let other = expect_sum_ty(self.db.lookup_term(subterm).ty);
+                let goal = expect_sum_ty(self.db, self.db.lookup_term(term).ty);
+                let other = expect_sum_ty(self.db, self.db.lookup_term(subterm).ty);
 
                 let param = self.ev_map[&PartialEv { other, goal }];
                 let idx = match direction {
@@ -822,7 +830,7 @@ where
                     .db
                     .lookup_term(term)
                     .ty
-                    .try_as_fn_ty()
+                    .try_as_fn_ty(self.db)
                     .unwrap_or_else(|_| unreachable!());
                 let value_var = IrVar {
                     var: self.var_conv.generate(),
@@ -874,8 +882,8 @@ where
                 let handler_infer = self.db.lookup_term(handler);
                 let eff_name = match handler_infer.eff {
                     Row::Closed(eff_row) => {
-                        debug_assert!(eff_row.len() == 1);
-                        eff_row.fields[0]
+                        debug_assert!(eff_row.len(self.db) == 1);
+                        self.db.row_fields(&eff_row.fields)[0]
                     }
                     Row::Open(_) => {
                         unreachable!("Handler effect expect to be closed row, found row variable")
@@ -953,14 +961,15 @@ pub trait IrEffectInfo<'ctx> {
 
 /// Lower an `Ast` into an `Ir`.
 /// TODO: Real documentation.
-pub fn lower<'ctx, Db, I>(
-    db: &Db,
-    ctx: &I,
-    scheme: &TyScheme<'ctx, TyVarId>,
+pub fn lower<'a, 'ctx, Db, I>(
+    db: &'a Db,
+    ctx: &'a I,
+    scheme: &TyScheme<InDb>,
     ast: &Ast<'ctx, VarId>,
 ) -> Ir<'ctx>
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
+    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx> + MkTy<InDb> + 'a,
+    Db: AccessTy<'a, InDb>,
     I: MkIrTy<'ctx>,
 {
     let mut var_conv = IdConverter::new();
@@ -993,7 +1002,7 @@ where
 
 pub mod test_utils {
     use aiahr_tc::test_utils::DummyEff;
-    use aiahr_tc::TyChkRes;
+    use aiahr_tc::{TyChkRes, TyData, TypeAlloc};
 
     use super::*;
 
@@ -1004,18 +1013,20 @@ pub mod test_utils {
     }
 
     pub struct LowerDb<'a, 'ctx> {
-        var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
-        term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<'ctx, TyVarId>>,
+        db: &'a dyn aiahr_tc::Db,
+        var_tys: FxHashMap<VarId, Ty<InDb>>,
+        term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
         eff_info: DummyEff<'a>,
     }
 
     impl<'a, 'ctx> LowerDb<'a, 'ctx> {
         pub fn new(
             db: &'a dyn aiahr_tc::Db,
-            var_tys: FxHashMap<VarId, Ty<'ctx, TyVarId>>,
-            term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<'ctx, TyVarId>>,
+            var_tys: FxHashMap<VarId, Ty<InDb>>,
+            term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
         ) -> Self {
             Self {
+                db,
                 var_tys,
                 term_tys,
                 eff_info: DummyEff(db),
@@ -1023,17 +1034,17 @@ pub mod test_utils {
         }
     }
     impl<'ctx> VarTys<'ctx> for LowerDb<'_, 'ctx> {
-        fn lookup_var(&self, var_id: VarId) -> Ty<'ctx, TyVarId> {
+        fn lookup_var(&self, var_id: VarId) -> Ty<InDb> {
             self.var_tys[&var_id]
         }
     }
     impl<'ctx> TermTys<'ctx> for LowerDb<'_, 'ctx> {
-        fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<'ctx, TyVarId> {
+        fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<InDb> {
             self.term_tys[term]
         }
     }
     impl<'ctx> ItemSchemes<'ctx> for LowerDb<'_, 'ctx> {
-        fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme<'ctx, TyVarId> {
+        fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme<InDb> {
             todo!()
         }
     }
@@ -1060,7 +1071,7 @@ pub mod test_utils {
             &self,
             eff: aiahr_core::id::EffectId,
             member: aiahr_core::id::EffectOpId,
-        ) -> TyScheme<'static, TyVarId> {
+        ) -> TyScheme<InDb> {
             self.eff_info.effect_member_sig(eff, member)
         }
 
@@ -1159,6 +1170,47 @@ pub mod test_utils {
             self.eff_info.lookup_effect_by_name(name)
         }
     }
+
+    impl<'a> AccessTy<'a, InDb> for LowerDb<'a, '_> {
+        fn kind(&self, ty: &Ty<InDb>) -> &'a TypeKind<InDb> {
+            self.db.kind(ty)
+        }
+
+        fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'a [Ident] {
+            self.db.row_fields(row)
+        }
+
+        fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'a [Ty<InDb>] {
+            self.db.row_values(row)
+        }
+    }
+    impl<'a> AccessTy<'a, InDb> for &LowerDb<'a, '_> {
+        fn kind(&self, ty: &Ty<InDb>) -> &'a TypeKind<InDb> {
+            self.db.kind(ty)
+        }
+
+        fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'a [Ident] {
+            self.db.row_fields(row)
+        }
+
+        fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'a [Ty<InDb>] {
+            self.db.row_values(row)
+        }
+    }
+
+    impl MkTy<InDb> for LowerDb<'_, '_> {
+        fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
+            Ty(TyData::new(self.db, kind))
+        }
+
+        fn mk_label(&self, label: &str) -> Ident {
+            self.db.ident_str(label)
+        }
+
+        fn mk_row(&self, fields: &[Ident], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
+            self.db.mk_row(fields, values)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1197,9 +1249,8 @@ mod tests {
         db: &'a TestDatabase,
         arena: &'ctx Bump,
         interner: &'ctx S,
-        ty_ctx: &aiahr_tc::TyCtx<'ctx, TyVarId>,
         input: &str,
-    ) -> (LowerDb<'a, 'ctx>, TyScheme<'ctx, TyVarId>, Ast<'ctx, VarId>)
+    ) -> (LowerDb<'a, 'ctx>, TyScheme<InDb>, Ast<'ctx, VarId>)
     where
         S: InternerByRef<'ctx, str>,
     {
@@ -1227,9 +1278,7 @@ mod tests {
 
         let ast = aiahr_desugar::desugar(db, arena, &mut vars, resolved).unwrap();
 
-        let infer_ctx = aiahr_tc::TyCtx::new(db, arena);
-        let (var_tys, term_tys, scheme, _) =
-            aiahr_tc::type_check(db, ty_ctx, &infer_ctx, &DummyEff(db), &ast);
+        let (var_tys, term_tys, scheme, _) = aiahr_tc::type_check(db, &DummyEff(db), &ast);
         (LowerDb::new(db, var_tys, term_tys), scheme, ast)
     }
 
@@ -1238,8 +1287,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let interner = SyncInterner::new(&arena);
-        let ty_ctx = aiahr_tc::TyCtx::new(&db, &arena);
-        let (db, scheme, ast) = compile_upto_lower(&db, &arena, &interner, &ty_ctx, "|x| x");
+        let (db, scheme, ast) = compile_upto_lower(&db, &arena, &interner, "|x| x");
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
 
@@ -1253,9 +1301,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let interner = SyncInterner::new(&arena);
-        let ty_ctx = aiahr_tc::TyCtx::new(&db, &arena);
-        let (db, scheme, ast) =
-            compile_upto_lower(&db, &arena, &interner, &ty_ctx, "|a| { x = a, y = a }");
+        let (db, scheme, ast) = compile_upto_lower(&db, &arena, &interner, "|a| { x = a, y = a }");
 
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
@@ -1276,8 +1322,6 @@ mod tests {
     fn lower_wand() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let ty_ctx = aiahr_tc::TyCtx::new(&db, &arena);
-        let infer_ctx = aiahr_tc::TyCtx::new(&db, &arena);
         let ir_ctx = IrCtx::new(&arena);
         let m = VarId(0);
         let n = VarId(1);
@@ -1293,13 +1337,8 @@ mod tests {
                 ),
             )
         });
-        let (var_tys, term_ress, scheme, _) = aiahr_tc::type_check(
-            &db,
-            &ty_ctx,
-            &infer_ctx,
-            &aiahr_tc::test_utils::DummyEff(&db),
-            &ast,
-        );
+        let (var_tys, term_ress, scheme, _) =
+            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), &ast);
 
         let ir = lower(
             &LowerDb::new(&db, var_tys, term_ress),

@@ -1,5 +1,6 @@
-use super::row::Row;
-use super::{MkTy, Ty, TypeKind};
+use crate::{Row, Ty};
+
+use super::{AccessTy, AllocVar, MkTy, TypeAlloc, TypeKind};
 
 /// A trait for things that contain types.
 /// This defines how to traverse `Self` to visit each type it contains and fold it.
@@ -8,23 +9,23 @@ use super::{MkTy, Ty, TypeKind};
 /// This could be `Ty` itself which would produce a new `Ty`, or it could be something like
 /// `ClosedRow` which would produce a new `ClosedRow` by folding each type in the rows values.
 pub trait TypeFoldable<'ctx> {
-    type TypeVar;
-    type Out<TV: 'ctx>;
+    type Alloc: TypeAlloc + 'ctx;
+    type Out<B: TypeAlloc>;
 
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
         self,
         fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error>;
+    ) -> Result<Self::Out<F::Out>, F::Error>;
 }
 
 impl<'ctx, T: TypeFoldable<'ctx>> TypeFoldable<'ctx> for Vec<T> {
-    type TypeVar = T::TypeVar;
-    type Out<TV: 'ctx> = Vec<T::Out<TV>>;
+    type Alloc = T::Alloc;
+    type Out<B: TypeAlloc> = Vec<T::Out<B>>;
 
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
         self,
         fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+    ) -> Result<Self::Out<F::Out>, F::Error> {
         self.into_iter().map(|t| t.try_fold_with(fold)).collect()
     }
 }
@@ -33,46 +34,92 @@ impl<'ctx, T: TypeFoldable<'ctx>> TypeFoldable<'ctx> for Vec<T> {
 /// This is commonly used to perform substitution.
 ///
 /// Pairs with `TypeFoldable` to perform a type fold over arbitrary data containing types.
-pub trait FallibleTypeFold<'ctx>: Sized {
-    type InTypeVar: Clone;
-    type TypeVar: 'ctx + TryFrom<Self::InTypeVar>;
-    type Error: From<<Self::TypeVar as TryFrom<Self::InTypeVar>>::Error>;
+pub trait FallibleTypeFold<'access>: Sized {
+    type In: TypeAlloc + Clone + 'access;
+    type Out: TypeAlloc;
+    type Error;
 
-    fn ctx(&self) -> &dyn MkTy<'ctx, Self::TypeVar>;
+    type AccessTy: ?Sized + AccessTy<'access, Self::In>;
+    type MkTy: ?Sized + MkTy<Self::Out>;
 
-    fn try_fold_ty<'a>(
-        &mut self,
-        t: Ty<'a, Self::InTypeVar>,
-    ) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> {
-        t.try_default_fold(self)
+    fn access(&self) -> &Self::AccessTy;
+    fn ctx(&self) -> &Self::MkTy;
+
+    fn try_fold_ty<'a>(&mut self, t: Ty<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
+        self.access().kind(&t).try_default_fold(self)
     }
 
-    fn try_fold_var(
-        &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> {
-        let v = var.try_into()?;
-        Ok(self.ctx().mk_ty(TypeKind::VarTy(v)))
+    fn try_fold_var(&mut self, var: AllocVar<Self::In>) -> Result<Ty<Self::Out>, Self::Error>;
+
+    fn try_fold_row_var(&mut self, var: AllocVar<Self::In>) -> Result<Row<Self::Out>, Self::Error>;
+}
+
+pub trait FallibleEndoTypeFold<'access>: Sized {
+    type Alloc: TypeAlloc + Clone + 'access;
+    type Error;
+
+    type TyCtx: ?Sized + MkTy<Self::Alloc> + AccessTy<'access, Self::Alloc>;
+
+    fn endo_ctx(&self) -> &Self::TyCtx;
+
+    fn try_endofold_ty(&mut self, ty: Ty<Self::Alloc>) -> Result<Ty<Self::Alloc>, Self::Error> {
+        self.endo_ctx().kind(&ty).try_default_fold(self)
     }
 
-    fn try_fold_row_var(
+    fn try_endofold_var(
         &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Row<'ctx, Self::TypeVar>, Self::Error> {
-        let v = var.try_into()?;
-        Ok(Row::Open(v))
+        var: AllocVar<Self::Alloc>,
+    ) -> Result<Ty<Self::Alloc>, Self::Error> {
+        Ok(self.endo_ctx().mk_ty(TypeKind::VarTy(var)))
+    }
+
+    fn try_endofold_row_var(
+        &mut self,
+        var: AllocVar<Self::Alloc>,
+    ) -> Result<Row<Self::Alloc>, Self::Error> {
+        Ok(Row::Open(var))
+    }
+}
+impl<'a, F> FallibleTypeFold<'a> for F
+where
+    F: FallibleEndoTypeFold<'a>,
+{
+    type In = F::Alloc;
+    type Out = F::Alloc;
+    type Error = F::Error;
+
+    type AccessTy = F::TyCtx;
+    type MkTy = F::TyCtx;
+
+    fn access(&self) -> &Self::AccessTy {
+        self.endo_ctx()
+    }
+
+    fn ctx(&self) -> &Self::MkTy {
+        self.endo_ctx()
+    }
+
+    fn try_fold_var(&mut self, var: AllocVar<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
+        self.try_endofold_var(var)
+    }
+
+    fn try_fold_row_var(&mut self, var: AllocVar<Self::In>) -> Result<Row<Self::Out>, Self::Error> {
+        self.try_endofold_row_var(var)
+    }
+
+    fn try_fold_ty(&mut self, ty: Ty<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
+        self.try_endofold_ty(ty)
     }
 }
 
 /// Defines the default way to fold over something.
 /// This is used by `TypeFoldable` and `FallibleTypeFold` to determine how to fold over something
 /// when the trait implementator does not wish to use a custom traversal.
-pub(crate) trait DefaultFold {
-    type TypeVar;
-    type Out<'a, TV: 'a>;
+pub(crate) trait DefaultFold<'ctx> {
+    type In: TypeAlloc + 'ctx;
 
-    fn try_default_fold<'ctx, F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
-        self,
+    fn try_default_fold<F: FallibleTypeFold<'ctx, In = Self::In>>(
+        &self,
         fold: &mut F,
-    ) -> Result<Self::Out<'ctx, F::TypeVar>, F::Error>;
+    ) -> Result<Ty<F::Out>, F::Error>;
 }

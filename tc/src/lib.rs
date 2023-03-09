@@ -12,14 +12,15 @@ use aiahr_core::{
 };
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
-use pretty::{docs, DocAllocator, Pretty};
+use pretty::{docs, DocAllocator};
 use rustc_hash::FxHashMap;
+use salsa::DebugWithDb;
 use std::{cmp::Ordering, collections::BTreeSet, convert::Infallible, hash::Hash};
 
 mod ty;
 pub use ty::{
     row::{ClosedRow, Row},
-    MkTy, Ty, TypeKind,
+    AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
 };
 
 use ty::{
@@ -29,6 +30,8 @@ use ty::{
     *,
 };
 
+use self::ty::fold::FallibleEndoTypeFold;
+
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]
 pub enum TypeCheckError<'ctx> {
@@ -36,19 +39,15 @@ pub enum TypeCheckError<'ctx> {
     VarNotDefined(VarId),
     ItemNotDefined((ModuleId, ItemId)),
     TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
-    OccursCheckFailed(TcUnifierVar<'ctx>, InferTy<'ctx>),
+    OccursCheckFailed(AllocVar<InArena<'ctx>>, InferTy<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),
-    RowsNotDisjoint(
-        ClosedRow<'ctx, TcUnifierVar<'ctx>>,
-        ClosedRow<'ctx, TcUnifierVar<'ctx>>,
-        RowLabel<'ctx>,
-    ),
+    RowsNotDisjoint(ClosedRow<InArena<'ctx>>, ClosedRow<InArena<'ctx>>, RowLabel),
     RowsNotEqual(InferRow<'ctx>, InferRow<'ctx>),
-    UndefinedEffectSignature(ClosedRow<'ctx, TcUnifierVar<'ctx>>),
+    UndefinedEffectSignature(ClosedRow<InArena<'ctx>>),
     UndefinedEffect(Ident),
     UnsolvedHandle {
-        handler: TcUnifierVar<'ctx>,
-        eff: TcUnifierVar<'ctx>,
+        handler: AllocVar<InArena<'ctx>>,
+        eff: AllocVar<InArena<'ctx>>,
     },
 }
 
@@ -86,7 +85,7 @@ fn into_diag(db: &dyn crate::Db, err: TypeCheckError<'_>, span: Span) -> TypeChe
                 .intersperse(
                     [
                         d.text("cycle detected for type variable"),
-                        var.pretty(&d),
+                        pretty::Pretty::pretty(var, &d),
                         d.text("with inferred type"),
                         ty.pretty(&d, db),
                     ],
@@ -283,19 +282,23 @@ struct OccursCheck<'a, 'inf, I> {
     ctx: &'a I,
     var: TcUnifierVar<'inf>,
 }
-impl<'inf, I> FallibleTypeFold<'inf> for OccursCheck<'_, 'inf, I>
+impl<'a, 'inf, I> FallibleEndoTypeFold<'inf> for OccursCheck<'a, 'inf, I>
 where
-    I: MkTy<'inf, TcUnifierVar<'inf>>,
+    I: MkTy<InArena<'inf>> + AccessTy<'inf, InArena<'inf>>,
 {
+    type Alloc = InArena<'inf>;
     type Error = TcUnifierVar<'inf>;
-    type TypeVar = TcUnifierVar<'inf>;
-    type InTypeVar = TcUnifierVar<'inf>;
 
-    fn ctx(&self) -> &dyn MkTy<'inf, TcUnifierVar<'inf>> {
+    type TyCtx = I;
+
+    fn endo_ctx(&self) -> &Self::TyCtx {
         self.ctx
     }
 
-    fn try_fold_var(&mut self, var: Self::TypeVar) -> Result<Ty<'inf, Self::TypeVar>, Self::Error> {
+    fn try_endofold_var(
+        &mut self,
+        var: AllocVar<Self::Alloc>,
+    ) -> Result<Ty<Self::Alloc>, Self::Error> {
         if var == self.var {
             Err(var)
         } else {
@@ -312,38 +315,44 @@ struct Normalize<'a, 'inf, I> {
     unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'inf>>,
 }
 
-impl<'inf, I> FallibleTypeFold<'inf> for Normalize<'_, 'inf, I>
+impl<'inf, I> FallibleEndoTypeFold<'inf> for Normalize<'_, 'inf, I>
 where
-    I: MkTy<'inf, TcUnifierVar<'inf>>,
+    I: MkTy<InArena<'inf>> + AccessTy<'inf, InArena<'inf>>,
 {
+    type Alloc = InArena<'inf>;
     type Error = Infallible;
-    type TypeVar = TcUnifierVar<'inf>;
-    type InTypeVar = TcUnifierVar<'inf>;
 
-    fn ctx(&self) -> &dyn MkTy<'inf, TcUnifierVar<'inf>> {
+    type TyCtx = I;
+
+    fn endo_ctx(&self) -> &Self::TyCtx {
         self.ctx
     }
 
-    fn try_fold_var(
+    fn try_endofold_var(
         &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Ty<'inf, Self::TypeVar>, Self::Error> {
-        Ok(match self.unifiers.probe_value(var) {
-            Some(ty) => ty,
-            _ => self.ctx().mk_ty(VarTy(var)),
-        })
+        var: AllocVar<Self::Alloc>,
+    ) -> Result<Ty<Self::Alloc>, Self::Error> {
+        match self.unifiers.probe_value(var) {
+            Some(ty) => ty.try_fold_with(self),
+            _ => Ok(self.endo_ctx().mk_ty(VarTy(var))),
+        }
     }
 
-    fn try_fold_row_var(
+    fn try_endofold_row_var(
         &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Row<'inf, Self::TypeVar>, Self::Error> {
-        Ok(match self.unifiers.probe_value(var) {
-            Some(ty) => ty
-                .try_to_row()
-                .expect("Kind mismatch: Unified a non row type with a row var"),
-            _ => Row::Open(var),
-        })
+        var: AllocVar<Self::Alloc>,
+    ) -> Result<Row<Self::Alloc>, Self::Error> {
+        //let v = var.try_into()?;
+        //Ok(Row::Open(v))
+        match self.unifiers.probe_value(var) {
+            Some(ty) => {
+                let row = ty
+                    .try_to_row()
+                    .expect("Kind mismatch: Unified a row variable with a type");
+                row.try_fold_with(self)
+            }
+            _ => Ok(Row::Open(var)),
+        }
     }
 }
 
@@ -358,26 +367,71 @@ macro_rules! ty_pat {
     };
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TyChkRes<'ctx, TV> {
-    pub ty: Ty<'ctx, TV>,
-    pub eff: Row<'ctx, TV>,
+#[derive(Clone)]
+pub struct TyChkRes<A: TypeAlloc> {
+    pub ty: Ty<A>,
+    pub eff: Row<A>,
 }
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for TyChkRes<'_, TV> {
-    type TypeVar = TV;
-    type Out<T: 'ctx> = TyChkRes<'ctx, T>;
+impl<A: TypeAlloc> Copy for TyChkRes<A>
+where
+    A: Clone,
+    Ty<A>: Copy,
+    Row<A>: Copy,
+{
+}
+impl<'ctx> std::fmt::Debug for TyChkRes<InArena<'ctx>> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TyChkRes")
+            .field("ty", &self.ty)
+            .field("eff", &self.eff)
+            .finish()
+    }
+}
+impl<Db> DebugWithDb<Db> for TyChkRes<InDb>
+where
+    Db: crate::Db,
+{
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        db: &Db,
+        _include_all_fields: bool,
+    ) -> std::fmt::Result {
+        f.debug_struct("TyChkRes")
+            .field("ty", &self.ty.debug(db))
+            .field("eff", &self.eff.debug(db))
+            .finish()
+    }
+}
+impl DebugWithDb<dyn crate::Db + '_> for TyChkRes<InDb> {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        db: &dyn crate::Db,
+        _include_all_fields: bool,
+    ) -> std::fmt::Result {
+        f.debug_struct("TyChkRes")
+            .field("ty", &self.ty.debug(db))
+            .field("eff", &self.eff.debug(db))
+            .finish()
+    }
+}
 
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for TyChkRes<A> {
+    type Alloc = A;
+    type Out<B: TypeAlloc> = TyChkRes<B>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
         self,
         fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+    ) -> Result<Self::Out<F::Out>, F::Error> {
         Ok(TyChkRes {
             ty: self.ty.try_fold_with(fold)?,
             eff: self.eff.try_fold_with(fold)?,
         })
     }
 }
-type InferResult<'infer> = TyChkRes<'infer, TcUnifierVar<'infer>>;
+type InferResult<'infer> = TyChkRes<InArena<'infer>>;
 
 impl<'infer> InferResult<'infer> {
     fn new(ty: InferTy<'infer>, eff: InferRow<'infer>) -> Self {
@@ -410,28 +464,60 @@ impl InferState for Generation {
     type Storage<'ctx, 'infer> = GenerationStorage<'ctx, 'infer>;
 }
 impl InferState for Solution {
-    type Storage<'ctx, 'infer> = BTreeSet<UnsolvedRowEquation<'infer, TcUnifierVar<'infer>>>;
+    type Storage<'ctx, 'infer> = BTreeSet<UnsolvedRowEquation<InArena<'infer>>>;
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-struct ClosedGoal<'ctx, TV> {
-    goal: ClosedRow<'ctx, TV>,
-    min: TV,
-    max: TV,
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ClosedGoal<A: TypeAlloc> {
+    goal: ClosedRow<A>,
+    min: A::TypeVar,
+    max: A::TypeVar,
 }
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-struct OpenGoal<'ctx, TV> {
-    goal: TV,
-    orxr: OrderedRowXorRow<'ctx, TV>,
+impl<A: TypeAlloc> Copy for ClosedGoal<A>
+where
+    A: Clone,
+    ClosedRow<A>: Copy,
+    A::TypeVar: Copy,
+{
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum UnsolvedRowEquation<'ctx, TV> {
-    ClosedGoal(ClosedGoal<'ctx, TV>),
-    OpenGoal(OpenGoal<'ctx, TV>),
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OpenGoal<A: TypeAlloc> {
+    goal: A::TypeVar,
+    orxr: OrderedRowXorRow<A>,
 }
-impl<'ctx, TV> From<UnsolvedRowEquation<'ctx, TV>> for Evidence<'ctx, TV> {
-    fn from(eq: UnsolvedRowEquation<'ctx, TV>) -> Self {
+impl<A: TypeAlloc> Copy for OpenGoal<A>
+where
+    A: Clone,
+    A::TypeVar: Copy,
+    OrderedRowXorRow<A>: Copy,
+{
+}
+
+enum UnsolvedRowEquation<A: TypeAlloc> {
+    ClosedGoal(ClosedGoal<A>),
+    OpenGoal(OpenGoal<A>),
+}
+impl<A: TypeAlloc> Clone for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Clone,
+    ClosedGoal<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            UnsolvedRowEquation::ClosedGoal(closed) => Self::ClosedGoal(closed.clone()),
+            UnsolvedRowEquation::OpenGoal(open) => Self::OpenGoal(open.clone()),
+        }
+    }
+}
+impl<A: TypeAlloc> Copy for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Copy,
+    ClosedGoal<A>: Copy,
+{
+}
+impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>>> for Evidence<InArena<'ctx>> {
+    fn from(eq: UnsolvedRowEquation<InArena<'ctx>>) -> Self {
         match eq {
             UnsolvedRowEquation::ClosedGoal(cand) => Evidence::Row {
                 left: Row::Open(cand.min),
@@ -453,8 +539,31 @@ impl<'ctx, TV> From<UnsolvedRowEquation<'ctx, TV>> for Evidence<'ctx, TV> {
         }
     }
 }
+impl<A: TypeAlloc> PartialEq for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: PartialEq,
+    ClosedGoal<A>: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (UnsolvedRowEquation::OpenGoal(a), UnsolvedRowEquation::OpenGoal(b)) => a == b,
+            (UnsolvedRowEquation::ClosedGoal(a), UnsolvedRowEquation::ClosedGoal(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+impl<A: TypeAlloc> Eq for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Eq,
+    ClosedGoal<A>: Eq,
+{
+}
 
-impl<'ctx, TV: PartialOrd> PartialOrd for UnsolvedRowEquation<'ctx, TV> {
+impl<A: TypeAlloc> PartialOrd for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: PartialOrd,
+    ClosedGoal<A>: PartialOrd,
+{
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
             (UnsolvedRowEquation::ClosedGoal(left), UnsolvedRowEquation::ClosedGoal(right)) => {
@@ -472,7 +581,11 @@ impl<'ctx, TV: PartialOrd> PartialOrd for UnsolvedRowEquation<'ctx, TV> {
         }
     }
 }
-impl<'ctx, TV: Ord> Ord for UnsolvedRowEquation<'ctx, TV> {
+impl<A: TypeAlloc> Ord for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Ord,
+    ClosedGoal<A>: Ord,
+{
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (UnsolvedRowEquation::ClosedGoal(left), UnsolvedRowEquation::ClosedGoal(right)) => {
@@ -526,29 +639,41 @@ struct InferCtx<'a, 'ctx, 'infer, I, State: InferState = Generation> {
     _marker: std::marker::PhantomData<State>,
 }
 
-impl<'ctx, 'infer, TV, I: MkTy<'infer, TV>, S: InferState> MkTy<'infer, TV>
+impl<'ctx, 'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A>
     for InferCtx<'_, 'ctx, 'infer, I, S>
 {
-    fn mk_ty(&self, kind: TypeKind<'infer, TV>) -> Ty<'infer, TV> {
+    fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A> {
         self.ctx.mk_ty(kind)
     }
 
-    fn mk_label(&self, label: &str) -> RowLabel<'infer> {
+    fn mk_label(&self, label: &str) -> RowLabel {
         self.ctx.mk_label(label)
     }
 
-    fn mk_row(
-        &self,
-        fields: &[RowLabel<'infer>],
-        values: &[Ty<'infer, TV>],
-    ) -> ClosedRow<'infer, TV> {
+    fn mk_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> ClosedRow<A> {
         self.ctx.mk_row(fields, values)
+    }
+}
+
+impl<'ctx, 'infer, A: TypeAlloc, I: AccessTy<'infer, A>, S: InferState> AccessTy<'infer, A>
+    for InferCtx<'_, 'ctx, 'infer, I, S>
+{
+    fn kind(&self, ty: &Ty<A>) -> &'infer TypeKind<A> {
+        self.ctx.kind(ty)
+    }
+
+    fn row_fields(&self, row: &<A as TypeAlloc>::RowFields) -> &'infer [RowLabel] {
+        self.ctx.row_fields(row)
+    }
+
+    fn row_values(&self, row: &<A as TypeAlloc>::RowValues) -> &'infer [Ty<A>] {
+        self.ctx.row_values(row)
     }
 }
 
 impl<'a, 'ctx, 'infer, I> InferCtx<'a, 'ctx, 'infer, I>
 where
-    I: MkTy<'infer, TcUnifierVar<'infer>>,
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
 {
     pub(crate) fn new(db: &'a dyn crate::Db, ctx: &'a I, ast: &'a Ast<'ctx, VarId>) -> Self {
         Self {
@@ -856,7 +981,7 @@ where
                 term_infer.map_ty(|ty| match *ty {
                     // If our output type is already a singleton row of without a label, use it
                     // directly. This avoids introducing needless unifiers
-                    RowTy(row) if row.len() == 1 && row.fields[0] == field => row.values[0],
+                    RowTy(row) if row.len(self.ctx) == 1 && row.fields[0] == field => row.values[0],
                     // Othewise introduce a unifier, and rely on unification for any needed error
                     // reporting
                     _ => {
@@ -1049,8 +1174,9 @@ where
         res
     }
 
-    fn instantiate(&mut self, ty_scheme: TyScheme<'_, TyVarId>, span: Span) -> InferResult<'infer> {
+    fn instantiate(&mut self, ty_scheme: TyScheme<InDb>, span: Span) -> InferResult<'infer> {
         let mut inst = Instantiate {
+            db: self.db,
             ctx: self.ctx,
             unifiers: ty_scheme
                 .bound
@@ -1119,8 +1245,9 @@ where
     }
 }
 
-impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
-    InferCtx<'a, 'ctx, 'infer, I, Solution>
+impl<'a, 'ctx, 'infer, I> InferCtx<'a, 'ctx, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
 {
     /// Convert our previous InferCtx in Generation state into Solution state.
     fn with_generation(
@@ -1224,8 +1351,8 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
     /// Solved equations are removed from the set and any equalities they produce are unified.
     fn dispatch_solved_eqs(
         &mut self,
-        var: TcUnifierVar<'infer>,
-        row: ClosedRow<'infer, TcUnifierVar<'infer>>,
+        var: AllocVar<InArena<'infer>>,
+        row: ClosedRow<InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>> {
         // We want any unifications we do as a byproduct of this to see the updated state so we
         // save them here until we've finished our intial removals from state
@@ -1330,8 +1457,8 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
 
     fn unify_closedrow_closedrow(
         &mut self,
-        left: ClosedRow<'infer, TcUnifierVar<'infer>>,
-        right: ClosedRow<'infer, TcUnifierVar<'infer>>,
+        left: ClosedRow<InArena<'infer>>,
+        right: ClosedRow<InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>> {
         // If our row labels aren't equal the types cannot be equal
         if left.fields != right.fields {
@@ -1572,7 +1699,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                     } else {
                         (right_var, left_var)
                     };
-                    let is_unifiable = |cand: &ClosedGoal<'infer, TcUnifierVar<'infer>>| {
+                    let is_unifiable = |cand: &ClosedGoal<InArena<'infer>>| {
                         // If any two components are equal we should unify
                         (cand.goal.fields == goal_row.fields
                             && (cand.min == min_var || cand.max == max_var))
@@ -1581,14 +1708,14 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                     self.state
                         .iter()
                         .find_map(|eq| match eq {
-                            UnsolvedRowEquation::ClosedGoal(cand) if is_unifiable(cand) => {
-                                Some((cand.min, cand.max, Row::Closed(cand.goal)))
+                            UnsolvedRowEquation::ClosedGoal(cand) if is_unifiable(&cand) => {
+                                Some((cand.min, cand.max, Row::<InArena<'_>>::Closed(cand.goal)))
                             }
                             UnsolvedRowEquation::OpenGoal(OpenGoal {
                                 goal,
                                 orxr: OrderedRowXorRow::OpenOpen { min, max },
                             }) if min_var.eq(min) && max_var.eq(max) => {
-                                Some((*min, *max, Row::Open(*goal)))
+                                Some((*min, *max, Row::<InArena<'_>>::Open(*goal)))
                             }
                             _ => None,
                         })
@@ -1648,53 +1775,51 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
             }
         };
 
-        let unify_sig_handler =
-            |ctx: &mut Self,
-             members_sig: Vec<(Ident, TyScheme<'eff, TyVarId>)>,
-             sig: ClosedRow<'infer, TcUnifierVar<'infer>>| {
-                let sig_unify = members_sig
-                    .into_iter()
-                    .zip(sig.fields.iter().zip(sig.values.iter()));
-                for ((member_name, scheme), (field_name, ty)) in sig_unify {
-                    // Sanity check that our handler fields and effect members line up the way we
-                    // expect them to.
-                    debug_assert_eq!(&member_name, field_name);
+        let unify_sig_handler = |ctx: &mut Self,
+                                 members_sig: Vec<(Ident, TyScheme<InDb>)>,
+                                 sig: ClosedRow<InArena<'infer>>| {
+            let sig_unify = members_sig
+                .into_iter()
+                .zip(sig.fields.iter().zip(sig.values.iter()));
+            for ((member_name, scheme), (field_name, ty)) in sig_unify {
+                // Sanity check that our handler fields and effect members line up the way we
+                // expect them to.
+                debug_assert_eq!(&member_name, field_name);
 
-                    let mut inst = Instantiate {
-                        ctx: ctx.ctx,
-                        unifiers: scheme
-                            .bound
-                            .into_iter()
-                            .map(|_| ctx.unifiers.new_key(None))
-                            .collect(),
-                    };
+                let mut inst = Instantiate {
+                    db: ctx.db,
+                    ctx: ctx.ctx,
+                    unifiers: scheme
+                        .bound
+                        .into_iter()
+                        .map(|_| ctx.unifiers.new_key(None))
+                        .collect(),
+                };
 
-                    // Transform our scheme ty into the type a handler should have
-                    // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
-                    let member_ty = transform_to_cps_handler_ty(
-                        ctx,
-                        scheme.ty.try_fold_with(&mut inst).unwrap(),
-                    )?;
+                // Transform our scheme ty into the type a handler should have
+                // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+                let member_ty =
+                    transform_to_cps_handler_ty(ctx, scheme.ty.try_fold_with(&mut inst).unwrap())?;
 
-                    // Unify our instantiated and transformed member type agaisnt the handler field
-                    // type.
-                    println!("unify_ty_ty\n\t{:?}\n\t{:?}", member_ty, ty);
-                    ctx.unify_ty_ty(member_ty, *ty)?;
+                // Unify our instantiated and transformed member type agaisnt the handler field
+                // type.
+                println!("unify_ty_ty\n\t{:?}\n\t{:?}", member_ty, ty);
+                ctx.unify_ty_ty(member_ty, *ty)?;
 
-                    // We want to check constrs after we unify our scheme type so that we've alread
-                    // unified as many fresh variables into handler field variables as possible.
-                    for constrs in scheme.constrs {
-                        match constrs.try_fold_with(&mut inst).unwrap() {
-                            Evidence::Row { left, right, goal } => {
-                                ctx.unify_row_combine(left, right, goal)?
-                            }
+                // We want to check constrs after we unify our scheme type so that we've alread
+                // unified as many fresh variables into handler field variables as possible.
+                for constrs in scheme.constrs {
+                    match constrs.try_fold_with(&mut inst).unwrap() {
+                        Evidence::Row { left, right, goal } => {
+                            ctx.unify_row_combine(left, right, goal)?
                         }
                     }
-                    // TODO: We should check scheme.eff here as well, at least to confirm they are
-                    // all the same
                 }
-                Ok(())
-            };
+                // TODO: We should check scheme.eff here as well, at least to confirm they are
+                // all the same
+            }
+            Ok(())
+        };
 
         match (normal_handler, normal_eff) {
             (Row::Closed(handler), Row::Open(eff_var)) => {
@@ -1729,7 +1854,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 self.unify_var_ty(eff_var, self.mk_ty(RowTy(eff_row)))
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
-                debug_assert!(eff.len() == 1);
+                debug_assert!(eff.len(self) == 1);
                 let eff_id = eff_info
                     .lookup_effect_by_name(eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
@@ -1752,7 +1877,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                 unify_sig_handler(self, members_sig, handler)
             }
             (Row::Open(handler_var), Row::Closed(eff)) => {
-                debug_assert!(eff.len() == 1);
+                debug_assert!(eff.len(self) == 1);
                 let eff_id = eff_info
                     .lookup_effect_by_name(eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
@@ -1762,6 +1887,7 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
                     .map(|eff_op_id| {
                         let scheme = eff_info.effect_member_sig(eff_id, *eff_op_id);
                         let mut inst = Instantiate {
+                            db: self.db,
                             ctx: self.ctx,
                             unifiers: scheme
                                 .bound
@@ -1803,32 +1929,37 @@ impl<'a, 'ctx, 'infer, I: MkTy<'infer, TcUnifierVar<'infer>>>
 /// This means replacing all it's TcVars with fresh unifiers and adding any constraints (post
 /// substitution) to the list of constraints that must be true.
 struct Instantiate<'a, 'infer, I> {
+    db: &'a dyn crate::Db,
     ctx: &'a I,
     unifiers: Vec<TcUnifierVar<'infer>>,
 }
-impl<'infer, I> FallibleTypeFold<'infer> for Instantiate<'_, 'infer, I>
+impl<'a, 'infer, I> FallibleTypeFold<'a> for Instantiate<'a, 'infer, I>
 where
-    I: MkTy<'infer, TcUnifierVar<'infer>>,
+    I: MkTy<InArena<'infer>>,
 {
-    type InTypeVar = TyVarId;
-    type TypeVar = TcUnifierVar<'infer>;
+    type In = InDb;
+    type Out = InArena<'infer>;
     type Error = TcVarToUnifierError;
 
-    fn ctx(&self) -> &dyn MkTy<'infer, Self::TypeVar> {
+    type AccessTy = &'a (dyn crate::Db + 'a);
+    type MkTy = I;
+
+    fn access(&self) -> &Self::AccessTy {
+        &self.db
+    }
+
+    fn ctx(&self) -> &Self::MkTy {
         self.ctx
     }
 
-    fn try_fold_var(
-        &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Ty<'infer, Self::TypeVar>, Self::Error> {
+    fn try_fold_var(&mut self, var: AllocVar<InDb>) -> Result<Ty<InArena<'infer>>, Self::Error> {
         Ok(self.ctx().mk_ty(VarTy(self.unifiers[var.0])))
     }
 
     fn try_fold_row_var(
         &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Row<'infer, Self::TypeVar>, Self::Error> {
+        var: AllocVar<InDb>,
+    ) -> Result<Row<InArena<'infer>>, Self::Error> {
         Ok(Row::Open(self.unifiers[var.0]))
     }
 }
@@ -1838,13 +1969,13 @@ where
 /// If a unification variables is solved to a type, it is replaced by that type.
 /// If a unification variable has no solution, we replace it by a fresh type variable and record it
 /// as free.
-pub struct Zonker<'a, 'ctx, 'infer> {
-    ctx: &'a dyn MkTy<'ctx, TyVarId>,
+pub struct Zonker<'a, 'infer> {
+    ctx: &'a dyn crate::Db,
     unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer>>,
     free_vars: Vec<TcUnifierVar<'infer>>,
 }
 
-impl<'a, 'ctx, 'infer> Zonker<'a, 'ctx, 'infer> {
+impl<'a, 'infer> Zonker<'a, 'infer> {
     fn add(&mut self, var: TcUnifierVar<'infer>) -> TyVarId {
         // Find the root unification variable and return a type varaible representing that
         // root.
@@ -1863,19 +1994,23 @@ impl<'a, 'ctx, 'infer> Zonker<'a, 'ctx, 'infer> {
     }
 }
 
-impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
+impl<'a, 'infer> FallibleTypeFold<'infer> for Zonker<'a, 'infer> {
+    type In = InArena<'infer>;
+    type Out = InDb;
     type Error = UnifierToTcVarError;
-    type TypeVar = TyVarId;
-    type InTypeVar = TcUnifierVar<'infer>;
 
-    fn ctx(&self) -> &dyn MkTy<'ctx, Self::TypeVar> {
+    type AccessTy = ();
+    type MkTy = dyn crate::Db + 'a;
+
+    fn access(&self) -> &Self::AccessTy {
+        &()
+    }
+
+    fn ctx(&self) -> &Self::MkTy {
         self.ctx
     }
 
-    fn try_fold_var(
-        &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Ty<'ctx, Self::TypeVar>, Self::Error> {
+    fn try_fold_var(&mut self, var: AllocVar<InArena<'infer>>) -> Result<Ty<InDb>, Self::Error> {
         match self.unifiers.probe_value(var) {
             Some(ty) => ty.try_fold_with(self),
             _ => {
@@ -1889,8 +2024,8 @@ impl<'ctx, 'infer> FallibleTypeFold<'ctx> for Zonker<'_, 'ctx, 'infer> {
 
     fn try_fold_row_var(
         &mut self,
-        var: Self::InTypeVar,
-    ) -> Result<Row<'ctx, Self::TypeVar>, Self::Error> {
+        var: AllocVar<InArena<'infer>>,
+    ) -> Result<Row<InDb>, Self::Error> {
         match self.unifiers.probe_value(var) {
             Some(Ty(Handle(RowTy(row)))) => row.try_fold_with(self).map(Row::Closed),
             // TODO: Consider if we should handle PartialRow cases here
@@ -1916,46 +2051,42 @@ pub trait EffectInfo<'s, 'ctx> {
     fn lookup_effect_by_member_names<'a>(&self, members: &[Ident]) -> Option<EffectId>;
     fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId>;
     /// Lookup the type signature of an effect's member
-    fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId>;
+    fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<InDb>;
     /// Lookup the name of an effect's member
     fn effect_member_name(&self, eff: EffectId, member: EffectOpId) -> Ident;
 }
 
-pub fn type_check<'ty, 'infer, 's, 'eff, I, II, E>(
+pub fn type_check<'ty, 's, 'eff, E>(
     db: &dyn crate::Db,
-    ty_ctx: &I,
-    infer_ctx: &II, // TODO: Consider removing this to ensure inference don't escape type checking.
     eff_info: &E,
     ast: &Ast<'ty, VarId>,
 ) -> (
-    FxHashMap<VarId, Ty<'ty, TyVarId>>,
-    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<'ty, TyVarId>>,
-    TyScheme<'ty, TyVarId>,
+    FxHashMap<VarId, Ty<InDb>>,
+    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
+    TyScheme<InDb>,
     Vec<TypeCheckDiagnostic>,
 )
 where
-    I: MkTy<'ty, TyVarId>,
-    II: MkTy<'infer, TcUnifierVar<'infer>>,
     E: EffectInfo<'s, 'eff>,
 {
-    tc_term(db, ty_ctx, infer_ctx, eff_info, ast)
+    let arena = Bump::new();
+    let infer_ctx = TyCtx::new(db, &arena);
+    tc_term(db, &infer_ctx, eff_info, ast)
 }
 
-fn tc_term<'ty, 'infer, 's, 'eff, I, II, E>(
+fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
     db: &dyn crate::Db,
-    ty_ctx: &I,
     infer_ctx: &II,
     eff_info: &E,
     ast: &Ast<'ty, VarId>,
 ) -> (
-    FxHashMap<VarId, Ty<'ty, TyVarId>>,
-    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<'ty, TyVarId>>,
-    TyScheme<'ty, TyVarId>,
+    FxHashMap<VarId, Ty<InDb>>,
+    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
+    TyScheme<InDb>,
     Vec<TypeCheckDiagnostic>,
 )
 where
-    I: MkTy<'ty, TyVarId>,
-    II: MkTy<'infer, TcUnifierVar<'infer>>,
+    II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
     E: EffectInfo<'s, 'eff>,
 {
     let term = ast.root();
@@ -1970,13 +2101,13 @@ where
     //print_root_unifiers(&mut unifiers);
     // Zonk the variable -> type mapping and the root term type.
     let mut zonker = Zonker {
-        ctx: ty_ctx,
+        ctx: db,
         unifiers: &mut unifiers,
         free_vars: vec![],
     };
     println!("Infer result: {:?}", result);
     let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
-    println!("Zonked result: {:?}", zonked_infer);
+    println!("Zonked result: {:?}", &zonked_infer.debug(db));
 
     let zonked_var_tys = gen_storage
         .var_tys
@@ -2009,23 +2140,66 @@ where
     (zonked_var_tys, zonked_term_tys, scheme, errors)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Evidence<'ctx, TV> {
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Evidence<A: TypeAlloc> {
     Row {
-        left: Row<'ctx, TV>,
-        right: Row<'ctx, TV>,
-        goal: Row<'ctx, TV>,
+        left: Row<A>,
+        right: Row<A>,
+        goal: Row<A>,
     },
 }
+impl<A: TypeAlloc> Copy for Evidence<A>
+where
+    A: Clone,
+    Row<A>: Copy,
+{
+}
+impl<'ctx> std::fmt::Debug for Evidence<InArena<'ctx>> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Evidence::Row { left, right, goal } => f
+                .debug_struct("Evidence::Row")
+                .field("left", &left)
+                .field("right", &right)
+                .field("goal", &goal)
+                .finish(),
+        }
+    }
+}
+impl std::fmt::Debug for Evidence<InDb> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Use DebugWithDb for Evidence<InDb>.")
+    }
+}
+impl<Db> DebugWithDb<Db> for Evidence<InDb>
+where
+    Db: crate::Db,
+{
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        db: &Db,
+        _include_all_fields: bool,
+    ) -> std::fmt::Result {
+        match self {
+            Evidence::Row { left, right, goal } => f
+                .debug_struct("Evidence::Row")
+                .field("left", &left.debug(db))
+                .field("right", &right.debug(db))
+                .field("goal", &goal.debug(db))
+                .finish(),
+        }
+    }
+}
 
-impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Evidence<'_, TV> {
-    type TypeVar = TV;
-    type Out<T: 'ctx> = Evidence<'ctx, T>;
+impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for Evidence<A> {
+    type Alloc = A;
+    type Out<B: TypeAlloc> = Evidence<B>;
 
-    fn try_fold_with<F: FallibleTypeFold<'ctx, InTypeVar = Self::TypeVar>>(
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
         self,
         fold: &mut F,
-    ) -> Result<Self::Out<F::TypeVar>, F::Error> {
+    ) -> Result<Self::Out<F::Out>, F::Error> {
         match self {
             Evidence::Row { left, right, goal } => Ok(Evidence::Row {
                 left: left.try_fold_with(fold)?,
@@ -2039,28 +2213,46 @@ impl<'ctx, TV: Clone> TypeFoldable<'ctx> for Evidence<'_, TV> {
 /// A type scheme (also know as a polymorphic type).
 /// Type schemes wrap a monomorphic type in any number of foralls binding the free variables within
 /// the monomorphic type. They may also assert constraints on the bound type variables.
-#[derive(Debug)]
-pub struct TyScheme<'ctx, TV> {
-    pub bound: Vec<TV>,
-    pub constrs: Vec<Evidence<'ctx, TV>>,
-    pub eff: Row<'ctx, TV>,
-    pub ty: Ty<'ctx, TV>,
+pub struct TyScheme<A: TypeAlloc> {
+    pub bound: Vec<A::TypeVar>,
+    pub constrs: Vec<Evidence<A>>,
+    pub eff: Row<A>,
+    pub ty: Ty<A>,
 }
 
 // This looks frustratingly close to SyncInterner, except we hold a &'ctx Bump instead of an owned
 // A. Which allows us to produce interned values with lifetime `'ctx` without TyCtx needing to be a
 // `&'ctx TyCtx<...>`.
-pub struct TyCtx<'ctx, TV> {
-    tys: SyncInterner<'ctx, TypeKind<'ctx, TV>, Bump>,
-    row_fields: SyncInterner<'ctx, [RowLabel<'ctx>], Bump>,
-    row_values: SyncInterner<'ctx, [Ty<'ctx, TV>], Bump>,
+pub struct TyCtx<'ctx> {
+    tys: SyncInterner<'ctx, TypeKind<InArena<'ctx>>, Bump>,
+    row_fields: SyncInterner<'ctx, [RowLabel], Bump>,
+    row_values: SyncInterner<'ctx, [Ty<InArena<'ctx>>], Bump>,
     db: &'ctx dyn crate::Db,
 }
 
-impl<'ctx, TV> TyCtx<'ctx, TV>
+/// Allocate our type structs in an Arena.
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct InArena<'ctx>(std::marker::PhantomData<&'ctx ()>);
+impl Copy for InArena<'_>
 where
-    TV: Eq + Copy + Hash,
+    <Self as TypeAlloc>::TypeData: Copy,
+    <Self as TypeAlloc>::TypeVar: Copy,
+    <Self as TypeAlloc>::RowFields: Copy,
+    <Self as TypeAlloc>::RowValues: Copy,
 {
+}
+
+impl<'ctx> TypeAlloc<TypeKind<Self>> for InArena<'ctx> {
+    type TypeData = RefHandle<'ctx, TypeKind<Self>>;
+
+    type RowFields = RefHandle<'ctx, [RowLabel]>;
+
+    type RowValues = RefHandle<'ctx, [Ty<Self>]>;
+
+    type TypeVar = TcUnifierVar<'ctx>;
+}
+
+impl<'ctx> TyCtx<'ctx> {
     pub fn new(db: &'ctx dyn crate::Db, arena: &'ctx Bump) -> Self {
         Self {
             tys: SyncInterner::new(arena),
@@ -2071,19 +2263,23 @@ where
     }
 }
 
-impl<'ctx, TV> MkTy<'ctx, TV> for TyCtx<'ctx, TV>
+impl<'ctx> MkTy<InArena<'ctx>> for TyCtx<'ctx>
 where
-    TV: Eq + Copy + Hash,
+    TypeKind<InArena<'ctx>>: Copy,
 {
-    fn mk_ty(&self, kind: TypeKind<'ctx, TV>) -> Ty<'ctx, TV> {
+    fn mk_ty(&self, kind: TypeKind<InArena<'ctx>>) -> Ty<InArena<'ctx>> {
         Ty(self.tys.intern(kind))
     }
 
-    fn mk_label(&self, label: &str) -> RowLabel<'ctx> {
+    fn mk_label(&self, label: &str) -> RowLabel {
         self.db.ident_str(label)
     }
 
-    fn mk_row(&self, fields: &[RowLabel<'ctx>], values: &[Ty<'ctx, TV>]) -> ClosedRow<'ctx, TV> {
+    fn mk_row(
+        &self,
+        fields: &[RowLabel],
+        values: &[Ty<InArena<'ctx>>],
+    ) -> ClosedRow<InArena<'ctx>> {
         debug_assert!(
             fields.len() == values.len(),
             "Expected row fields and valuse to be the same length"
@@ -2153,17 +2349,100 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
     println!("]");
 }
 
+#[salsa::interned]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub struct TyData {
+    #[return_ref]
+    kind: TypeKind<InDb>,
+}
+
+#[salsa::interned]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub struct SalsaRowFields {
+    #[return_ref]
+    pub fields: Vec<Ident>,
+}
+#[salsa::interned]
+pub struct SalsaRowValues {
+    #[return_ref]
+    pub values: Vec<Ty<InDb>>,
+}
+
 #[salsa::jar(db = Db)]
-pub struct Jar();
+pub struct Jar(TyData, SalsaRowFields, SalsaRowValues);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+
+/// Allocate our types in salsa database.
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct InDb;
+impl TypeAlloc for InDb {
+    type TypeData = TyData;
+
+    type RowFields = SalsaRowFields;
+
+    type RowValues = SalsaRowValues;
+
+    type TypeVar = TyVarId;
+}
+impl Copy for InDb
+where
+    <Self as TypeAlloc>::TypeData: Copy,
+    <Self as TypeAlloc>::RowFields: Copy,
+    <Self as TypeAlloc>::RowValues: Copy,
+    <Self as TypeAlloc>::TypeVar: Copy,
+{
+}
+
+impl MkTy<InDb> for dyn crate::Db + '_ {
+    fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
+        Ty(TyData::new(self, kind))
+    }
+
+    fn mk_label(&self, label: &str) -> RowLabel {
+        self.ident_str(label)
+    }
+
+    fn mk_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
+        debug_assert_eq!(fields.len(), values.len());
+        debug_assert!(fields.iter().considered_sorted());
+
+        ClosedRow {
+            fields: SalsaRowFields::new(self, fields.to_vec()),
+            values: SalsaRowValues::new(self, values.to_vec()),
+        }
+    }
+}
+
+impl<DB> MkTy<InDb> for DB
+where
+    DB: crate::Db,
+{
+    fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
+        Ty(TyData::new(self, kind))
+    }
+
+    fn mk_label(&self, label: &str) -> RowLabel {
+        self.ident_str(label)
+    }
+
+    fn mk_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
+        debug_assert_eq!(fields.len(), values.len());
+        debug_assert!(fields.iter().considered_sorted());
+
+        ClosedRow {
+            fields: SalsaRowFields::new(self, fields.to_vec()),
+            values: SalsaRowValues::new(self, values.to_vec()),
+        }
+    }
+}
 
 pub mod test_utils {
     use aiahr_core::id::{EffectId, EffectOpId, TyVarId};
     use aiahr_core::ident::Ident;
     use aiahr_core::memory::handle::{self, RefHandle};
 
-    use crate::{ClosedRow, EffectInfo, Row, Ty, TyScheme};
+    use crate::{EffectInfo, InDb, MkTy, Row, TyScheme};
 
     // Utility trait to remove a lot of the intermediate allocation when creating ASTs
     // Helps make tests a little more readable
@@ -2235,7 +2514,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_member_sig(&self, _eff: EffectId, member: EffectOpId) -> TyScheme<'ctx, TyVarId> {
+        fn effect_member_sig(&self, _eff: EffectId, member: EffectOpId) -> TyScheme<InDb> {
             use crate::TypeKind::*;
             match member {
                 // get: forall 0 . {} -{0}-> Int
@@ -2243,39 +2522,28 @@ pub mod test_utils {
                     bound: vec![TyVarId(0)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
-                    ty: Ty(handle::Handle(&FunTy(
-                        Ty(handle::Handle(&RowTy(ClosedRow {
-                            fields: handle::Handle(&[]),
-                            values: handle::Handle(&[]),
-                        }))),
-                        Ty(handle::Handle(&IntTy)),
-                    ))),
+                    ty: self
+                        .0
+                        .mk_ty(FunTy(self.0.empty_row_ty(), self.0.mk_ty(IntTy))),
                 },
                 // put: forall 0 . Int -{0}-> {}
                 DummyEff::PUT_ID => TyScheme {
                     bound: vec![TyVarId(0)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
-                    ty: Ty(handle::Handle(&FunTy(
-                        Ty(handle::Handle(&IntTy)),
-                        Ty(handle::Handle(&RowTy(ClosedRow {
-                            fields: handle::Handle(&[]),
-                            values: handle::Handle(&[]),
-                        }))),
-                    ))),
+                    ty: self
+                        .0
+                        .mk_ty(FunTy(self.0.mk_ty(IntTy), self.0.empty_row_ty())),
                 },
                 // ask: forall 0 1. {} -{0}-> 1
                 DummyEff::ASK_ID => TyScheme {
                     bound: vec![TyVarId(0), TyVarId(1)],
                     constrs: vec![],
                     eff: Row::Open(TyVarId(0)),
-                    ty: Ty(handle::Handle(&FunTy(
-                        Ty(handle::Handle(&RowTy(ClosedRow {
-                            fields: handle::Handle(&[]),
-                            values: handle::Handle(&[]),
-                        }))),
-                        Ty(handle::Handle(&VarTy(TyVarId(1)))),
-                    ))),
+                    ty: self.0.mk_ty(FunTy(
+                        self.0.empty_row_ty(),
+                        self.0.mk_ty(VarTy(TyVarId(1))),
+                    )),
                 },
                 _ => unimplemented!(),
             }
@@ -2294,6 +2562,7 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
+
     use aiahr_core::id::TyVarId;
     use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
@@ -2301,25 +2570,13 @@ mod tests {
 
     use super::{test_utils::DummyEff, *};
 
-    macro_rules! ty {
-        ({}) => {
-            Ty(Handle(ProdTy(Row::Closed(ClosedRow {
-                fields: Handle(&[]),
-                values: Handle(&[]),
-            }))))
-        };
-        ($kind:pat) => {
-            Ty(Handle($kind))
-        };
-    }
-
-    macro_rules! row {
-        ([$($field:pat),*], [$($value:pat),*]) => {
-            ClosedRow {
-                fields: Handle([$($field),*]),
-                values: Handle([$($value),*]),
-            }
-        };
+    macro_rules! assert_matches_unit_ty {
+        ($db:expr, $term:expr) => {
+            assert_matches!($db.kind($term), ProdTy(Row::Closed(ClosedRow { fields, values })) => {
+                assert!(fields.fields($db).is_empty());
+                assert!(values.values($db).is_empty());
+            });
+        }
     }
 
     macro_rules! assert_vec_matches {
@@ -2331,7 +2588,7 @@ mod tests {
         ($vec: expr, [$($elem:pat),*] => $body:expr) => {{
             let mut tmp = $vec;
             tmp.sort();
-            assert_matches!(tmp.as_slice(), [$($elem),*] => $body);
+            assert_matches!(tmp.as_slice(), [$($elem),*] => $body)
         }};
     }
 
@@ -2353,15 +2610,17 @@ mod tests {
                 builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
             )
         });
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (_, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
+        let db = &db;
         assert_matches!(
-            scheme.ty,
-            ty!(FunTy(ty!(VarTy(TyVarId(0))), ty!(VarTy(TyVarId(0)))))
+            db.kind(&scheme.ty),
+            FunTy(arg, ret) => {
+                assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(a), VarTy(b)) => {
+                    assert_eq!(a, b);
+                });
+            }
         );
     }
 
@@ -2376,11 +2635,8 @@ mod tests {
                 builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
             )
         });
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (_, _, _, errors) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             errors[0],
@@ -2400,22 +2656,19 @@ mod tests {
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (_, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
+        let db = &db;
         assert_matches!(
-            scheme.ty,
-            ty!(FunTy(
-                ty!(VarTy(TyVarId(0))),
-                ty!(RowTy(ClosedRow {
-                    fields: Handle(&[start]),
-                    values: Handle(&[ty!(VarTy(TyVarId(0)))])
-                })),
-            )) => {
-                assert_eq!(start.text(&db), "start");
+            db.kind(&scheme.ty),
+            FunTy(arg, ret)
+            => {
+                assert_matches!((db.kind(arg), db.kind(ret)),
+                    (VarTy(a), RowTy(ClosedRow { fields, values })) => {
+                        assert_eq!(fields.fields(db).get(0).map(|start| start.text(db).as_str()), Some("start"));
+                        assert_eq!(values.values(db).get(0).map(|val| db.kind(val)), Some(&VarTy(*a)));
+                });
             }
         );
     }
@@ -2429,20 +2682,27 @@ mod tests {
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
-        let (var_to_tys, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (var_to_tys, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
-        assert_matches!(var_to_tys.get(&VarId(0)), Some(ty!(VarTy(TyVarId(0)))));
-        assert_matches!(var_to_tys.get(&VarId(1)), Some(ty!(VarTy(TyVarId(1)))));
+        let db = &db;
         assert_matches!(
-            scheme.ty,
-            ty!(FunTy(
-                ty!(VarTy(TyVarId(0))),
-                ty!(FunTy(ty!(VarTy(TyVarId(1))), ty!(VarTy(TyVarId(0))),)),
-            ))
+            var_to_tys.get(&VarId(0)).map(|ty| db.kind(ty)),
+            Some(&VarTy(TyVarId(0)))
+        );
+        assert_matches!(
+            var_to_tys.get(&VarId(1)).map(|ty| db.kind(ty)),
+            Some(&VarTy(TyVarId(1)))
+        );
+        assert_matches!(
+            db.kind(&scheme.ty),
+            FunTy(arg, ret) => {
+                assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(a), FunTy(arg, ret)) => {
+                    assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(_), VarTy(b)) => {
+                        assert_eq!(a, b);
+                    })
+                })
+            }
         );
     }
 
@@ -2459,33 +2719,33 @@ mod tests {
             )
         });
 
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
-        let (_, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
-
+        let db = &db;
         assert_matches!(
-            scheme.ty,
-            ty!(FunTy(
-                ty!(SumTy(Row::Closed(row!(
-                    [true_, false_],
-                    [ty!(VarTy(TyVarId(0))), ty!(VarTy(TyVarId(0)))]
-                )))),
-                ty!(VarTy(TyVarId(0)))
-            )) => {
-                assert_eq!(false_.text(&db), "false");
-                assert_eq!(true_.text(&db), "true");
-            }
-        );
+        db.kind(&scheme.ty),
+        FunTy(arg, ret) => {
+            let ty_var = assert_matches!(
+                db.kind(arg),
+                SumTy(Row::Closed(ClosedRow { fields, values })) => {
+                    assert_matches!(fields.fields(db).as_slice(), [true_, false_] => {
+                        assert_eq!(false_.text(db), "false");
+                        assert_eq!(true_.text(db), "true");
+                    });
+                    assert_matches!(values.values(db).as_slice(), [a, b] => {
+                        assert_eq!(a, b);
+                        a
+                    })
+                }
+            );
+            assert_eq!(ret, ty_var);
+        });
     }
 
     #[test]
     fn test_tc_product_literal() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
         let x = VarId(0);
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
@@ -2504,37 +2764,33 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
+        let db = &db;
         assert_matches!(
-            scheme.ty,
-            ty!(FunTy(
-                ty!(VarTy(TyVarId(0))),
-                ty!(ProdTy(Row::Closed(row!(
-                    [a, b, c, d],
-                    [
-                        ty!(VarTy(TyVarId(0))),
-                        ty!(VarTy(TyVarId(0))),
-                        ty!(VarTy(TyVarId(0))),
-                        ty!(VarTy(TyVarId(0)))
-                    ]
-                ))))
-            )) => {
-                assert_eq!(a.text(&db), "a");
-                assert_eq!(b.text(&db), "b");
-                assert_eq!(c.text(&db), "c");
-                assert_eq!(d.text(&db), "d");
-            }
-        )
+        db.kind(&scheme.ty),
+        FunTy(arg, ret) => {
+            assert_matches!(db.kind(ret), ProdTy(Row::Closed(ClosedRow { fields, values })) => {
+                assert_matches!(fields.fields(db).as_slice(), [a, b, c, d] => {
+                    assert_eq!(a.text(db), "a");
+                    assert_eq!(b.text(db), "b");
+                    assert_eq!(c.text(db), "c");
+                    assert_eq!(d.text(db), "d");
+                });
+                assert_matches!(values.values(db).as_slice(), [a, b, c, d] => {
+                    assert_eq!(a, arg);
+                    assert_eq!(b, arg);
+                    assert_eq!(c, arg);
+                    assert_eq!(d, arg);
+                })
+            })
+        });
     }
 
     #[test]
     fn test_tc_product_wand() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
         let m = VarId(0);
         let n = VarId(1);
@@ -2551,41 +2807,45 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
-        assert_vec_matches!(
+        let ty = assert_vec_matches!(
             scheme.constrs,
             [
                 Evidence::Row {
-                    left: Row::Closed(row!([x], [ty!(VarTy(TyVarId(2)))])),
-                    right: Row::Open(_),
-                    goal: Row::Open(TyVarId(3))
-                },
-                Evidence::Row {
                     left: Row::Open(_),
                     right: Row::Open(_),
-                    goal: Row::Open(TyVarId(3))
+                    goal: Row::Open(b)
+                },
+                Evidence::Row {
+                    left: Row::Closed(ClosedRow { fields, values }),
+                    right: Row::Open(_),
+                    goal: Row::Open(a)
                 }
             ] => {
-                assert_eq!(x.text(&db), "x");
+                assert_eq!(a, b);
+                assert_matches!(fields.fields(&db).as_slice(), [x] => {
+                    assert_eq!(x.text(&db), "x");
+                });
+                assert_matches!(values.values(&db).as_slice(), [ty] => ty)
             }
         );
+        let db = &db;
         assert_matches!(
-            scheme.ty,
-            ty!(FunTy(
-                ty!(ProdTy(Row::Open(_))),
-                ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!(VarTy(TyVarId(2)))))
-            ))
-        )
+        db.kind(&scheme.ty),
+        FunTy(arg, ret) => {
+            assert_matches!(db.kind(arg), ProdTy(Row::Open(_)));
+            assert_matches!(db.kind(ret), FunTy(arg, ret) => {
+                assert_matches!(db.kind(arg), ProdTy(Row::Open(_)));
+                assert_eq!(ret, ty)
+            })
+        });
     }
 
     #[test]
     fn test_tc_applied_wand() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
         let m = VarId(0);
         let n = VarId(1);
@@ -2605,48 +2865,57 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
             [Evidence::Row {
-                left: Row::Closed(row!([x], [ty!({})])),
+                left: Row::Closed(ClosedRow { fields, values }),
                 right: Row::Open(_),
                 goal: Row::Open(_),
             }] => {
-                assert_eq!(x.text(&db), "x");
+                assert_matches!(fields.fields(&db).as_slice(), [x] => {
+                    assert_eq!(x.text(&db), "x");
+                });
+                assert_matches!(values.values(&db).as_slice(), [unit] => {
+                    assert_matches_unit_ty!(&db, unit);
+                });
             }
         );
 
-        assert_matches!(scheme.ty, ty!(FunTy(ty!(ProdTy(Row::Open(_))), ty!({}))))
+        let db = &db;
+        assert_matches!(db.kind(&scheme.ty), FunTy(arg, ret) => {
+            assert_matches!(db.kind(arg), ProdTy(Row::Open(_)));
+            assert_matches_unit_ty!(db, &ret);
+        })
     }
 
     #[test]
     fn test_tc_eff_operation_infers_correct_effect() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_app(Operation(EffectOpId(0)), Unit)
         });
-        let (_, _, scheme, _) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
-        assert_matches!(scheme.eff, Row::Closed(row!([state], [ty!(ty_pat!({}))])) => {
-            assert_eq!(state.text(&db), "State");
+        assert_matches!(scheme.eff, Row::Closed(ClosedRow { fields, values }) => {
+            assert_matches!(fields.fields(&db).as_slice(), [state] => {
+                assert_eq!(state.text(&db), "State");
+            });
+            assert_matches!(values.values(&db).as_slice(), [unit] => {
+                assert_matches_unit_ty!(&db, unit);
+            });
         });
-        assert_matches!(scheme.ty, ty!(IntTy))
+        let db = &db;
+        assert_matches!(db.kind(&scheme.ty), IntTy);
     }
 
     #[test]
     fn test_tc_eff_handler_removes_correct_effect() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let infer_intern = TyCtx::new(&db, &arena);
-        let ty_intern = TyCtx::new(&db, &arena);
 
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_handler(
@@ -2676,17 +2945,25 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, errors) =
-            type_check(&db, &ty_intern, &infer_intern, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, errors) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
         assert_eq!(errors, vec![]);
         assert_matches!(
             scheme.eff,
-            Row::Closed(row!([reader], [ty!(ty_pat!({}))])) => {
-                assert_eq!(reader.text(&db), "Reader");
+            Row::Closed(ClosedRow { fields, values }/*row!([reader], [ty!(ty_pat!({}))])*/) => {
+                assert_matches!(fields.fields(&db).as_slice(), [reader] => {
+                    assert_eq!(reader.text(&db), "Reader");
+                });
+                assert_matches!(values.values(&db).as_slice(), [unit] => {
+                    assert_matches_unit_ty!(&db, unit);
+                });
             }
         );
-        assert_matches!(scheme.ty, ty!(RowTy(row!([], []))));
+        let db = &db;
+        assert_matches!(db.kind(&scheme.ty), RowTy(ClosedRow { fields, values }) => {
+            assert!(fields.fields(db).is_empty());
+            assert!(values.values(db).is_empty());
+        });
     }
 
     #[test]
@@ -2694,10 +2971,8 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |_| Variable(VarId(0)));
-        let infer_ctx = TyCtx::new(&db, &arena);
-        let ty_ctx = TyCtx::new(&db, &arena);
 
-        let (_, _, _, errors) = type_check(&db, &infer_ctx, &ty_ctx, &DummyEff(&db), &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
         assert_matches!(
             &errors[0],
