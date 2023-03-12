@@ -361,7 +361,7 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for Row<A> {
     ) -> Result<Self::Out<F::Out>, F::Error> {
         match self {
             Row::Open(var) => fold.try_fold_row_var(var),
-            Row::Closed(crow) => crow.try_fold_with(fold).map(|crow| Row::Closed(crow)),
+            Row::Closed(crow) => crow.try_fold_with(fold).map(Row::Closed),
         }
     }
 }

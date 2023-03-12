@@ -45,7 +45,7 @@ pub trait FallibleTypeFold<'access>: Sized {
     fn access(&self) -> &Self::AccessTy;
     fn ctx(&self) -> &Self::MkTy;
 
-    fn try_fold_ty<'a>(&mut self, t: Ty<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
+    fn try_fold_ty(&mut self, t: Ty<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
         self.access().kind(&t).try_default_fold(self)
     }
 

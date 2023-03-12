@@ -225,7 +225,7 @@ struct SolvedRowEv {
     left: ClosedRow<InDb>,
     right: ClosedRow<InDb>,
 }
-impl<'ctx> From<SolvedRowEv> for Evidence<InDb> {
+impl From<SolvedRowEv> for Evidence<InDb> {
     fn from(val: SolvedRowEv) -> Self {
         Evidence::Row {
             left: Row::Closed(val.left),

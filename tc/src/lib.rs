@@ -1708,7 +1708,7 @@ where
                     self.state
                         .iter()
                         .find_map(|eq| match eq {
-                            UnsolvedRowEquation::ClosedGoal(cand) if is_unifiable(&cand) => {
+                            UnsolvedRowEquation::ClosedGoal(cand) if is_unifiable(cand) => {
                                 Some((cand.min, cand.max, Row::<InArena<'_>>::Closed(cand.goal)))
                             }
                             UnsolvedRowEquation::OpenGoal(OpenGoal {
@@ -2048,7 +2048,7 @@ pub trait EffectInfo<'s, 'ctx> {
     fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId;
     /// Look up an effect by the name of it's members, this may fail if an invalid list of member
     /// names is passed.
-    fn lookup_effect_by_member_names<'a>(&self, members: &[Ident]) -> Option<EffectId>;
+    fn lookup_effect_by_member_names(&self, members: &[Ident]) -> Option<EffectId>;
     fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId>;
     /// Lookup the type signature of an effect's member
     fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<InDb>;

@@ -241,7 +241,7 @@ impl<'ctx> Ty<InArena<'ctx>> {
     pub fn try_as_prod_row(self) -> Result<Row<InArena<'ctx>>, Self> {
         match self.deref() {
             TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
             _ => Err(self),
         }
     }
@@ -249,7 +249,7 @@ impl<'ctx> Ty<InArena<'ctx>> {
     pub fn try_as_sum_row(self) -> Result<Row<InArena<'ctx>>, Self> {
         match self.deref() {
             TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
             _ => Err(self),
         }
     }
@@ -265,7 +265,7 @@ impl Ty<InDb> {
     pub fn try_as_prod_row<'a>(self, db: &impl AccessTy<'a, InDb>) -> Result<Row<InDb>, Self> {
         match db.kind(&self) {
             TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
             _ => Err(self),
         }
     }
@@ -273,7 +273,7 @@ impl Ty<InDb> {
     pub fn try_as_sum_row<'a>(self, db: &impl AccessTy<'a, InDb>) -> Result<Row<InDb>, Self> {
         match db.kind(&self) {
             TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
             _ => Err(self),
         }
     }
@@ -291,7 +291,7 @@ impl<'ctx> Ty<InArena<'ctx>> {
     pub(crate) fn try_to_row(&self) -> Result<Row<InArena<'ctx>>, Self> {
         match self.deref() {
             TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::VarTy(var) => Ok(Row::Open(var.clone())),
+            TypeKind::VarTy(var) => Ok(Row::Open(*var)),
             _ => Err(*self),
         }
     }
@@ -423,7 +423,7 @@ impl<'ctx> TypeKind<InArena<'ctx>> {
         match self {
             TypeKind::ErrorTy => a.as_string("Error"),
             TypeKind::IntTy => a.as_string("Int"),
-            TypeKind::VarTy(tv) => pretty::Pretty::pretty(tv.clone(), a),
+            TypeKind::VarTy(tv) => pretty::Pretty::pretty(*tv, a),
             TypeKind::RowTy(closed_row) => closed_row.pretty(a, db).nest(2).parens().group(),
             TypeKind::FunTy(arg, ret) => arg
                 .pretty(a, db)
