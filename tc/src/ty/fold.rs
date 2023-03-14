@@ -1,6 +1,6 @@
 use crate::{Row, Ty};
 
-use super::{AccessTy, AllocVar, MkTy, TypeAlloc, TypeKind};
+use super::{alloc::TypeVarOf, AccessTy, MkTy, TypeAlloc, TypeKind};
 
 /// A trait for things that contain types.
 /// This defines how to traverse `Self` to visit each type it contains and fold it.
@@ -49,9 +49,10 @@ pub trait FallibleTypeFold<'access>: Sized {
         self.access().kind(&t).try_default_fold(self)
     }
 
-    fn try_fold_var(&mut self, var: AllocVar<Self::In>) -> Result<Ty<Self::Out>, Self::Error>;
+    fn try_fold_var(&mut self, var: TypeVarOf<Self::In>) -> Result<Ty<Self::Out>, Self::Error>;
 
-    fn try_fold_row_var(&mut self, var: AllocVar<Self::In>) -> Result<Row<Self::Out>, Self::Error>;
+    fn try_fold_row_var(&mut self, var: TypeVarOf<Self::In>)
+        -> Result<Row<Self::Out>, Self::Error>;
 }
 
 pub trait FallibleEndoTypeFold<'access>: Sized {
@@ -68,14 +69,14 @@ pub trait FallibleEndoTypeFold<'access>: Sized {
 
     fn try_endofold_var(
         &mut self,
-        var: AllocVar<Self::Alloc>,
+        var: TypeVarOf<Self::Alloc>,
     ) -> Result<Ty<Self::Alloc>, Self::Error> {
         Ok(self.endo_ctx().mk_ty(TypeKind::VarTy(var)))
     }
 
     fn try_endofold_row_var(
         &mut self,
-        var: AllocVar<Self::Alloc>,
+        var: TypeVarOf<Self::Alloc>,
     ) -> Result<Row<Self::Alloc>, Self::Error> {
         Ok(Row::Open(var))
     }
@@ -99,11 +100,14 @@ where
         self.endo_ctx()
     }
 
-    fn try_fold_var(&mut self, var: AllocVar<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
+    fn try_fold_var(&mut self, var: TypeVarOf<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
         self.try_endofold_var(var)
     }
 
-    fn try_fold_row_var(&mut self, var: AllocVar<Self::In>) -> Result<Row<Self::Out>, Self::Error> {
+    fn try_fold_row_var(
+        &mut self,
+        var: TypeVarOf<Self::In>,
+    ) -> Result<Row<Self::Out>, Self::Error> {
         self.try_endofold_row_var(var)
     }
 

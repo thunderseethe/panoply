@@ -3,9 +3,10 @@ use ena::unify::{EqUnifyValue, UnifyValue};
 use pretty::{docs, DocAllocator, DocBuilder};
 use salsa::DebugWithDb;
 
-use crate::{InArena, InDb, Ty, TypeCheckError, TypeKind};
+use crate::{diagnostic::TypeCheckError, Evidence, InArena, InDb, Ty, TypeKind};
 
 use crate::ty::TypeFoldable;
+use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -332,7 +333,7 @@ impl<'ctx> Row<InArena<'ctx>> {
     }
 }
 
-pub type InferRow<'ctx> = Row<InArena<'ctx>>;
+pub(crate) type InferRow<'ctx> = Row<InArena<'ctx>>;
 impl<'ctx> UnifyValue for InferRow<'ctx> {
     type Error = TypeCheckError<'ctx>;
 
@@ -459,5 +460,142 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<
                 (fold.try_fold_row_var(min)?, fold.try_fold_row_var(max)?)
             }
         })
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ClosedGoal<A: TypeAlloc> {
+    pub(crate) goal: ClosedRow<A>,
+    pub(crate) min: A::TypeVar,
+    pub(crate) max: A::TypeVar,
+}
+impl<A: TypeAlloc> Copy for ClosedGoal<A>
+where
+    A: Clone,
+    ClosedRow<A>: Copy,
+    A::TypeVar: Copy,
+{
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct OpenGoal<A: TypeAlloc> {
+    pub(crate) goal: A::TypeVar,
+    pub(crate) orxr: OrderedRowXorRow<A>,
+}
+impl<A: TypeAlloc> Copy for OpenGoal<A>
+where
+    A: Clone,
+    A::TypeVar: Copy,
+    OrderedRowXorRow<A>: Copy,
+{
+}
+
+pub(crate) enum UnsolvedRowEquation<A: TypeAlloc> {
+    ClosedGoal(ClosedGoal<A>),
+    OpenGoal(OpenGoal<A>),
+}
+impl<A: TypeAlloc> Clone for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Clone,
+    ClosedGoal<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            UnsolvedRowEquation::ClosedGoal(closed) => Self::ClosedGoal(closed.clone()),
+            UnsolvedRowEquation::OpenGoal(open) => Self::OpenGoal(open.clone()),
+        }
+    }
+}
+impl<A: TypeAlloc> Copy for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Copy,
+    ClosedGoal<A>: Copy,
+{
+}
+impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>>> for Evidence<InArena<'ctx>> {
+    fn from(eq: UnsolvedRowEquation<InArena<'ctx>>) -> Self {
+        match eq {
+            UnsolvedRowEquation::ClosedGoal(cand) => Evidence::Row {
+                left: Row::Open(cand.min),
+                right: Row::Open(cand.max),
+                goal: Row::Closed(cand.goal),
+            },
+            UnsolvedRowEquation::OpenGoal(cand) => match cand.orxr {
+                OrderedRowXorRow::ClosedOpen(closed, open) => Evidence::Row {
+                    left: Row::Closed(closed),
+                    right: Row::Open(open),
+                    goal: Row::Open(cand.goal),
+                },
+                OrderedRowXorRow::OpenOpen { min, max } => Evidence::Row {
+                    left: Row::Open(min),
+                    right: Row::Open(max),
+                    goal: Row::Open(cand.goal),
+                },
+            },
+        }
+    }
+}
+impl<A: TypeAlloc> PartialEq for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: PartialEq,
+    ClosedGoal<A>: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (UnsolvedRowEquation::OpenGoal(a), UnsolvedRowEquation::OpenGoal(b)) => a == b,
+            (UnsolvedRowEquation::ClosedGoal(a), UnsolvedRowEquation::ClosedGoal(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+impl<A: TypeAlloc> Eq for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Eq,
+    ClosedGoal<A>: Eq,
+{
+}
+
+impl<A: TypeAlloc> PartialOrd for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: PartialOrd,
+    ClosedGoal<A>: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (UnsolvedRowEquation::ClosedGoal(left), UnsolvedRowEquation::ClosedGoal(right)) => {
+                left.partial_cmp(right)
+            }
+            (UnsolvedRowEquation::OpenGoal(left), UnsolvedRowEquation::OpenGoal(right)) => {
+                left.partial_cmp(right)
+            }
+            (UnsolvedRowEquation::ClosedGoal(_), UnsolvedRowEquation::OpenGoal(_)) => {
+                Some(Ordering::Greater)
+            }
+            (UnsolvedRowEquation::OpenGoal(_), UnsolvedRowEquation::ClosedGoal(_)) => {
+                Some(Ordering::Less)
+            }
+        }
+    }
+}
+impl<A: TypeAlloc> Ord for UnsolvedRowEquation<A>
+where
+    OpenGoal<A>: Ord,
+    ClosedGoal<A>: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (UnsolvedRowEquation::ClosedGoal(left), UnsolvedRowEquation::ClosedGoal(right)) => {
+                left.cmp(right)
+            }
+            (UnsolvedRowEquation::OpenGoal(left), UnsolvedRowEquation::OpenGoal(right)) => {
+                left.cmp(right)
+            }
+            (UnsolvedRowEquation::ClosedGoal(_), UnsolvedRowEquation::OpenGoal(_)) => {
+                Ordering::Greater
+            }
+            (UnsolvedRowEquation::OpenGoal(_), UnsolvedRowEquation::ClosedGoal(_)) => {
+                Ordering::Less
+            }
+        }
     }
 }

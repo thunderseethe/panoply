@@ -17,6 +17,8 @@ use salsa::DebugWithDb;
 
 use crate::{InArena, InDb, TyCtx};
 
+use self::alloc::TypeAlloc;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct UnifierToTcVarError {
     index: u32,
@@ -33,7 +35,7 @@ pub struct TcVarToUnifierError {
 /// Conversely to the untouchable TcVar, these are "touchable" and will be modified by the type
 /// checker.
 #[derive(Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct TcUnifierVar<'ctx> {
+pub(crate) struct TcUnifierVar<'ctx> {
     id: u32,
     _marker: std::marker::PhantomData<&'ctx ()>,
 }
@@ -178,26 +180,255 @@ impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
         row.values(*self)
     }
 }
-/// Allow our type structs (Ty, ClosedRow, etc.) to be generic in how they are allocated
-///
-/// We have two allocation strategies we'd like to support. During unification we will allocate
-/// everything in an arena that is dropped at the end of unification. This is to prevent any
-/// unifiers from escaping unification which is an ICE.
-///
-/// Once unification completes we zonk all our types, generalizing them back to use type variables
-/// where allowed. Once this is done we want to store them in the salsa database so that they are
-/// incrementally recomputed.
-///
-/// We aim to achieve this by parameterizing our structs by this allocation trait, and then we can
-/// implement unification only against these structs instantiated with our unification allocator.
-pub trait TypeAlloc<TK = TypeKind<Self>> {
-    type TypeData: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
-    type RowFields: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
-    type RowValues: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
-    type TypeVar: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
-}
 
-pub(crate) type AllocVar<A> = <A as TypeAlloc>::TypeVar;
+pub mod alloc {
+    use crate::TypeKind;
+    use std::cmp::Ordering;
+    use std::fmt::Debug;
+    use std::hash::Hash;
+
+    /// Allow our type structs (Ty, ClosedRow, etc.) to be generic in how they are allocated
+    ///
+    /// We have two allocation strategies we'd like to support. During unification we will allocate
+    /// everything in an arena that is dropped at the end of unification. This is to prevent any
+    /// unifiers from escaping unification which is an ICE.
+    ///
+    /// Once unification completes we zonk all our types, generalizing them back to use type variables
+    /// where allowed. Once this is done we want to store them in the salsa database so that they are
+    /// incrementally recomputed.
+    ///
+    /// We aim to achieve this by parameterizing our structs by this allocation trait, and then we can
+    /// implement unification only against these structs instantiated with our unification allocator.
+    pub trait TypeAlloc<TK = TypeKind<Self>> {
+        type TypeData: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
+        type RowFields: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
+        type RowValues: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
+        type TypeVar: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
+    }
+
+    pub(crate) type TypeVarOf<A> = <A as TypeAlloc>::TypeVar;
+
+    // TODO: Replace this once `is_sorted` is stabilized
+    pub(crate) trait IteratorSorted: Iterator {
+        // Is this iterator sorted based on compare function
+        fn considered_sorted_by<F>(self, compare: F) -> bool
+        where
+            Self: Sized,
+            F: FnMut(&Self::Item, &Self::Item) -> Option<Ordering>;
+
+        // Is this iterator sorted based on it's PartialOrd instance
+        fn considered_sorted(self) -> bool
+        where
+            Self: Sized,
+            Self::Item: PartialOrd,
+        {
+            self.considered_sorted_by(PartialOrd::partial_cmp)
+        }
+    }
+
+    impl<I: Iterator> IteratorSorted for I {
+        fn considered_sorted_by<F>(mut self, mut compare: F) -> bool
+        where
+            Self: Sized,
+            F: FnMut(&Self::Item, &Self::Item) -> Option<Ordering>,
+        {
+            let mut last = match self.next() {
+                Some(e) => e,
+                None => return true,
+            };
+
+            self.all(move |curr| {
+                if let Some(Ordering::Greater) | None = compare(&last, &curr) {
+                    return false;
+                }
+                last = curr;
+                true
+            })
+        }
+    }
+
+    pub mod db {
+
+        use aiahr_core::{id::TyVarId, ident::Ident};
+
+        use crate::{
+            ty::{alloc::IteratorSorted, row::RowLabel},
+            ClosedRow, MkTy, Ty, TypeKind,
+        };
+
+        use super::TypeAlloc;
+
+        #[salsa::interned]
+        #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+        pub struct TyData {
+            #[return_ref]
+            pub kind: TypeKind<InDb>,
+        }
+
+        #[salsa::interned]
+        #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+        pub struct SalsaRowFields {
+            #[return_ref]
+            pub fields: Vec<Ident>,
+        }
+        #[salsa::interned]
+        pub struct SalsaRowValues {
+            #[return_ref]
+            pub values: Vec<Ty<InDb>>,
+        }
+
+        /// Allocate our types in salsa database.
+        #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+        pub struct InDb;
+        impl TypeAlloc for InDb {
+            type TypeData = TyData;
+
+            type RowFields = SalsaRowFields;
+
+            type RowValues = SalsaRowValues;
+
+            type TypeVar = TyVarId;
+        }
+        impl Copy for InDb
+        where
+            <Self as TypeAlloc>::TypeData: Copy,
+            <Self as TypeAlloc>::RowFields: Copy,
+            <Self as TypeAlloc>::RowValues: Copy,
+            <Self as TypeAlloc>::TypeVar: Copy,
+        {
+        }
+
+        impl MkTy<InDb> for dyn crate::Db + '_ {
+            fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
+                Ty(TyData::new(self, kind))
+            }
+
+            fn mk_label(&self, label: &str) -> RowLabel {
+                self.ident_str(label)
+            }
+
+            fn mk_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
+                debug_assert_eq!(fields.len(), values.len());
+                debug_assert!(fields.iter().considered_sorted());
+
+                ClosedRow {
+                    fields: SalsaRowFields::new(self, fields.to_vec()),
+                    values: SalsaRowValues::new(self, values.to_vec()),
+                }
+            }
+        }
+
+        impl<DB> MkTy<InDb> for DB
+        where
+            DB: crate::Db,
+        {
+            fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
+                Ty(TyData::new(self, kind))
+            }
+
+            fn mk_label(&self, label: &str) -> RowLabel {
+                self.ident_str(label)
+            }
+
+            fn mk_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
+                debug_assert_eq!(fields.len(), values.len());
+                debug_assert!(fields.iter().considered_sorted());
+
+                ClosedRow {
+                    fields: SalsaRowFields::new(self, fields.to_vec()),
+                    values: SalsaRowValues::new(self, values.to_vec()),
+                }
+            }
+        }
+    }
+
+    pub(crate) mod arena {
+        use aiahr_core::memory::{
+            handle::RefHandle,
+            intern::{Interner, InternerByRef, SyncInterner},
+        };
+        use bumpalo::Bump;
+
+        use crate::{
+            ty::{alloc::IteratorSorted, row::RowLabel, TcUnifierVar},
+            ClosedRow, MkTy, Ty, TypeKind,
+        };
+
+        use super::TypeAlloc;
+
+        pub(crate) struct TyCtx<'ctx> {
+            tys: SyncInterner<'ctx, TypeKind<InArena<'ctx>>, Bump>,
+            row_fields: SyncInterner<'ctx, [RowLabel], Bump>,
+            row_values: SyncInterner<'ctx, [Ty<InArena<'ctx>>], Bump>,
+            db: &'ctx dyn crate::Db,
+        }
+
+        /// Allocate our type structs in an Arena.
+        #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+        pub(crate) struct InArena<'ctx>(std::marker::PhantomData<&'ctx ()>);
+        impl Copy for InArena<'_>
+        where
+            <Self as TypeAlloc>::TypeData: Copy,
+            <Self as TypeAlloc>::TypeVar: Copy,
+            <Self as TypeAlloc>::RowFields: Copy,
+            <Self as TypeAlloc>::RowValues: Copy,
+        {
+        }
+
+        impl<'ctx> TypeAlloc<TypeKind<Self>> for InArena<'ctx> {
+            type TypeData = RefHandle<'ctx, TypeKind<Self>>;
+
+            type RowFields = RefHandle<'ctx, [RowLabel]>;
+
+            type RowValues = RefHandle<'ctx, [Ty<Self>]>;
+
+            type TypeVar = TcUnifierVar<'ctx>;
+        }
+
+        impl<'ctx> TyCtx<'ctx> {
+            pub fn new(db: &'ctx dyn crate::Db, arena: &'ctx Bump) -> Self {
+                Self {
+                    tys: SyncInterner::new(arena),
+                    row_fields: SyncInterner::new(arena),
+                    row_values: SyncInterner::new(arena),
+                    db,
+                }
+            }
+        }
+
+        impl<'ctx> MkTy<InArena<'ctx>> for TyCtx<'ctx>
+        where
+            TypeKind<InArena<'ctx>>: Copy,
+        {
+            fn mk_ty(&self, kind: TypeKind<InArena<'ctx>>) -> Ty<InArena<'ctx>> {
+                Ty(self.tys.intern(kind))
+            }
+
+            fn mk_label(&self, label: &str) -> RowLabel {
+                self.db.ident_str(label)
+            }
+
+            fn mk_row(
+                &self,
+                fields: &[RowLabel],
+                values: &[Ty<InArena<'ctx>>],
+            ) -> ClosedRow<InArena<'ctx>> {
+                debug_assert!(
+                    fields.len() == values.len(),
+                    "Expected row fields and valuse to be the same length"
+                );
+                debug_assert!(
+                    fields.iter().considered_sorted(),
+                    "Expected row fields to be sorted"
+                );
+                ClosedRow {
+                    fields: self.row_fields.intern_by_ref(fields),
+                    values: self.row_values.intern_by_ref(values),
+                }
+            }
+        }
+    }
+}
 
 /// A monomorphic type.
 ///
@@ -319,7 +550,7 @@ impl<'ctx> Ty<InArena<'ctx>> {
 
 /// During inference our type variables are all unification variables.
 /// This is an alias to make inference types easy to talk about.
-pub type InferTy<'ctx> = Ty<InArena<'ctx>>;
+pub(crate) type InferTy<'ctx> = Ty<InArena<'ctx>>;
 
 impl<'ctx> EqUnifyValue for Ty<InArena<'ctx>> {}
 
