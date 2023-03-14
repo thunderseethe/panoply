@@ -3,9 +3,7 @@ use aiahr_core::{
     id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
     ir::{Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, P},
 };
-use aiahr_tc::{
-    AccessTy, ClosedRow, Evidence, InDb, MkTy, Row, Ty, TyChkRes, TyScheme, TypeKind,
-};
+use aiahr_tc::{AccessTy, ClosedRow, Evidence, InDb, MkTy, Row, Ty, TyChkRes, TyScheme, TypeKind};
 
 use crate::{
     evidence::{EvidenceMap, PartialEv, SolvedRowEv},
@@ -225,12 +223,8 @@ where
                 match (left.is_empty(self.db), right.is_empty(self.db)) {
                     // we're discriminating void, produce a case with no branches
                     (true, true) => Ir::case_on_var(goal_branch_var, vec![]),
-                    (true, false) => {
-                        Ir::app(Ir::var(left_branch_var), [Ir::var(goal_branch_var)])
-                    }
-                    (false, true) => {
-                        Ir::app(Ir::var(right_branch_var), [Ir::var(goal_branch_var)])
-                    }
+                    (true, false) => Ir::app(Ir::var(left_branch_var), [Ir::var(goal_branch_var)]),
+                    (false, true) => Ir::app(Ir::var(right_branch_var), [Ir::var(goal_branch_var)]),
                     (false, false) => {
                         debug_assert!(left_len + right_len == goal_len);
 
@@ -249,10 +243,7 @@ where
                                 let length = if i < left_len { left_len } else { right_len };
                                 Ir::abss(
                                     [case_var],
-                                    Ir::app(
-                                        Ir::var(case_var),
-                                        [inj(i, length, Ir::var(case_var))],
-                                    ),
+                                    Ir::app(Ir::var(case_var), [inj(i, length, Ir::var(case_var))]),
                                 )
                             });
 
@@ -429,8 +420,7 @@ where
                 RowTerm::Concat { left, right } => {
                     let left_row = expect_prod_ty(self.db, self.db.lookup_term(left).ty);
                     let right_row = expect_prod_ty(self.db, self.db.lookup_term(right).ty);
-                    let goal_row =
-                        expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
+                    let goal_row = expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
 
                     match (left_row, right_row, goal_row) {
                         (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
@@ -454,8 +444,7 @@ where
                 }
                 RowTerm::Project { direction, term } => {
                     let sub_row = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
-                    let goal_row =
-                        expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
+                    let goal_row = expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
 
                     match (sub_row, goal_row) {
                         (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
@@ -467,8 +456,7 @@ where
                 }
                 RowTerm::Inject { direction, term } => {
                     let sub_row = expect_sum_ty(self.db, self.db.lookup_term(term).ty);
-                    let goal_row =
-                        expect_sum_ty(self.db, self.db.lookup_term(row_view.parent).ty);
+                    let goal_row = expect_sum_ty(self.db, self.db.lookup_term(row_view.parent).ty);
 
                     match (sub_row, goal_row) {
                         (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
@@ -686,10 +674,7 @@ where
                                 Ir::app(
                                     Ir::new(FieldProj(
                                         handler_index,
-                                        P::new(Ir::new(FieldProj(
-                                            1,
-                                            P::new(Ir::var(handle_var)),
-                                        ))),
+                                        P::new(Ir::new(FieldProj(1, P::new(Ir::var(handle_var))))),
                                     )),
                                     [Ir::var(value_var), Ir::var(kont_var)],
                                 ),
@@ -711,9 +696,7 @@ where
                         self.db.row_fields(&eff_row.fields)[0]
                     }
                     Row::Open(_) => {
-                        unreachable!(
-                            "Handler effect expect to be closed row, found row variable"
-                        )
+                        unreachable!("Handler effect expect to be closed row, found row variable")
                     }
                 };
                 let eff = self
