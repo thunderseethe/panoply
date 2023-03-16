@@ -26,11 +26,13 @@ pub mod indexed {
         pub comma: Option<Span>,
     }
 
+    pub type IdField<T> = Field<SpanOf<Ident>, T>;
+
     /// A product row with values in `T`.
     #[derive(Clone, Debug)]
     pub struct ProductRow<T> {
         pub lbrace: Span,
-        pub fields: Option<Separated<Field<Ident, T>>>,
+        pub fields: Option<Separated<IdField<T>>>,
         pub rbrace: Span,
     }
 
@@ -38,7 +40,7 @@ pub mod indexed {
     #[derive(Clone, Copy, Debug)]
     pub struct SumRow<T> {
         pub langle: Span,
-        pub field: Field<Ident, T>,
+        pub field: IdField<T>,
         pub rangle: Span,
     }
 
@@ -55,7 +57,7 @@ pub mod indexed {
     }
 
     /// A row of types.
-    pub type TypeRow<V> = Row<V, Field<Ident, Idx<Type<V>>>>;
+    pub type TypeRow<V> = Row<V, IdField<Idx<Type<V>>>>;
 
     /// An unqualified Aiahr type.
     #[derive(Clone, Debug)]
@@ -88,7 +90,7 @@ pub mod indexed {
     pub enum RowAtom<V> {
         Concrete {
             lpar: Span,
-            fields: Separated<Field<Ident, Idx<Type<V>>>>,
+            fields: Separated<IdField<Idx<Type<V>>>>,
             rpar: Span,
         },
         Variable(SpanOf<V>),
@@ -149,7 +151,7 @@ pub mod indexed {
     pub type TypeAnnotation<V> = super::Annotation<Idx<Type<V>>>;
 
     /// A scheme annotation.
-    pub type SchemeAnnotation<V> = super::Annotation<Idx<Scheme<V>>>;
+    pub type SchemeAnnotation<V> = super::Annotation<Scheme<V>>;
 
     /// An Aiahr term.
     #[derive(Clone, Debug)]
@@ -218,6 +220,394 @@ pub mod indexed {
             eq: Span,
             value: Idx<Term>,
         },
+    }
+
+    /// Holds references to arenas we need to convert from cst types to these types.
+    pub struct IndexedAllocator<'db> {
+        db: &'db dyn crate::Db,
+        types: Arena<Type<Ident>>,
+        terms: Arena<Term>,
+        pats: Arena<Pattern>,
+    }
+
+    impl IndexedAllocator<'_> {
+        /// Convert a reference arena allocated Item into an index arena allocated Item.
+        pub fn alloc_item(&mut self, item: &super::Item<'_, '_>) -> Item {
+            match item {
+                super::Item::Effect {
+                    effect,
+                    name,
+                    lbrace,
+                    ops,
+                    rbrace,
+                } => Item::Effect {
+                    effect: *effect,
+                    name: self.alloc_ident(name),
+                    lbrace: *lbrace,
+                    ops: ops
+                        .iter()
+                        .map(|effect_op| self.alloc_effect_op(effect_op))
+                        .collect(),
+                    rbrace: *rbrace,
+                },
+                super::Item::Term {
+                    name,
+                    annotation,
+                    eq,
+                    value,
+                } => Item::Term {
+                    name: self.alloc_ident(name),
+                    annotation: annotation.as_ref().map(|ann| {
+                        self.alloc_annotation(ann, |this, scheme| this.alloc_scheme(scheme))
+                    }),
+                    eq: *eq,
+                    value: self.alloc_term(value),
+                },
+            }
+        }
+
+        fn alloc_ident(&self, var: &SpanOf<RefHandle<'_, str>>) -> SpanOf<Ident> {
+            var.map(|v| self.db.ident(v.to_string()))
+        }
+
+        fn alloc_separated<T, U>(
+            &mut self,
+            separated: &super::Separated<T>,
+            mut alloc_elem: impl FnMut(&mut Self, &T) -> U,
+        ) -> Separated<U> {
+            Separated {
+                first: alloc_elem(self, &separated.first),
+                elems: separated
+                    .elems
+                    .iter()
+                    .map(|(span, elem)| (*span, alloc_elem(self, elem)))
+                    .collect(),
+                comma: separated.comma,
+            }
+        }
+
+        fn alloc_id_field<T, U>(
+            &mut self,
+            field: &super::IdField<'_, T>,
+            mut alloc_target: impl FnMut(&mut Self, &T) -> U,
+        ) -> IdField<U> {
+            Field {
+                label: self.alloc_ident(&field.label),
+                sep: field.sep,
+                target: alloc_target(self, &field.target),
+            }
+        }
+
+        fn alloc_separated_id_field<T, U>(
+            &mut self,
+            separated_fields: &super::Separated<super::IdField<T>>,
+            mut alloc_target: impl FnMut(&mut Self, &T) -> U,
+        ) -> Separated<IdField<U>> {
+            self.alloc_separated(separated_fields, |this, field| {
+                this.alloc_id_field(field, &mut alloc_target)
+            })
+        }
+
+        fn alloc_row<'s>(
+            &mut self,
+            row: &super::Row<
+                RefHandle<'s, str>,
+                super::IdField<'s, &super::Type<RefHandle<'s, str>>>,
+            >,
+        ) -> Row<Ident, IdField<Idx<Type<Ident>>>> {
+            match row {
+                super::Row::Concrete(closed_row) => Row::Concrete(
+                    self.alloc_separated_id_field(closed_row, |this, type_| this.alloc_type(type_)),
+                ),
+                super::Row::Variable(open_row) => Row::Variable(
+                    self.alloc_separated(open_row, |this, elem| this.alloc_ident(elem)),
+                ),
+                super::Row::Mixed {
+                    concrete,
+                    vbar,
+                    variables,
+                } => Row::Mixed {
+                    concrete: self
+                        .alloc_separated_id_field(concrete, |this, type_| this.alloc_type(type_)),
+                    vbar: *vbar,
+                    variables: self.alloc_separated(variables, |this, elem| this.alloc_ident(elem)),
+                },
+            }
+        }
+
+        fn alloc_type<'s>(
+            &mut self,
+            type_: &super::Type<'_, 's, RefHandle<'s, str>>,
+        ) -> Idx<Type<Ident>> {
+            let type_ = match type_ {
+                super::Type::Named(ty_var) => Type::Named(self.alloc_ident(ty_var)),
+                super::Type::Sum {
+                    langle,
+                    variants,
+                    rangle,
+                } => Type::Sum {
+                    langle: *langle,
+                    variants: self.alloc_row(variants),
+                    rangle: *rangle,
+                },
+                super::Type::Product {
+                    lbrace,
+                    fields,
+                    rbrace,
+                } => Type::Product {
+                    lbrace: *lbrace,
+                    fields: fields.as_ref().map(|row| self.alloc_row(row)),
+                    rbrace: *rbrace,
+                },
+                super::Type::Function {
+                    domain,
+                    arrow,
+                    codomain,
+                } => Type::Function {
+                    domain: self.alloc_type(domain),
+                    arrow: *arrow,
+                    codomain: self.alloc_type(codomain),
+                },
+                super::Type::Parenthesized { lpar, type_, rpar } => Type::Parenthesized {
+                    lpar: *lpar,
+                    type_: self.alloc_type(type_),
+                    rpar: *rpar,
+                },
+            };
+            self.types.alloc(type_)
+        }
+
+        fn alloc_effect_op<'s>(
+            &mut self,
+            effect_op: &super::EffectOp<'_, 's, RefHandle<'s, str>, RefHandle<'s, str>>,
+        ) -> EffectOp<Ident, Ident> {
+            EffectOp {
+                name: self.alloc_ident(&effect_op.name),
+                colon: effect_op.colon,
+                type_: self.alloc_type(effect_op.type_),
+            }
+        }
+
+        fn alloc_annotation<T, U>(
+            &mut self,
+            ann: &super::Annotation<&T>,
+            mut alloc_type: impl FnMut(&mut Self, &T) -> U,
+        ) -> super::Annotation<U> {
+            super::Annotation {
+                colon: ann.colon,
+                type_: alloc_type(self, ann.type_),
+            }
+        }
+
+        fn alloc_scheme<'s>(
+            &mut self,
+            scheme: &super::Scheme<'_, 's, RefHandle<'s, str>>,
+        ) -> Scheme<Ident> {
+            Scheme {
+                quantifiers: scheme
+                    .quantifiers
+                    .iter()
+                    .map(|quant| self.alloc_quantifier(quant))
+                    .collect(),
+                qualifiers: scheme
+                    .qualifiers
+                    .as_ref()
+                    .map(|quals| self.alloc_qualifiers(quals)),
+                type_: self.alloc_type(scheme.type_),
+            }
+        }
+
+        fn alloc_quantifier(
+            &self,
+            quant: &super::Quantifier<RefHandle<'_, str>>,
+        ) -> Quantifier<Ident> {
+            Quantifier {
+                forall: quant.forall,
+                var: self.alloc_ident(&quant.var),
+                dot: quant.dot,
+            }
+        }
+
+        fn alloc_qualifiers<'s>(
+            &mut self,
+            quals: &super::Qualifiers<'_, 's, RefHandle<'s, str>>,
+        ) -> Qualifiers<Ident> {
+            Qualifiers {
+                constraints: self.alloc_separated(&quals.constraints, |this, constr| {
+                    this.alloc_constraint(constr)
+                }),
+                arrow: quals.arrow,
+            }
+        }
+
+        fn alloc_constraint<'s>(
+            &mut self,
+            constr: &super::Constraint<'_, 's, RefHandle<'s, str>>,
+        ) -> Constraint<Ident> {
+            match constr {
+                super::Constraint::RowSum {
+                    lhs,
+                    plus,
+                    rhs,
+                    eq,
+                    goal,
+                } => Constraint::RowSum {
+                    lhs: self.alloc_row_atom(lhs),
+                    plus: *plus,
+                    rhs: self.alloc_row_atom(rhs),
+                    eq: *eq,
+                    goal: self.alloc_row_atom(goal),
+                },
+            }
+        }
+
+        fn alloc_row_atom<'s>(
+            &mut self,
+            atom: &super::RowAtom<'_, 's, RefHandle<'s, str>>,
+        ) -> RowAtom<Ident> {
+            match atom {
+                super::RowAtom::Concrete { lpar, fields, rpar } => RowAtom::Concrete {
+                    lpar: *lpar,
+                    fields: self
+                        .alloc_separated_id_field(fields, |this, type_| this.alloc_type(type_)),
+                    rpar: *rpar,
+                },
+                super::RowAtom::Variable(var) => RowAtom::Variable(self.alloc_ident(var)),
+            }
+        }
+
+        fn alloc_term(&mut self, term: &super::Term<'_, '_>) -> Idx<Term> {
+            let term = match term {
+                super::Term::Binding {
+                    var,
+                    annotation,
+                    eq,
+                    value,
+                    semi,
+                    expr,
+                } => Term::Binding {
+                    var: self.alloc_ident(var),
+                    annotation: annotation.as_ref().map(|ann| {
+                        self.alloc_annotation(ann, |this, type_| this.alloc_type(type_))
+                    }),
+                    eq: *eq,
+                    value: self.alloc_term(value),
+                    semi: *semi,
+                    expr: self.alloc_term(expr),
+                },
+                super::Term::Handle {
+                    with,
+                    handler,
+                    do_,
+                    expr,
+                } => Term::Handle {
+                    with: *with,
+                    handler: self.alloc_term(handler),
+                    do_: *do_,
+                    expr: self.alloc_term(expr),
+                },
+                super::Term::Abstraction {
+                    lbar,
+                    arg,
+                    annotation,
+                    rbar,
+                    body,
+                } => Term::Abstraction {
+                    lbar: *lbar,
+                    arg: self.alloc_ident(arg),
+                    annotation: annotation.as_ref().map(|ann| {
+                        self.alloc_annotation(ann, |this, type_| this.alloc_type(type_))
+                    }),
+                    rbar: *rbar,
+                    body: self.alloc_term(body),
+                },
+                super::Term::Application {
+                    func,
+                    lpar,
+                    arg,
+                    rpar,
+                } => Term::Application {
+                    func: self.alloc_term(func),
+                    lpar: *lpar,
+                    arg: self.alloc_term(arg),
+                    rpar: *rpar,
+                },
+                super::Term::ProductRow(super::ProductRow {
+                    lbrace,
+                    fields,
+                    rbrace,
+                }) => Term::ProductRow(ProductRow {
+                    lbrace: *lbrace,
+                    fields: fields.as_ref().map(|fields| {
+                        self.alloc_separated_id_field(fields, |this, term| this.alloc_term(term))
+                    }),
+                    rbrace: *rbrace,
+                }),
+                super::Term::SumRow(super::SumRow {
+                    langle,
+                    field,
+                    rangle,
+                }) => Term::SumRow(SumRow {
+                    langle: *langle,
+                    field: self.alloc_id_field(field, |this, term| this.alloc_term(term)),
+                    rangle: *rangle,
+                }),
+                super::Term::DotAccess { base, dot, field } => Term::DotAccess {
+                    base: self.alloc_term(base),
+                    dot: *dot,
+                    field: self.alloc_ident(field),
+                },
+                super::Term::Match {
+                    match_,
+                    langle,
+                    cases,
+                    rangle,
+                } => Term::Match {
+                    match_: *match_,
+                    langle: *langle,
+                    cases: self.alloc_separated(cases, |this, field| Field {
+                        label: this.alloc_pattern(&field.label),
+                        sep: field.sep,
+                        target: this.alloc_term(&field.target),
+                    }),
+                    rangle: *rangle,
+                },
+                super::Term::SymbolRef(symbol) => Term::SymbolRef(self.alloc_ident(symbol)),
+                super::Term::Parenthesized { lpar, term, rpar } => Term::Parenthesized {
+                    lpar: *lpar,
+                    term: self.alloc_term(term),
+                    rpar: *rpar,
+                },
+            };
+            self.terms.alloc(term)
+        }
+
+        fn alloc_pattern(&mut self, pat: &super::Pattern<'_, '_>) -> Idx<Pattern> {
+            let pat = match pat {
+                super::Pattern::ProductRow(super::ProductRow {
+                    lbrace,
+                    fields,
+                    rbrace,
+                }) => Pattern::ProductRow(ProductRow {
+                    lbrace: *lbrace,
+                    fields: fields.as_ref().map(|fields| {
+                        self.alloc_separated_id_field(fields, |this, pat| this.alloc_pattern(pat))
+                    }),
+                    rbrace: *rbrace,
+                }),
+                super::Pattern::SumRow(super::SumRow {
+                    langle,
+                    field,
+                    rangle,
+                }) => Pattern::SumRow(SumRow {
+                    langle: *langle,
+                    field: self.alloc_id_field(field, |this, pat| this.alloc_pattern(pat)),
+                    rangle: *rangle,
+                }),
+                super::Pattern::Whole(var) => Pattern::Whole(self.alloc_ident(var)),
+            };
+            self.pats.alloc(pat)
+        }
     }
 }
 
