@@ -5,6 +5,222 @@ use crate::{
     span::{Span, SpanOf, Spanned},
 };
 
+pub mod indexed {
+    //! Variant of the same data types as cst but using owned data and indexed arenas instead of
+    //! reference arenas. This is to ease the transition to Salsa.
+
+    use la_arena::{Arena, Idx};
+
+    use crate::ident::Ident;
+    use crate::memory::handle::RefHandle;
+    use crate::span::{Span, SpanOf};
+
+    use super::Field;
+
+    /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
+    /// `Option`.
+    #[derive(Clone, Debug)]
+    pub struct Separated<T> {
+        pub first: T,
+        pub elems: Vec<(Span, T)>,
+        pub comma: Option<Span>,
+    }
+
+    /// A product row with values in `T`.
+    #[derive(Clone, Debug)]
+    pub struct ProductRow<T> {
+        pub lbrace: Span,
+        pub fields: Option<Separated<Field<Ident, T>>>,
+        pub rbrace: Span,
+    }
+
+    /// A sum row with value in `T`.
+    #[derive(Clone, Copy, Debug)]
+    pub struct SumRow<T> {
+        pub langle: Span,
+        pub field: Field<Ident, T>,
+        pub rangle: Span,
+    }
+
+    /// A non-empty row with concrete fields in `C` and variables in `V`.
+    #[derive(Clone, Debug)]
+    pub enum Row<V, C> {
+        Concrete(Separated<C>),
+        Variable(Separated<SpanOf<V>>),
+        Mixed {
+            concrete: Separated<C>,
+            vbar: Span,
+            variables: Separated<SpanOf<V>>,
+        },
+    }
+
+    /// A row of types.
+    pub type TypeRow<V> = Row<V, Field<Ident, Idx<Type<V>>>>;
+
+    /// An unqualified Aiahr type.
+    #[derive(Clone, Debug)]
+    pub enum Type<V> {
+        Named(SpanOf<V>),
+        Sum {
+            langle: Span,
+            variants: TypeRow<V>,
+            rangle: Span,
+        },
+        Product {
+            lbrace: Span,
+            fields: Option<TypeRow<V>>,
+            rbrace: Span,
+        },
+        Function {
+            domain: Idx<Self>,
+            arrow: Span,
+            codomain: Idx<Self>,
+        },
+        Parenthesized {
+            lpar: Span,
+            type_: Idx<Self>,
+            rpar: Span,
+        },
+    }
+
+    /// An atomic row for use in a type constraint.
+    #[derive(Clone, Debug)]
+    pub enum RowAtom<V> {
+        Concrete {
+            lpar: Span,
+            fields: Separated<Field<Ident, Idx<Type<V>>>>,
+            rpar: Span,
+        },
+        Variable(SpanOf<V>),
+    }
+
+    /// A type constraint.
+    #[derive(Clone, Debug)]
+    pub enum Constraint<V> {
+        RowSum {
+            lhs: RowAtom<V>,
+            plus: Span,
+            rhs: RowAtom<V>,
+            eq: Span,
+            goal: RowAtom<V>,
+        },
+    }
+
+    /// A quantifier for a polytype.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Quantifier<V> {
+        pub forall: Span,
+        pub var: SpanOf<V>,
+        pub dot: Span,
+    }
+
+    /// A qualifiers for a type.
+    #[derive(Clone, Debug)]
+    pub struct Qualifiers<V> {
+        pub constraints: Separated<Constraint<V>>,
+        pub arrow: Span,
+    }
+
+    /// A polymorphic Aiahr type.
+    #[derive(Clone, Debug)]
+    pub struct Scheme<V> {
+        pub quantifiers: Vec<Quantifier<V>>,
+        pub qualifiers: Option<Qualifiers<V>>,
+        pub type_: Idx<Type<V>>,
+    }
+
+    /// An effect operation.
+    #[derive(Clone, Debug)]
+    pub struct EffectOp<O, V> {
+        pub name: SpanOf<O>,
+        pub colon: Span,
+        pub type_: Idx<Type<V>>,
+    }
+
+    /// An Aiahr pattern.
+    #[derive(Clone, Debug)]
+    pub enum Pattern {
+        ProductRow(ProductRow<Idx<Self>>),
+        SumRow(SumRow<Idx<Self>>),
+        Whole(SpanOf<Ident>),
+    }
+
+    /// A monotype annotation.
+    pub type TypeAnnotation<V> = super::Annotation<Idx<Type<V>>>;
+
+    /// A scheme annotation.
+    pub type SchemeAnnotation<V> = super::Annotation<Idx<Scheme<V>>>;
+
+    /// An Aiahr term.
+    #[derive(Clone, Debug)]
+    pub enum Term {
+        Binding {
+            var: SpanOf<Ident>,
+            annotation: Option<TypeAnnotation<Ident>>,
+            eq: Span,
+            value: Idx<Self>,
+            semi: Span,
+            expr: Idx<Self>,
+        },
+        Handle {
+            with: Span,
+            handler: Idx<Self>,
+            do_: Span,
+            expr: Idx<Self>,
+        },
+        Abstraction {
+            lbar: Span,
+            arg: SpanOf<Ident>,
+            annotation: Option<TypeAnnotation<Ident>>,
+            rbar: Span,
+            body: Idx<Self>,
+        },
+        Application {
+            func: Idx<Self>,
+            lpar: Span,
+            arg: Idx<Self>,
+            rpar: Span,
+        },
+        ProductRow(ProductRow<Idx<Self>>),
+        SumRow(SumRow<Idx<Self>>),
+        DotAccess {
+            base: Idx<Self>,
+            dot: Span,
+            field: SpanOf<Ident>,
+        },
+        Match {
+            match_: Span,
+            langle: Span,
+            cases: Separated<Field<Idx<Pattern>, Idx<Self>>>,
+            rangle: Span,
+        },
+        SymbolRef(SpanOf<Ident>),
+        Parenthesized {
+            lpar: Span,
+            term: Idx<Self>,
+            rpar: Span,
+        },
+    }
+
+    /// A top-level item in an Aiahr source file.
+    #[derive(Clone, Debug)]
+    pub enum Item {
+        Effect {
+            effect: Span,
+            name: SpanOf<Ident>,
+            lbrace: Span,
+            ops: Vec<EffectOp<Ident, Ident>>,
+            rbrace: Span,
+        },
+        Term {
+            name: SpanOf<Ident>,
+            annotation: Option<SchemeAnnotation<Ident>>,
+            eq: Span,
+            value: Idx<Term>,
+        },
+    }
+}
+
 /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
 /// `Option`.
 #[derive(Clone, Copy, Debug)]
