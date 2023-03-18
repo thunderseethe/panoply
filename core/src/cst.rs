@@ -9,10 +9,10 @@ pub mod indexed {
     //! Variant of the same data types as cst but using owned data and indexed arenas instead of
     //! reference arenas. This is to ease the transition to Salsa.
 
-    use la_arena::{Arena, Idx};
+    use la_arena::Idx;
 
     use crate::ident::Ident;
-    use crate::memory::handle::RefHandle;
+    use crate::indexed::{HasArena, IndexedAllocate, IndexedAllocator};
     use crate::span::{Span, SpanOf};
 
     use super::{Annotation, Field};
@@ -214,40 +214,18 @@ pub mod indexed {
         },
     }
 
-    /// Holds references to arenas we need to convert from cst types to these types.
-    pub struct IndexedAllocator<'db> {
-        db: &'db dyn crate::Db,
-        types: Arena<Type<Ident>>,
-        terms: Arena<Term>,
-        pats: Arena<Pattern>,
-    }
-
-    pub trait IndexedAllocate {
-        type Out;
-
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out;
-    }
-
-    impl<T: IndexedAllocate> IndexedAllocate for &T {
-        type Out = T::Out;
-
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
-            T::alloc(*self, alloc)
-        }
-    }
-
-    impl IndexedAllocate for RefHandle<'_, str> {
+    impl IndexedAllocate for Ident {
         type Out = Ident;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
-            alloc.db.ident(self.to_string())
+        fn alloc<'db>(&self, _: &mut IndexedAllocator) -> Self::Out {
+            *self
         }
     }
 
     impl<T: IndexedAllocate> IndexedAllocate for Option<T> {
         type Out = Option<T::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             self.as_ref().map(|t| t.alloc(alloc))
         }
     }
@@ -255,7 +233,7 @@ pub mod indexed {
     impl<V: IndexedAllocate> IndexedAllocate for SpanOf<V> {
         type Out = SpanOf<V::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             SpanOf {
                 start: self.start,
                 value: self.value.alloc(alloc),
@@ -267,7 +245,7 @@ pub mod indexed {
     impl<T: IndexedAllocate> IndexedAllocate for super::Separated<'_, T> {
         type Out = Separated<T::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             Separated {
                 first: self.first.alloc(alloc),
                 elems: self
@@ -283,7 +261,7 @@ pub mod indexed {
     impl<L: IndexedAllocate, T: IndexedAllocate> IndexedAllocate for super::Field<L, T> {
         type Out = Field<L::Out, T::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             Field {
                 label: self.label.alloc(alloc),
                 sep: self.sep,
@@ -295,7 +273,7 @@ pub mod indexed {
     impl<V: IndexedAllocate, C: IndexedAllocate> IndexedAllocate for super::Row<'_, V, C> {
         type Out = Row<V::Out, C::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             match self {
                 super::Row::Concrete(concrete) => Row::Concrete(concrete.alloc(alloc)),
                 super::Row::Variable(vars) => Row::Variable(vars.alloc(alloc)),
@@ -312,10 +290,13 @@ pub mod indexed {
         }
     }
 
-    impl<'a, 's> IndexedAllocate for &super::Type<'a, 's, RefHandle<'s, str>> {
-        type Out = Idx<Type<Ident>>;
+    impl<'a, V: IndexedAllocate> IndexedAllocate for super::Type<'a, V>
+    where
+        IndexedAllocator: HasArena<Type<V::Out>>,
+    {
+        type Out = Idx<Type<V::Out>>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             let ty = match self {
                 super::Type::Named(var) => Type::Named(var.alloc(alloc)),
                 super::Type::Sum {
@@ -351,14 +332,17 @@ pub mod indexed {
                     rpar: *rpar,
                 },
             };
-            alloc.types.alloc(ty)
+            alloc.arena().alloc(ty)
         }
     }
 
-    impl<'s, O: IndexedAllocate> IndexedAllocate for super::EffectOp<'_, 's, O, RefHandle<'s, str>> {
-        type Out = EffectOp<O::Out, Ident>;
+    impl<'a, O: IndexedAllocate, V: IndexedAllocate> IndexedAllocate for super::EffectOp<'_, O, V>
+    where
+        IndexedAllocator: HasArena<Type<V::Out>>,
+    {
+        type Out = EffectOp<O::Out, V::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             EffectOp {
                 name: self.name.alloc(alloc),
                 colon: self.colon,
@@ -370,7 +354,7 @@ pub mod indexed {
     impl<T: IndexedAllocate> IndexedAllocate for super::Annotation<T> {
         type Out = super::Annotation<T::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             Annotation {
                 colon: self.colon,
                 type_: self.type_.alloc(alloc),
@@ -378,10 +362,13 @@ pub mod indexed {
         }
     }
 
-    impl<'a, 's> IndexedAllocate for &super::Scheme<'a, 's, RefHandle<'s, str>> {
-        type Out = Scheme<Ident>;
+    impl<'a, V: IndexedAllocate> IndexedAllocate for super::Scheme<'a, V>
+    where
+        IndexedAllocator: HasArena<Type<V::Out>>,
+    {
+        type Out = Scheme<V::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             Scheme {
                 quantifiers: self
                     .quantifiers
@@ -397,7 +384,7 @@ pub mod indexed {
     impl<V: IndexedAllocate> IndexedAllocate for super::Quantifier<V> {
         type Out = super::Quantifier<V::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             super::Quantifier {
                 forall: self.forall,
                 var: self.var.alloc(alloc),
@@ -405,10 +392,14 @@ pub mod indexed {
             }
         }
     }
-    impl<'s> IndexedAllocate for super::Qualifiers<'_, 's, RefHandle<'s, str>> {
-        type Out = Qualifiers<Ident>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+    impl<V: IndexedAllocate> IndexedAllocate for super::Qualifiers<'_, V>
+    where
+        IndexedAllocator: HasArena<Type<V::Out>>,
+    {
+        type Out = Qualifiers<V::Out>;
+
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             Qualifiers {
                 constraints: self.constraints.alloc(alloc),
                 arrow: self.arrow,
@@ -416,10 +407,13 @@ pub mod indexed {
         }
     }
 
-    impl<'s> IndexedAllocate for super::Constraint<'_, 's, RefHandle<'s, str>> {
-        type Out = Constraint<Ident>;
+    impl<V: IndexedAllocate> IndexedAllocate for super::Constraint<'_, V>
+    where
+        IndexedAllocator: HasArena<Type<V::Out>>,
+    {
+        type Out = Constraint<V::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             match self {
                 super::Constraint::RowSum {
                     lhs,
@@ -438,10 +432,13 @@ pub mod indexed {
         }
     }
 
-    impl<'s> IndexedAllocate for super::RowAtom<'_, 's, RefHandle<'s, str>> {
-        type Out = RowAtom<Ident>;
+    impl<V: IndexedAllocate> IndexedAllocate for super::RowAtom<'_, V>
+    where
+        IndexedAllocator: HasArena<Type<V::Out>>,
+    {
+        type Out = RowAtom<V::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             match self {
                 super::RowAtom::Concrete { lpar, fields, rpar } => RowAtom::Concrete {
                     lpar: *lpar,
@@ -453,10 +450,10 @@ pub mod indexed {
         }
     }
 
-    impl IndexedAllocate for &super::Term<'_, '_> {
+    impl IndexedAllocate for super::Term<'_> {
         type Out = Idx<Term>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             let term = match self {
                 super::Term::Binding {
                     var,
@@ -533,14 +530,14 @@ pub mod indexed {
                     rpar: *rpar,
                 },
             };
-            alloc.terms.alloc(term)
+            alloc.arena().alloc(term)
         }
     }
 
-    impl<T: IndexedAllocate> IndexedAllocate for super::SumRow<'_, T> {
+    impl<T: IndexedAllocate> IndexedAllocate for super::SumRow<T> {
         type Out = SumRow<T::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             SumRow {
                 langle: self.langle,
                 field: self.field.alloc(alloc),
@@ -549,10 +546,10 @@ pub mod indexed {
         }
     }
 
-    impl<T: IndexedAllocate> IndexedAllocate for super::ProductRow<'_, '_, T> {
+    impl<T: IndexedAllocate> IndexedAllocate for super::ProductRow<'_, T> {
         type Out = ProductRow<T::Out>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             ProductRow {
                 lbrace: self.lbrace,
                 fields: self.fields.alloc(alloc),
@@ -561,23 +558,23 @@ pub mod indexed {
         }
     }
 
-    impl IndexedAllocate for &super::Pattern<'_, '_> {
+    impl IndexedAllocate for &super::Pattern<'_> {
         type Out = Idx<Pattern>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             let pat = match self {
                 super::Pattern::ProductRow(prod) => Pattern::ProductRow(prod.alloc(alloc)),
                 super::Pattern::SumRow(sum) => Pattern::SumRow(sum.alloc(alloc)),
                 super::Pattern::Whole(var) => Pattern::Whole(var.alloc(alloc)),
             };
-            alloc.pats.alloc(pat)
+            alloc.arena().alloc(pat)
         }
     }
 
-    impl IndexedAllocate for super::Item<'_, '_> {
+    impl IndexedAllocate for super::Item<'_> {
         type Out = Item;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             match self {
                 super::Item::Effect {
                     effect,

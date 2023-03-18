@@ -5,6 +5,7 @@ mod display_iter;
 pub mod displayer;
 pub mod graph;
 pub mod id;
+pub mod indexed;
 pub mod ir;
 pub mod loc;
 pub mod memory;

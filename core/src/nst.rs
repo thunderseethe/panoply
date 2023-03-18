@@ -8,14 +8,13 @@ use crate::{
 pub mod indexed {
     use la_arena::Idx;
 
-    use crate::cst;
     use crate::cst::indexed::{
-        EffectOp, IndexedAllocate, IndexedAllocator, ProductRow, SchemeAnnotation, Separated,
-        SumRow, TypeAnnotation,
+        EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation,
     };
     use crate::cst::Field;
     use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
     use crate::ident::Ident;
+    use crate::indexed::{HasArena, IndexedAllocate, IndexedAllocator};
     use crate::span::{Span, SpanOf};
 
     /// A pattern with names resolved.
@@ -97,34 +96,125 @@ pub mod indexed {
         },
     }
 
-    impl IndexedAllocate for cst::EffectOp<'_, '_, EffectOpId, TyVarId> {
-        type Out = cst::indexed::EffectOp<EffectOpId, TyVarId>;
+    impl IndexedAllocate for EffectOpId {
+        type Out = EffectOpId;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
-            todo!()
+        fn alloc<'db>(&self, _: &mut IndexedAllocator) -> Self::Out {
+            *self
         }
     }
 
-    impl IndexedAllocate for super::Term<'_, '_> {
+    impl IndexedAllocate for TyVarId {
+        type Out = TyVarId;
+
+        fn alloc<'db>(&self, _: &mut IndexedAllocator) -> Self::Out {
+            *self
+        }
+    }
+
+    impl IndexedAllocate for super::Pattern<'_> {
+        type Out = Idx<Pattern>;
+
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
+            let pat = match self {
+                super::Pattern::ProductRow(prod) => Pattern::ProductRow(prod.alloc(alloc)),
+                super::Pattern::SumRow(sum) => Pattern::SumRow(sum.alloc(alloc)),
+                super::Pattern::Whole(var) => Pattern::Whole(*var),
+            };
+            alloc.arena().alloc(pat)
+        }
+    }
+
+    impl IndexedAllocate for super::Term<'_> {
         type Out = Idx<Term>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
-            todo!()
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
+            let term = match self {
+                super::Term::Binding {
+                    var,
+                    annotation,
+                    eq,
+                    value,
+                    semi,
+                    expr,
+                } => Term::Binding {
+                    var: *var,
+                    annotation: annotation.alloc(alloc),
+                    eq: *eq,
+                    value: value.alloc(alloc),
+                    semi: *semi,
+                    expr: expr.alloc(alloc),
+                },
+                super::Term::Handle {
+                    with,
+                    handler,
+                    do_,
+                    expr,
+                } => Term::Handle {
+                    with: *with,
+                    handler: handler.alloc(alloc),
+                    do_: *do_,
+                    expr: expr.alloc(alloc),
+                },
+                super::Term::Abstraction {
+                    lbar,
+                    arg,
+                    annotation,
+                    rbar,
+                    body,
+                } => Term::Abstraction {
+                    lbar: *lbar,
+                    arg: *arg,
+                    annotation: annotation.alloc(alloc),
+                    rbar: *rbar,
+                    body: body.alloc(alloc),
+                },
+                super::Term::Application {
+                    func,
+                    lpar,
+                    arg,
+                    rpar,
+                } => Term::Application {
+                    func: func.alloc(alloc),
+                    lpar: *lpar,
+                    arg: arg.alloc(alloc),
+                    rpar: *rpar,
+                },
+                super::Term::ProductRow(prod) => Term::ProductRow(prod.alloc(alloc)),
+                super::Term::SumRow(sum) => Term::SumRow(sum.alloc(alloc)),
+                super::Term::FieldAccess { base, dot, field } => Term::FieldAccess {
+                    base: base.alloc(alloc),
+                    dot: *dot,
+                    field: field.alloc(alloc),
+                },
+                super::Term::Match {
+                    match_,
+                    langle,
+                    cases,
+                    rangle,
+                } => Term::Match {
+                    match_: *match_,
+                    langle: *langle,
+                    cases: cases.alloc(alloc),
+                    rangle: *rangle,
+                },
+                super::Term::Parenthesized { lpar, term, rpar } => Term::Parenthesized {
+                    lpar: *lpar,
+                    term: term.alloc(alloc),
+                    rpar: *rpar,
+                },
+                super::Term::EffectOpRef(ids) => Term::EffectOpRef(*ids),
+                super::Term::ItemRef(id) => Term::ItemRef(*id),
+                super::Term::VariableRef(id) => Term::VariableRef(*id),
+            };
+            alloc.arena().alloc(term)
         }
     }
 
-    impl IndexedAllocate for cst::Scheme<'_, '_, TyVarId> {
-        type Out = cst::indexed::Scheme<TyVarId>;
-
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
-            todo!()
-        }
-    }
-
-    impl IndexedAllocate for super::Item<'_, '_> {
+    impl IndexedAllocate for super::Item<'_> {
         type Out = Item;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
             match self {
                 super::Item::Effect {
                     effect,
