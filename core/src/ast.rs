@@ -3,6 +3,138 @@ use crate::ident::Ident;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
 
+pub mod indexed {
+    use la_arena::Idx;
+    use rustc_hash::FxHashMap;
+
+    use crate::id::{EffectOpId, ItemId, ModuleId};
+    use crate::ident::Ident;
+    use crate::indexed::{HasArena, IndexedAllocate, IndexedAllocator};
+    use crate::span::Span;
+
+    use super::Direction;
+
+    /// A Term of the AST
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub enum Term<Var> {
+        // Function abstraction, a closure, a lambda etc.
+        Abstraction {
+            arg: Var,
+            body: Idx<Self>,
+        },
+        // Function application
+        Application {
+            func: Idx<Self>,
+            arg: Idx<Self>,
+        },
+        // A local variable binding
+        Variable(Var),
+        Int(usize),
+        // A global variable binding
+        Item((ModuleId, ItemId)),
+        // A unit value
+        // Because all products are represented in terms of concat, we don't actually have a way to
+        // represent unit at this level
+        Unit,
+        // Label a term, used in construction of Product and Sum types.
+        Label {
+            label: Ident,
+            term: Idx<Self>,
+        },
+        // Unlabel a term, this is used to project a product into one of it's fields.
+        Unlabel {
+            label: Ident,
+            term: Idx<Self>,
+        },
+        // Concat two rows into a larger row
+        Concat {
+            left: Idx<Self>,
+            right: Idx<Self>,
+        },
+        // Project a product out into a subproduct
+        Project {
+            direction: Direction,
+            term: Idx<Self>,
+        },
+        Branch {
+            left: Idx<Self>,
+            right: Idx<Self>,
+        },
+        Inject {
+            direction: Direction,
+            term: Idx<Self>,
+        },
+        // An effect operation
+        Operation(EffectOpId),
+        Handle {
+            handler: Idx<Self>,
+            body: Idx<Self>,
+        },
+    }
+
+    impl<Var: IndexedAllocate> IndexedAllocate for super::Term<'_, Var>
+    where
+        IndexedAllocator: HasArena<Term<Var::Out>>,
+    {
+        type Out = Idx<Term<Var::Out>>;
+
+        fn alloc<'db>(&self, alloc: &mut crate::indexed::IndexedAllocator) -> Self::Out {
+            let term = match self {
+                super::Term::Abstraction { arg, body } => Term::Abstraction {
+                    arg: arg.alloc(alloc),
+                    body: body.alloc(alloc),
+                },
+                super::Term::Application { func, arg } => Term::Application {
+                    func: func.alloc(alloc),
+                    arg: arg.alloc(alloc),
+                },
+                super::Term::Variable(var) => Term::Variable(var.alloc(alloc)),
+                super::Term::Int(i) => Term::Int(*i),
+                super::Term::Item(ids) => Term::Item(*ids),
+                super::Term::Unit => Term::Unit,
+                super::Term::Label { label, term } => Term::Label {
+                    label: *label,
+                    term: term.alloc(alloc),
+                },
+                super::Term::Unlabel { label, term } => Term::Unlabel {
+                    label: *label,
+                    term: term.alloc(alloc),
+                },
+                super::Term::Concat { left, right } => Term::Concat {
+                    left: left.alloc(alloc),
+                    right: right.alloc(alloc),
+                },
+                super::Term::Project { direction, term } => Term::Project {
+                    direction: *direction,
+                    term: term.alloc(alloc),
+                },
+                super::Term::Branch { left, right } => Term::Branch {
+                    left: left.alloc(alloc),
+                    right: right.alloc(alloc),
+                },
+                super::Term::Inject { direction, term } => Term::Inject {
+                    direction: *direction,
+                    term: term.alloc(alloc),
+                },
+                super::Term::Operation(ids) => Term::Operation(*ids),
+                super::Term::Handle { handler, body } => Term::Handle {
+                    handler: handler.alloc(alloc),
+                    body: body.alloc(alloc),
+                },
+            };
+            alloc.arena().alloc(term)
+        }
+    }
+
+    /// Abstract Syntax Tree (AST)
+    pub struct Ast<Var> {
+        // We store spans of the Ast out of band because we won't need them for most operations.
+        // TODO: Figure out how to populate this field.
+        spans: FxHashMap<Idx<Term<Var>>, Span>,
+        pub tree: Idx<Term<Var>>,
+    }
+}
+
 /// Abstract Syntax Tree (AST)
 pub struct Ast<'a, Var> {
     // We store spans of the Ast out of band because we won't need them for most operations

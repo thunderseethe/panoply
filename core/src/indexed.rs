@@ -1,7 +1,7 @@
 use la_arena::Arena;
 
 use crate::cst::indexed::Type;
-use crate::id::TyVarId;
+use crate::id::{TyVarId, VarId};
 use crate::ident::Ident;
 
 /// Holds references to arenas we need to convert from cst types to these types.
@@ -11,6 +11,7 @@ pub struct IndexedAllocator {
     nst_types: Arena<Type<TyVarId>>,
     cst_terms: Arena<crate::cst::indexed::Term>,
     nst_terms: Arena<crate::nst::indexed::Term>,
+    ast_terms: Arena<crate::ast::indexed::Term<VarId>>,
     cst_pats: Arena<crate::cst::indexed::Pattern>,
     nst_pats: Arena<crate::nst::indexed::Pattern>,
 }
@@ -40,6 +41,12 @@ impl HasArena<crate::cst::indexed::Term> for IndexedAllocator {
 impl HasArena<crate::nst::indexed::Term> for IndexedAllocator {
     fn arena(&mut self) -> &mut Arena<crate::nst::indexed::Term> {
         &mut self.nst_terms
+    }
+}
+
+impl HasArena<crate::ast::indexed::Term<VarId>> for IndexedAllocator {
+    fn arena(&mut self) -> &mut Arena<crate::ast::indexed::Term<VarId>> {
+        &mut self.ast_terms
     }
 }
 
