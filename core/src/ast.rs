@@ -4,7 +4,9 @@ use crate::span::Span;
 use rustc_hash::FxHashMap;
 
 pub mod indexed {
-    use la_arena::Idx;
+    use std::hash::Hash;
+
+    use la_arena::{Arena, Idx};
     use rustc_hash::FxHashMap;
 
     use crate::id::{EffectOpId, ItemId, ModuleId};
@@ -13,6 +15,17 @@ pub mod indexed {
     use crate::span::Span;
 
     use super::Direction;
+
+    pub struct AstIndxAlloc<'b, 'a, Var> {
+        terms: Arena<Term<Var>>,
+        ref_spans: &'b FxHashMap<&'a super::Term<'a, Var>, Span>,
+        idx_spans: FxHashMap<Idx<Term<Var>>, Span>,
+    }
+    impl<Var> HasArena<Term<Var>> for AstIndxAlloc<'_, '_, Var> {
+        fn arena(&mut self) -> &mut Arena<Term<Var>> {
+            &mut self.terms
+        }
+    }
 
     /// A Term of the AST
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -72,23 +85,23 @@ pub mod indexed {
         },
     }
 
-    impl<A, Var: IndexedAllocate<A>> IndexedAllocate<A> for super::Term<'_, Var>
-    where
-        A: HasArena<Term<Var::Out>>,
+    impl<'a, Var: Copy + Eq + Hash> IndexedAllocate<AstIndxAlloc<'_, 'a, Var>>
+        for &'a super::Term<'a, Var>
     {
-        type Out = Idx<Term<Var::Out>>;
+        type Out = Idx<Term<Var>>;
 
-        fn alloc<'db>(&self, alloc: &mut A) -> Self::Out {
+        fn alloc(&self, alloc: &mut AstIndxAlloc<'_, 'a, Var>) -> Self::Out {
+            let span = alloc.ref_spans[*self];
             let term = match self {
                 super::Term::Abstraction { arg, body } => Term::Abstraction {
-                    arg: arg.alloc(alloc),
+                    arg: *arg,
                     body: body.alloc(alloc),
                 },
                 super::Term::Application { func, arg } => Term::Application {
                     func: func.alloc(alloc),
                     arg: arg.alloc(alloc),
                 },
-                super::Term::Variable(var) => Term::Variable(var.alloc(alloc)),
+                super::Term::Variable(var) => Term::Variable(*var),
                 super::Term::Int(i) => Term::Int(*i),
                 super::Term::Item(ids) => Term::Item(*ids),
                 super::Term::Unit => Term::Unit,
@@ -122,16 +135,32 @@ pub mod indexed {
                     body: body.alloc(alloc),
                 },
             };
-            alloc.arena().alloc(term)
+            let idx = alloc.arena().alloc(term);
+            alloc.idx_spans.insert(idx, span);
+            idx
         }
     }
 
     /// Abstract Syntax Tree (AST)
     pub struct Ast<Var> {
         // We store spans of the Ast out of band because we won't need them for most operations.
-        // TODO: Figure out how to populate this field.
-        spans: FxHashMap<Idx<Term<Var>>, Span>,
+        pub spans: FxHashMap<Idx<Term<Var>>, Span>,
         pub tree: Idx<Term<Var>>,
+    }
+
+    impl<'a, Var: Copy + Eq + Hash> From<&super::Ast<'a, Var>> for Ast<Var> {
+        fn from(value: &super::Ast<'a, Var>) -> Self {
+            let mut alloc = AstIndxAlloc {
+                terms: Arena::default(),
+                ref_spans: &value.spans,
+                idx_spans: FxHashMap::default(),
+            };
+            let tree = value.tree.alloc(&mut alloc);
+            Ast {
+                spans: alloc.idx_spans,
+                tree,
+            }
+        }
     }
 }
 

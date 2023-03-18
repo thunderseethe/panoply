@@ -6,16 +6,38 @@ use crate::{
 };
 
 pub mod indexed {
-    use la_arena::Idx;
+    use la_arena::{Arena, Idx};
 
     use crate::cst::indexed::{
-        EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation,
+        EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation,
     };
     use crate::cst::Field;
     use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
     use crate::ident::Ident;
-    use crate::indexed::{HasArena, IndexedAllocate, IndexedAllocator};
+    use crate::indexed::{HasArena, IndexedAllocate};
     use crate::span::{Span, SpanOf};
+
+    #[derive(Default)]
+    pub struct NstIndxAlloc {
+        types: Arena<Type<TyVarId>>,
+        terms: Arena<Term>,
+        pats: Arena<Pattern>,
+    }
+    impl HasArena<Type<TyVarId>> for NstIndxAlloc {
+        fn arena(&mut self) -> &mut Arena<Type<TyVarId>> {
+            &mut self.types
+        }
+    }
+    impl HasArena<Term> for NstIndxAlloc {
+        fn arena(&mut self) -> &mut Arena<Term> {
+            &mut self.terms
+        }
+    }
+    impl HasArena<Pattern> for NstIndxAlloc {
+        fn arena(&mut self) -> &mut Arena<Pattern> {
+            &mut self.pats
+        }
+    }
 
     /// A pattern with names resolved.
     #[derive(Clone, Debug)]
@@ -99,7 +121,7 @@ pub mod indexed {
     impl<A> IndexedAllocate<A> for EffectOpId {
         type Out = EffectOpId;
 
-        fn alloc<'db>(&self, _: &mut A) -> Self::Out {
+        fn alloc(&self, _: &mut A) -> Self::Out {
             *self
         }
     }
@@ -107,7 +129,7 @@ pub mod indexed {
     impl<A> IndexedAllocate<A> for TyVarId {
         type Out = TyVarId;
 
-        fn alloc<'db>(&self, _: &mut A) -> Self::Out {
+        fn alloc(&self, _: &mut A) -> Self::Out {
             *self
         }
     }
@@ -118,7 +140,7 @@ pub mod indexed {
     {
         type Out = Idx<Pattern>;
 
-        fn alloc<'db>(&self, alloc: &mut A) -> Self::Out {
+        fn alloc(&self, alloc: &mut A) -> Self::Out {
             let pat = match self {
                 super::Pattern::ProductRow(prod) => Pattern::ProductRow(prod.alloc(alloc)),
                 super::Pattern::SumRow(sum) => Pattern::SumRow(sum.alloc(alloc)),
@@ -128,10 +150,10 @@ pub mod indexed {
         }
     }
 
-    impl IndexedAllocate<IndexedAllocator> for super::Term<'_> {
+    impl IndexedAllocate<NstIndxAlloc> for super::Term<'_> {
         type Out = Idx<Term>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
+        fn alloc(&self, alloc: &mut NstIndxAlloc) -> Self::Out {
             let term = match self {
                 super::Term::Binding {
                     var,
@@ -214,10 +236,10 @@ pub mod indexed {
         }
     }
 
-    impl IndexedAllocate<IndexedAllocator> for super::Item<'_> {
+    impl IndexedAllocate<NstIndxAlloc> for super::Item<'_> {
         type Out = Item;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
+        fn alloc(&self, alloc: &mut NstIndxAlloc) -> Self::Out {
             match self {
                 super::Item::Effect {
                     effect,
