@@ -752,8 +752,7 @@ mod tests {
         ));
         let arena: pretty::Arena<'_, ()> = pretty::Arena::new();
         let mut out = String::new();
-        (&ty)
-            .pretty(&arena, &db)
+        ty.pretty(&arena, &db)
             .into_doc()
             .render_fmt(32, &mut out)
             .unwrap();
@@ -763,8 +762,7 @@ mod tests {
   -> tv<0>"#
         );
         let mut out = String::new();
-        (&ty)
-            .pretty(&arena, &db)
+        ty.pretty(&arena, &db)
             .into_doc()
             .render_fmt(10, &mut out)
             .unwrap();

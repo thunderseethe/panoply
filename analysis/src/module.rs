@@ -162,7 +162,7 @@ impl ModuleNames {
     }
 
     /// Finds the correct ID associated with the given string.
-    pub fn find<'a>(&'a self, name: Ident) -> impl 'a + Iterator<Item = SpanOf<ModuleName>> {
+    pub fn find(&self, name: Ident) -> impl '_ + Iterator<Item = SpanOf<ModuleName>> {
         self.names
             .get(&name)
             .into_iter()

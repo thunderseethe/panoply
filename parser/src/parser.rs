@@ -4,8 +4,8 @@ use aiahr_core::{
         Quantifier, Row, RowAtom, Scheme, Separated, SumRow, Term, Type, TypeAnnotation,
     },
     diagnostic::parser::ParseErrors,
+    ident::Ident,
     loc::Loc,
-    memory::handle::RefHandle,
     span::{Span, SpanOf, Spanned},
     token::Token,
 };
@@ -18,20 +18,17 @@ use chumsky::{
 use crate::expr::{infixr1, postfix, prefix};
 
 /// A trait alias for a cloneable parser for Aiahr syntax.
-pub trait AiahrParser<'s, T>: Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>> {}
-impl<'s, T, A> AiahrParser<'s, T> for A where
-    A: Clone + Parser<Token<'s>, T, Error = ParseErrors<'s>>
-{
-}
+pub trait AiahrParser<T>: Clone + Parser<Token, T, Error = ParseErrors> {}
+impl<T, A> AiahrParser<T> for A where A: Clone + Parser<Token, T, Error = ParseErrors> {}
 
 // Returns a spanned parser that matches just the given token and returns ().
-fn lit(token: Token<'_>) -> impl AiahrParser<'_, Span> {
+fn lit(token: Token) -> impl AiahrParser<Span> {
     just(token).map_with_span(|_, span| span)
 }
 
 // Returns a spanned parser that matches any `Token::Identifier` and unwraps it to the contained
 // `&str`.
-fn ident<'s>() -> impl AiahrParser<'s, SpanOf<RefHandle<'s, str>>> {
+fn ident() -> impl AiahrParser<SpanOf<Ident>> {
     select! {
         Token::Identifier(id) => id,
     }
@@ -39,17 +36,17 @@ fn ident<'s>() -> impl AiahrParser<'s, SpanOf<RefHandle<'s, str>>> {
 }
 
 // Returns a parser for either `parser` or the empty string.
-fn option<'s, T>(parser: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, Option<T>> {
+fn option<T>(parser: impl AiahrParser<T>) -> impl AiahrParser<Option<T>> {
     choice((parser.map(Some), empty().map(|_| None)))
 }
 
 // Returns a parser for one or more `T` values separated by `sep`, representing the sequence with
 // `Separated<T>`.
-fn separated<'a, 's, T: 'a>(
+fn separated<'a, T: 'a>(
     arena: &'a Bump,
-    elem: impl AiahrParser<'s, T>,
-    sep: impl AiahrParser<'s, Span>,
-) -> impl AiahrParser<'s, Separated<'a, T>> {
+    elem: impl AiahrParser<T>,
+    sep: impl AiahrParser<Span>,
+) -> impl AiahrParser<Separated<'a, T>> {
     elem.clone()
         .then(sep.clone().then(elem).repeated())
         .then(choice((sep.map(Some), empty().map(|_| None))))
@@ -61,11 +58,11 @@ fn separated<'a, 's, T: 'a>(
 }
 
 // Returns a parser for a field with a label, separator, and target.
-fn field<'s, L, T>(
-    label: impl AiahrParser<'s, L>,
-    sep: Token<'s>,
-    target: impl AiahrParser<'s, T>,
-) -> impl AiahrParser<'s, Field<L, T>> {
+fn field<L, T>(
+    label: impl AiahrParser<L>,
+    sep: Token,
+    target: impl AiahrParser<T>,
+) -> impl AiahrParser<Field<L, T>> {
     label
         .then(lit(sep))
         .then(target)
@@ -73,18 +70,15 @@ fn field<'s, L, T>(
 }
 
 // Returns a parser for a field with an identifier label, separator, and target.
-fn id_field<'s, T>(
-    sep: Token<'s>,
-    target: impl AiahrParser<'s, T>,
-) -> impl AiahrParser<'s, IdField<'s, T>> {
+fn id_field<T>(sep: Token, target: impl AiahrParser<T>) -> impl AiahrParser<IdField<T>> {
     field(ident(), sep, target)
 }
 
 // Returns a parser for a product row with terms in `term`.
-fn product_row<'a, 's: 'a, T: 'a>(
+fn product_row<'a, T: 'a>(
     arena: &'a Bump,
-    term: impl AiahrParser<'s, T>,
-) -> impl AiahrParser<'s, ProductRow<'a, 's, T>> {
+    term: impl AiahrParser<T>,
+) -> impl AiahrParser<ProductRow<'a, T>> {
     lit(Token::LBrace)
         .then(option(separated(
             arena,
@@ -100,7 +94,7 @@ fn product_row<'a, 's: 'a, T: 'a>(
 }
 
 // Returns a parser for a sum row with terms in `term`.
-fn sum_row<'s, T>(term: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, SumRow<'s, T>> {
+fn sum_row<T>(term: impl AiahrParser<T>) -> impl AiahrParser<SumRow<T>> {
     lit(Token::LAngle)
         .then(id_field(Token::Equal, term))
         .then(lit(Token::RAngle))
@@ -112,10 +106,10 @@ fn sum_row<'s, T>(term: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, SumRow<
 }
 
 // Returns a parser for a non-empty row of `C` in an explicit type.
-fn row<'a, 's: 'a, C: 'a>(
+fn row<'a, C: 'a>(
     arena: &'a Bump,
-    field: impl AiahrParser<'s, C>,
-) -> impl AiahrParser<'s, Row<'a, RefHandle<'s, str>, C>> {
+    field: impl AiahrParser<C>,
+) -> impl AiahrParser<Row<'a, Ident, C>> {
     let concrete = separated(arena, field, lit(Token::Comma));
     let variables = separated(arena, ident(), lit(Token::Plus));
     choice((
@@ -135,9 +129,7 @@ fn row<'a, 's: 'a, C: 'a>(
 }
 
 /// Returns a parser for an Aiahr (mono-)type.
-pub fn type_<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl AiahrParser<'s, &'a Type<'a, 's, RefHandle<'s, str>>> {
+pub fn type_(arena: &Bump) -> impl AiahrParser<&Type<'_, Ident>> {
     recursive(|type_| {
         let type_row = row(arena, id_field(Token::Colon, type_.clone()));
 
@@ -193,9 +185,7 @@ pub fn type_<'a, 's: 'a>(
 }
 
 // Returns a parser for a row type expression.
-fn row_atom<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl AiahrParser<'s, RowAtom<'a, 's, RefHandle<'s, str>>> {
+fn row_atom(arena: &Bump) -> impl AiahrParser<RowAtom<'_, Ident>> {
     choice((
         lit(Token::LParen)
             .then(separated(
@@ -210,9 +200,7 @@ fn row_atom<'a, 's: 'a>(
 }
 
 // Returns a parser for a type constraint.
-fn constraint<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl AiahrParser<'s, Constraint<'a, 's, RefHandle<'s, str>>> {
+fn constraint(arena: &Bump) -> impl AiahrParser<Constraint<'_, Ident>> {
     let row = row_atom(arena);
     row.clone()
         .then(lit(Token::Plus))
@@ -229,9 +217,7 @@ fn constraint<'a, 's: 'a>(
 }
 
 /// Returns a parser for a scheme (polymorphic type).
-pub fn scheme<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl AiahrParser<'s, &'a Scheme<'a, 's, RefHandle<'s, str>>> {
+pub fn scheme(arena: &Bump) -> impl AiahrParser<&Scheme<'_, Ident>> {
     lit(Token::KwForall)
         .then(ident())
         .then(lit(Token::Dot))
@@ -254,9 +240,7 @@ pub fn scheme<'a, 's: 'a>(
 }
 
 // Returns a parser for an effect operation.
-fn effect_op<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl AiahrParser<'s, EffectOp<'a, 's, RefHandle<'s, str>, RefHandle<'s, str>>> {
+fn effect_op(arena: &Bump) -> impl AiahrParser<EffectOp<'_, Ident, Ident>> {
     ident()
         .then(lit(Token::Colon))
         .then(type_(arena))
@@ -264,14 +248,14 @@ fn effect_op<'a, 's: 'a>(
 }
 
 /// Returns a parser for an annotation with a given type syntax.
-pub fn annotation<'s, T>(ty: impl AiahrParser<'s, T>) -> impl AiahrParser<'s, Annotation<T>> {
+pub fn annotation<T>(ty: impl AiahrParser<T>) -> impl AiahrParser<Annotation<T>> {
     lit(Token::Colon)
         .then(ty)
         .map(|(colon, type_)| Annotation { colon, type_ })
 }
 
 /// Returns a parser for a pattern.
-pub fn pattern<'a, 's: 'a>(arena: &'a Bump) -> impl AiahrParser<'s, &'a Pattern<'a, 's>> {
+pub fn pattern(arena: &Bump) -> impl AiahrParser<&Pattern<'_>> {
     recursive(|pattern| {
         choice((
             product_row(arena, pattern.clone()).map(|p| arena.alloc(Pattern::ProductRow(p)) as &_),
@@ -281,29 +265,29 @@ pub fn pattern<'a, 's: 'a>(arena: &'a Bump) -> impl AiahrParser<'s, &'a Pattern<
     })
 }
 
-enum TermPrefix<'a, 's> {
+enum TermPrefix<'a> {
     Binding {
-        var: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
+        var: SpanOf<Ident>,
+        annotation: Option<TypeAnnotation<'a, Ident>>,
         eq: Span,
-        value: &'a Term<'a, 's>,
+        value: &'a Term<'a>,
         semi: Span,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a, 's>,
+        handler: &'a Term<'a>,
         do_: Span,
     },
     Abstraction {
         lbar: Span,
-        arg: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
+        arg: SpanOf<Ident>,
+        annotation: Option<TypeAnnotation<'a, Ident>>,
         rbar: Span,
     },
 }
 
-impl<'a, 's> TermPrefix<'a, 's> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 's>) -> &'a Term<'a, 's> {
+impl<'a> TermPrefix<'a> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a>) -> &'a Term<'a> {
         match self {
             TermPrefix::Binding {
                 var,
@@ -341,20 +325,20 @@ impl<'a, 's> TermPrefix<'a, 's> {
     }
 }
 
-enum TermPostfix<'a, 's> {
+enum TermPostfix<'a> {
     Application {
         lpar: Span,
-        arg: &'a Term<'a, 's>,
+        arg: &'a Term<'a>,
         rpar: Span,
     },
     DotAccess {
         dot: Span,
-        field: SpanOf<RefHandle<'s, str>>,
+        field: SpanOf<Ident>,
     },
 }
 
-impl<'a, 's> TermPostfix<'a, 's> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a, 's>) -> &'a Term<'a, 's> {
+impl<'a> TermPostfix<'a> {
+    fn apply(self, arena: &'a Bump, t: &'a Term<'a>) -> &'a Term<'a> {
         match self {
             TermPostfix::Application { lpar, arg, rpar } => arena.alloc(Term::Application {
                 func: t,
@@ -372,9 +356,7 @@ impl<'a, 's> TermPostfix<'a, 's> {
 }
 
 /// Returns a parser for terms.
-pub fn term<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl Parser<Token<'s>, &'a Term<'a, 's>, Error = ParseErrors<'s>> {
+pub fn term(arena: &Bump) -> impl Parser<Token, &Term<'_>, Error = ParseErrors> {
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -480,9 +462,7 @@ pub fn term<'a, 's: 'a>(
 }
 
 /// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
-pub fn aiahr_parser<'a, 's: 'a>(
-    arena: &'a Bump,
-) -> impl Parser<Token<'s>, &'a [Item<'a, 's>], Error = ParseErrors<'s>> {
+pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, &[Item<'_>], Error = ParseErrors> {
     let effect = lit(Token::KwEffect)
         .then(ident())
         .then(lit(Token::LBrace))
@@ -517,9 +497,9 @@ pub fn aiahr_parser<'a, 's: 'a>(
 pub fn to_stream<'s, I>(
     tokens: I,
     end_of_input: Loc,
-) -> Stream<'s, Token<'s>, Span, Box<dyn Iterator<Item = (Token<'s>, Span)> + 's>>
+) -> Stream<'s, Token, Span, Box<dyn Iterator<Item = (Token, Span)> + 's>>
 where
-    I: IntoIterator<Item = SpanOf<Token<'s>>>,
+    I: IntoIterator<Item = SpanOf<Token>>,
     I::IntoIter: 's,
 {
     // TODO: figure out what the `eoi` parameter is actually used for.
@@ -532,16 +512,12 @@ where
 pub mod test_utils {
     use super::*;
     use crate::lexer::aiahr_lexer;
-    use aiahr_core::{id::ModuleId, memory::intern::InternerByRef};
+    use aiahr_core::id::ModuleId;
 
     const MOD: ModuleId = ModuleId(0);
 
-    pub fn parse_term<'a, S: InternerByRef<'a, str>>(
-        arena: &'a Bump,
-        interner: &'a S,
-        input: &str,
-    ) -> &'a Term<'a, 'a> {
-        let (tokens, eoi) = aiahr_lexer(interner)
+    pub fn parse_term<'a>(db: &'a dyn crate::Db, arena: &'a Bump, input: &str) -> &'a Term<'a> {
+        let (tokens, eoi) = aiahr_lexer(db)
             .lex(MOD, input)
             .expect("Lexing input failed");
         term(arena)
@@ -556,434 +532,505 @@ mod tests {
         cst::{Item, Scheme, Term, Type},
         ct_rowsum, eff_op, field,
         id::ModuleId,
-        id_field, item_effect, item_term,
-        memory::{
-            handle::RefHandle,
-            intern::{InternerByRef, SyncInterner},
-        },
-        pat_prod, pat_sum, pat_var, qual, quant, row_concrete, row_mixed, row_variable,
-        rwx_concrete, rwx_variable, scheme, term_abs, term_app, term_dot, term_local, term_match,
-        term_paren, term_prod, term_sum, term_sym, term_with, type_func, type_named, type_par,
-        type_prod, type_sum,
+        id_field,
+        ident::Ident,
+        item_effect, item_term, pat_prod, pat_sum, pat_var, qual, quant, row_concrete, row_mixed,
+        row_variable, rwx_concrete, rwx_variable, scheme, term_abs, term_app, term_dot, term_local,
+        term_match, term_paren, term_prod, term_sum, term_sym, term_with, type_func, type_named,
+        type_par, type_prod, type_sum,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
     use chumsky::{prelude::end, Parser};
 
+    use aiahr_test::assert_ident_text_matches_name;
+
     use crate::lexer::aiahr_lexer;
 
     use super::{aiahr_parser, scheme, term, to_stream, type_};
 
+    #[derive(Default)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    struct TestDatabase {
+        storage: salsa::Storage<Self>,
+    }
+    impl salsa::Database for TestDatabase {}
+
     const MOD: ModuleId = ModuleId(0);
 
-    fn parse_type_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
+    fn parse_type_unwrap<'a>(
+        db: &'a dyn crate::Db,
         arena: &'a Bump,
-        interner: &'s S,
         input: &str,
-    ) -> &'a Type<'a, 's, RefHandle<'s, str>> {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
+    ) -> &'a Type<'a, Ident> {
+        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
         type_(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
     }
 
-    fn parse_scheme_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
+    fn parse_scheme_unwrap<'a>(
+        db: &'a dyn crate::Db,
         arena: &'a Bump,
-        interner: &'s S,
         input: &str,
-    ) -> &'a Scheme<'a, 's, RefHandle<'s, str>> {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
+    ) -> &'a Scheme<'a, Ident> {
+        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
         scheme(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
     }
 
-    fn parse_term_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
-        arena: &'a Bump,
-        interner: &'s S,
-        input: &str,
-    ) -> &'a Term<'a, 's> {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
+    fn parse_term_unwrap<'a>(db: &'a dyn crate::Db, arena: &'a Bump, input: &str) -> &'a Term<'a> {
+        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
         term(arena)
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
     }
 
-    fn parse_file_unwrap<'a, 's: 'a, S: InternerByRef<'s, str>>(
+    fn parse_file_unwrap<'a>(
+        db: &'a dyn crate::Db,
         arena: &'a Bump,
-        interner: &'s S,
         input: &str,
-    ) -> &'a [Item<'a, 's>] {
-        let (tokens, eoi) = aiahr_lexer(interner).lex(MOD, input).unwrap();
+    ) -> &'a [Item<'a>] {
+        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
         aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
 
     #[test]
     fn test_sum_types() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_type_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "<x: a, y: b>"
             ),
             type_sum!(row_concrete!(
-                id_field!("x", type_named!("a")),
-                id_field!("y", type_named!("b"))
-            ))
+                id_field!(x, type_named!(a)),
+                id_field!(y, type_named!(b))
+            )) => assert_ident_text_matches_name!(db, [x, y, a, b])
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "<r + s>"),
-            type_sum!(row_variable!("r", "s"))
+            parse_type_unwrap(&db, &Bump::new(), "<r + s>"),
+            type_sum!(row_variable!(r, s)) => assert_ident_text_matches_name!(db, [r, s])
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "<x: a | r>"),
-            type_sum!(row_mixed!((id_field!("x", type_named!("a"))), ("r")))
+            parse_type_unwrap(&db, &Bump::new(), "<x: a | r>"),
+            type_sum!(row_mixed!((id_field!(x, type_named!(a))), (r))) => assert_ident_text_matches_name!(db, [x, a, r])
         );
     }
 
     #[test]
     fn test_product_types() {
-        assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{}"),
-            type_prod!()
-        );
+        let db = TestDatabase::default();
+        assert_matches!(parse_type_unwrap(&db, &Bump::new(), "{}"), type_prod!());
         assert_matches!(
             parse_type_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "{x: a, y: b}"
             ),
             type_prod!(row_concrete!(
-                id_field!("x", type_named!("a")),
-                id_field!("y", type_named!("b"))
-            ))
+                id_field!(x, type_named!(a)),
+                id_field!(y, type_named!(b))
+            )) => { assert_ident_text_matches_name!(db, [x, y, a, b]); }
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{r + s}"),
-            type_prod!(row_variable!("r", "s"))
+            parse_type_unwrap(&db, &Bump::new(), "{r + s}"),
+            type_prod!(row_variable!(r, s)) => assert_ident_text_matches_name!(db, [r, s])
         );
         assert_matches!(
-            parse_type_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{x: a | r}"),
-            type_prod!(row_mixed!((id_field!("x", type_named!("a"))), ("r")))
+            parse_type_unwrap(&db, &Bump::new(), "{x: a | r}"),
+            type_prod!(row_mixed!((id_field!(x, type_named!(a))), (r))) => assert_ident_text_matches_name!(db, [x, a, r])
         );
     }
 
     #[test]
     fn test_function_types() {
+        let db = TestDatabase::default();
         // Make sure this example tests right-associativity.
         assert_matches!(
             parse_type_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "(a -> b) -> a -> (b -> c)"
             ),
             type_func!(
-                type_par!(type_func!(type_named!("a"), type_named!("b"))),
+                type_par!(type_func!(type_named!(a), type_named!(b))),
                 type_func!(
-                    type_named!("a"),
-                    type_par!(type_func!(type_named!("b"), type_named!("c")))
+                    type_named!(a1),
+                    type_par!(type_func!(type_named!(b1), type_named!(c)))
                 )
-            )
+            ) => {
+                assert_ident_text_matches_name!(db, [a, b, c]);
+                assert_eq!(a, a1);
+                assert_eq!(b, b1);
+            }
         );
     }
 
     #[test]
     fn test_mixed_types() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_type_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "{x: a} -> <f: b -> a | r>"
             ),
             type_func!(
-                type_prod!(row_concrete!(id_field!("x", type_named!("a")))),
+                type_prod!(row_concrete!(id_field!(x, type_named!(a)))),
                 type_sum!(row_mixed!(
-                    (id_field!("f", type_func!(type_named!("b"), type_named!("a")))),
-                    ("r")
+                    (id_field!(f, type_func!(type_named!(b), type_named!(a1)))),
+                    (r)
                 ))
-            )
+            ) => {
+                assert_ident_text_matches_name!(db, [x, a, f, b, r]);
+                assert_eq!(a, a1);
+            }
         );
     }
 
     #[test]
     fn test_unqualified_schemes() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_scheme_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "{x: a} -> <f: b -> a | r>"
             ),
             scheme!(type_func!(
-                type_prod!(row_concrete!(id_field!("x", type_named!("a")))),
+                type_prod!(row_concrete!(id_field!(x, type_named!(a)))),
                 type_sum!(row_mixed!(
-                    (id_field!("f", type_func!(type_named!("b"), type_named!("a")))),
-                    ("r")
+                    (id_field!(f, type_func!(type_named!(b), type_named!(a1)))),
+                    (r)
                 ))
-            ))
+            )) => {
+                assert_ident_text_matches_name!(db, [x, a, f, b, r]);
+                assert_eq!(a, a1);
+            }
         );
     }
 
     #[test]
     fn test_equals_schemes() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_scheme_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "r + (y: a) = s => {r} -> a -> {s}"
             ),
             scheme!(
                 qual!(ct_rowsum!(
-                    rwx_variable!("r"),
-                    rwx_concrete!(id_field!("y", type_named!("a"))),
-                    rwx_variable!("s")
+                    rwx_variable!(r),
+                    rwx_concrete!(id_field!(y, type_named!(a))),
+                    rwx_variable!(s)
                 )),
                 type_func!(
-                    type_prod!(row_variable!("r")),
-                    type_func!(type_named!("a"), type_prod!(row_variable!("s")))
+                    type_prod!(row_variable!(r1)),
+                    type_func!(type_named!(a1), type_prod!(row_variable!(s1)))
                 )
-            )
+            ) => {
+                assert_ident_text_matches_name!(db, [r, y, a, s]);
+                assert_eq!(r, r1);
+                assert_eq!(a, a1);
+                assert_eq!(s, s1);
+            }
         );
     }
 
     #[test]
     fn test_undelimted_closure_fails() {
+        let db = TestDatabase::default();
         let arena = Bump::new();
-        let interner = SyncInterner::new(&arena);
-        let (tokens, eoi) = aiahr_lexer(&interner).lex(MOD, "|x whoops(x)").unwrap();
+        let (tokens, eoi) = aiahr_lexer(&db).lex(MOD, "|x whoops(x)").unwrap();
         assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 
     #[test]
     fn test_annotated_bindings() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "x: a = {}; y: {} = {}; x"
             ),
             term_local!(
-                "x",
-                type_named!("a"),
+                x,
+                type_named!(a),
                 term_prod!(),
-                term_local!("y", type_prod!(), term_prod!(), term_sym!("x"))
-            )
+                term_local!(y, type_prod!(), term_prod!(), term_sym!(x1))
+            ) => {
+                assert_ident_text_matches_name!(db, [x, a, y]);
+                assert_eq!(x, x1);
+            }
         );
     }
 
     #[test]
     fn test_app_precedence() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "(|x| |w| w)(y)(z)"
             ),
             term_app!(
                 term_app!(
-                    term_paren!(term_abs!("x", term_abs!("w", term_sym!("w")))),
-                    term_sym!("y")
+                    term_paren!(term_abs!(x, term_abs!(w, term_sym!(w1)))),
+                    term_sym!(y)
                 ),
-                term_sym!("z")
-            )
+                term_sym!(z)
+            ) => {
+                assert_ident_text_matches_name!(db, [x, w, y, z]);
+                assert_eq!(w, w1);
+            }
         );
     }
 
     #[test]
     fn test_with_do() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "with h do a(b)"
             ),
-            term_with!(term_sym!("h"), term_app!(term_sym!("a"), term_sym!("b")))
+            term_with!(term_sym!(h), term_app!(term_sym!(a), term_sym!(b))) => assert_ident_text_matches_name!(db, [h, a, b])
         );
     }
 
     #[test]
     fn test_mixing_prefixes() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "|x| y = |z| y(z); w = x(y); w"
             ),
             term_abs!(
-                "x",
+                x,
                 term_local!(
-                    "y",
-                    term_abs!("z", term_app!(term_sym!("y"), term_sym!("z"))),
+                    y,
+                    term_abs!(z, term_app!(term_sym!(y1), term_sym!(z1))),
                     term_local!(
-                        "w",
-                        term_app!(term_sym!("x"), term_sym!("y")),
-                        term_sym!("w")
+                        w,
+                        term_app!(term_sym!(x1), term_sym!(y2)),
+                        term_sym!(w1)
                     )
                 )
-            )
+            ) => {
+                assert_ident_text_matches_name!(db, [x, y, z, w]);
+                assert_eq!([x, y, z, w], [x1, y1, z1, w1]);
+                assert_eq!(y, y2);
+            }
         );
     }
 
     #[test]
     fn test_basic_lambdas() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "|x| |y: a| z = x(y); z"
             ),
             term_abs!(
-                "x",
+                x,
                 term_abs!(
-                    "y",
-                    type_named!("a"),
+                    y,
+                    type_named!(a),
                     term_local!(
-                        "z",
-                        term_app!(term_sym!("x"), term_sym!("y")),
-                        term_sym!("z")
+                        z,
+                        term_app!(term_sym!(x1), term_sym!(y1)),
+                        term_sym!(z1)
                     )
                 )
-            )
+            ) => {
+                assert_ident_text_matches_name!(db, [x, y, a, z]);
+                assert_eq!([x, y, z], [x1, y1, z1]);
+            }
         );
     }
 
     #[test]
     fn test_product_rows() {
-        assert_matches!(
-            parse_term_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "{}"),
-            term_prod!()
-        );
+        let db = TestDatabase::default();
+        assert_matches!(parse_term_unwrap(&db, &Bump::new(), "{}"), term_prod!());
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "{x = a, y = |t| t}"
             ),
             term_prod!(
-                id_field!("x", term_sym!("a")),
-                id_field!("y", term_abs!("t", term_sym!("t"))),
-            )
+                id_field!(x, term_sym!(a)),
+                id_field!(y, term_abs!(t, term_sym!(t1))),
+            ) => {
+                assert_ident_text_matches_name!(db, [x, a, y, t]);
+                assert_eq!(t, t1);
+            }
         );
     }
 
     #[test]
     fn test_product_rows_precedence() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "{x = |t| t}({y = |t| u})"
             ),
             term_app!(
-                term_prod!(id_field!("x", term_abs!("t", term_sym!("t")))),
-                term_prod!(id_field!("y", term_abs!("t", term_sym!("u"))))
-            )
+                term_prod!(id_field!(x, term_abs!(t, term_sym!(t1)))),
+                term_prod!(id_field!(y, term_abs!(t2, term_sym!(u))))
+            ) => {
+                assert_ident_text_matches_name!(db, [x, y, t, u]);
+                assert_eq!(t, t1);
+                assert_eq!(t, t2);
+            }
         );
     }
 
     #[test]
     fn test_field_access() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "{x = a, y = b}.x"
             ),
             term_dot!(
                 term_prod!(
-                    id_field!("x", term_sym!("a")),
-                    id_field!("y", term_sym!("b")),
+                    id_field!(x, term_sym!(a)),
+                    id_field!(y, term_sym!(b)),
                 ),
-                "x"
-            )
+                x1
+            ) => {
+                assert_ident_text_matches_name!(db, [x, a, y, b]);
+                assert_eq!(x, x1);
+            }
         );
     }
 
     #[test]
     fn test_combined_postfixes() {
+        let db = TestDatabase::default();
         assert_matches!(
-            parse_term_unwrap(&Bump::new(), &SyncInterner::new(&Bump::new()), "a.x(b)"),
-            term_app!(term_dot!(term_sym!("a"), "x"), term_sym!("b"))
+            parse_term_unwrap(&db, &Bump::new(), "a.x(b)"),
+            term_app!(term_dot!(term_sym!(a), x), term_sym!(b)) => assert_ident_text_matches_name!(db, [a, x, b])
         );
     }
 
     #[test]
     fn test_sum_rows() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "<x = |t| t>"
             ),
-            term_sum!(id_field!("x", term_abs!("t", term_sym!("t"))))
+            term_sum!(id_field!(x, term_abs!(t, term_sym!(t1)))) => {
+                assert_ident_text_matches_name!(db, [x, t]);
+                assert_eq!(t, t1);
+            }
         );
     }
 
     #[test]
     fn test_matches() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "match < {x = a} => a, <y = b> => b, c => c >"
             ),
             term_match!(
-                field!(pat_prod!(id_field!("x", pat_var!("a"))), term_sym!("a")),
-                field!(pat_sum!(id_field!("y", pat_var!("b"))), term_sym!("b")),
-                field!(pat_var!("c"), term_sym!("c")),
-            )
+                field!(pat_prod!(id_field!(x, pat_var!(a))), term_sym!(a1)),
+                field!(pat_sum!(id_field!(y, pat_var!(b))), term_sym!(b1)),
+                field!(pat_var!(c), term_sym!(c1)),
+            ) => {
+                assert_ident_text_matches_name!(db, [x, a, y, b, c]);
+                assert_eq!([a, b, c], [a1, b1, c1]);
+            }
         );
     }
 
     #[test]
     fn test_effect_items() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_file_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "effect foo { foo: a -> a }"
             ),
             &[item_effect!(
-                "foo",
-                eff_op!("foo", type_func!(type_named!("a"), type_named!("a")))
-            )]
+                foo,
+                eff_op!(foo1, type_func!(type_named!(a), type_named!(a1)))
+            )] => {
+                assert_ident_text_matches_name!(db, [foo, a]);
+                assert_eq!([foo, a], [foo1, a1]);
+            }
         );
     }
 
     #[test]
     fn test_term_items() {
+        let db = TestDatabase::default();
         assert_matches!(
             parse_file_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "x = a\ny = |b| b\nz = t = x; t"
             ),
             &[
-                item_term!("x", term_sym!("a")),
-                item_term!("y", term_abs!("b", term_sym!("b"))),
-                item_term!("z", term_local!("t", term_sym!("x"), term_sym!("t"))),
-            ]
+                item_term!(x, term_sym!(a)),
+                item_term!(y, term_abs!(b, term_sym!(b1))),
+                item_term!(z, term_local!(t, term_sym!(x1), term_sym!(t1))),
+            ] => {
+                assert_ident_text_matches_name!(db, [x, y, z, a, b, t]);
+                assert_eq!([x, b, t], [x1, b1, t1]);
+            }
         );
         assert_matches!(
             parse_file_unwrap(
+                &db,
                 &Bump::new(),
-                &SyncInterner::new(&Bump::new()),
                 "x: a = a\ny: forall b. b -> b = |b| b"
             ),
             &[
-                item_term!("x", scheme!(type_named!("a")), term_sym!("a")),
+                item_term!(x, scheme!(type_named!(a)), term_sym!(a1)),
                 item_term!(
-                    "y",
+                    y,
                     scheme!(
-                        quant!("b"),
+                        quant!(b),
                         None,
-                        type_func!(type_named!("b"), type_named!("b"))
+                        type_func!(type_named!(b1), type_named!(b2))
                     ),
-                    term_abs!("b", term_sym!("b"))
+                    term_abs!(b3, term_sym!(b4))
                 ),
-            ]
+            ] => {
+                assert_ident_text_matches_name!(db, [x, a, y, b]);
+                assert_eq!([a, b], [a1, b1]);
+                assert_eq!(b, b2);
+                assert_eq!(b, b3);
+                assert_eq!(b, b4);
+            }
         );
     }
 }

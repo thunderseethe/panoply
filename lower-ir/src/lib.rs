@@ -299,7 +299,6 @@ mod tests {
     use aiahr_analysis::resolve::resolve_term;
     use aiahr_analysis::top_level::BaseBuilder;
     use aiahr_core::ast::Direction;
-    use aiahr_core::memory::intern::{InternerByRef, SyncInterner};
     use aiahr_core::modules::ModuleTree;
     use aiahr_core::Db;
     use aiahr_tc::test_utils::DummyEff;
@@ -315,7 +314,8 @@ mod tests {
         aiahr_core::Jar,
         aiahr_tc::Jar,
         aiahr_desugar::Jar,
-        aiahr_analysis::Jar
+        aiahr_analysis::Jar,
+        aiahr_parser::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
@@ -323,29 +323,25 @@ mod tests {
     impl salsa::Database for TestDatabase {}
 
     /// Compile an input string up to (but not including) the lower stage.
-    fn compile_upto_lower<'a, 'ctx, S>(
+    fn compile_upto_lower<'a: 'ctx, 'ctx>(
         db: &'a TestDatabase,
         arena: &'ctx Bump,
-        interner: &'ctx S,
         input: &str,
-    ) -> (LowerDb<'a, 'ctx>, TyScheme<InDb>, Ast<'ctx, VarId>)
-    where
-        S: InternerByRef<'ctx, str>,
-    {
+    ) -> (LowerDb<'a, 'ctx>, TyScheme<InDb>, Ast<'ctx, VarId>) {
         let (m, modules) = {
             let mut modules = ModuleTree::new();
             let m = modules.add_package(db.ident_str(MODNAME));
             (m, modules)
         };
 
-        let unresolved = aiahr_parser::parser::test_utils::parse_term(arena, interner, input);
+        let unresolved = aiahr_parser::parser::test_utils::parse_term(db, arena, input);
         let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = Vec::new();
 
         let mut module_names = FxHashMap::default();
-        let base = BaseBuilder::new(db).build(arena, m, &modules, &mut module_names);
+        let base = BaseBuilder::new().build(arena, m, &modules, &mut module_names);
         let mut names = Names::new(&base);
 
-        let resolved = resolve_term(db, arena, unresolved, &mut names, &mut errors)
+        let resolved = resolve_term(arena, unresolved, &mut names, &mut errors)
             .expect("Name resolution to succeed");
 
         let mut vars = names
@@ -364,8 +360,8 @@ mod tests {
     fn lower_id() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let interner = SyncInterner::new(&arena);
-        let (db, scheme, ast) = compile_upto_lower(&db, &arena, &interner, "|x| x");
+        let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|x| x");
+
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);
 
@@ -378,8 +374,7 @@ mod tests {
     fn lower_product_literal() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let interner = SyncInterner::new(&arena);
-        let (db, scheme, ast) = compile_upto_lower(&db, &arena, &interner, "|a| { x = a, y = a }");
+        let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|a| { x = a, y = a }");
 
         let ir_ctx = IrCtx::new(&arena);
         let ir = lower(&db, &ir_ctx, &scheme, &ast);

@@ -18,22 +18,19 @@ use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
 /// Accumulates and publishes top-level names.
-pub struct BaseBuilder<'a> {
-    db: &'a dyn crate::Db,
+#[derive(Default)]
+pub struct BaseBuilder {
     builder: ModuleNamesBuilder,
 }
 
-impl<'base> BaseBuilder<'base> {
+impl BaseBuilder {
     /// Constructs an empty set of top-level names.
-    pub fn new(db: &'base dyn crate::Db) -> BaseBuilder {
-        BaseBuilder {
-            db,
-            builder: Default::default(),
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Accumulates names from the given top-level items.
-    pub fn add_slice<'s, E>(mut self, items: &[Item<'_, 's>], errors: &mut E) -> Self
+    pub fn add_slice<E>(mut self, items: &[Item<'_>], errors: &mut E) -> Self
     where
         E: DiagnosticSink<NameResolutionError>,
     {
@@ -42,14 +39,13 @@ impl<'base> BaseBuilder<'base> {
                 Item::Effect { name, ops, .. } => {
                     let mut effect = EffectBuilder::default();
                     for op in ops.iter() {
-                        let name = op.name.map(|v| self.db.ident(v.to_string()));
                         if let InsertResult {
                             existing: Some(old),
                             ..
-                        } = effect.insert_op(name)
+                        } = effect.insert_op(op.name)
                         {
                             errors.add(NameResolutionError::Duplicate {
-                                name: name.value,
+                                name: op.name.value,
                                 kind: NameKind::EffectOp,
                                 original: old.span(),
                                 duplicate: op.name.span(),
@@ -57,11 +53,10 @@ impl<'base> BaseBuilder<'base> {
                         }
                     }
 
-                    let name = name.map(|v| self.db.ident(v.to_string()));
                     if let InsertResult {
                         existing: Some(old),
                         ..
-                    } = self.builder.insert_effect(name, effect.build())
+                    } = self.builder.insert_effect(*name, effect.build())
                     {
                         errors.add(NameResolutionError::Duplicate {
                             name: name.value,
@@ -72,11 +67,10 @@ impl<'base> BaseBuilder<'base> {
                     }
                 }
                 Item::Term { name, .. } => {
-                    let name = name.map(|v| self.db.ident(v.to_string()));
                     if let InsertResult {
                         existing: Some(old),
                         ..
-                    } = self.builder.insert_item(name)
+                    } = self.builder.insert_item(*name)
                     {
                         errors.add(NameResolutionError::Duplicate {
                             name: name.value,

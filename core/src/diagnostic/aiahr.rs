@@ -9,31 +9,31 @@ use super::{
 
 /// Any Aiahr compilation error.
 #[derive(Debug)]
-pub enum AiahrcError<'s> {
+pub enum AiahrcError {
     LexError(LexError),
     NameResolutionError(NameResolutionError),
-    ParseError(ParseError<'s>),
+    ParseError(ParseError),
 }
 
-impl<'s> From<LexError> for AiahrcError<'s> {
+impl From<LexError> for AiahrcError {
     fn from(err: LexError) -> Self {
         AiahrcError::LexError(err)
     }
 }
 
-impl<'s> From<NameResolutionError> for AiahrcError<'s> {
+impl From<NameResolutionError> for AiahrcError {
     fn from(err: NameResolutionError) -> Self {
         AiahrcError::NameResolutionError(err)
     }
 }
 
-impl<'s> From<ParseError<'s>> for AiahrcError<'s> {
-    fn from(err: ParseError<'s>) -> Self {
+impl From<ParseError> for AiahrcError {
+    fn from(err: ParseError) -> Self {
         AiahrcError::ParseError(err)
     }
 }
 
-impl<'s> Diagnostic for AiahrcError<'s> {
+impl Diagnostic for AiahrcError {
     fn name(&self) -> &'static str {
         match self {
             AiahrcError::LexError(err) => err.name(),

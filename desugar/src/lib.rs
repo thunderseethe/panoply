@@ -3,7 +3,6 @@ use std::ops::Not;
 use aiahr_core::ast::Direction;
 use aiahr_core::id::{Id, IdGen};
 use aiahr_core::ident::Ident;
-use aiahr_core::memory::handle::RefHandle;
 use aiahr_core::nst::Pattern;
 use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::{
@@ -41,7 +40,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
     /// Desugar a NST Term into it's corresponding AST Term.
     fn ds_term<'n, 's: 'ctx>(
         &mut self,
-        nst: &'n nst::Term<'n, 's>,
+        nst: &'n nst::Term<'n>,
     ) -> Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> {
         let mk_term = |term, spans: &mut FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>| {
             let t = self.arena.alloc(term) as &_;
@@ -88,14 +87,14 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 None => self.arena.alloc(Unit),
                 Some(fields) => {
                     let head = self.arena.alloc(Label {
-                        label: self.db.ident(fields.first.label.value.to_string()),
+                        label: fields.first.label.value,
                         term: self.ds_term(fields.first.target)?,
                     }) as &_;
                     self.spans
                         .insert(head, fields.first.label.join_spans(fields.first.target));
                     fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
                         let right = self.arena.alloc(Label {
-                            label: self.db.ident(field.label.value.to_string()),
+                            label: field.label.value,
                             term: self.ds_term(field.target)?,
                         }) as &_;
                         self.spans
@@ -110,7 +109,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
             nst::Term::FieldAccess { base, field, .. } => {
                 let term = self.ds_term(base)?;
                 self.arena.alloc(Unlabel {
-                    label: self.db.ident(field.value.to_string()),
+                    label: field.value,
                     term: mk_term(
                         Project {
                             direction: Direction::Right,
@@ -126,7 +125,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     direction: Direction::Right,
                     term: mk_term(
                         Label {
-                            label: self.db.ident(sum.field.label.value.to_string()),
+                            label: sum.field.label.value,
                             term,
                         },
                         &mut self.spans,
@@ -151,7 +150,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
     fn desugar_pattern_matrix<'p, 's: 'ctx>(
         &mut self,
         occurences: &mut [VarId],
-        matrix: ClauseMatrix<'p, 's, 'ctx>,
+        matrix: ClauseMatrix<'p, 'ctx>,
     ) -> Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> {
         let mk_term = |spans: &mut FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>, term, span| {
             let t = self.arena.alloc(term) as &_;
@@ -192,9 +191,9 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                     let init =
                         self.desugar_pattern_matrix(occs.as_mut_slice(), matrix.specialize(&c))?;
-                    let body = lbls.iter().cloned().fold(init, |body, lbl| {
+                    let body = lbls.iter().cloned().fold(init, |body, label| {
                         let destructure = self.arena.alloc(Unlabel {
-                            label: self.db.ident(lbl.to_string()),
+                            label,
                             term: self.arena.alloc(Project {
                                 direction: Direction::Right,
                                 term: self.arena.alloc(Variable(top_level)),
@@ -224,14 +223,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                     let func = self.desugar_pattern_matrix(&mut occs, matrix.specialize(&c))?;
                     let term = mk_term(&mut self.spans, Variable(binder), p.span());
-                    let arg = mk_term(
-                        &mut self.spans,
-                        Unlabel {
-                            label: self.db.ident(label.to_string()),
-                            term,
-                        },
-                        p.span(),
-                    );
+                    let arg = mk_term(&mut self.spans, Unlabel { label, term }, p.span());
                     let body = mk_term(&mut self.spans, Application { func, arg }, p.span());
                     Ok(mk_term(
                         &mut self.spans,
@@ -277,22 +269,20 @@ pub fn desugar<'n, 's: 'a, 'a>(
     db: &dyn crate::Db,
     arena: &'a Bump,
     vars: &mut IdGen<VarId, Ident>,
-    nst: &'n nst::Term<'n, 's>,
+    nst: &'n nst::Term<'n>,
 ) -> Result<Ast<'a, VarId>, PatternMatchError> {
     let mut ds_ctx = DesugarCtx::new(db, arena, vars);
     let tree = ds_ctx.ds_term(nst)?;
     Ok(Ast::new(ds_ctx.spans, tree))
 }
 
-struct ClauseMatrix<'p, 's, 't> {
-    pats: Vec<Vec<Pattern<'p, 's>>>,
+struct ClauseMatrix<'p, 't> {
+    pats: Vec<Vec<Pattern<'p>>>,
     arms: Vec<&'t ast::Term<'t, VarId>>,
 }
 
-impl<'p, 's, 't> FromIterator<(Vec<Pattern<'p, 's>>, &'t ast::Term<'t, VarId>)>
-    for ClauseMatrix<'p, 's, 't>
-{
-    fn from_iter<T: IntoIterator<Item = (Vec<Pattern<'p, 's>>, &'t ast::Term<'t, VarId>)>>(
+impl<'p, 't> FromIterator<(Vec<Pattern<'p>>, &'t ast::Term<'t, VarId>)> for ClauseMatrix<'p, 't> {
+    fn from_iter<T: IntoIterator<Item = (Vec<Pattern<'p>>, &'t ast::Term<'t, VarId>)>>(
         iter: T,
     ) -> Self {
         let (mut pats, mut arms) = (vec![], vec![]);
@@ -304,7 +294,7 @@ impl<'p, 's, 't> FromIterator<(Vec<Pattern<'p, 's>>, &'t ast::Term<'t, VarId>)>
     }
 }
 
-impl<'p, 's, 't> ClauseMatrix<'p, 's, 't> {
+impl<'p, 't> ClauseMatrix<'p, 't> {
     fn is_empty(&self) -> bool {
         debug_assert!(
             (self.pats.is_empty() && self.arms.is_empty())
@@ -313,7 +303,7 @@ impl<'p, 's, 't> ClauseMatrix<'p, 's, 't> {
         self.pats.is_empty()
     }
 
-    fn first(&self) -> &[Pattern<'p, 's>] {
+    fn first(&self) -> &[Pattern<'p>] {
         debug_assert!(self.pats.is_empty().not());
         self.pats[0].as_slice()
     }
@@ -321,13 +311,13 @@ impl<'p, 's, 't> ClauseMatrix<'p, 's, 't> {
     fn col_constr<'a>(
         &'a self,
         col_index: usize,
-    ) -> impl Iterator<Item = (Constructor<'s>, &'a Pattern<'p, 's>)> + 'a {
+    ) -> impl Iterator<Item = (Constructor, &'a Pattern<'p>)> + 'a {
         self.pats
             .iter()
             .map(move |col| (Constructor::from(&col[col_index]), &col[col_index]))
     }
 
-    pub(crate) fn specialize(&self, constr: &Constructor<'s>) -> ClauseMatrix<'p, 's, 't> {
+    pub(crate) fn specialize(&self, constr: &Constructor) -> ClauseMatrix<'p, 't> {
         self.pats
             .iter()
             .zip(self.arms.iter())
@@ -340,7 +330,7 @@ impl<'p, 's, 't> ClauseMatrix<'p, 's, 't> {
             .collect()
     }
 
-    fn default(&self) -> ClauseMatrix<'p, 's, 't> {
+    fn default(&self) -> ClauseMatrix<'p, 't> {
         self.pats
             .iter()
             .zip(self.arms.iter())
@@ -358,13 +348,13 @@ pub enum PatternMatchError {
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
-enum Constructor<'s> {
-    ProductRow(Vec<RefHandle<'s, str>>),
-    SumRow(RefHandle<'s, str>),
+enum Constructor {
+    ProductRow(Vec<Ident>),
+    SumRow(Ident),
     WildCard,
 }
-impl<'s> Constructor<'s> {
-    fn matches<'p>(&self, pat: &Pattern<'p, 's>) -> Option<Vec<Pattern<'p, 's>>> {
+impl Constructor {
+    fn matches<'p>(&self, pat: &Pattern<'p>) -> Option<Vec<Pattern<'p>>> {
         let bogus_var_id = aiahr_core::span::SpanOf {
             start: aiahr_core::loc::Loc {
                 byte: 0,
@@ -405,8 +395,8 @@ impl<'s> Constructor<'s> {
     }
 }
 
-impl<'s> From<&Pattern<'_, 's>> for Constructor<'s> {
-    fn from(pat: &Pattern<'_, 's>) -> Self {
+impl From<&Pattern<'_>> for Constructor {
+    fn from(pat: &Pattern<'_>) -> Self {
         match pat {
             Pattern::ProductRow(rows) => Constructor::ProductRow(
                 rows.fields
@@ -423,7 +413,6 @@ impl<'s> From<&Pattern<'_, 's>> for Constructor<'s> {
 mod tests {
     use super::*;
     use aiahr_core::cst::{Field, IdField, ProductRow, Separated, SumRow};
-    use aiahr_core::memory::handle;
     use aiahr_core::Db;
     use aiahr_core::{id::VarId, nst};
     use aiahr_test::{cst::*, span::*};
@@ -612,7 +601,7 @@ mod tests {
                 lbrace: start,
                 fields: Some(Separated {
                     first: IdField {
-                        label: random_span_of(handle::Handle("abc")),
+                        label: random_span_of(a),
                         sep: random_span(),
                         target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
                     },
@@ -620,7 +609,7 @@ mod tests {
                         (
                             random_span(),
                             IdField {
-                                label: random_span_of(handle::Handle("def")),
+                                label: random_span_of(b),
                                 sep: random_span(),
                                 target: arena
                                     .alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
@@ -629,7 +618,7 @@ mod tests {
                         (
                             random_span(),
                             IdField {
-                                label: random_span_of(handle::Handle("ghi")),
+                                label: random_span_of(c),
                                 sep: random_span(),
                                 target: arena
                                     .alloc(nst::Term::VariableRef(random_span_of(VarId(2)))),
@@ -679,7 +668,7 @@ mod tests {
         let state = db.ident_str("state");
 
         let base = random_span_of(VarId(0));
-        let field = random_span_of(handle::Handle("state"));
+        let field = random_span_of(state);
         let nst = arena.alloc(nst::Term::FieldAccess {
             base: arena.alloc(nst::Term::VariableRef(base)),
             dot: random_span(),
@@ -718,7 +707,7 @@ mod tests {
         let nst = arena.alloc(nst::Term::SumRow(aiahr_core::cst::SumRow {
             langle,
             field: Field {
-                label: random_span_of(handle::Handle("true")),
+                label: random_span_of(tru),
                 sep: random_span(),
                 target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
             },
@@ -763,7 +752,7 @@ mod tests {
                     label: arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                         langle: random_span(),
                         field: Field {
-                            label: random_span_of(handle::Handle("A")),
+                            label: random_span_of(a),
                             sep: random_span(),
                             target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))),
                         },
@@ -779,7 +768,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(handle::Handle("B")),
+                                    label: random_span_of(b),
                                     sep: random_span(),
                                     target: arena.alloc(Pattern::Whole(random_span_of(VarId(1)))),
                                 },
@@ -795,7 +784,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(handle::Handle("C")),
+                                    label: random_span_of(c),
                                     sep: random_span(),
                                     target: &*arena.alloc(Pattern::Whole(random_span_of(VarId(2)))),
                                 },
@@ -879,7 +868,7 @@ mod tests {
                     label: arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                         langle: random_span(),
                         field: Field {
-                            label: random_span_of(handle::Handle("A")),
+                            label: random_span_of(a),
                             sep: random_span(),
                             target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))),
                         },
@@ -895,7 +884,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(handle::Handle("B")),
+                                    label: random_span_of(b),
                                     sep: random_span(),
                                     target: arena.alloc(Pattern::Whole(random_span_of(VarId(1)))),
                                 },
@@ -911,7 +900,7 @@ mod tests {
                             label: &*arena.alloc(Pattern::SumRow(aiahr_core::cst::SumRow {
                                 langle: random_span(),
                                 field: Field {
-                                    label: random_span_of(handle::Handle("C")),
+                                    label: random_span_of(c),
                                     sep: random_span(),
                                     target: &*arena.alloc(Pattern::Whole(random_span_of(VarId(2)))),
                                 },
@@ -1009,7 +998,7 @@ mod tests {
                         lbrace: random_span(),
                         fields: Some(Separated {
                             first: Field {
-                                label: random_span_of(handle::Handle("A")),
+                                label: random_span_of(a),
                                 sep: random_span(),
                                 target: arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
                             },
@@ -1017,7 +1006,7 @@ mod tests {
                                 (
                                     random_span(),
                                     Field {
-                                        label: random_span_of(handle::Handle("B")),
+                                        label: random_span_of(b),
                                         sep: random_span(),
                                         target: arena
                                             .alloc(Pattern::Whole(random_span_of(VarId(1))))
@@ -1027,7 +1016,7 @@ mod tests {
                                 (
                                     random_span(),
                                     Field {
-                                        label: random_span_of(handle::Handle("C")),
+                                        label: random_span_of(c),
                                         sep: random_span(),
                                         target: arena
                                             .alloc(Pattern::Whole(random_span_of(VarId(2))))
@@ -1120,11 +1109,11 @@ mod tests {
                                 &arena,
                                 [
                                     random_field(
-                                        random_span_of(handle::Handle("x")),
+                                        random_span_of(x),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(handle::Handle("A")),
+                                                random_span_of(a),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(0))))
                                                     as &_,
@@ -1133,11 +1122,11 @@ mod tests {
                                         })) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(handle::Handle("y")),
+                                        random_span_of(y),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(handle::Handle("B")),
+                                                random_span_of(b),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(1))))
                                                     as &_,
@@ -1146,7 +1135,7 @@ mod tests {
                                         })) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(handle::Handle("z")),
+                                        random_span_of(z),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(2)))) as &_,
                                     ),
                                 ],
@@ -1162,15 +1151,15 @@ mod tests {
                                 &arena,
                                 [
                                     random_field(
-                                        random_span_of(handle::Handle("x")),
+                                        random_span_of(x),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(handle::Handle("y")),
+                                        random_span_of(y),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(handle::Handle("B")),
+                                                random_span_of(b),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(1))))
                                                     as &_,
@@ -1179,7 +1168,7 @@ mod tests {
                                         })) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(handle::Handle("z")),
+                                        random_span_of(z),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(2)))) as &_,
                                     ),
                                 ],
@@ -1195,19 +1184,19 @@ mod tests {
                                 &arena,
                                 [
                                     random_field(
-                                        random_span_of(handle::Handle("x")),
+                                        random_span_of(x),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(0)))) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(handle::Handle("y")),
+                                        random_span_of(y),
                                         arena.alloc(Pattern::Whole(random_span_of(VarId(1)))) as &_,
                                     ),
                                     random_field(
-                                        random_span_of(handle::Handle("z")),
+                                        random_span_of(z),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
                                             field: random_field(
-                                                random_span_of(handle::Handle("C")),
+                                                random_span_of(c),
                                                 arena
                                                     .alloc(Pattern::Whole(random_span_of(VarId(2))))
                                                     as &_,

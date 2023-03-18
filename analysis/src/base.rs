@@ -30,7 +30,7 @@ pub struct BaseNames<'b, 'a> {
     module_names: &'b FxHashMap<ModuleId, &'a ModuleNames>,
 }
 
-impl<'b, 'a, 's> BaseNames<'b, 'a> {
+impl<'b, 'a> BaseNames<'b, 'a> {
     /// Creates a new `BaseNames`.
     pub fn new(
         me: ModuleId,
@@ -55,16 +55,16 @@ impl<'b, 'a, 's> BaseNames<'b, 'a> {
     }
 
     /// Finds the correct ID associated with the given string.
-    pub fn find<'c>(&'c self, name: Ident) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
+    pub fn find(&self, name: Ident) -> impl '_ + Iterator<Item = SpanOf<BaseName>> {
         self.find_in(self.me, name)
     }
 
     /// Finds the correct ID associated with the given string in the given module.
-    pub fn find_in<'c>(
-        &'c self,
+    pub fn find_in(
+        &self,
         module: ModuleId,
         name: Ident,
-    ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
+    ) -> impl '_ + Iterator<Item = SpanOf<BaseName>> {
         self.module_names[&module]
             .find(name)
             .map(move |sn| sn.map(|n| n.based_in(module)))
@@ -76,7 +76,7 @@ impl<'b, 'a, 's> BaseNames<'b, 'a> {
     }
 }
 
-impl<'b, 'a, 's, I> IdOps<I> for BaseNames<'b, 'a>
+impl<'b, 'a, I> IdOps<I> for BaseNames<'b, 'a>
 where
     BaseName: From<I>,
 {

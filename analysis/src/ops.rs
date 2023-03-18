@@ -37,13 +37,13 @@ pub trait IdOps<I> {
     fn get(&self, id: I) -> SpanOf<Ident>;
 }
 
-impl<'s, I: Id> IdOps<I> for Ids<I, SpanOf<Ident>> {
+impl<I: Id> IdOps<I> for Ids<I, SpanOf<Ident>> {
     fn get(&self, id: I) -> SpanOf<Ident> {
         self[id]
     }
 }
 
-impl<'s, I: Id, T> IdOps<I> for T
+impl<I: Id, T> IdOps<I> for T
 where
     T: Deref<Target = Ids<I, SpanOf<Ident>>>,
 {
@@ -58,7 +58,7 @@ pub(crate) trait GensOps<I>: IdOps<I> {
     fn push(&mut self, name: SpanOf<Ident>) -> I;
 }
 
-impl<'s, I: Id> GensOps<I> for IdGen<I, SpanOf<Ident>> {
+impl<I: Id> GensOps<I> for IdGen<I, SpanOf<Ident>> {
     fn push(&mut self, name: SpanOf<Ident>) -> I {
         self.push(name)
     }

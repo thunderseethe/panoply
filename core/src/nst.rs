@@ -1,19 +1,19 @@
 use crate::{
     cst::{EffectOp, Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation},
     id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
-    memory::handle::RefHandle,
+    ident::Ident,
     span::{Span, SpanOf, Spanned},
 };
 
 /// A pattern with names resolved.
 #[derive(Clone, Copy, Debug)]
-pub enum Pattern<'a, 's> {
-    ProductRow(ProductRow<'a, 's, &'a Pattern<'a, 's>>),
-    SumRow(SumRow<'s, &'a Pattern<'a, 's>>),
+pub enum Pattern<'a> {
+    ProductRow(ProductRow<'a, &'a Pattern<'a>>),
+    SumRow(SumRow<&'a Pattern<'a>>),
     Whole(SpanOf<VarId>),
 }
 
-impl<'a, 's> Spanned for Pattern<'a, 's> {
+impl<'a> Spanned for Pattern<'a> {
     fn span(&self) -> Span {
         match self {
             Pattern::ProductRow(p) => p.span(),
@@ -25,45 +25,45 @@ impl<'a, 's> Spanned for Pattern<'a, 's> {
 
 /// An Aiahr term with names resolved.
 #[derive(Clone, Copy, Debug)]
-pub enum Term<'a, 's> {
+pub enum Term<'a> {
     Binding {
         var: SpanOf<VarId>,
-        annotation: Option<TypeAnnotation<'a, 's, TyVarId>>,
+        annotation: Option<TypeAnnotation<'a, TyVarId>>,
         eq: Span,
-        value: &'a Term<'a, 's>,
+        value: &'a Term<'a>,
         semi: Span,
-        expr: &'a Term<'a, 's>,
+        expr: &'a Term<'a>,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a, 's>,
+        handler: &'a Term<'a>,
         do_: Span,
-        expr: &'a Term<'a, 's>,
+        expr: &'a Term<'a>,
     },
     Abstraction {
         lbar: Span,
         arg: SpanOf<VarId>,
-        annotation: Option<TypeAnnotation<'a, 's, TyVarId>>,
+        annotation: Option<TypeAnnotation<'a, TyVarId>>,
         rbar: Span,
-        body: &'a Term<'a, 's>,
+        body: &'a Term<'a>,
     },
     Application {
-        func: &'a Term<'a, 's>,
+        func: &'a Term<'a>,
         lpar: Span,
-        arg: &'a Term<'a, 's>,
+        arg: &'a Term<'a>,
         rpar: Span,
     },
-    ProductRow(ProductRow<'a, 's, &'a Term<'a, 's>>),
-    SumRow(SumRow<'s, &'a Term<'a, 's>>),
+    ProductRow(ProductRow<'a, &'a Term<'a>>),
+    SumRow(SumRow<&'a Term<'a>>),
     FieldAccess {
-        base: &'a Term<'a, 's>,
+        base: &'a Term<'a>,
         dot: Span,
-        field: SpanOf<RefHandle<'s, str>>,
+        field: SpanOf<Ident>,
     },
     Match {
         match_: Span,
         langle: Span,
-        cases: Separated<'a, Field<&'a Pattern<'a, 's>, &'a Term<'a, 's>>>,
+        cases: Separated<'a, Field<&'a Pattern<'a>, &'a Term<'a>>>,
         rangle: Span,
     },
     EffectOpRef(SpanOf<(ModuleId, EffectId, EffectOpId)>),
@@ -71,12 +71,12 @@ pub enum Term<'a, 's> {
     VariableRef(SpanOf<VarId>),
     Parenthesized {
         lpar: Span,
-        term: &'a Term<'a, 's>,
+        term: &'a Term<'a>,
         rpar: Span,
     },
 }
 
-impl<'a, 's> Spanned for Term<'a, 's> {
+impl<'a> Spanned for Term<'a> {
     fn span(&self) -> Span {
         match self {
             Term::Binding { var, expr, .. } => Span::join(var, *expr),
@@ -97,23 +97,23 @@ impl<'a, 's> Spanned for Term<'a, 's> {
 
 /// A top-level item in an Aiahr source file with names resolved.
 #[derive(Clone, Copy, Debug)]
-pub enum Item<'a, 's> {
+pub enum Item<'a> {
     Effect {
         effect: Span,
         name: SpanOf<EffectId>,
         lbrace: Span,
-        ops: &'a [Option<EffectOp<'a, 's, EffectOpId, TyVarId>>],
+        ops: &'a [Option<EffectOp<'a, EffectOpId, TyVarId>>],
         rbrace: Span,
     },
     Term {
         name: SpanOf<ItemId>,
-        annotation: Option<SchemeAnnotation<'a, 's, TyVarId>>,
+        annotation: Option<SchemeAnnotation<'a, TyVarId>>,
         eq: Span,
-        value: &'a Term<'a, 's>,
+        value: &'a Term<'a>,
     },
 }
 
-impl<'a, 's> Spanned for Item<'a, 's> {
+impl<'a> Spanned for Item<'a> {
     fn span(&self) -> Span {
         match self {
             Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
@@ -227,7 +227,7 @@ macro_rules! nterm_dot {
     ($base:pat, $field:pat) => {
         &$crate::nst::Term::FieldAccess {
             base: $base,
-            field: $crate::span_of!($crate::h!($field)),
+            field: $crate::span_of!($field),
             ..
         }
     };

@@ -15,3 +15,4 @@ salsa.workspace = true
 aiahr-parser.workspace = true
 assert_matches.workspace = true
 chumsky.workspace = true
+aiahr-test.workspace = true

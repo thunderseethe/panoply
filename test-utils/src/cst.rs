@@ -11,10 +11,7 @@ pub fn random_field<L, T>(label: L, target: T) -> Field<L, T> {
     }
 }
 
-pub fn random_sep<'a, T, II>(
-    arena: &'a Bump,
-    elems: impl IntoIterator<IntoIter = II>,
-) -> Separated<'a, T>
+pub fn random_sep<T, II>(arena: &Bump, elems: impl IntoIterator<IntoIter = II>) -> Separated<'_, T>
 where
     II: Iterator<Item = T> + ExactSizeIterator,
 {

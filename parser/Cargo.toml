@@ -10,6 +10,8 @@ aiahr-core.workspace = true
 bumpalo.workspace = true
 chumsky.workspace = true
 regex.workspace = true
+salsa.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true
+aiahr-test.workspace = true

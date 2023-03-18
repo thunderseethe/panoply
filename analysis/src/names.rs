@@ -109,7 +109,7 @@ pub struct Names<'b, 'a> {
     scopes: Vec<FxHashSet<Ident>>,
 }
 
-impl<'b, 'a, 's> Names<'b, 'a> {
+impl<'b, 'a> Names<'b, 'a> {
     /// Constructs a new `Names` with the given base.
     pub fn new(base: &'b BaseNames<'b, 'a>) -> Names<'b, 'a> {
         Names {
@@ -190,7 +190,7 @@ impl<'b, 'a, 's> Names<'b, 'a> {
     }
 
     /// Finds the correct ID associated with the given string.
-    pub fn find<'c>(&'c self, name: Ident) -> impl 'c + Iterator<Item = SpanOf<Name>> {
+    pub fn find(&self, name: Ident) -> impl '_ + Iterator<Item = SpanOf<Name>> {
         self.names
             .get(&name)
             .into_iter()
@@ -200,11 +200,11 @@ impl<'b, 'a, 's> Names<'b, 'a> {
     }
 
     /// Finds the correct ID associated with the given string in the given module.
-    pub fn find_in<'c>(
-        &'c self,
+    pub fn find_in(
+        &self,
         module: ModuleId,
         name: Ident,
-    ) -> impl 'c + Iterator<Item = SpanOf<BaseName>> {
+    ) -> impl '_ + Iterator<Item = SpanOf<BaseName>> {
         self.base.find_in(module, name)
     }
 
@@ -214,7 +214,7 @@ impl<'b, 'a, 's> Names<'b, 'a> {
     }
 }
 
-impl<'b, 'a, 's, I> IdOps<I> for Names<'b, 'a>
+impl<'b, 'a, I> IdOps<I> for Names<'b, 'a>
 where
     Name: From<I>,
 {

@@ -1,7 +1,7 @@
 use std::{fmt::Debug, iter::FusedIterator};
 
 use crate::{
-    memory::handle::RefHandle,
+    ident::Ident,
     span::{Span, SpanOf, Spanned},
 };
 
@@ -94,29 +94,29 @@ impl<L: Spanned, T: Spanned> Spanned for Field<L, T> {
 }
 
 /// A field with an identifier label, separator, and target in `T`.
-pub type IdField<'s, T> = Field<SpanOf<RefHandle<'s, str>>, T>;
+pub type IdField<T> = Field<SpanOf<Ident>, T>;
 
 /// A product row with values in `T`.
 #[derive(Clone, Copy, Debug)]
-pub struct ProductRow<'a, 's, T> {
+pub struct ProductRow<'a, T> {
     pub lbrace: Span,
-    pub fields: Option<Separated<'a, IdField<'s, T>>>,
+    pub fields: Option<Separated<'a, IdField<T>>>,
     pub rbrace: Span,
 }
 
-impl<'a, 's, T> Spanned for ProductRow<'a, 's, T> {
+impl<'a, T> Spanned for ProductRow<'a, T> {
     fn span(&self) -> Span {
         Span::join(&self.lbrace, &self.rbrace)
     }
 }
 
-impl<'a, 's, T> IntoIterator for &'a ProductRow<'a, 's, T> {
-    type Item = &'a IdField<'s, T>;
+impl<'a, T> IntoIterator for &'a ProductRow<'a, T> {
+    type Item = &'a IdField<T>;
 
     type IntoIter = std::iter::FlatMap<
-        std::option::Iter<'a, Separated<'a, IdField<'s, T>>>,
-        Elements<'a, IdField<'s, T>>,
-        fn(&'a Separated<'a, IdField<'s, T>>) -> Elements<'a, IdField<'s, T>>,
+        std::option::Iter<'a, Separated<'a, IdField<T>>>,
+        Elements<'a, IdField<T>>,
+        fn(&'a Separated<'a, IdField<T>>) -> Elements<'a, IdField<T>>,
     >;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -126,13 +126,13 @@ impl<'a, 's, T> IntoIterator for &'a ProductRow<'a, 's, T> {
 
 /// A sum row with value in `T`.
 #[derive(Clone, Copy, Debug)]
-pub struct SumRow<'s, T> {
+pub struct SumRow<T> {
     pub langle: Span,
-    pub field: IdField<'s, T>,
+    pub field: IdField<T>,
     pub rangle: Span,
 }
 
-impl<'s, T> Spanned for SumRow<'s, T> {
+impl<T> Spanned for SumRow<T> {
     fn span(&self) -> Span {
         Span::join(&self.langle, &self.rangle)
     }
@@ -165,35 +165,35 @@ impl<'a, V, C: Spanned> Spanned for Row<'a, V, C> {
 }
 
 /// A row of types.
-pub type TypeRow<'a, 's, V> = Row<'a, V, IdField<'s, &'a Type<'a, 's, V>>>;
+pub type TypeRow<'a, V> = Row<'a, V, IdField<&'a Type<'a, V>>>;
 
 /// An unqualified Aiahr type.
 #[derive(Clone, Copy, Debug)]
-pub enum Type<'a, 's, V> {
+pub enum Type<'a, V> {
     Named(SpanOf<V>),
     Sum {
         langle: Span,
-        variants: TypeRow<'a, 's, V>,
+        variants: TypeRow<'a, V>,
         rangle: Span,
     },
     Product {
         lbrace: Span,
-        fields: Option<TypeRow<'a, 's, V>>,
+        fields: Option<TypeRow<'a, V>>,
         rbrace: Span,
     },
     Function {
-        domain: &'a Type<'a, 's, V>,
+        domain: &'a Type<'a, V>,
         arrow: Span,
-        codomain: &'a Type<'a, 's, V>,
+        codomain: &'a Type<'a, V>,
     },
     Parenthesized {
         lpar: Span,
-        type_: &'a Type<'a, 's, V>,
+        type_: &'a Type<'a, V>,
         rpar: Span,
     },
 }
 
-impl<'a, 's, V> Spanned for Type<'a, 's, V> {
+impl<'a, V> Spanned for Type<'a, V> {
     fn span(&self) -> Span {
         match self {
             Type::Named(n) => n.span(),
@@ -209,16 +209,16 @@ impl<'a, 's, V> Spanned for Type<'a, 's, V> {
 
 /// An atomic row for use in a type constraint.
 #[derive(Clone, Copy, Debug)]
-pub enum RowAtom<'a, 's, V> {
+pub enum RowAtom<'a, V> {
     Concrete {
         lpar: Span,
-        fields: Separated<'a, IdField<'s, &'a Type<'a, 's, V>>>,
+        fields: Separated<'a, IdField<&'a Type<'a, V>>>,
         rpar: Span,
     },
     Variable(SpanOf<V>),
 }
 
-impl<'a, 's, V> Spanned for RowAtom<'a, 's, V> {
+impl<'a, V> Spanned for RowAtom<'a, V> {
     fn span(&self) -> Span {
         match self {
             RowAtom::Concrete { lpar, rpar, .. } => Span::join(lpar, rpar),
@@ -229,17 +229,17 @@ impl<'a, 's, V> Spanned for RowAtom<'a, 's, V> {
 
 /// A type constraint.
 #[derive(Clone, Copy, Debug)]
-pub enum Constraint<'a, 's, V> {
+pub enum Constraint<'a, V> {
     RowSum {
-        lhs: RowAtom<'a, 's, V>,
+        lhs: RowAtom<'a, V>,
         plus: Span,
-        rhs: RowAtom<'a, 's, V>,
+        rhs: RowAtom<'a, V>,
         eq: Span,
-        goal: RowAtom<'a, 's, V>,
+        goal: RowAtom<'a, V>,
     },
 }
 
-impl<'a, 's, V> Spanned for Constraint<'a, 's, V> {
+impl<'a, V> Spanned for Constraint<'a, V> {
     fn span(&self) -> Span {
         match self {
             Constraint::RowSum { lhs, goal, .. } => Span::join(lhs, goal),
@@ -263,12 +263,12 @@ impl<V> Spanned for Quantifier<V> {
 
 /// A qualifiers for a type.
 #[derive(Clone, Copy, Debug)]
-pub struct Qualifiers<'a, 's, V> {
-    pub constraints: Separated<'a, Constraint<'a, 's, V>>,
+pub struct Qualifiers<'a, V> {
+    pub constraints: Separated<'a, Constraint<'a, V>>,
     pub arrow: Span,
 }
 
-impl<'a, 's, V> Spanned for Qualifiers<'a, 's, V> {
+impl<'a, V> Spanned for Qualifiers<'a, V> {
     fn span(&self) -> Span {
         Span::join(&self.constraints, &self.arrow)
     }
@@ -276,13 +276,13 @@ impl<'a, 's, V> Spanned for Qualifiers<'a, 's, V> {
 
 /// A polymorphic Aiahr type.
 #[derive(Clone, Copy, Debug)]
-pub struct Scheme<'a, 's, V> {
+pub struct Scheme<'a, V> {
     pub quantifiers: &'a [Quantifier<V>],
-    pub qualifiers: Option<Qualifiers<'a, 's, V>>,
-    pub type_: &'a Type<'a, 's, V>,
+    pub qualifiers: Option<Qualifiers<'a, V>>,
+    pub type_: &'a Type<'a, V>,
 }
 
-impl<'a, 's, V> Spanned for Scheme<'a, 's, V> {
+impl<'a, V> Spanned for Scheme<'a, V> {
     fn span(&self) -> Span {
         Span {
             start: self
@@ -303,13 +303,13 @@ impl<'a, 's, V> Spanned for Scheme<'a, 's, V> {
 
 /// An effect operation.
 #[derive(Clone, Copy, Debug)]
-pub struct EffectOp<'a, 's, O, V> {
+pub struct EffectOp<'a, O, V> {
     pub name: SpanOf<O>,
     pub colon: Span,
-    pub type_: &'a Type<'a, 's, V>,
+    pub type_: &'a Type<'a, V>,
 }
 
-impl<'a, 's, O, V> Spanned for EffectOp<'a, 's, O, V> {
+impl<'a, O, V> Spanned for EffectOp<'a, O, V> {
     fn span(&self) -> Span {
         Span::join(&self.name, self.type_)
     }
@@ -317,13 +317,13 @@ impl<'a, 's, O, V> Spanned for EffectOp<'a, 's, O, V> {
 
 /// An Aiahr pattern.
 #[derive(Clone, Copy, Debug)]
-pub enum Pattern<'a, 's> {
-    ProductRow(ProductRow<'a, 's, &'a Pattern<'a, 's>>),
-    SumRow(SumRow<'s, &'a Pattern<'a, 's>>),
-    Whole(SpanOf<RefHandle<'s, str>>),
+pub enum Pattern<'a> {
+    ProductRow(ProductRow<'a, &'a Pattern<'a>>),
+    SumRow(SumRow<&'a Pattern<'a>>),
+    Whole(SpanOf<Ident>),
 }
 
-impl<'a, 's> Spanned for Pattern<'a, 's> {
+impl<'a> Spanned for Pattern<'a> {
     fn span(&self) -> Span {
         match self {
             Pattern::ProductRow(p) => p.span(),
@@ -341,63 +341,63 @@ pub struct Annotation<T> {
 }
 
 /// A monotype annotation.
-pub type TypeAnnotation<'a, 's, V> = Annotation<&'a Type<'a, 's, V>>;
+pub type TypeAnnotation<'a, V> = Annotation<&'a Type<'a, V>>;
 
 /// A scheme annotation.
-pub type SchemeAnnotation<'a, 's, V> = Annotation<&'a Scheme<'a, 's, V>>;
+pub type SchemeAnnotation<'a, V> = Annotation<&'a Scheme<'a, V>>;
 
 /// An Aiahr term.
 #[derive(Clone, Copy, Debug)]
-pub enum Term<'a, 's> {
+pub enum Term<'a> {
     Binding {
-        var: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
+        var: SpanOf<Ident>,
+        annotation: Option<TypeAnnotation<'a, Ident>>,
         eq: Span,
-        value: &'a Term<'a, 's>,
+        value: &'a Term<'a>,
         semi: Span,
-        expr: &'a Term<'a, 's>,
+        expr: &'a Term<'a>,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a, 's>,
+        handler: &'a Term<'a>,
         do_: Span,
-        expr: &'a Term<'a, 's>,
+        expr: &'a Term<'a>,
     },
     Abstraction {
         lbar: Span,
-        arg: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<TypeAnnotation<'a, 's, RefHandle<'s, str>>>,
+        arg: SpanOf<Ident>,
+        annotation: Option<TypeAnnotation<'a, Ident>>,
         rbar: Span,
-        body: &'a Term<'a, 's>,
+        body: &'a Term<'a>,
     },
     Application {
-        func: &'a Term<'a, 's>,
+        func: &'a Term<'a>,
         lpar: Span,
-        arg: &'a Term<'a, 's>,
+        arg: &'a Term<'a>,
         rpar: Span,
     },
-    ProductRow(ProductRow<'a, 's, &'a Term<'a, 's>>),
-    SumRow(SumRow<'s, &'a Term<'a, 's>>),
+    ProductRow(ProductRow<'a, &'a Term<'a>>),
+    SumRow(SumRow<&'a Term<'a>>),
     DotAccess {
-        base: &'a Term<'a, 's>,
+        base: &'a Term<'a>,
         dot: Span,
-        field: SpanOf<RefHandle<'s, str>>,
+        field: SpanOf<Ident>,
     },
     Match {
         match_: Span,
         langle: Span,
-        cases: Separated<'a, Field<&'a Pattern<'a, 's>, &'a Term<'a, 's>>>,
+        cases: Separated<'a, Field<&'a Pattern<'a>, &'a Term<'a>>>,
         rangle: Span,
     },
-    SymbolRef(SpanOf<RefHandle<'s, str>>),
+    SymbolRef(SpanOf<Ident>),
     Parenthesized {
         lpar: Span,
-        term: &'a Term<'a, 's>,
+        term: &'a Term<'a>,
         rpar: Span,
     },
 }
 
-impl<'a, 's> Spanned for Term<'a, 's> {
+impl<'a> Spanned for Term<'a> {
     fn span(&self) -> Span {
         match self {
             Term::Binding { var, expr, .. } => Span::join(var, *expr),
@@ -416,32 +416,32 @@ impl<'a, 's> Spanned for Term<'a, 's> {
 
 /// A top-level item in an Aiahr source file.
 #[derive(Clone, Copy, Debug)]
-pub enum Item<'a, 's> {
+pub enum Item<'a> {
     Effect {
         effect: Span,
-        name: SpanOf<RefHandle<'s, str>>,
+        name: SpanOf<Ident>,
         lbrace: Span,
-        ops: &'a [EffectOp<'a, 's, RefHandle<'s, str>, RefHandle<'s, str>>],
+        ops: &'a [EffectOp<'a, Ident, Ident>],
         rbrace: Span,
     },
     Term {
-        name: SpanOf<RefHandle<'s, str>>,
-        annotation: Option<SchemeAnnotation<'a, 's, RefHandle<'s, str>>>,
+        name: SpanOf<Ident>,
+        annotation: Option<SchemeAnnotation<'a, Ident>>,
         eq: Span,
-        value: &'a Term<'a, 's>,
+        value: &'a Term<'a>,
     },
 }
 
-impl<'a, 's> Item<'a, 's> {
+impl<'a> Item<'a> {
     /// Returns the name of the item.
-    pub fn name(&self) -> SpanOf<RefHandle<'s, str>> {
+    pub fn name(&self) -> SpanOf<Ident> {
         match self {
             Item::Effect { name, .. } | Item::Term { name, .. } => *name,
         }
     }
 }
 
-impl<'a, 's> Spanned for Item<'a, 's> {
+impl<'a> Spanned for Item<'a> {
     fn span(&self) -> Span {
         match self {
             Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
@@ -477,7 +477,7 @@ macro_rules! field {
 #[macro_export]
 macro_rules! id_field {
     ($label:pat, $target:pat) => {
-        $crate::field!($crate::span_of!($crate::h!($label)), $target)
+        $crate::field!($crate::span_of!($label), $target)
     };
 }
 
@@ -514,7 +514,7 @@ macro_rules! row_concrete {
 #[macro_export]
 macro_rules! row_variable {
     ($($vars:pat),+ $(,)?) => {
-        $crate::cst::Row::Variable($crate::separated!($($crate::span_of!($crate::h!($vars))),+))
+        $crate::cst::Row::Variable($crate::separated!($($crate::span_of!($vars)),+))
     };
 }
 
@@ -523,7 +523,7 @@ macro_rules! row_mixed {
     (($($fields:pat),+ $(,)?), ($($vars:pat),+ $(,)?)) => {
         $crate::cst::Row::Mixed {
             concrete: $crate::separated!($($fields),+),
-            variables: $crate::separated!($($crate::span_of!($crate::h!($vars))),+),
+            variables: $crate::separated!($($crate::span_of!($vars)),+),
             ..
         }
     };
@@ -593,7 +593,7 @@ macro_rules! rwx_concrete {
 #[macro_export]
 macro_rules! rwx_variable {
     ($var:pat) => {
-        $crate::cst::RowAtom::Variable($crate::span_of!($crate::h!($var)))
+        $crate::cst::RowAtom::Variable($crate::span_of!($var))
     };
 }
 
@@ -696,7 +696,7 @@ macro_rules! pat_sum {
 #[macro_export]
 macro_rules! pat_var {
     ($var:pat) => {
-        &$crate::cst::Pattern::Whole($crate::span_of!($crate::h!($var)))
+        &$crate::cst::Pattern::Whole($crate::span_of!($var))
     };
 }
 
@@ -704,7 +704,7 @@ macro_rules! pat_var {
 macro_rules! term_local {
     ($var:pat, $value:pat, $expr:pat) => {
         &$crate::cst::Term::Binding {
-            var: $crate::span_of!($crate::h!((var))),
+            var: $crate::span_of!($var),
             annotation: None,
             value: $value,
             expr: $expr,
@@ -713,7 +713,7 @@ macro_rules! term_local {
     };
     ($var:pat, $type_:pat, $value:pat, $expr:pat) => {
         &$crate::cst::Term::Binding {
-            var: $crate::span_of!($crate::h!((var))),
+            var: $crate::span_of!($var),
             annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             value: $value,
             expr: $expr,
@@ -737,7 +737,7 @@ macro_rules! term_with {
 macro_rules! term_abs {
     ($arg:pat, $body:pat) => {
         &$crate::cst::Term::Abstraction {
-            arg: $crate::span_of!($crate::h!($arg)),
+            arg: $crate::span_of!($arg),
             annotation: None,
             body: $body,
             ..
@@ -745,7 +745,7 @@ macro_rules! term_abs {
     };
     ($arg:pat, $type_:pat, $body:pat) => {
         &$crate::cst::Term::Abstraction {
-            arg: $crate::span_of!($crate::h!($arg)),
+            arg: $crate::span_of!($arg),
             annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             body: $body,
             ..
@@ -786,7 +786,7 @@ macro_rules! term_dot {
     ($base:pat, $field:pat) => {
         &$crate::cst::Term::DotAccess {
             base: $base,
-            field: $crate::span_of!($crate::h!($field)),
+            field: $crate::span_of!($field),
             ..
         }
     };
@@ -802,7 +802,7 @@ macro_rules! term_match {
 #[macro_export]
 macro_rules! term_sym {
     ($var:pat) => {
-        &$crate::cst::Term::SymbolRef($crate::span_of!($crate::h!($var)))
+        &$crate::cst::Term::SymbolRef($crate::span_of!($var))
     };
 }
 
@@ -817,7 +817,7 @@ macro_rules! term_paren {
 macro_rules! item_effect {
     ($name:pat, $($ops:pat),* $(,)?) => {
         $crate::cst::Item::Effect {
-            name: $crate::span_of!($crate::h!($name)),
+            name: $crate::span_of!($name),
             ops: &[$($ops),*],
             ..
         }
@@ -828,7 +828,7 @@ macro_rules! item_effect {
 macro_rules! item_term {
     ($name:pat, $value:pat) => {
         $crate::cst::Item::Term {
-            name: $crate::span_of!($crate::h!($name)),
+            name: $crate::span_of!($name),
             annotation: None,
             value: $value,
             ..
@@ -836,7 +836,7 @@ macro_rules! item_term {
     };
     ($name:pat, $type_:pat, $value:pat) => {
         $crate::cst::Item::Term {
-            name: $crate::span_of!($crate::h!($name)),
+            name: $crate::span_of!($name),
             annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
             ..

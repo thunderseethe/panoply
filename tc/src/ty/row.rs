@@ -196,7 +196,7 @@ impl<'ctx> ClosedRow<InArena<'ctx>> {
         right: Self,
     ) -> Result<RowInternals<InArena<'ctx>>, TypeCheckError<'ctx>> {
         self._disjoint_union(right, &(), |left, right, lbl| {
-            TypeCheckError::RowsNotDisjoint(left, right, lbl.clone())
+            TypeCheckError::RowsNotDisjoint(left, right, *lbl)
         })
     }
 }

@@ -3,36 +3,36 @@ use std::cmp::Reverse;
 use aiahr_core::{
     diagnostic::lexer::LexError,
     id::ModuleId,
+    ident::Ident,
     loc::{Loc, Locator},
-    memory::{handle::RefHandle, intern::InternerByRef},
     span::SpanOf,
     token::Token,
 };
 use regex::{Captures, Regex, RegexSet};
 
 /// A function that produces a token from a regex match using a string interner.
-type TokenFactory = Box<dyn for<'s> Fn(Captures, &'s dyn InternerByRef<str>) -> Token<'s>>;
+type TokenFactory = Box<dyn Fn(Captures, &(dyn crate::Db + '_)) -> Token>;
 
 /// A `Lexer` turns input text into a sequence of `Token`s based on input regexes.
 ///
 /// When multiple regexes match a given piece of text, the regex with the longest match takes
 /// precedence. In the case of a tie in length, regexes earlier in the list provided at construction
 /// take precedence over later ones.
-pub struct Lexer<'s, S> {
+pub struct Lexer<'s> {
     union: RegexSet, // The set of all regexes in `tokens`.
     tokens: Vec<(Regex, Option<TokenFactory>)>,
-    interner: &'s S,
+    db: &'s dyn crate::Db,
 }
 
-impl<'s, S> Lexer<'s, S> {
+impl<'s> Lexer<'s> {
     /// Returns a new lexer which maps each of the given regexes to the corresponding token factory
     /// function. Regexes paired with `None` indicate text that should be ignored.
     ///
     /// Interns all strings using the given interner.
     pub fn new(
         tokens: Vec<(String, Option<TokenFactory>)>,
-        interner: &'s S,
-    ) -> Result<Lexer<'s, S>, regex::Error> {
+        db: &'s dyn crate::Db,
+    ) -> Result<Lexer<'s>, regex::Error> {
         let anchored = tokens
             .into_iter()
             .map(|(p, f)| (format!("^{}", p), f))
@@ -43,19 +43,12 @@ impl<'s, S> Lexer<'s, S> {
                 .into_iter()
                 .map(|(p, f)| Ok((Regex::new(&p)?, f)))
                 .collect::<Result<Vec<_>, _>>()?,
-            interner,
+            db,
         })
     }
 
     /// Splits `text` into a sequence of tokens.
-    pub fn lex(
-        &self,
-        module: ModuleId,
-        text: &str,
-    ) -> Result<(Vec<SpanOf<Token<'s>>>, Loc), LexError>
-    where
-        S: InternerByRef<'s, str>,
-    {
+    pub fn lex(&self, module: ModuleId, text: &str) -> Result<(Vec<SpanOf<Token>>, Loc), LexError> {
         let locator = Locator::new(module, text);
         let mut idx = 0;
         let mut tokens = Vec::new();
@@ -75,7 +68,7 @@ impl<'s, S> Lexer<'s, S> {
                 if let Some(f) = f {
                     tokens.push(SpanOf {
                         start: locator.locate(idx).unwrap(),
-                        value: f(caps, self.interner),
+                        value: f(caps, self.db),
                         end: locator.locate(idx + len).unwrap(),
                     });
                 }
@@ -89,22 +82,22 @@ impl<'s, S> Lexer<'s, S> {
 }
 
 // Maps the literal text to the given token.
-fn literal(text: &'static str, t: Token<'static>) -> (String, Option<TokenFactory>) {
+fn literal(text: &'static str, t: Token) -> (String, Option<TokenFactory>) {
     (regex::escape(text), Some(Box::new(move |_, _| t)))
 }
 
 // Calls `f` on the entire match. Use this if you don't care about capture groups.
 fn whole<F>(f: F) -> Option<TokenFactory>
 where
-    for<'s> F: 's + Fn(RefHandle<'s, str>) -> Token<'s>,
+    F: Fn(Ident) -> Token + 'static,
 {
-    Some(Box::new(move |c, interner| {
-        f(interner.intern_by_ref(c.get(0).unwrap().as_str()))
+    Some(Box::new(move |c, db| {
+        f(db.ident_str(c.get(0).unwrap().as_str()))
     }))
 }
 
 /// Returns a lexer for the Aiahr language that uses the given interner.
-pub fn aiahr_lexer<S>(interner: &S) -> Lexer<'_, S> {
+pub fn aiahr_lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
     // TODO: Do something with comments, or at least doc comments.
     Lexer::new(
         vec![
@@ -117,7 +110,7 @@ pub fn aiahr_lexer<S>(interner: &S) -> Lexer<'_, S> {
             // Identifier
             (
                 r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),
-                whole(|s| Token::Identifier(s)),
+                whole(Token::Identifier),
             ),
             // Punctuation
             literal("+", Token::Plus),
@@ -143,7 +136,7 @@ pub fn aiahr_lexer<S>(interner: &S) -> Lexer<'_, S> {
             // Whitespace
             (r"\s+".to_string(), None),
         ],
-        interner,
+        db,
     )
     .unwrap()
 }

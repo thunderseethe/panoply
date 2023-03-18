@@ -1,16 +1,16 @@
 use std::fmt::Debug;
 
-use crate::memory::handle::RefHandle;
+use crate::ident::Ident;
 
 /// A token in Aiahr.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Token<'s> {
+pub enum Token {
     KwForall,
     KwEffect,
     KwMatch,
     KwWith,
     KwDo,
-    Identifier(RefHandle<'s, str>),
+    Identifier(Ident),
     Plus,
     Equal,
     VerticalBar,
@@ -30,7 +30,7 @@ pub enum Token<'s> {
     Dot,
 }
 
-impl<'s> Token<'s> {
+impl Token {
     /// Returns a human-friendly name for this kind of token. If the token corresponds to a specific
     /// literal string, then that string is its name.
     pub fn name(&self) -> &'static str {

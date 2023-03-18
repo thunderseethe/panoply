@@ -46,7 +46,7 @@ pub struct EffectNames {
 
 impl EffectNames {
     /// An iterator over all operations matching the given name.
-    pub fn find<'a>(&'a self, name: Ident) -> impl 'a + Iterator<Item = SpanOf<EffectOpId>> {
+    pub fn find(&self, name: Ident) -> impl '_ + Iterator<Item = SpanOf<EffectOpId>> {
         self.names
             .get(&name)
             .map(|n| self.get(*n).span().of(*n))

@@ -153,7 +153,7 @@ pub enum NameResolutionError {
     },
 }
 
-impl<'s> Diagnostic for NameResolutionError {
+impl Diagnostic for NameResolutionError {
     fn name(&self) -> &'static str {
         match self {
             NameResolutionError::Duplicate { .. } => "name-resolution-duplicate-definition",
