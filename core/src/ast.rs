@@ -9,7 +9,7 @@ pub mod indexed {
 
     use crate::id::{EffectOpId, ItemId, ModuleId};
     use crate::ident::Ident;
-    use crate::indexed::{HasArena, IndexedAllocate, IndexedAllocator};
+    use crate::indexed::{HasArena, IndexedAllocate};
     use crate::span::Span;
 
     use super::Direction;
@@ -72,13 +72,13 @@ pub mod indexed {
         },
     }
 
-    impl<Var: IndexedAllocate> IndexedAllocate for super::Term<'_, Var>
+    impl<A, Var: IndexedAllocate<A>> IndexedAllocate<A> for super::Term<'_, Var>
     where
-        IndexedAllocator: HasArena<Term<Var::Out>>,
+        A: HasArena<Term<Var::Out>>,
     {
         type Out = Idx<Term<Var::Out>>;
 
-        fn alloc<'db>(&self, alloc: &mut crate::indexed::IndexedAllocator) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut A) -> Self::Out {
             let term = match self {
                 super::Term::Abstraction { arg, body } => Term::Abstraction {
                     arg: arg.alloc(alloc),

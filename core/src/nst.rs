@@ -96,26 +96,29 @@ pub mod indexed {
         },
     }
 
-    impl IndexedAllocate for EffectOpId {
+    impl<A> IndexedAllocate<A> for EffectOpId {
         type Out = EffectOpId;
 
-        fn alloc<'db>(&self, _: &mut IndexedAllocator) -> Self::Out {
+        fn alloc<'db>(&self, _: &mut A) -> Self::Out {
             *self
         }
     }
 
-    impl IndexedAllocate for TyVarId {
+    impl<A> IndexedAllocate<A> for TyVarId {
         type Out = TyVarId;
 
-        fn alloc<'db>(&self, _: &mut IndexedAllocator) -> Self::Out {
+        fn alloc<'db>(&self, _: &mut A) -> Self::Out {
             *self
         }
     }
 
-    impl IndexedAllocate for super::Pattern<'_> {
+    impl<A> IndexedAllocate<A> for super::Pattern<'_>
+    where
+        A: HasArena<Pattern>,
+    {
         type Out = Idx<Pattern>;
 
-        fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
+        fn alloc<'db>(&self, alloc: &mut A) -> Self::Out {
             let pat = match self {
                 super::Pattern::ProductRow(prod) => Pattern::ProductRow(prod.alloc(alloc)),
                 super::Pattern::SumRow(sum) => Pattern::SumRow(sum.alloc(alloc)),
@@ -125,7 +128,7 @@ pub mod indexed {
         }
     }
 
-    impl IndexedAllocate for super::Term<'_> {
+    impl IndexedAllocate<IndexedAllocator> for super::Term<'_> {
         type Out = Idx<Term>;
 
         fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
@@ -211,7 +214,7 @@ pub mod indexed {
         }
     }
 
-    impl IndexedAllocate for super::Item<'_> {
+    impl IndexedAllocate<IndexedAllocator> for super::Item<'_> {
         type Out = Item;
 
         fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {

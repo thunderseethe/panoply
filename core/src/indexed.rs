@@ -62,16 +62,16 @@ impl HasArena<crate::nst::indexed::Pattern> for IndexedAllocator {
     }
 }
 
-pub trait IndexedAllocate {
+pub trait IndexedAllocate<A> {
     type Out;
 
-    fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out;
+    fn alloc<'db>(&self, alloc: &mut A) -> Self::Out;
 }
 
-impl<T: IndexedAllocate> IndexedAllocate for &T {
+impl<A, T: IndexedAllocate<A>> IndexedAllocate<A> for &T {
     type Out = T::Out;
 
-    fn alloc<'db>(&self, alloc: &mut IndexedAllocator) -> Self::Out {
+    fn alloc<'db>(&self, alloc: &mut A) -> Self::Out {
         T::alloc(*self, alloc)
     }
 }
