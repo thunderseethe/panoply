@@ -5,6 +5,156 @@ use crate::{
     span::{Span, SpanOf, Spanned},
 };
 
+pub mod indexed {
+    use la_arena::Idx;
+
+    use crate::cst;
+    use crate::cst::indexed::{
+        EffectOp, IndexedAllocate, IndexedAllocator, ProductRow, SchemeAnnotation, Separated,
+        SumRow, TypeAnnotation,
+    };
+    use crate::cst::Field;
+    use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
+    use crate::ident::Ident;
+    use crate::span::{Span, SpanOf};
+
+    /// A pattern with names resolved.
+    #[derive(Clone, Debug)]
+    pub enum Pattern {
+        ProductRow(ProductRow<Idx<Self>>),
+        SumRow(SumRow<Idx<Self>>),
+        Whole(SpanOf<VarId>),
+    }
+
+    /// An Aiahr term with names resolved.
+    #[derive(Clone, Debug)]
+    pub enum Term {
+        Binding {
+            var: SpanOf<VarId>,
+            annotation: Option<TypeAnnotation<TyVarId>>,
+            eq: Span,
+            value: Idx<Self>,
+            semi: Span,
+            expr: Idx<Self>,
+        },
+        Handle {
+            with: Span,
+            handler: Idx<Self>,
+            do_: Span,
+            expr: Idx<Self>,
+        },
+        Abstraction {
+            lbar: Span,
+            arg: SpanOf<VarId>,
+            annotation: Option<TypeAnnotation<TyVarId>>,
+            rbar: Span,
+            body: Idx<Self>,
+        },
+        Application {
+            func: Idx<Self>,
+            lpar: Span,
+            arg: Idx<Self>,
+            rpar: Span,
+        },
+        ProductRow(ProductRow<Idx<Self>>),
+        SumRow(SumRow<Idx<Self>>),
+        FieldAccess {
+            base: Idx<Self>,
+            dot: Span,
+            field: SpanOf<Ident>,
+        },
+        Match {
+            match_: Span,
+            langle: Span,
+            cases: Separated<Field<Idx<Pattern>, Idx<Self>>>,
+            rangle: Span,
+        },
+        EffectOpRef(SpanOf<(ModuleId, EffectId, EffectOpId)>),
+        ItemRef(SpanOf<(ModuleId, ItemId)>),
+        VariableRef(SpanOf<VarId>),
+        Parenthesized {
+            lpar: Span,
+            term: Idx<Self>,
+            rpar: Span,
+        },
+    }
+
+    /// A top-level item in an Aiahr source file with names resolved.
+    #[derive(Clone, Debug)]
+    pub enum Item {
+        Effect {
+            effect: Span,
+            name: SpanOf<EffectId>,
+            lbrace: Span,
+            ops: Vec<Option<EffectOp<EffectOpId, TyVarId>>>,
+            rbrace: Span,
+        },
+        Term {
+            name: SpanOf<ItemId>,
+            annotation: Option<SchemeAnnotation<TyVarId>>,
+            eq: Span,
+            value: Idx<Term>,
+        },
+    }
+
+    impl IndexedAllocate for cst::EffectOp<'_, '_, EffectOpId, TyVarId> {
+        type Out = cst::indexed::EffectOp<EffectOpId, TyVarId>;
+
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+            todo!()
+        }
+    }
+
+    impl IndexedAllocate for super::Term<'_, '_> {
+        type Out = Idx<Term>;
+
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+            todo!()
+        }
+    }
+
+    impl IndexedAllocate for cst::Scheme<'_, '_, TyVarId> {
+        type Out = cst::indexed::Scheme<TyVarId>;
+
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+            todo!()
+        }
+    }
+
+    impl IndexedAllocate for super::Item<'_, '_> {
+        type Out = Item;
+
+        fn alloc<'db>(&self, alloc: &mut IndexedAllocator<'db>) -> Self::Out {
+            match self {
+                super::Item::Effect {
+                    effect,
+                    name,
+                    lbrace,
+                    ops,
+                    rbrace,
+                } => Item::Effect {
+                    effect: *effect,
+                    name: *name,
+                    lbrace: *lbrace,
+                    ops: ops.iter().map(|op| op.alloc(alloc)).collect(),
+                    rbrace: *rbrace,
+                },
+                super::Item::Term {
+                    name,
+                    annotation,
+                    eq,
+                    value,
+                } => Item::Term {
+                    name: *name,
+                    annotation: annotation.alloc(alloc),
+                    eq: *eq,
+                    value: value.alloc(alloc),
+                },
+            }
+        }
+    }
+}
+
 /// A pattern with names resolved.
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern<'a> {
