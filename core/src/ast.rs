@@ -22,7 +22,11 @@ pub mod indexed {
         idx_spans: FxHashMap<Idx<Term<Var>>, Span>,
     }
     impl<Var> HasArena<Term<Var>> for AstIndxAlloc<'_, '_, Var> {
-        fn arena(&mut self) -> &mut Arena<Term<Var>> {
+        fn arena(&self) -> &Arena<Term<Var>> {
+            &self.terms
+        }
+
+        fn arena_mut(&mut self) -> &mut Arena<Term<Var>> {
             &mut self.terms
         }
     }
@@ -135,7 +139,7 @@ pub mod indexed {
                     body: body.alloc(alloc),
                 },
             };
-            let idx = alloc.arena().alloc(term);
+            let idx = alloc.arena_mut().alloc(term);
             alloc.idx_spans.insert(idx, span);
             idx
         }

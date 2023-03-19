@@ -24,17 +24,26 @@ pub mod indexed {
         pats: Arena<Pattern>,
     }
     impl HasArena<Type<TyVarId>> for NstIndxAlloc {
-        fn arena(&mut self) -> &mut Arena<Type<TyVarId>> {
+        fn arena(&self) -> &Arena<Type<TyVarId>> {
+            &self.types
+        }
+        fn arena_mut(&mut self) -> &mut Arena<Type<TyVarId>> {
             &mut self.types
         }
     }
     impl HasArena<Term> for NstIndxAlloc {
-        fn arena(&mut self) -> &mut Arena<Term> {
+        fn arena(&self) -> &Arena<Term> {
+            &self.terms
+        }
+        fn arena_mut(&mut self) -> &mut Arena<Term> {
             &mut self.terms
         }
     }
     impl HasArena<Pattern> for NstIndxAlloc {
-        fn arena(&mut self) -> &mut Arena<Pattern> {
+        fn arena(&self) -> &Arena<Pattern> {
+            &self.pats
+        }
+        fn arena_mut(&mut self) -> &mut Arena<Pattern> {
             &mut self.pats
         }
     }
@@ -146,7 +155,7 @@ pub mod indexed {
                 super::Pattern::SumRow(sum) => Pattern::SumRow(sum.alloc(alloc)),
                 super::Pattern::Whole(var) => Pattern::Whole(*var),
             };
-            alloc.arena().alloc(pat)
+            alloc.arena_mut().alloc(pat)
         }
     }
 
@@ -232,7 +241,7 @@ pub mod indexed {
                 super::Term::ItemRef(id) => Term::ItemRef(*id),
                 super::Term::VariableRef(id) => Term::VariableRef(*id),
             };
-            alloc.arena().alloc(term)
+            alloc.arena_mut().alloc(term)
         }
     }
 
