@@ -1,9 +1,7 @@
 use aiahr_core::ident::Ident;
-use ena::unify::{EqUnifyValue, UnifyValue};
-use pretty::{docs, DocAllocator, DocBuilder};
 use salsa::DebugWithDb;
 
-use crate::{diagnostic::TypeCheckError, Evidence, InArena, InDb, Ty, TypeKind};
+use crate::{InDb, Ty, TypeKind};
 
 use crate::ty::TypeFoldable;
 use std::cmp::Ordering;
@@ -11,7 +9,8 @@ use std::convert::Infallible;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
-use super::{AccessTy, FallibleTypeFold, MkTy, TypeAlloc};
+use super::alloc::MkTy;
+use super::{AccessTy, FallibleTypeFold, TypeAlloc};
 
 /// A label of a row field
 pub type RowLabel = Ident;
@@ -35,35 +34,6 @@ where
     A::RowValues: Copy,
 {
 }
-impl<'ctx> ClosedRow<InArena<'ctx>> {
-    pub(crate) fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        let docs = self
-            .fields
-            .iter()
-            .zip(self.values.iter())
-            .map(|(field, value)| {
-                docs![
-                    a,
-                    a.as_string(field.text(db.as_core_db())),
-                    a.space(),
-                    "|>",
-                    a.softline(),
-                    value.pretty(a, db)
-                ]
-                .group()
-            });
-        a.intersperse(
-            docs,
-            a.concat([a.softline_(), a.as_string(","), a.space()])
-                .into_doc(),
-        )
-    }
-}
-impl<'ctx> EqUnifyValue for ClosedRow<InArena<'ctx>> {}
 impl<A: TypeAlloc> ClosedRow<A> {
     pub fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool {
         acc.row_fields(&self.fields).is_empty()
@@ -109,7 +79,7 @@ impl<A: TypeAlloc> ClosedRow<A>
 where
     Ty<A>: Clone,
 {
-    fn _disjoint_union<'a, E>(
+    pub fn _disjoint_union<'a, E>(
         self,
         right: Self,
         acc: &dyn AccessTy<'a, A>,
@@ -168,36 +138,6 @@ where
         values.shrink_to_fit();
 
         Ok((fields.into_boxed_slice(), values.into_boxed_slice()))
-    }
-}
-
-impl<'ctx> ClosedRow<InArena<'ctx>> {
-    /// Create a new row that contains all self fields that are not present in sub.
-    pub fn difference(self, sub: Self) -> (Box<[RowLabel]>, Box<[Ty<InArena<'ctx>>]>) {
-        let out_row = self
-            .fields
-            .iter()
-            .zip(self.values.iter())
-            .filter(|(field, _)| sub.fields.binary_search_by(|lbl| lbl.cmp(field)).is_err());
-
-        let (mut fields, mut values) = (Vec::new(), Vec::new());
-        for (field, value) in out_row {
-            fields.push(*field);
-            values.push(*value);
-        }
-        (fields.into_boxed_slice(), values.into_boxed_slice())
-    }
-
-    /// Combine two disjoint rows into a new row.
-    /// This maintains the row invariants in the resulting row.
-    /// If called on two overlapping rows an error is thrown.
-    pub fn disjoint_union(
-        self,
-        right: Self,
-    ) -> Result<RowInternals<InArena<'ctx>>, TypeCheckError<'ctx>> {
-        self._disjoint_union(right, &(), |left, right, lbl| {
-            TypeCheckError::RowsNotDisjoint(left, right, *lbl)
-        })
     }
 }
 
@@ -316,41 +256,6 @@ impl<A: TypeAlloc> Row<A> {
         }
     }
 }
-impl<'ctx> Row<InArena<'ctx>> {
-    pub(crate) fn pretty<'a, D>(
-        &self,
-        allocator: &'a D,
-        db: &dyn crate::Db,
-    ) -> pretty::DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        match self {
-            Row::Open(tv) => pretty::Pretty::pretty(tv.clone(), allocator),
-            Row::Closed(row) => row.pretty(allocator, db),
-        }
-    }
-}
-
-pub(crate) type InferRow<'ctx> = Row<InArena<'ctx>>;
-impl<'ctx> UnifyValue for InferRow<'ctx> {
-    type Error = TypeCheckError<'ctx>;
-
-    fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
-        match (left, right) {
-            (Row::Open(left_var), Row::Open(right_var)) => {
-                Ok(Row::Open(std::cmp::min(*left_var, *right_var)))
-            }
-            // Prefer the more solved row if possible
-            (Row::Open(_), Row::Closed(_)) => Ok(*right),
-            (Row::Closed(_), Row::Open(_)) => Ok(*left),
-            (Row::Closed(left_row), Row::Closed(right_row)) => (left_row == right_row)
-                .then_some(*left)
-                .ok_or(TypeCheckError::RowsNotEqual(*left, *right)),
-        }
-    }
-}
 
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for Row<A> {
     type Alloc = A;
@@ -422,27 +327,6 @@ impl<A: TypeAlloc> OrderedRowXorRow<A> {
         }
     }
 }
-impl<'ctx> From<OrderedRowXorRow<InArena<'ctx>>> for (Row<InArena<'ctx>>, Row<InArena<'ctx>>) {
-    fn from(val: OrderedRowXorRow<InArena<'ctx>>) -> Self {
-        match val {
-            OrderedRowXorRow::ClosedOpen(row, var) => (Row::Closed(row), Row::Open(var)),
-            OrderedRowXorRow::OpenOpen { min, max } => (Row::Open(min), Row::Open(max)),
-        }
-    }
-}
-impl<'ctx> TryFrom<(Row<InArena<'ctx>>, Row<InArena<'ctx>>)> for OrderedRowXorRow<InArena<'ctx>> {
-    type Error = (ClosedRow<InArena<'ctx>>, ClosedRow<InArena<'ctx>>);
-
-    fn try_from(value: (Row<InArena<'ctx>>, Row<InArena<'ctx>>)) -> Result<Self, Self::Error> {
-        match value {
-            (Row::Open(l), Row::Open(r)) => Ok(Self::with_open_open(l, r)),
-            (Row::Open(tv), Row::Closed(row)) | (Row::Closed(row), Row::Open(tv)) => {
-                Ok(Self::ClosedOpen(row, tv))
-            }
-            (Row::Closed(l), Row::Closed(r)) => Err((l, r)),
-        }
-    }
-}
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<A> {
     type Alloc = A;
     type Out<B: TypeAlloc> = (Row<B>, Row<B>);
@@ -511,29 +395,6 @@ where
     OpenGoal<A>: Copy,
     ClosedGoal<A>: Copy,
 {
-}
-impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>>> for Evidence<InArena<'ctx>> {
-    fn from(eq: UnsolvedRowEquation<InArena<'ctx>>) -> Self {
-        match eq {
-            UnsolvedRowEquation::ClosedGoal(cand) => Evidence::Row {
-                left: Row::Open(cand.min),
-                right: Row::Open(cand.max),
-                goal: Row::Closed(cand.goal),
-            },
-            UnsolvedRowEquation::OpenGoal(cand) => match cand.orxr {
-                OrderedRowXorRow::ClosedOpen(closed, open) => Evidence::Row {
-                    left: Row::Closed(closed),
-                    right: Row::Open(open),
-                    goal: Row::Open(cand.goal),
-                },
-                OrderedRowXorRow::OpenOpen { min, max } => Evidence::Row {
-                    left: Row::Open(min),
-                    right: Row::Open(max),
-                    goal: Row::Open(cand.goal),
-                },
-            },
-        }
-    }
 }
 impl<A: TypeAlloc> PartialEq for UnsolvedRowEquation<A>
 where

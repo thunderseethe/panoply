@@ -10,11 +10,8 @@ use aiahr_core::{
 use pretty::{docs, DocAllocator};
 
 use crate::{
-    ty::{
-        alloc::{arena::InArena, TypeVarOf},
-        row::{InferRow, RowLabel},
-        InferTy, UnifierToTcVarError,
-    },
+    infer_ty::{arena::InArena, InferRow, InferTy},
+    ty::{alloc::TypeVarOf, row::RowLabel, UnifierToTcVarError},
     ClosedRow,
 };
 

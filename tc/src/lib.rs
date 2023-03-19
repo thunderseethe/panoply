@@ -14,16 +14,19 @@ mod ty;
 pub use ty::{
     alloc::{
         db::{InDb, TyData},
-        TypeAlloc,
+        AccessTy, MkTy, TypeAlloc,
     },
     row::{ClosedRow, Row},
-    AccessTy, MkTy, Ty, TypeKind,
+    Ty, TypeKind,
 };
 
-use ty::{
-    alloc::arena::{InArena, TyCtx},
-    fold::TypeFoldable,
-    TcUnifierVar,
+use ty::fold::TypeFoldable;
+
+pub(crate) mod infer_ty;
+
+use infer_ty::{
+    arena::{InArena, TyCtx},
+    *,
 };
 
 use crate::infer::InferCtx;

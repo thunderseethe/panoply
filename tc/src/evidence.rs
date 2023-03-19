@@ -1,8 +1,9 @@
 use salsa::DebugWithDb;
 
 use crate::{
+    infer_ty::arena::InArena,
     ty::{
-        alloc::{arena::InArena, db::InDb, TypeAlloc},
+        alloc::{db::InDb, TypeAlloc},
         fold::{FallibleTypeFold, TypeFoldable},
     },
     Row,

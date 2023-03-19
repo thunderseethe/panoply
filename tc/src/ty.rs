@@ -1,23 +1,17 @@
-use std::convert::Infallible;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::ops::Deref;
 
-use aiahr_core::ident::Ident;
-
-use ena::unify::{EqUnifyValue, UnifyKey};
-
 pub mod row;
-use pretty::{docs, DocAllocator, DocBuilder};
 use row::*;
 
 pub mod fold;
 use fold::*;
 use salsa::DebugWithDb;
 
-use crate::{InArena, InDb, TyCtx};
+use crate::InDb;
 
-use self::alloc::TypeAlloc;
+use self::alloc::{AccessTy, MkTy, TypeAlloc};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct UnifierToTcVarError {
@@ -28,161 +22,10 @@ pub struct TcVarToUnifierError {
     index: u32,
 }
 
-/// A unifier variable.
-/// These are produced during the type checking process and MUST NOT persist outside the type
-/// checker. They may not appear in the AST once type checking is completed and are removed by
-/// zonking.
-/// Conversely to the untouchable TcVar, these are "touchable" and will be modified by the type
-/// checker.
-#[derive(Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) struct TcUnifierVar<'ctx> {
-    id: u32,
-    _marker: std::marker::PhantomData<&'ctx ()>,
-}
-impl<'ctx> Debug for TcUnifierVar<'ctx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("TcUnifierVar").field(&self.id).finish()
-    }
-}
-impl<'ctx> From<Infallible> for TcUnifierVar<'ctx> {
-    fn from(_: Infallible) -> Self {
-        unreachable!()
-    }
-}
-
-impl<'a, 'ctx, A, D> pretty::Pretty<'a, D, A> for TcUnifierVar<'ctx>
-where
-    A: 'a,
-    D: ?Sized + DocAllocator<'a, A>,
-{
-    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
-        "tv".pretty(a).append(a.as_string(self.id).angles()).group()
-    }
-}
-
-impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
-    type Value = Option<InferTy<'ctx>>;
-
-    fn index(&self) -> u32 {
-        self.id
-    }
-
-    fn from_index(id: u32) -> Self {
-        Self {
-            id,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    fn tag() -> &'static str {
-        "TcUnifierVar"
-    }
-}
-
-/// A trait for allocators that can make types and related data types.
-pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
-    fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A>;
-    fn mk_label(&self, label: &str) -> RowLabel;
-    fn mk_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> ClosedRow<A>;
-
-    fn empty_row(&self) -> ClosedRow<A> {
-        self.mk_row(&[], &[])
-    }
-    fn empty_row_ty(&self) -> Ty<A> {
-        self.mk_ty(TypeKind::RowTy(self.empty_row()))
-    }
-    fn single_row(&self, label: Ident, value: Ty<A>) -> ClosedRow<A> {
-        self.mk_row(&[label], &[value])
-    }
-    fn single_row_ty(&self, label: Ident, value: Ty<A>) -> Ty<A> {
-        self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
-    }
-
-    fn construct_row(&self, mut row: Vec<(RowLabel, Ty<A>)>) -> ClosedRow<A> {
-        row.sort_by(|a, b| Ident::cmp(&a.0, &b.0));
-
-        let mut fields = Vec::with_capacity(row.len());
-        let mut values = Vec::with_capacity(row.len());
-        for (k, v) in row {
-            fields.push(k);
-            values.push(v);
-        }
-
-        self.mk_row(&fields, &values)
-    }
-}
-
-pub trait AccessTy<'a, A: TypeAlloc<TypeKind<A>>> {
-    fn kind(&self, ty: &Ty<A>) -> &'a TypeKind<A>;
-    fn row_fields(&self, row: &A::RowFields) -> &'a [RowLabel];
-    fn row_values(&self, row: &A::RowValues) -> &'a [Ty<A>];
-}
-impl<'ctx> AccessTy<'ctx, InArena<'ctx>> for TyCtx<'ctx> {
-    fn kind(&self, ty: &Ty<InArena<'ctx>>) -> &'ctx TypeKind<InArena<'ctx>> {
-        let handle = ty.0;
-        handle.0
-    }
-
-    fn row_fields(&self, fields: &<InArena<'ctx> as TypeAlloc>::RowFields) -> &'ctx [RowLabel] {
-        fields.0
-    }
-
-    fn row_values(
-        &self,
-        values: &<InArena<'ctx> as TypeAlloc>::RowValues,
-    ) -> &'ctx [Ty<InArena<'ctx>>] {
-        values.0
-    }
-}
-// Technically with arena alloc it's all refs so we don't need any context to access data.
-impl<'ctx> AccessTy<'ctx, InArena<'ctx>> for () {
-    fn kind(&self, ty: &Ty<InArena<'ctx>>) -> &'ctx TypeKind<InArena<'ctx>> {
-        (ty.0).0
-    }
-
-    fn row_fields(&self, fields: &<InArena<'ctx> as TypeAlloc>::RowFields) -> &'ctx [RowLabel] {
-        fields.0
-    }
-
-    fn row_values(
-        &self,
-        values: &<InArena<'ctx> as TypeAlloc>::RowValues,
-    ) -> &'ctx [Ty<InArena<'ctx>>] {
-        values.0
-    }
-}
-impl<'db, DB> AccessTy<'db, InDb> for &'db DB
-where
-    DB: crate::Db,
-{
-    fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
-        ty.0.kind(*self)
-    }
-
-    fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
-        row.fields(*self).as_slice()
-    }
-
-    fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
-        row.values(*self).as_slice()
-    }
-}
-impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
-    fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
-        ty.0.kind(*self)
-    }
-
-    fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
-        row.fields(*self)
-    }
-
-    fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
-        row.values(*self)
-    }
-}
-
 pub mod alloc {
-    use crate::TypeKind;
+    use aiahr_core::ident::Ident;
+
+    use crate::{ty::row::RowLabel, ClosedRow, Ty, TypeKind};
     use std::cmp::Ordering;
     use std::fmt::Debug;
     use std::hash::Hash;
@@ -207,6 +50,45 @@ pub mod alloc {
     }
 
     pub(crate) type TypeVarOf<A> = <A as TypeAlloc>::TypeVar;
+
+    /// A trait for allocators that can make types and related data types.
+    pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
+        fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A>;
+        fn mk_label(&self, label: &str) -> RowLabel;
+        fn mk_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> ClosedRow<A>;
+
+        fn empty_row(&self) -> ClosedRow<A> {
+            self.mk_row(&[], &[])
+        }
+        fn empty_row_ty(&self) -> Ty<A> {
+            self.mk_ty(TypeKind::RowTy(self.empty_row()))
+        }
+        fn single_row(&self, label: Ident, value: Ty<A>) -> ClosedRow<A> {
+            self.mk_row(&[label], &[value])
+        }
+        fn single_row_ty(&self, label: Ident, value: Ty<A>) -> Ty<A> {
+            self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
+        }
+
+        fn construct_row(&self, mut row: Vec<(RowLabel, Ty<A>)>) -> ClosedRow<A> {
+            row.sort_by(|a, b| Ident::cmp(&a.0, &b.0));
+
+            let mut fields = Vec::with_capacity(row.len());
+            let mut values = Vec::with_capacity(row.len());
+            for (k, v) in row {
+                fields.push(k);
+                values.push(v);
+            }
+
+            self.mk_row(&fields, &values)
+        }
+    }
+
+    pub trait AccessTy<'a, A: TypeAlloc<TypeKind<A>>> {
+        fn kind(&self, ty: &Ty<A>) -> &'a TypeKind<A>;
+        fn row_fields(&self, row: &A::RowFields) -> &'a [RowLabel];
+        fn row_values(&self, row: &A::RowValues) -> &'a [Ty<A>];
+    }
 
     // TODO: Replace this once `is_sorted` is stabilized
     pub(crate) trait IteratorSorted: Iterator {
@@ -256,7 +138,7 @@ pub mod alloc {
             ClosedRow, MkTy, Ty, TypeKind,
         };
 
-        use super::TypeAlloc;
+        use super::{AccessTy, TypeAlloc};
 
         #[salsa::interned]
         #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -340,91 +222,34 @@ pub mod alloc {
                 }
             }
         }
-    }
 
-    pub(crate) mod arena {
-        use aiahr_core::memory::{
-            handle::RefHandle,
-            intern::{Interner, InternerByRef, SyncInterner},
-        };
-        use bumpalo::Bump;
-
-        use crate::{
-            ty::{alloc::IteratorSorted, row::RowLabel, TcUnifierVar},
-            ClosedRow, MkTy, Ty, TypeKind,
-        };
-
-        use super::TypeAlloc;
-
-        pub(crate) struct TyCtx<'ctx> {
-            tys: SyncInterner<'ctx, TypeKind<InArena<'ctx>>, Bump>,
-            row_fields: SyncInterner<'ctx, [RowLabel], Bump>,
-            row_values: SyncInterner<'ctx, [Ty<InArena<'ctx>>], Bump>,
-            db: &'ctx dyn crate::Db,
-        }
-
-        /// Allocate our type structs in an Arena.
-        #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-        pub(crate) struct InArena<'ctx>(std::marker::PhantomData<&'ctx ()>);
-        impl Copy for InArena<'_>
+        impl<'db, DB> AccessTy<'db, InDb> for &'db DB
         where
-            <Self as TypeAlloc>::TypeData: Copy,
-            <Self as TypeAlloc>::TypeVar: Copy,
-            <Self as TypeAlloc>::RowFields: Copy,
-            <Self as TypeAlloc>::RowValues: Copy,
+            DB: crate::Db,
         {
-        }
-
-        impl<'ctx> TypeAlloc<TypeKind<Self>> for InArena<'ctx> {
-            type TypeData = RefHandle<'ctx, TypeKind<Self>>;
-
-            type RowFields = RefHandle<'ctx, [RowLabel]>;
-
-            type RowValues = RefHandle<'ctx, [Ty<Self>]>;
-
-            type TypeVar = TcUnifierVar<'ctx>;
-        }
-
-        impl<'ctx> TyCtx<'ctx> {
-            pub fn new(db: &'ctx dyn crate::Db, arena: &'ctx Bump) -> Self {
-                Self {
-                    tys: SyncInterner::new(arena),
-                    row_fields: SyncInterner::new(arena),
-                    row_values: SyncInterner::new(arena),
-                    db,
-                }
-            }
-        }
-
-        impl<'ctx> MkTy<InArena<'ctx>> for TyCtx<'ctx>
-        where
-            TypeKind<InArena<'ctx>>: Copy,
-        {
-            fn mk_ty(&self, kind: TypeKind<InArena<'ctx>>) -> Ty<InArena<'ctx>> {
-                Ty(self.tys.intern(kind))
+            fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
+                ty.0.kind(*self)
             }
 
-            fn mk_label(&self, label: &str) -> RowLabel {
-                self.db.ident_str(label)
+            fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
+                row.fields(*self).as_slice()
             }
 
-            fn mk_row(
-                &self,
-                fields: &[RowLabel],
-                values: &[Ty<InArena<'ctx>>],
-            ) -> ClosedRow<InArena<'ctx>> {
-                debug_assert!(
-                    fields.len() == values.len(),
-                    "Expected row fields and valuse to be the same length"
-                );
-                debug_assert!(
-                    fields.iter().considered_sorted(),
-                    "Expected row fields to be sorted"
-                );
-                ClosedRow {
-                    fields: self.row_fields.intern_by_ref(fields),
-                    values: self.row_values.intern_by_ref(values),
-                }
+            fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
+                row.values(*self).as_slice()
+            }
+        }
+        impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
+            fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
+                ty.0.kind(*self)
+            }
+
+            fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
+                row.fields(*self)
+            }
+
+            fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
+                row.values(*self)
             }
         }
     }
@@ -468,30 +293,6 @@ impl DebugWithDb<dyn crate::Db + '_> for Ty<InDb> {
     }
 }
 
-impl<'ctx> Ty<InArena<'ctx>> {
-    pub fn try_as_prod_row(self) -> Result<Row<InArena<'ctx>>, Self> {
-        match self.deref() {
-            TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
-            _ => Err(self),
-        }
-    }
-
-    pub fn try_as_sum_row(self) -> Result<Row<InArena<'ctx>>, Self> {
-        match self.deref() {
-            TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
-            _ => Err(self),
-        }
-    }
-
-    pub fn try_as_fn_ty(self) -> Result<(Self, Self), Self> {
-        match self.deref() {
-            TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
-            _ => Err(self),
-        }
-    }
-}
 impl Ty<InDb> {
     pub fn try_as_prod_row<'a>(self, db: &impl AccessTy<'a, InDb>) -> Result<Row<InDb>, Self> {
         match db.kind(&self) {
@@ -517,17 +318,6 @@ impl Ty<InDb> {
     }
 }
 
-impl<'ctx> Ty<InArena<'ctx>> {
-    /// Convert a type to a row. If type is not representable as a row return type as an error.
-    pub(crate) fn try_to_row(&self) -> Result<Row<InArena<'ctx>>, Self> {
-        match self.deref() {
-            TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::VarTy(var) => Ok(Row::Open(*var)),
-            _ => Err(*self),
-        }
-    }
-}
-
 impl<A: TypeAlloc> Deref for Ty<A>
 where
     A::TypeData: Deref,
@@ -538,21 +328,6 @@ where
         self.0.deref()
     }
 }
-impl<'ctx> Ty<InArena<'ctx>> {
-    pub fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        self.0.deref().pretty(a, db)
-    }
-}
-
-/// During inference our type variables are all unification variables.
-/// This is an alias to make inference types easy to talk about.
-pub(crate) type InferTy<'ctx> = Ty<InArena<'ctx>>;
-
-impl<'ctx> EqUnifyValue for Ty<InArena<'ctx>> {}
 
 /// Data for `Ty`.
 /// `TypeKind` is interned to produce a `Ty`.
@@ -583,19 +358,6 @@ where
     Row<A>: Copy,
     Ty<A>: Copy,
 {
-}
-impl<'ctx> Debug for TypeKind<InArena<'ctx>> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeKind::ErrorTy => f.debug_tuple("ErrorTy").finish(),
-            TypeKind::IntTy => f.debug_tuple("IntTy").finish(),
-            TypeKind::VarTy(var) => f.debug_tuple("VarTy").field(var).finish(),
-            TypeKind::RowTy(row) => f.debug_tuple("RowTy").field(row).finish(),
-            TypeKind::FunTy(arg, ret) => f.debug_tuple("FunTy").field(arg).field(ret).finish(),
-            TypeKind::ProdTy(row) => f.debug_tuple("ProdTy").field(row).finish(),
-            TypeKind::SumTy(row) => f.debug_tuple("SumTy").field(row).finish(),
-        }
-    }
 }
 impl Debug for TypeKind<InDb> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -641,34 +403,6 @@ impl DebugWithDb<dyn crate::Db + '_> for TypeKind<InDb> {
                 .finish(),
             TypeKind::ProdTy(row) => f.debug_tuple("ProdTy").field(&row.debug(db)).finish(),
             TypeKind::SumTy(row) => f.debug_tuple("SumTy").field(&row.debug(db)).finish(),
-        }
-    }
-}
-
-impl<'ctx> TypeKind<InArena<'ctx>> {
-    fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        match self {
-            TypeKind::ErrorTy => a.as_string("Error"),
-            TypeKind::IntTy => a.as_string("Int"),
-            TypeKind::VarTy(tv) => pretty::Pretty::pretty(*tv, a),
-            TypeKind::RowTy(closed_row) => closed_row.pretty(a, db).nest(2).parens().group(),
-            TypeKind::FunTy(arg, ret) => arg
-                .pretty(a, db)
-                .append(docs![a, a.softline(), "->", a.softline(), ret.pretty(a, db)].nest(2)),
-            TypeKind::ProdTy(row) => row
-                .pretty(a, db)
-                .enclose(a.softline(), a.softline())
-                .braces()
-                .group(),
-            TypeKind::SumTy(row) => row
-                .pretty(a, db)
-                .enclose(a.softline(), a.softline())
-                .angles()
-                .group(),
         }
     }
 }
@@ -728,11 +462,10 @@ mod tests {
     use bumpalo::Bump;
     use ena::unify::UnifyKey;
 
+    use crate::infer_ty::TcUnifierVar;
     use crate::tests::TestDatabase;
     use crate::TypeKind::*;
     use crate::{MkTy, Row, TyCtx};
-
-    use super::TcUnifierVar;
 
     #[test]
     fn test_ty_pretty_printing() {

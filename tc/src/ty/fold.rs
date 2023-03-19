@@ -1,6 +1,9 @@
 use crate::{Row, Ty};
 
-use super::{alloc::TypeVarOf, AccessTy, MkTy, TypeAlloc, TypeKind};
+use super::{
+    alloc::{AccessTy, MkTy, TypeAlloc, TypeVarOf},
+    TypeKind,
+};
 
 /// A trait for things that contain types.
 /// This defines how to traverse `Self` to visit each type it contains and fold it.

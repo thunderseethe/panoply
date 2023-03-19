@@ -66,18 +66,21 @@ use rustc_hash::FxHashMap;
 use salsa::DebugWithDb;
 use std::collections::BTreeSet;
 
-use crate::ty::alloc::db::InDb;
 use crate::{
     diagnostic::{into_diag, TypeCheckDiagnostic, TypeCheckError},
     folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
     ty::{
-        alloc::{arena::InArena, TypeAlloc, TypeVarOf},
+        alloc::{TypeAlloc, TypeVarOf},
         fold::{FallibleTypeFold, TypeFoldable},
-        row::{ClosedGoal, InferRow, OpenGoal, OrderedRowXorRow, RowLabel, UnsolvedRowEquation},
+        row::{ClosedGoal, OpenGoal, OrderedRowXorRow, RowLabel, UnsolvedRowEquation},
         TypeKind::*,
         *,
     },
     ClosedRow, Db, EffectInfo, Evidence, Row, TyScheme,
+};
+use crate::{
+    infer_ty::{arena::InArena, InferRow, InferTy, TcUnifierVar},
+    ty::alloc::{db::InDb, AccessTy, MkTy},
 };
 
 /// Type states for infer context

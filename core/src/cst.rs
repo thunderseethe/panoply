@@ -111,7 +111,7 @@ pub mod indexed {
     /// A row of types.
     pub type TypeRow<V> = Row<V, IdField<Idx<Type<V>>>>;
 
-    /// An unqualified Aiahr type.
+    /// An unqualified Aiahr syntactic type.
     #[derive(Clone, Debug)]
     pub enum Type<V> {
         Named(SpanOf<V>),

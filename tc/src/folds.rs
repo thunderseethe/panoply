@@ -1,7 +1,8 @@
 pub(crate) mod occurs_check {
     use crate::{
-        ty::{alloc::TypeVarOf, fold::FallibleEndoTypeFold, TcUnifierVar},
-        AccessTy, InArena, MkTy, Ty, TypeKind,
+        infer_ty::{arena::InArena, TcUnifierVar},
+        ty::{alloc::TypeVarOf, fold::FallibleEndoTypeFold},
+        AccessTy, MkTy, Ty, TypeKind,
     };
 
     /// Check that a unification variable does not appear within the type the unification variable is
@@ -42,12 +43,12 @@ pub(crate) mod normalize {
     use ena::unify::InPlaceUnificationTable;
 
     use crate::{
+        infer_ty::{arena::InArena, TcUnifierVar},
         ty::{
             alloc::TypeVarOf,
             fold::{FallibleEndoTypeFold, TypeFoldable},
-            TcUnifierVar,
         },
-        AccessTy, InArena, MkTy, Row, Ty, TypeKind,
+        AccessTy, MkTy, Row, Ty, TypeKind,
     };
 
     /// Normalize a type for unification.
@@ -102,8 +103,9 @@ pub(crate) mod normalize {
 
 pub(crate) mod instantiate {
     use crate::{
-        ty::{alloc::TypeVarOf, fold::FallibleTypeFold, TcUnifierVar, TcVarToUnifierError},
-        InArena, InDb, MkTy, Row, Ty, TypeKind,
+        infer_ty::{arena::InArena, TcUnifierVar},
+        ty::{alloc::TypeVarOf, fold::FallibleTypeFold, TcVarToUnifierError},
+        InDb, MkTy, Row, Ty, TypeKind,
     };
 
     /// Instantiate a type scheme for type checking.
@@ -157,12 +159,13 @@ pub(crate) mod zonker {
     use ena::unify::InPlaceUnificationTable;
 
     use crate::{
+        infer_ty::{arena::InArena, TcUnifierVar},
         ty::{
             alloc::TypeVarOf,
             fold::{FallibleTypeFold, TypeFoldable},
-            TcUnifierVar, UnifierToTcVarError,
+            UnifierToTcVarError,
         },
-        InArena, InDb, MkTy, Row, Ty, TypeKind,
+        InDb, MkTy, Row, Ty, TypeKind,
     };
 
     /// Zonk anything that is TypeFoldable.
