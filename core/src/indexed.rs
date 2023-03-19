@@ -1,3 +1,4 @@
+use bumpalo::Bump;
 use la_arena::Arena;
 
 /// A trait for a type that contains an `Arena<T>`
@@ -7,6 +8,14 @@ use la_arena::Arena;
 pub trait HasArena<T> {
     fn arena(&self) -> &Arena<T>;
     fn arena_mut(&mut self) -> &mut Arena<T>;
+}
+
+/// A trait for a type that contains a `&'a Bump`
+///
+/// Allows types to implement `ReferenceAllocated<'a, A>` for a generic A as long as it has the
+/// required arena.
+pub trait HasRefArena<'a> {
+    fn ref_arena(&self) -> &'a Bump;
 }
 
 /// Convert a reference arena allocated type into an indexed arena allocated type.

@@ -14,7 +14,7 @@ pub mod indexed {
     use crate::cst::Field;
     use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
     use crate::ident::Ident;
-    use crate::indexed::{HasArena, IndexedAllocate};
+    use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
     use crate::span::{Span, SpanOf};
 
     #[derive(Default)]
@@ -134,11 +134,25 @@ pub mod indexed {
             *self
         }
     }
+    impl<A> ReferenceAllocate<'_, A> for EffectOpId {
+        type Out = EffectOpId;
+
+        fn ref_alloc(&self, _: &A) -> Self::Out {
+            *self
+        }
+    }
 
     impl<A> IndexedAllocate<A> for TyVarId {
         type Out = TyVarId;
 
         fn alloc(&self, _: &mut A) -> Self::Out {
+            *self
+        }
+    }
+    impl<A> ReferenceAllocate<'_, A> for TyVarId {
+        type Out = TyVarId;
+
+        fn ref_alloc(&self, _: &A) -> Self::Out {
             *self
         }
     }
@@ -156,6 +170,21 @@ pub mod indexed {
                 super::Pattern::Whole(var) => Pattern::Whole(*var),
             };
             alloc.arena_mut().alloc(pat)
+        }
+    }
+    impl<'a, A> ReferenceAllocate<'a, A> for Idx<Pattern>
+    where
+        A: HasRefArena<'a> + HasArena<Pattern>,
+    {
+        type Out = &'a super::Pattern<'a>;
+
+        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+            let pat = match &alloc.arena()[*self] {
+                Pattern::ProductRow(prod) => super::Pattern::ProductRow(prod.ref_alloc(alloc)),
+                Pattern::SumRow(sum) => super::Pattern::SumRow(sum.ref_alloc(alloc)),
+                Pattern::Whole(var) => super::Pattern::Whole(*var),
+            };
+            alloc.ref_arena().alloc(pat) as &_
         }
     }
 
@@ -242,6 +271,94 @@ pub mod indexed {
                 super::Term::VariableRef(id) => Term::VariableRef(*id),
             };
             alloc.arena_mut().alloc(term)
+        }
+    }
+    impl<'a, A> ReferenceAllocate<'a, A> for Idx<Term>
+    where
+        A: HasRefArena<'a> + HasArena<Term> + HasArena<Type<TyVarId>> + HasArena<Pattern>,
+    {
+        type Out = &'a super::Term<'a>;
+
+        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+            let term = match &alloc.arena()[*self] {
+                Term::Binding {
+                    var,
+                    annotation,
+                    eq,
+                    value,
+                    semi,
+                    expr,
+                } => super::Term::Binding {
+                    var: *var,
+                    annotation: annotation.ref_alloc(alloc),
+                    eq: *eq,
+                    value: value.ref_alloc(alloc),
+                    semi: *semi,
+                    expr: expr.ref_alloc(alloc),
+                },
+                Term::Handle {
+                    with,
+                    handler,
+                    do_,
+                    expr,
+                } => super::Term::Handle {
+                    with: *with,
+                    handler: handler.ref_alloc(alloc),
+                    do_: *do_,
+                    expr: expr.ref_alloc(alloc),
+                },
+                Term::Abstraction {
+                    lbar,
+                    arg,
+                    annotation,
+                    rbar,
+                    body,
+                } => super::Term::Abstraction {
+                    lbar: *lbar,
+                    arg: *arg,
+                    annotation: annotation.ref_alloc(alloc),
+                    rbar: *rbar,
+                    body: body.ref_alloc(alloc),
+                },
+                Term::Application {
+                    func,
+                    lpar,
+                    arg,
+                    rpar,
+                } => super::Term::Application {
+                    func: func.ref_alloc(alloc),
+                    lpar: *lpar,
+                    arg: arg.ref_alloc(alloc),
+                    rpar: *rpar,
+                },
+                Term::ProductRow(prod) => super::Term::ProductRow(prod.ref_alloc(alloc)),
+                Term::SumRow(sum) => super::Term::SumRow(sum.ref_alloc(alloc)),
+                Term::FieldAccess { base, dot, field } => super::Term::FieldAccess {
+                    base: base.ref_alloc(alloc),
+                    dot: *dot,
+                    field: field.ref_alloc(alloc),
+                },
+                Term::Match {
+                    match_,
+                    langle,
+                    cases,
+                    rangle,
+                } => super::Term::Match {
+                    match_: *match_,
+                    langle: *langle,
+                    cases: cases.ref_alloc(alloc),
+                    rangle: *rangle,
+                },
+                Term::EffectOpRef(ids) => super::Term::EffectOpRef(*ids),
+                Term::ItemRef(ids) => super::Term::ItemRef(*ids),
+                Term::VariableRef(var) => super::Term::VariableRef(*var),
+                Term::Parenthesized { lpar, term, rpar } => super::Term::Parenthesized {
+                    lpar: *lpar,
+                    term: term.ref_alloc(alloc),
+                    rpar: *rpar,
+                },
+            };
+            alloc.ref_arena().alloc(term) as &_
         }
     }
 
