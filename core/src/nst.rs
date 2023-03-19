@@ -162,7 +162,7 @@ pub mod indexed {
     impl<A> ReferenceAllocate<'_, A> for EffectOpId {
         type Out = EffectOpId;
 
-        fn ref_alloc(&self, _: &A) -> Self::Out {
+        fn ref_alloc(&self, _: &mut A) -> Self::Out {
             *self
         }
     }
@@ -177,7 +177,7 @@ pub mod indexed {
     impl<A> ReferenceAllocate<'_, A> for TyVarId {
         type Out = TyVarId;
 
-        fn ref_alloc(&self, _: &A) -> Self::Out {
+        fn ref_alloc(&self, _: &mut A) -> Self::Out {
             *self
         }
     }
@@ -203,11 +203,11 @@ pub mod indexed {
     {
         type Out = &'a super::Pattern<'a>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
-            let pat = match &alloc.arena()[*self] {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
+            let pat = match alloc.arena()[*self].clone() {
                 Pattern::ProductRow(prod) => super::Pattern::ProductRow(prod.ref_alloc(alloc)),
                 Pattern::SumRow(sum) => super::Pattern::SumRow(sum.ref_alloc(alloc)),
-                Pattern::Whole(var) => super::Pattern::Whole(*var),
+                Pattern::Whole(var) => super::Pattern::Whole(var),
             };
             alloc.ref_arena().alloc(pat) as &_
         }
@@ -304,8 +304,8 @@ pub mod indexed {
     {
         type Out = &'a super::Term<'a>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
-            let term = match &alloc.arena()[*self] {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
+            let term = match alloc.arena()[*self].clone() {
                 Term::Binding {
                     var,
                     annotation,
@@ -314,11 +314,11 @@ pub mod indexed {
                     semi,
                     expr,
                 } => super::Term::Binding {
-                    var: *var,
+                    var,
                     annotation: annotation.ref_alloc(alloc),
-                    eq: *eq,
+                    eq,
                     value: value.ref_alloc(alloc),
-                    semi: *semi,
+                    semi,
                     expr: expr.ref_alloc(alloc),
                 },
                 Term::Handle {
@@ -327,9 +327,9 @@ pub mod indexed {
                     do_,
                     expr,
                 } => super::Term::Handle {
-                    with: *with,
+                    with,
                     handler: handler.ref_alloc(alloc),
-                    do_: *do_,
+                    do_,
                     expr: expr.ref_alloc(alloc),
                 },
                 Term::Abstraction {
@@ -339,10 +339,10 @@ pub mod indexed {
                     rbar,
                     body,
                 } => super::Term::Abstraction {
-                    lbar: *lbar,
-                    arg: *arg,
+                    lbar,
+                    arg,
                     annotation: annotation.ref_alloc(alloc),
-                    rbar: *rbar,
+                    rbar,
                     body: body.ref_alloc(alloc),
                 },
                 Term::Application {
@@ -352,15 +352,15 @@ pub mod indexed {
                     rpar,
                 } => super::Term::Application {
                     func: func.ref_alloc(alloc),
-                    lpar: *lpar,
+                    lpar,
                     arg: arg.ref_alloc(alloc),
-                    rpar: *rpar,
+                    rpar,
                 },
                 Term::ProductRow(prod) => super::Term::ProductRow(prod.ref_alloc(alloc)),
                 Term::SumRow(sum) => super::Term::SumRow(sum.ref_alloc(alloc)),
                 Term::FieldAccess { base, dot, field } => super::Term::FieldAccess {
                     base: base.ref_alloc(alloc),
-                    dot: *dot,
+                    dot,
                     field: field.ref_alloc(alloc),
                 },
                 Term::Match {
@@ -369,18 +369,18 @@ pub mod indexed {
                     cases,
                     rangle,
                 } => super::Term::Match {
-                    match_: *match_,
-                    langle: *langle,
+                    match_,
+                    langle,
                     cases: cases.ref_alloc(alloc),
-                    rangle: *rangle,
+                    rangle,
                 },
-                Term::EffectOpRef(ids) => super::Term::EffectOpRef(*ids),
-                Term::ItemRef(ids) => super::Term::ItemRef(*ids),
-                Term::VariableRef(var) => super::Term::VariableRef(*var),
+                Term::EffectOpRef(ids) => super::Term::EffectOpRef(ids),
+                Term::ItemRef(ids) => super::Term::ItemRef(ids),
+                Term::VariableRef(var) => super::Term::VariableRef(var),
                 Term::Parenthesized { lpar, term, rpar } => super::Term::Parenthesized {
-                    lpar: *lpar,
+                    lpar,
                     term: term.ref_alloc(alloc),
-                    rpar: *rpar,
+                    rpar,
                 },
             };
             alloc.ref_arena().alloc(term) as &_

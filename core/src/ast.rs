@@ -6,12 +6,13 @@ use rustc_hash::FxHashMap;
 pub mod indexed {
     use std::hash::Hash;
 
+    use bumpalo::Bump;
     use la_arena::{Arena, Idx};
     use rustc_hash::FxHashMap;
 
     use crate::id::{EffectOpId, ItemId, ModuleId};
     use crate::ident::Ident;
-    use crate::indexed::{HasArena, IndexedAllocate};
+    use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
     use crate::span::Span;
 
     use super::Direction;
@@ -22,6 +23,27 @@ pub mod indexed {
         idx_spans: FxHashMap<Idx<Term<Var>>, Span>,
     }
     impl<Var> HasArena<Term<Var>> for AstIndxAlloc<'_, '_, Var> {
+        fn arena(&self) -> &Arena<Term<Var>> {
+            &self.terms
+        }
+
+        fn arena_mut(&mut self) -> &mut Arena<Term<Var>> {
+            &mut self.terms
+        }
+    }
+
+    pub struct AstRefAlloc<'b, 'a, Var> {
+        arena: &'a Bump,
+        terms: Arena<Term<Var>>,
+        ref_spans: FxHashMap<&'a super::Term<'a, Var>, Span>,
+        idx_spans: &'b FxHashMap<Idx<Term<Var>>, Span>,
+    }
+    impl<'a, Var> HasRefArena<'a> for AstRefAlloc<'_, 'a, Var> {
+        fn ref_arena(&self) -> &'a Bump {
+            self.arena
+        }
+    }
+    impl<Var> HasArena<Term<Var>> for AstRefAlloc<'_, '_, Var> {
         fn arena(&self) -> &Arena<Term<Var>> {
             &self.terms
         }
@@ -145,11 +167,86 @@ pub mod indexed {
         }
     }
 
+    impl<'a, Var: 'a + Copy + Eq + Hash> ReferenceAllocate<'a, AstRefAlloc<'_, 'a, Var>>
+        for Idx<Term<Var>>
+    {
+        type Out = &'a super::Term<'a, Var>;
+
+        fn ref_alloc(&self, alloc: &mut AstRefAlloc<'_, 'a, Var>) -> Self::Out {
+            let span = alloc.idx_spans[self];
+            let term = match alloc.arena()[*self] {
+                Term::Abstraction { arg, body } => super::Term::Abstraction {
+                    arg,
+                    body: body.ref_alloc(alloc),
+                },
+                Term::Application { func, arg } => super::Term::Application {
+                    func: func.ref_alloc(alloc),
+                    arg: arg.ref_alloc(alloc),
+                },
+                Term::Variable(var) => super::Term::Variable(var),
+                Term::Int(i) => super::Term::Int(i),
+                Term::Item(ids) => super::Term::Item(ids),
+                Term::Unit => super::Term::Unit,
+                Term::Label { label, term } => super::Term::Label {
+                    label,
+                    term: term.ref_alloc(alloc),
+                },
+                Term::Unlabel { label, term } => super::Term::Unlabel {
+                    label,
+                    term: term.ref_alloc(alloc),
+                },
+                Term::Concat { left, right } => super::Term::Concat {
+                    left: left.ref_alloc(alloc),
+                    right: right.ref_alloc(alloc),
+                },
+                Term::Project { direction, term } => super::Term::Project {
+                    direction,
+                    term: term.ref_alloc(alloc),
+                },
+                Term::Branch { left, right } => super::Term::Branch {
+                    left: left.ref_alloc(alloc),
+                    right: right.ref_alloc(alloc),
+                },
+                Term::Inject { direction, term } => super::Term::Inject {
+                    direction,
+                    term: term.ref_alloc(alloc),
+                },
+                Term::Operation(ids) => super::Term::Operation(ids),
+                Term::Handle { handler, body } => super::Term::Handle {
+                    handler: handler.ref_alloc(alloc),
+                    body: body.ref_alloc(alloc),
+                },
+            };
+            let term_ref = alloc.ref_arena().alloc(term) as &_;
+            alloc.ref_spans.insert(term_ref, span);
+            term_ref
+        }
+    }
+
     /// Abstract Syntax Tree (AST)
     pub struct Ast<Var> {
         // We store spans of the Ast out of band because we won't need them for most operations.
         pub spans: FxHashMap<Idx<Term<Var>>, Span>,
         pub tree: Idx<Term<Var>>,
+    }
+    impl<Var: Copy + Eq + Hash> Ast<Var> {
+        pub fn ref_alloc<'a>(
+            &self,
+            arena: &'a Bump,
+            terms: Arena<Term<Var>>,
+        ) -> super::Ast<'a, Var> {
+            let mut alloc = AstRefAlloc {
+                arena,
+                terms,
+                ref_spans: FxHashMap::default(),
+                idx_spans: &self.spans,
+            };
+            let tree = self.tree.ref_alloc(&mut alloc);
+            super::Ast {
+                spans: alloc.ref_spans,
+                tree,
+            }
+        }
     }
 
     impl<'a, Var: Copy + Eq + Hash> From<&super::Ast<'a, Var>> for Ast<Var> {

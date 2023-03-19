@@ -276,7 +276,7 @@ pub mod indexed {
     impl<'a, A> ReferenceAllocate<'a, A> for Ident {
         type Out = Ident;
 
-        fn ref_alloc(&self, _: &A) -> Self::Out {
+        fn ref_alloc(&self, _: &mut A) -> Self::Out {
             *self
         }
     }
@@ -294,7 +294,7 @@ pub mod indexed {
     {
         type Out = Option<T::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             self.as_ref().map(|t| t.ref_alloc(alloc))
         }
     }
@@ -313,7 +313,7 @@ pub mod indexed {
     impl<'a, A, V: ReferenceAllocate<'a, A>> ReferenceAllocate<'a, A> for SpanOf<V> {
         type Out = SpanOf<V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             SpanOf {
                 start: self.start,
                 value: self.value.ref_alloc(alloc),
@@ -342,7 +342,7 @@ pub mod indexed {
     {
         type Out = super::Separated<'a, T::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::Separated {
                 first: self.first.ref_alloc(alloc),
                 elems: alloc.ref_arena().alloc_slice_fill_iter(
@@ -371,7 +371,7 @@ pub mod indexed {
     {
         type Out = super::Field<L::Out, T::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::Field {
                 label: self.label.ref_alloc(alloc),
                 sep: self.sep,
@@ -407,7 +407,7 @@ pub mod indexed {
     {
         type Out = super::Row<'a, V::Out, C::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             match self {
                 Row::Concrete(concrete) => super::Row::Concrete(concrete.ref_alloc(alloc)),
                 Row::Variable(vars) => super::Row::Variable(vars.ref_alloc(alloc)),
@@ -469,32 +469,32 @@ pub mod indexed {
             alloc.arena_mut().alloc(ty)
         }
     }
-    impl<'a, A, V: ReferenceAllocate<'a, A>> ReferenceAllocate<'a, A> for Idx<Type<V>>
+    impl<'a, A, V: Copy + ReferenceAllocate<'a, A>> ReferenceAllocate<'a, A> for Idx<Type<V>>
     where
         A: HasRefArena<'a> + HasArena<Type<V>>,
     {
         type Out = &'a super::Type<'a, V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
-            let type_ = match &alloc.arena()[*self] {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
+            let type_ = match alloc.arena()[*self].clone() {
                 Type::Named(var) => super::Type::Named(var.ref_alloc(alloc)),
                 Type::Sum {
                     langle,
                     variants,
                     rangle,
                 } => super::Type::Sum {
-                    langle: *langle,
+                    langle,
                     variants: variants.ref_alloc(alloc),
-                    rangle: *rangle,
+                    rangle,
                 },
                 Type::Product {
                     lbrace,
                     fields,
                     rbrace,
                 } => super::Type::Product {
-                    lbrace: *lbrace,
+                    lbrace,
                     fields: fields.ref_alloc(alloc),
-                    rbrace: *rbrace,
+                    rbrace,
                 },
                 Type::Function {
                     domain,
@@ -502,13 +502,13 @@ pub mod indexed {
                     codomain,
                 } => super::Type::Function {
                     domain: domain.ref_alloc(alloc),
-                    arrow: *arrow,
+                    arrow,
                     codomain: codomain.ref_alloc(alloc),
                 },
                 Type::Parenthesized { lpar, type_, rpar } => super::Type::Parenthesized {
-                    lpar: *lpar,
+                    lpar,
                     type_: type_.ref_alloc(alloc),
-                    rpar: *rpar,
+                    rpar,
                 },
             };
             alloc.ref_arena().alloc(type_) as &_
@@ -534,11 +534,11 @@ pub mod indexed {
     where
         A: HasRefArena<'a> + HasArena<Type<V>>,
         O: ReferenceAllocate<'a, A>,
-        V: ReferenceAllocate<'a, A>,
+        V: Copy + ReferenceAllocate<'a, A>,
     {
         type Out = super::EffectOp<'a, O::Out, V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::EffectOp {
                 name: self.name.ref_alloc(alloc),
                 colon: self.colon,
@@ -563,7 +563,7 @@ pub mod indexed {
     {
         type Out = super::Annotation<T::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::Annotation {
                 colon: self.colon,
                 type_: self.type_.ref_alloc(alloc),
@@ -589,13 +589,14 @@ pub mod indexed {
             }
         }
     }
-    impl<'a, A, V: 'a + ReferenceAllocate<'a, A>> ReferenceAllocate<'a, A> for Scheme<V>
+    impl<'a, A, V> ReferenceAllocate<'a, A> for Scheme<V>
     where
         A: HasRefArena<'a> + HasArena<Type<V>>,
+        V: 'a + Copy + ReferenceAllocate<'a, A>,
     {
         type Out = &'a super::Scheme<'a, V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             let scheme = super::Scheme {
                 quantifiers: alloc.ref_arena().alloc_slice_fill_iter(
                     self.quantifiers.iter().map(|quant| quant.ref_alloc(alloc)),
@@ -624,7 +625,7 @@ pub mod indexed {
     {
         type Out = super::Quantifier<V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::Quantifier {
                 forall: self.forall,
                 var: self.var.ref_alloc(alloc),
@@ -646,13 +647,14 @@ pub mod indexed {
             }
         }
     }
-    impl<'a, A, V: ReferenceAllocate<'a, A>> ReferenceAllocate<'a, A> for Qualifiers<V>
+    impl<'a, A, V> ReferenceAllocate<'a, A> for Qualifiers<V>
     where
         A: HasRefArena<'a> + HasArena<Type<V>>,
+        V: Copy + ReferenceAllocate<'a, A>,
     {
         type Out = super::Qualifiers<'a, V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::Qualifiers {
                 constraints: self.constraints.ref_alloc(alloc),
                 arrow: self.arrow,
@@ -687,11 +689,11 @@ pub mod indexed {
     impl<'a, A, V> ReferenceAllocate<'a, A> for Constraint<V>
     where
         A: HasRefArena<'a> + HasArena<Type<V>>,
-        V: ReferenceAllocate<'a, A>,
+        V: Copy + ReferenceAllocate<'a, A>,
     {
         type Out = super::Constraint<'a, V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             match self {
                 Constraint::RowSum {
                     lhs,
@@ -730,11 +732,11 @@ pub mod indexed {
     impl<'a, A, V> ReferenceAllocate<'a, A> for RowAtom<V>
     where
         A: HasRefArena<'a> + HasArena<Type<V>>,
-        V: ReferenceAllocate<'a, A>,
+        V: Copy + ReferenceAllocate<'a, A>,
     {
         type Out = super::RowAtom<'a, V::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             match self {
                 RowAtom::Concrete { lpar, fields, rpar } => super::RowAtom::Concrete {
                     lpar: *lpar,
@@ -835,8 +837,8 @@ pub mod indexed {
     {
         type Out = &'a super::Term<'a>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
-            let term = match &alloc.arena()[*self] {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
+            let term = match alloc.arena()[*self].clone() {
                 Term::Binding {
                     var,
                     annotation,
@@ -845,11 +847,11 @@ pub mod indexed {
                     semi,
                     expr,
                 } => super::Term::Binding {
-                    var: *var,
+                    var,
                     annotation: annotation.ref_alloc(alloc),
-                    eq: *eq,
+                    eq,
                     value: value.ref_alloc(alloc),
-                    semi: *semi,
+                    semi,
                     expr: expr.ref_alloc(alloc),
                 },
                 Term::Handle {
@@ -858,9 +860,9 @@ pub mod indexed {
                     do_,
                     expr,
                 } => super::Term::Handle {
-                    with: *with,
+                    with,
                     handler: handler.ref_alloc(alloc),
-                    do_: *do_,
+                    do_,
                     expr: expr.ref_alloc(alloc),
                 },
                 Term::Abstraction {
@@ -870,10 +872,10 @@ pub mod indexed {
                     rbar,
                     body,
                 } => super::Term::Abstraction {
-                    lbar: *lbar,
-                    arg: *arg,
+                    lbar,
+                    arg,
                     annotation: annotation.ref_alloc(alloc),
-                    rbar: *rbar,
+                    rbar,
                     body: body.ref_alloc(alloc),
                 },
                 Term::Application {
@@ -883,16 +885,16 @@ pub mod indexed {
                     rpar,
                 } => super::Term::Application {
                     func: func.ref_alloc(alloc),
-                    lpar: *lpar,
+                    lpar,
                     arg: arg.ref_alloc(alloc),
-                    rpar: *rpar,
+                    rpar,
                 },
                 Term::ProductRow(prod) => super::Term::ProductRow(prod.ref_alloc(alloc)),
                 Term::SumRow(sum) => super::Term::SumRow(sum.ref_alloc(alloc)),
                 Term::DotAccess { base, dot, field } => super::Term::DotAccess {
                     base: base.ref_alloc(alloc),
-                    dot: *dot,
-                    field: *field,
+                    dot,
+                    field,
                 },
                 Term::Match {
                     match_,
@@ -900,16 +902,16 @@ pub mod indexed {
                     cases,
                     rangle,
                 } => super::Term::Match {
-                    match_: *match_,
-                    langle: *langle,
+                    match_,
+                    langle,
                     cases: cases.ref_alloc(alloc),
-                    rangle: *rangle,
+                    rangle,
                 },
-                Term::SymbolRef(symbol) => super::Term::SymbolRef(*symbol),
+                Term::SymbolRef(symbol) => super::Term::SymbolRef(symbol),
                 Term::Parenthesized { lpar, term, rpar } => super::Term::Parenthesized {
-                    lpar: *lpar,
+                    lpar,
                     term: term.ref_alloc(alloc),
-                    rpar: *rpar,
+                    rpar,
                 },
             };
             alloc.ref_arena().alloc(term) as &_
@@ -930,7 +932,7 @@ pub mod indexed {
     impl<'a, A, T: ReferenceAllocate<'a, A>> ReferenceAllocate<'a, A> for SumRow<T> {
         type Out = super::SumRow<T::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::SumRow {
                 langle: self.langle,
                 field: self.field.ref_alloc(alloc),
@@ -957,7 +959,7 @@ pub mod indexed {
     {
         type Out = super::ProductRow<'a, T::Out>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             super::ProductRow {
                 lbrace: self.lbrace,
                 fields: self.fields.ref_alloc(alloc),
@@ -988,8 +990,8 @@ pub mod indexed {
     {
         type Out = &'a super::Pattern<'a>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
-            let pat = match &alloc.arena()[*self] {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
+            let pat = match alloc.arena()[*self].clone() {
                 Pattern::ProductRow(prod) => super::Pattern::ProductRow(prod.ref_alloc(alloc)),
                 Pattern::SumRow(sum) => super::Pattern::SumRow(sum.ref_alloc(alloc)),
                 Pattern::Whole(var) => super::Pattern::Whole(var.ref_alloc(alloc)),
@@ -1036,7 +1038,7 @@ pub mod indexed {
     {
         type Out = super::Item<'a>;
 
-        fn ref_alloc(&self, alloc: &A) -> Self::Out {
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
             match self {
                 Item::Effect {
                     effect,

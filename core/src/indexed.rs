@@ -36,7 +36,7 @@ impl<A, T: IndexedAllocate<A>> IndexedAllocate<A> for &T {
 pub trait ReferenceAllocate<'a, A> {
     type Out: 'a;
 
-    fn ref_alloc(&self, alloc: &A) -> Self::Out;
+    fn ref_alloc(&self, alloc: &mut A) -> Self::Out;
 }
 
 impl<'a, A, T> ReferenceAllocate<'a, A> for &T
@@ -45,7 +45,7 @@ where
 {
     type Out = T::Out;
 
-    fn ref_alloc(&self, alloc: &A) -> Self::Out {
+    fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
         T::ref_alloc(&self, alloc)
     }
 }
