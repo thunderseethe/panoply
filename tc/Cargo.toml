@@ -9,7 +9,7 @@ aiahr-test.workspace = true
 assert_matches.workspace = true
 
 [dependencies]
-aiahr-core.workspace = true
+aiahr-core = { workspace = true, features = ["type_infer"] }
 bumpalo.workspace = true
 ena.workspace = true
 pretty.workspace = true

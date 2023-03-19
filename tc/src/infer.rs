@@ -60,6 +60,7 @@ use aiahr_core::{
     ident::Ident,
     memory::handle::Handle,
     span::Span,
+    ty::{row::*, TypeKind::*, *},
 };
 use ena::unify::InPlaceUnificationTable;
 use rustc_hash::FxHashMap;
@@ -69,19 +70,10 @@ use std::collections::BTreeSet;
 use crate::{
     diagnostic::{into_diag, TypeCheckDiagnostic, TypeCheckError},
     folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
-    ty::{
-        alloc::{TypeAlloc, TypeVarOf},
-        fold::{FallibleTypeFold, TypeFoldable},
-        row::{ClosedGoal, OpenGoal, OrderedRowXorRow, RowLabel, UnsolvedRowEquation},
-        TypeKind::*,
-        *,
-    },
-    ClosedRow, Db, EffectInfo, Evidence, Row, TyScheme,
+    wip::{ClosedGoal, OpenGoal, OrderedRowXorRow, UnsolvedRowEquation},
+    Db, EffectInfo, Evidence, TyScheme,
 };
-use crate::{
-    infer_ty::{arena::InArena, InferRow, InferTy, TcUnifierVar},
-    ty::alloc::{db::InDb, AccessTy, MkTy},
-};
+use aiahr_core::ty::infer::{InArena, InferRow, InferTy, TcUnifierVar};
 
 /// Type states for infer context
 pub(crate) struct Generation;
@@ -149,11 +141,11 @@ where
             .finish()
     }
 }
-impl DebugWithDb<dyn crate::Db + '_> for TyChkRes<InDb> {
+impl DebugWithDb<dyn aiahr_core::Db + '_> for TyChkRes<InDb> {
     fn fmt(
         &self,
         f: &mut std::fmt::Formatter<'_>,
-        db: &dyn crate::Db,
+        db: &dyn aiahr_core::Db,
         _include_all_fields: bool,
     ) -> std::fmt::Result {
         f.debug_struct("TyChkRes")
@@ -1160,7 +1152,9 @@ where
             Row::Open(goal_var) => match (left, right) {
                 // With only one open variable we can solve
                 (Row::Closed(left), Row::Closed(right)) => {
-                    let (fields, values) = left.disjoint_union(right)?;
+                    let (fields, values) = left.disjoint_union(right).map_err(|err| {
+                        TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
+                    })?;
                     let row = self.mk_ty(RowTy(self.mk_row(&fields, &values)));
                     self.unify_var_ty(goal_var, row)
                 }
@@ -1258,7 +1252,9 @@ where
             Row::Closed(goal_row) => match (left, right) {
                 // Our rows are all closed, we just need to check they are equal and discharge them
                 (Row::Closed(left_row), Row::Closed(right_row)) => {
-                    let (fields, values) = left_row.disjoint_union(right_row)?;
+                    let (fields, values) = left_row.disjoint_union(right_row).map_err(|err| {
+                        TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
+                    })?;
                     let row = self.mk_row(&fields, &values);
                     self.unify_closedrow_closedrow(goal_row, row)
                 }

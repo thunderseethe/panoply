@@ -1,13 +1,5 @@
+use aiahr_core::ty::{infer::InArena, row::Row, FallibleTypeFold, InDb, TypeAlloc, TypeFoldable};
 use salsa::DebugWithDb;
-
-use crate::{
-    infer_ty::arena::InArena,
-    ty::{
-        alloc::{db::InDb, TypeAlloc},
-        fold::{FallibleTypeFold, TypeFoldable},
-    },
-    Row,
-};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Evidence<A: TypeAlloc> {

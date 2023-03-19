@@ -1,7 +1,12 @@
 use std::ops::Index;
 
 use aiahr_core::ir::IrVar;
-use aiahr_tc::{ClosedRow, Evidence, InDb, Row};
+use aiahr_core::ty::{
+    row::{ClosedRow, Row},
+    InDb,
+};
+use aiahr_tc::Evidence;
+
 use rustc_hash::FxHashMap;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Debug)]

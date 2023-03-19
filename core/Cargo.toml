@@ -6,6 +6,7 @@ edition.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [features]
 test_utils = ["rand"]
+type_infer = ["ena"]
 
 [dependencies]
 bitflags.workspace = true
@@ -13,8 +14,9 @@ bumpalo.workspace = true
 bumpalo-herd.workspace = true
 chumsky.workspace = true
 dashmap = { workspace = true, features = ["raw-api"] }
+ena = { workspace = true, optional = true }
 la-arena.workspace = true
-pretty = { workspace = true, optional = true }
+pretty = { workspace = true }
 rand = { workspace = true, optional = true }
 rustc-hash.workspace = true
 salsa.workspace = true

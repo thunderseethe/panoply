@@ -5,8 +5,9 @@ use aiahr_core::{
     id::{IrTyVarId, ItemId, ModuleId, VarId},
     ir::{IrKind::*, IrTyKind::*, *},
     memory::handle::{Handle, RefHandle},
+    ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
 };
-use aiahr_tc::{AccessTy, ClosedRow, EffectInfo, InDb, MkTy, Ty, TyScheme, TypeKind};
+use aiahr_tc::{EffectInfo, TyScheme};
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use rustc_hash::FxHashMap;
 
@@ -76,8 +77,9 @@ where
 }
 
 pub mod test_utils {
+    use aiahr_core::ty::{TyData, TypeAlloc};
     use aiahr_tc::test_utils::DummyEff;
-    use aiahr_tc::{TyChkRes, TyData, TypeAlloc};
+    use aiahr_tc::TyChkRes;
 
     use super::*;
 
@@ -104,7 +106,7 @@ pub mod test_utils {
                 db,
                 var_tys,
                 term_tys,
-                eff_info: DummyEff(db),
+                eff_info: DummyEff(db.as_core_db()),
             }
         }
     }
@@ -275,7 +277,7 @@ pub mod test_utils {
 
     impl MkTy<InDb> for LowerDb<'_, '_> {
         fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
-            Ty(TyData::new(self.db, kind))
+            Ty(TyData::new(self.db.as_core_db(), kind))
         }
 
         fn mk_label(&self, label: &str) -> Ident {
@@ -283,7 +285,7 @@ pub mod test_utils {
         }
 
         fn mk_row(&self, fields: &[Ident], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
-            self.db.mk_row(fields, values)
+            self.db.as_core_db().mk_row(fields, values)
         }
     }
 }

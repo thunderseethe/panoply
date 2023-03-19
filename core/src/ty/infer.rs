@@ -3,15 +3,21 @@
 use std::{convert::Infallible, fmt, ops::Deref};
 
 use ena::unify::{EqUnifyValue, UnifyKey, UnifyValue};
-use pretty::{docs, DocAllocator, DocBuilder};
+use pretty::DocAllocator;
 
-use crate::{
-    diagnostic::TypeCheckError,
-    ty::row::{OrderedRowXorRow, RowInternals, RowLabel, UnsolvedRowEquation},
-    ClosedRow, Evidence, Row, Ty, TypeKind,
+use crate::ty::{
+    row::{ClosedRow, Row, RowInternals, RowLabel},
+    Ty, TypeKind,
 };
 
-use self::arena::InArena;
+#[derive(Debug, PartialEq, Eq)]
+pub struct UnifierToTcVarError {
+    index: u32,
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct TcVarToUnifierError {
+    index: u32,
+}
 
 /// A unifier variable.
 /// These are produced during the type checking process and MUST NOT persist outside the type
@@ -20,7 +26,7 @@ use self::arena::InArena;
 /// Conversely to the untouchable TcVar, these are "touchable" and will be modified by the type
 /// checker.
 #[derive(Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub(crate) struct TcUnifierVar<'ctx> {
+pub struct TcUnifierVar<'ctx> {
     id: u32,
     _marker: std::marker::PhantomData<&'ctx ()>,
 }
@@ -66,28 +72,27 @@ impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
 
 /// During inference our type variables are all unification variables.
 /// This is an alias to make inference types easy to talk about.
-pub(crate) type InferTy<'ctx> = Ty<InArena<'ctx>>;
+pub type InferTy<'ctx> = Ty<InArena<'ctx>>;
 
 impl<'ctx> EqUnifyValue for Ty<InArena<'ctx>> {}
 
 pub(crate) mod arena {
-    use aiahr_core::memory::{
-        handle::RefHandle,
-        intern::{Interner, InternerByRef, SyncInterner},
+    use crate::ty::{
+        row::{ClosedRow, RowLabel},
+        AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
+    };
+    use crate::{
+        memory::{
+            handle::RefHandle,
+            intern::{Interner, InternerByRef, SyncInterner},
+        },
+        ty::alloc::IteratorSorted,
     };
     use bumpalo::Bump;
 
-    use crate::{
-        ty::{
-            alloc::{AccessTy, IteratorSorted, MkTy},
-            row::RowLabel,
-        },
-        ClosedRow, Ty, TypeAlloc, TypeKind,
-    };
-
     use super::TcUnifierVar;
 
-    pub(crate) struct TyCtx<'ctx> {
+    pub struct TyCtx<'ctx> {
         tys: SyncInterner<'ctx, TypeKind<InArena<'ctx>>, Bump>,
         row_fields: SyncInterner<'ctx, [RowLabel], Bump>,
         row_values: SyncInterner<'ctx, [Ty<InArena<'ctx>>], Bump>,
@@ -96,7 +101,7 @@ pub(crate) mod arena {
 
     /// Allocate our type structs in an Arena.
     #[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-    pub(crate) struct InArena<'ctx>(std::marker::PhantomData<&'ctx ()>);
+    pub struct InArena<'ctx>(std::marker::PhantomData<&'ctx ()>);
     impl Copy for InArena<'_>
     where
         <Self as TypeAlloc>::TypeData: Copy,
@@ -194,34 +199,7 @@ pub(crate) mod arena {
         }
     }
 }
-
-impl<'ctx> TypeKind<InArena<'ctx>> {
-    fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        match self {
-            TypeKind::ErrorTy => a.as_string("Error"),
-            TypeKind::IntTy => a.as_string("Int"),
-            TypeKind::VarTy(tv) => pretty::Pretty::pretty(*tv, a),
-            TypeKind::RowTy(closed_row) => closed_row.pretty(a, db).nest(2).parens().group(),
-            TypeKind::FunTy(arg, ret) => arg
-                .pretty(a, db)
-                .append(docs![a, a.softline(), "->", a.softline(), ret.pretty(a, db)].nest(2)),
-            TypeKind::ProdTy(row) => row
-                .pretty(a, db)
-                .enclose(a.softline(), a.softline())
-                .braces()
-                .group(),
-            TypeKind::SumTy(row) => row
-                .pretty(a, db)
-                .enclose(a.softline(), a.softline())
-                .angles()
-                .group(),
-        }
-    }
-}
+pub use arena::{InArena, TyCtx};
 
 impl<'ctx> fmt::Debug for TypeKind<InArena<'ctx>> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -260,11 +238,8 @@ impl<'ctx> Ty<InArena<'ctx>> {
             _ => Err(self),
         }
     }
-}
 
-impl<'ctx> Ty<InArena<'ctx>> {
-    /// Convert a type to a row. If type is not representable as a row return type as an error.
-    pub(crate) fn try_to_row(&self) -> Result<Row<InArena<'ctx>>, Self> {
+    pub fn try_to_row(&self) -> Result<Row<InArena<'ctx>>, Self> {
         match self.deref() {
             TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
             TypeKind::VarTy(var) => Ok(Row::Open(*var)),
@@ -272,110 +247,13 @@ impl<'ctx> Ty<InArena<'ctx>> {
         }
     }
 }
-impl<'ctx> Ty<InArena<'ctx>> {
-    pub fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        self.0.deref().pretty(a, db)
-    }
-}
 
-impl<'ctx> ClosedRow<InArena<'ctx>> {
-    pub(crate) fn pretty<'a, D>(&self, a: &'a D, db: &dyn crate::Db) -> DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        let docs = self
-            .fields
-            .iter()
-            .zip(self.values.iter())
-            .map(|(field, value)| {
-                docs![
-                    a,
-                    a.as_string(field.text(db.as_core_db())),
-                    a.space(),
-                    "|>",
-                    a.softline(),
-                    value.pretty(a, db)
-                ]
-                .group()
-            });
-        a.intersperse(
-            docs,
-            a.concat([a.softline_(), a.as_string(","), a.space()])
-                .into_doc(),
-        )
-    }
-}
 impl<'ctx> EqUnifyValue for ClosedRow<InArena<'ctx>> {}
-pub(crate) type InferRow<'ctx> = Row<InArena<'ctx>>;
-impl<'ctx> From<OrderedRowXorRow<InArena<'ctx>>> for (Row<InArena<'ctx>>, Row<InArena<'ctx>>) {
-    fn from(val: OrderedRowXorRow<InArena<'ctx>>) -> Self {
-        match val {
-            OrderedRowXorRow::ClosedOpen(row, var) => (Row::Closed(row), Row::Open(var)),
-            OrderedRowXorRow::OpenOpen { min, max } => (Row::Open(min), Row::Open(max)),
-        }
-    }
-}
-impl<'ctx> TryFrom<(Row<InArena<'ctx>>, Row<InArena<'ctx>>)> for OrderedRowXorRow<InArena<'ctx>> {
-    type Error = (ClosedRow<InArena<'ctx>>, ClosedRow<InArena<'ctx>>);
 
-    fn try_from(value: (Row<InArena<'ctx>>, Row<InArena<'ctx>>)) -> Result<Self, Self::Error> {
-        match value {
-            (Row::Open(l), Row::Open(r)) => Ok(Self::with_open_open(l, r)),
-            (Row::Open(tv), Row::Closed(row)) | (Row::Closed(row), Row::Open(tv)) => {
-                Ok(Self::ClosedOpen(row, tv))
-            }
-            (Row::Closed(l), Row::Closed(r)) => Err((l, r)),
-        }
-    }
-}
-impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>>> for Evidence<InArena<'ctx>> {
-    fn from(eq: UnsolvedRowEquation<InArena<'ctx>>) -> Self {
-        match eq {
-            UnsolvedRowEquation::ClosedGoal(cand) => Evidence::Row {
-                left: Row::Open(cand.min),
-                right: Row::Open(cand.max),
-                goal: Row::Closed(cand.goal),
-            },
-            UnsolvedRowEquation::OpenGoal(cand) => match cand.orxr {
-                OrderedRowXorRow::ClosedOpen(closed, open) => Evidence::Row {
-                    left: Row::Closed(closed),
-                    right: Row::Open(open),
-                    goal: Row::Open(cand.goal),
-                },
-                OrderedRowXorRow::OpenOpen { min, max } => Evidence::Row {
-                    left: Row::Open(min),
-                    right: Row::Open(max),
-                    goal: Row::Open(cand.goal),
-                },
-            },
-        }
-    }
-}
-
-impl<'ctx> Row<InArena<'ctx>> {
-    pub(crate) fn pretty<'a, D>(
-        &self,
-        allocator: &'a D,
-        db: &dyn crate::Db,
-    ) -> pretty::DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
-        match self {
-            Row::Open(tv) => pretty::Pretty::pretty(tv.clone(), allocator),
-            Row::Closed(row) => row.pretty(allocator, db),
-        }
-    }
-}
+pub type InferRow<'ctx> = Row<InArena<'ctx>>;
 
 impl<'ctx> UnifyValue for InferRow<'ctx> {
-    type Error = TypeCheckError<'ctx>;
+    type Error = (Self, Self);
 
     fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
         match (left, right) {
@@ -387,9 +265,18 @@ impl<'ctx> UnifyValue for InferRow<'ctx> {
             (Row::Closed(_), Row::Open(_)) => Ok(*left),
             (Row::Closed(left_row), Row::Closed(right_row)) => (left_row == right_row)
                 .then_some(*left)
-                .ok_or(TypeCheckError::RowsNotEqual(*left, *right)),
+                .ok_or((*left, *right)),
         }
     }
+}
+
+pub struct RowsNotDisjoint<'ctx> {
+    /// Left row that was expected to be disjoint
+    pub left: ClosedRow<InArena<'ctx>>,
+    /// Right row that was expected to be disjoint
+    pub right: ClosedRow<InArena<'ctx>>,
+    /// The label left and right both contain
+    pub label: RowLabel,
 }
 
 impl<'ctx> ClosedRow<InArena<'ctx>> {
@@ -415,9 +302,81 @@ impl<'ctx> ClosedRow<InArena<'ctx>> {
     pub fn disjoint_union(
         self,
         right: Self,
-    ) -> Result<RowInternals<InArena<'ctx>>, TypeCheckError<'ctx>> {
-        self._disjoint_union(right, &(), |left, right, lbl| {
-            TypeCheckError::RowsNotDisjoint(left, right, *lbl)
+    ) -> Result<RowInternals<InArena<'ctx>>, RowsNotDisjoint<'ctx>> {
+        self._disjoint_union(right, &(), |left, right, lbl| RowsNotDisjoint {
+            left,
+            right,
+            label: *lbl,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty::{DocAllocator, Pretty};
+
+    use crate::id::TyVarId;
+
+    use crate::ty::TypeKind::*;
+    use crate::ty::{row::Row, MkTy};
+
+    #[derive(Default)]
+    #[salsa::db(crate::Jar)]
+    struct TestDatabase {
+        storage: salsa::Storage<Self>,
+    }
+    impl salsa::Database for TestDatabase {}
+
+    impl<'a, D> Pretty<'a, D> for TyVarId
+    where
+        D: DocAllocator<'a>,
+    {
+        fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, ()> {
+            alloc
+                .text("ty_var")
+                .append(alloc.as_string(self.0).angles())
+        }
+    }
+
+    #[test]
+    fn test_ty_pretty_printing() {
+        //let arena = Bump::new();
+        let db = TestDatabase::default();
+        //let ctx: TyCtx<'_> = TyCtx::new(&db, &arena);
+
+        let int = db.mk_ty(IntTy);
+        let row = db.mk_row(
+            &[db.mk_label("x"), db.mk_label("y"), db.mk_label("z")],
+            &[int, int, int],
+        );
+
+        let ty = db.mk_ty(FunTy(
+            db.mk_ty(ProdTy(Row::Closed(row))),
+            db.mk_ty(VarTy(TyVarId(0))),
+        ));
+        let arena: pretty::Arena<'_, ()> = pretty::Arena::new();
+        let mut out = String::new();
+        ty.pretty(&arena, &db, &&db)
+            .into_doc()
+            .render_fmt(32, &mut out)
+            .unwrap();
+        assert_eq!(
+            out,
+            r#"{ x |> Int, y |> Int, z |> Int }
+  -> ty_var<0>"#
+        );
+        let mut out = String::new();
+        ty.pretty(&arena, &db, &&db)
+            .into_doc()
+            .render_fmt(10, &mut out)
+            .unwrap();
+        assert_eq!(
+            out,
+            r#"{ x |> Int
+, y |> Int
+, z |> Int
+} ->
+  ty_var<0>"#
+        );
     }
 }

@@ -1,8 +1,7 @@
-use crate::{Row, Ty};
-
 use super::{
     alloc::{AccessTy, MkTy, TypeAlloc, TypeVarOf},
-    TypeKind,
+    row::Row,
+    Ty, TypeKind,
 };
 
 /// A trait for things that contain types.
@@ -84,6 +83,7 @@ pub trait FallibleEndoTypeFold<'access>: Sized {
         Ok(Row::Open(var))
     }
 }
+
 impl<'a, F> FallibleTypeFold<'a> for F
 where
     F: FallibleEndoTypeFold<'a>,

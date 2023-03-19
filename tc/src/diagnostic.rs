@@ -6,14 +6,14 @@ use aiahr_core::{
     id::{ItemId, ModuleId, VarId},
     ident::Ident,
     span::Span,
+    ty::{
+        row::{ClosedRow, RowLabel},
+        TypeVarOf,
+    },
 };
 use pretty::{docs, DocAllocator};
 
-use crate::{
-    infer_ty::{arena::InArena, InferRow, InferTy},
-    ty::{alloc::TypeVarOf, row::RowLabel, UnifierToTcVarError},
-    ClosedRow,
-};
+use aiahr_core::ty::infer::{InArena, InferRow, InferTy, UnifierToTcVarError};
 
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]
@@ -51,11 +51,11 @@ pub(crate) fn into_diag(
                 .append(
                     docs![
                         &d,
-                        left.pretty(&d, db),
+                        left.pretty(&d, db.as_core_db(), &()),
                         d.softline(),
                         "!=",
                         d.softline(),
-                        right.pretty(&d, db)
+                        right.pretty(&d, db.as_core_db(), &())
                     ]
                     .nest(2),
                 )
@@ -74,7 +74,7 @@ pub(crate) fn into_diag(
                         d.text("cycle detected for type variable"),
                         pretty::Pretty::pretty(var, &d),
                         d.text("with inferred type"),
-                        ty.pretty(&d, db),
+                        ty.pretty(&d, db.as_core_db(), &()),
                     ],
                     d.space(),
                 )
@@ -93,9 +93,9 @@ pub(crate) fn into_diag(
                 .append(d.text(lbl.text(db.as_core_db())))
                 .append(
                     d.hardline()
-                        .append(left.pretty(&d, db))
+                        .append(left.pretty(&d, db.as_core_db(), &()))
                         .append(d.hardline())
-                        .append(right.pretty(&d, db))
+                        .append(right.pretty(&d, db.as_core_db(), &()))
                         .nest(2),
                 );
             let mut message = String::new();
@@ -110,9 +110,9 @@ pub(crate) fn into_diag(
                 .text("expected rows to be equal")
                 .append(d.hardline())
                 .append(
-                    left.pretty(&d, db)
+                    left.pretty(&d, db.as_core_db(), &())
                         .append(d.hardline())
-                        .append(right.pretty(&d, db))
+                        .append(right.pretty(&d, db.as_core_db(), &()))
                         .nest(2),
                 );
             let mut message = String::new();
@@ -126,7 +126,7 @@ pub(crate) fn into_diag(
             let doc = d
                 .text("could not find an effect signature matching handler:")
                 .append(d.softline())
-                .append(signature.pretty(&d, db));
+                .append(signature.pretty(&d, db.as_core_db(), &()));
             let mut message = String::new();
             doc.render_fmt(width, &mut message).unwrap();
             TypeCheckDiagnostic {

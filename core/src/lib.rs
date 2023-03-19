@@ -15,6 +15,7 @@ pub mod option;
 pub mod span;
 pub mod spanner;
 pub mod token;
+pub mod ty;
 
 pub mod ident {
     /// An interned identifier.
@@ -26,7 +27,13 @@ pub mod ident {
 }
 
 #[salsa::jar(db = Db)]
-pub struct Jar(ident::Ident, modules::Module);
+pub struct Jar(
+    ident::Ident,
+    modules::Module,
+    ty::TyData,
+    ty::SalsaRowFields,
+    ty::SalsaRowValues,
+);
 pub trait Db: salsa::DbWithJar<Jar> {
     fn as_core_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
