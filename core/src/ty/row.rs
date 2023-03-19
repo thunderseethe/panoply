@@ -30,11 +30,11 @@ where
 {
 }
 impl<A: TypeAlloc> ClosedRow<A> {
-    pub fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool {
+    pub fn is_empty(&self, acc: &dyn AccessTy<'_, A>) -> bool {
         acc.row_fields(&self.fields).is_empty()
     }
 
-    pub fn len<'a>(&self, acc: &dyn AccessTy<'a, A>) -> usize {
+    pub fn len(&self, acc: &dyn AccessTy<'_, A>) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
         acc.row_fields(&self.fields).len()
     }
@@ -101,14 +101,14 @@ where
                     match left_lbl.cmp(right_lbl) {
                         // Push left
                         Less => {
-                            fields.push(left_fields.next().unwrap().clone());
+                            fields.push(*left_fields.next().unwrap());
                             values.push(left_values.next().unwrap().clone());
                         }
                         // Because these are disjoint rows overlapping labels are an error
                         Equal => return Err(mk_err(self, right, left_lbl)),
                         // Push right
                         Greater => {
-                            fields.push(right_fields.next().unwrap().clone());
+                            fields.push(*right_fields.next().unwrap());
                             values.push(right_values.next().unwrap().clone());
                         }
                     }

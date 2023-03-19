@@ -46,6 +46,6 @@ where
     type Out = T::Out;
 
     fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
-        T::ref_alloc(&self, alloc)
+        T::ref_alloc(self, alloc)
     }
 }
