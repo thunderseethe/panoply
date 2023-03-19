@@ -303,7 +303,7 @@ pub mod test_utils {
 mod tests {
 
     use aiahr_core::ast::{Direction, Term::*};
-    use aiahr_core::id::TyVarId;
+    use aiahr_core::id::{ModuleId, TyVarId};
     use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
     use bumpalo::Bump;
@@ -637,7 +637,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
-            builder.mk_app(Operation(EffectOpId(0)), Unit)
+            builder.mk_app(Operation((ModuleId(0), EffectId(0), EffectOpId(0))), Unit)
         });
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
 
@@ -680,8 +680,11 @@ mod tests {
                     builder.mk_label("return", builder.mk_abs(VarId(2), Variable(VarId(2)))),
                 ),
                 builder.mk_app(
-                    Operation(DummyEff::PUT_ID),
-                    builder.mk_app(Operation(DummyEff::ASK_ID), Unit),
+                    Operation((ModuleId(0), DummyEff::STATE_ID, DummyEff::PUT_ID)),
+                    builder.mk_app(
+                        Operation((ModuleId(0), DummyEff::READER_ID, DummyEff::ASK_ID)),
+                        Unit,
+                    ),
                 ),
             )
         });

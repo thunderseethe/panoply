@@ -50,9 +50,9 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
         let ast = match nst {
             nst::Term::VariableRef(var) => self.arena.alloc(ast::Term::Variable(var.value)) as &_,
             nst::Term::ItemRef(item) => self.arena.alloc(ast::Term::Item(item.value)) as &_,
-            nst::Term::EffectOpRef(SpanOf {
-                value: (_, _, op), ..
-            }) => self.arena.alloc(ast::Term::Operation(*op)) as &_,
+            nst::Term::EffectOpRef(SpanOf { value, .. }) => {
+                self.arena.alloc(ast::Term::Operation(*value)) as &_
+            }
             nst::Term::Binding {
                 var, value, expr, ..
             } => {

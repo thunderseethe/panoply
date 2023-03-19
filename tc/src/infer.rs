@@ -686,17 +686,16 @@ where
 
                 InferResult::new(self.mk_ty(SumTy(big_row)), eff)
             }
-            Operation(eff_op_id) => {
-                let eff_id = eff_info.lookup_effect_by_member(*eff_op_id);
+            Operation((_, eff_id, eff_op_id)) => {
                 let sig = self.instantiate(
-                    eff_info.effect_member_sig(eff_id, *eff_op_id),
+                    eff_info.effect_member_sig(*eff_id, *eff_op_id),
                     current_span(),
                 );
 
                 InferResult::new(
                     sig.ty,
                     Row::Closed(self.single_row(
-                        eff_info.effect_name(eff_id),
+                        eff_info.effect_name(*eff_id),
                         self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
                     )),
                 )

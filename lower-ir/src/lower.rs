@@ -634,8 +634,7 @@ where
                 Ir::app(inj, [self.lower_term(subterm)])
             }
             // Effect stuff
-            Operation(op) => {
-                let eff_id = self.db.lookup_effect_by_member(*op);
+            Operation((_, eff_id, op)) => {
                 let (value_ty, _) = self
                     .db
                     .lookup_term(term)
@@ -648,7 +647,7 @@ where
                 };
                 let handle_var = IrVar {
                     var: self.var_conv.generate(),
-                    ty: self.db.effect_handler_ir_ty(eff_id),
+                    ty: self.db.effect_handler_ir_ty(*eff_id),
                 };
                 let kont_var = IrVar {
                     var: self.var_conv.generate(),
@@ -662,8 +661,8 @@ where
                     ty: self.ctx.mk_ir_ty(IntTy),
                 };
 
-                let handler_index = self.db.effect_member_op_index(eff_id, *op);
-                let eff_index = self.db.effect_vector_index(eff_id);
+                let handler_index = self.db.effect_member_op_index(*eff_id, *op);
+                let eff_index = self.db.effect_vector_index(*eff_id);
                 Ir::app(
                     Ir::abss(
                         [handle_var, value_var],

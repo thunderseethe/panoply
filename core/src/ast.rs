@@ -1,4 +1,4 @@
-use crate::id::{EffectOpId, ItemId, ModuleId};
+use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use crate::ident::Ident;
 use crate::span::Span;
 use rustc_hash::FxHashMap;
@@ -10,7 +10,7 @@ pub mod indexed {
     use la_arena::{Arena, Idx};
     use rustc_hash::FxHashMap;
 
-    use crate::id::{EffectOpId, ItemId, ModuleId};
+    use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
     use crate::ident::Ident;
     use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
     use crate::span::Span;
@@ -104,7 +104,7 @@ pub mod indexed {
             term: Idx<Self>,
         },
         // An effect operation
-        Operation(EffectOpId),
+        Operation((ModuleId, EffectId, EffectOpId)),
         Handle {
             handler: Idx<Self>,
             body: Idx<Self>,
@@ -351,7 +351,7 @@ pub enum Term<'a, Var> {
         term: &'a Term<'a, Var>,
     },
     // An effect operation
-    Operation(EffectOpId),
+    Operation((ModuleId, EffectId, EffectOpId)),
     Handle {
         handler: &'a Term<'a, Var>,
         body: &'a Term<'a, Var>,
