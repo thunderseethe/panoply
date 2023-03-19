@@ -754,6 +754,10 @@ where
                     install_prompt,
                 )
             }
+            Annotated { term, .. } => {
+                // We type checked so this is handled, we can just unwrap here.
+                self.lower_term(term)
+            }
         }
     }
 }

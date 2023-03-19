@@ -748,6 +748,20 @@ where
                 InferResult::new(ret_ty, out_eff)
             }
             Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_row())),
+            Annotated { ty, term } => {
+                let eff = self.fresh_row();
+                let mut inst = Instantiate {
+                    db: self.db,
+                    ctx: self.ctx,
+                    // TODO: Collect all unifiers from the ast ahead of time to infer a scheme.
+                    unifiers: vec![],
+                };
+                // TODO: We should possibly extract an effect from this
+                let infer_ty = ty.try_fold_with(&mut inst).unwrap();
+                let res = InferResult::new(infer_ty, eff);
+                self._check(eff_info, term, res);
+                res
+            }
             // TODOs
             Item(_) => todo!(),
         };

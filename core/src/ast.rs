@@ -1,6 +1,7 @@
 use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use crate::ident::Ident;
 use crate::span::Span;
+use crate::ty::{InDb, Ty};
 use rustc_hash::FxHashMap;
 
 pub mod indexed {
@@ -14,6 +15,7 @@ pub mod indexed {
     use crate::ident::Ident;
     use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
     use crate::span::Span;
+    use crate::ty::{InDb, Ty};
 
     use super::Direction;
 
@@ -109,6 +111,10 @@ pub mod indexed {
             handler: Idx<Self>,
             body: Idx<Self>,
         },
+        Annotated {
+            ty: Ty<InDb>,
+            term: Idx<Term<Var>>,
+        },
     }
 
     impl<'a, Var: Copy + Eq + Hash> IndexedAllocate<AstIndxAlloc<'_, 'a, Var>>
@@ -159,6 +165,10 @@ pub mod indexed {
                 super::Term::Handle { handler, body } => Term::Handle {
                     handler: handler.alloc(alloc),
                     body: body.alloc(alloc),
+                },
+                super::Term::Annotated { ty, term } => Term::Annotated {
+                    ty: *ty,
+                    term: term.alloc(alloc),
                 },
             };
             let idx = alloc.arena_mut().alloc(term);
@@ -215,6 +225,10 @@ pub mod indexed {
                 Term::Handle { handler, body } => super::Term::Handle {
                     handler: handler.ref_alloc(alloc),
                     body: body.ref_alloc(alloc),
+                },
+                Term::Annotated { ty, term } => super::Term::Annotated {
+                    ty,
+                    term: term.ref_alloc(alloc),
                 },
             };
             let term_ref = alloc.ref_arena().alloc(term) as &_;
@@ -356,6 +370,10 @@ pub enum Term<'a, Var> {
         handler: &'a Term<'a, Var>,
         body: &'a Term<'a, Var>,
     },
+    Annotated {
+        ty: Ty<InDb>,
+        term: &'a Term<'a, Var>,
+    },
 }
 
 impl<'a, Var> Term<'a, Var> {
@@ -386,6 +404,7 @@ impl<'a, Var> Term<'a, Var> {
             Term::Variable(_) | Term::Int(_) | Term::Item(_) | Term::Unit | Term::Operation(_) => {
                 ZeroOneOrTwo::Zero
             }
+            Term::Annotated { term, .. } => ZeroOneOrTwo::One(term),
         }
     }
 }
