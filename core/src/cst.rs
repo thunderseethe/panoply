@@ -56,31 +56,16 @@ pub mod indexed {
             self.arena
         }
     }
-    impl HasArena<Term> for CstRefAlloc<'_> {
-        fn arena(&self) -> &Arena<Term> {
-            &self.indices.terms
+    impl<T> HasArena<T> for CstRefAlloc<'_>
+    where
+        CstIndxAlloc: HasArena<T>,
+    {
+        fn arena(&self) -> &Arena<T> {
+            self.indices.arena()
         }
 
-        fn arena_mut(&mut self) -> &mut Arena<Term> {
-            &mut self.indices.terms
-        }
-    }
-    impl HasArena<Pattern> for CstRefAlloc<'_> {
-        fn arena(&self) -> &Arena<Pattern> {
-            &self.indices.pats
-        }
-
-        fn arena_mut(&mut self) -> &mut Arena<Pattern> {
-            &mut self.indices.pats
-        }
-    }
-    impl HasArena<Type<Ident>> for CstRefAlloc<'_> {
-        fn arena(&self) -> &Arena<Type<Ident>> {
-            &self.indices.types
-        }
-
-        fn arena_mut(&mut self) -> &mut Arena<Type<Ident>> {
-            &mut self.indices.types
+        fn arena_mut(&mut self) -> &mut Arena<T> {
+            self.indices.arena_mut()
         }
     }
 

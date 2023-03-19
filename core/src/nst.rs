@@ -6,6 +6,7 @@ use crate::{
 };
 
 pub mod indexed {
+    use bumpalo::Bump;
     use la_arena::{Arena, Idx};
 
     use crate::cst::indexed::{
@@ -45,6 +46,30 @@ pub mod indexed {
         }
         fn arena_mut(&mut self) -> &mut Arena<Pattern> {
             &mut self.pats
+        }
+    }
+
+    pub struct NstRefAlloc<'a> {
+        /// Allocate the new reference based tree types.
+        arena: &'a Bump,
+        /// Included to expand indices encountered during conversion
+        indices: NstIndxAlloc,
+    }
+    impl<'a> HasRefArena<'a> for NstRefAlloc<'a> {
+        fn ref_arena(&self) -> &'a Bump {
+            self.arena
+        }
+    }
+    impl<T> HasArena<T> for NstRefAlloc<'_>
+    where
+        NstIndxAlloc: HasArena<T>,
+    {
+        fn arena(&self) -> &Arena<T> {
+            self.indices.arena()
+        }
+
+        fn arena_mut(&mut self) -> &mut Arena<T> {
+            self.indices.arena_mut()
         }
     }
 
