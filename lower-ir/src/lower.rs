@@ -1,13 +1,13 @@
 use aiahr_core::ty::{
     row::{ClosedRow, Row},
-    AccessTy, InDb, MkTy, Ty, TypeKind,
+    AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
 };
 use aiahr_core::{
     ast::{Direction, RowTerm, RowTermView, Term},
     id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
     ir::{Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, P},
 };
-use aiahr_tc::{Evidence, TyChkRes, TyScheme};
+use aiahr_tc::TyChkRes;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv, SolvedRowEv},

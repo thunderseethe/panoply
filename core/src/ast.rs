@@ -1,7 +1,7 @@
 use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use crate::ident::Ident;
 use crate::span::Span;
-use crate::ty::{InDb, Ty};
+use crate::ty::{InDb, Ty, TyScheme};
 use rustc_hash::FxHashMap;
 
 pub mod indexed {
@@ -15,7 +15,7 @@ pub mod indexed {
     use crate::ident::Ident;
     use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
     use crate::span::Span;
-    use crate::ty::{InDb, Ty};
+    use crate::ty::{InDb, Ty, TyScheme};
 
     use super::Direction;
 
@@ -239,8 +239,10 @@ pub mod indexed {
 
     /// Abstract Syntax Tree (AST)
     pub struct Ast<Var> {
+        name: ItemId,
         // We store spans of the Ast out of band because we won't need them for most operations.
-        pub spans: FxHashMap<Idx<Term<Var>>, Span>,
+        spans: FxHashMap<Idx<Term<Var>>, Span>,
+        annotation: Option<TyScheme<InDb>>,
         pub tree: Idx<Term<Var>>,
     }
     impl<Var: Copy + Eq + Hash> Ast<Var> {
@@ -257,7 +259,9 @@ pub mod indexed {
             };
             let tree = self.tree.ref_alloc(&mut alloc);
             super::Ast {
+                name: self.name,
                 spans: alloc.ref_spans,
+                annotation: self.annotation.clone(),
                 tree,
             }
         }
@@ -272,23 +276,67 @@ pub mod indexed {
             };
             let tree = value.tree.alloc(&mut alloc);
             Ast {
+                name: value.name,
                 spans: alloc.idx_spans,
+                annotation: value.annotation.clone(),
                 tree,
             }
         }
     }
 }
 
+/// An ast definition of an effect
+#[derive(Clone, Debug)]
+pub struct EffectItem {
+    pub name: EffectId,
+    pub ops: Vec<Option<(EffectOpId, Ty<InDb>)>>,
+}
+
+/// A top-level item in an Aiahr source file.
+/// This is desugared from an NST item and all of it's spans are moved out of band to make working
+/// with the semantic information of the tree easier.
+#[derive(Clone, Debug)]
+pub enum Item<'a, Var> {
+    Effect(EffectItem),
+    Function(Ast<'a, Var>),
+}
+
 /// Abstract Syntax Tree (AST)
+#[derive(Clone, Debug)]
 pub struct Ast<'a, Var> {
+    name: ItemId,
     // We store spans of the Ast out of band because we won't need them for most operations
     spans: FxHashMap<&'a Term<'a, Var>, Span>,
+    annotation: Option<TyScheme<InDb>>,
     pub tree: &'a Term<'a, Var>,
 }
 
 impl<'a, Var> Ast<'a, Var> {
-    pub fn new(spans: FxHashMap<&'a Term<'a, Var>, Span>, tree: &'a Term<'a, Var>) -> Self {
-        Self { spans, tree }
+    pub fn new(
+        name: ItemId,
+        spans: FxHashMap<&'a Term<'a, Var>, Span>,
+        tree: &'a Term<'a, Var>,
+    ) -> Self {
+        Self {
+            name,
+            spans,
+            annotation: None,
+            tree,
+        }
+    }
+
+    pub fn with_ann(
+        name: ItemId,
+        spans: FxHashMap<&'a Term<'a, Var>, Span>,
+        annotation: TyScheme<InDb>,
+        tree: &'a Term<'a, Var>,
+    ) -> Self {
+        Self {
+            name,
+            spans,
+            annotation: Some(annotation),
+            tree,
+        }
     }
 
     /// Get the root node of this Ast

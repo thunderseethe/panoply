@@ -1,5 +1,6 @@
 use aiahr_core::id::{EffectId, EffectOpId};
 use aiahr_core::ident::Ident;
+use aiahr_core::ty::TyScheme;
 use aiahr_core::{
     ast::{Ast, Term},
     id::{IrTyVarId, ItemId, ModuleId, VarId},
@@ -7,7 +8,7 @@ use aiahr_core::{
     memory::handle::{Handle, RefHandle},
     ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
 };
-use aiahr_tc::{EffectInfo, TyScheme};
+use aiahr_tc::EffectInfo;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use rustc_hash::FxHashMap;
 
@@ -305,6 +306,7 @@ mod tests {
     use aiahr_core::Db;
     use aiahr_tc::test_utils::DummyEff;
     use aiahr_test::ast::*;
+    use aiahr_test::nst::random_term_item;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
     use ir_matcher::ir_matcher;
@@ -352,7 +354,7 @@ mod tests {
             .map(|span_of| span_of.value)
             .collect();
 
-        let ast = aiahr_desugar::desugar(db, arena, &mut vars, resolved).unwrap();
+        let ast = aiahr_desugar::desugar(db, arena, &mut vars, random_term_item(resolved)).unwrap();
 
         let (var_tys, term_tys, scheme, _) = aiahr_tc::type_check(db, &DummyEff(db), &ast);
         (LowerDb::new(db, var_tys, term_tys), scheme, ast)

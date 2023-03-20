@@ -1,5 +1,6 @@
 use aiahr_core::{
     ast::{Ast, Direction, Term, Term::*},
+    id::{Id, ItemId},
     span::Span,
 };
 use bumpalo::Bump;
@@ -36,6 +37,7 @@ pub trait MkTerm<'a, Var> {
 /// AST.
 pub struct AstBuilder<'a, Var> {
     db: &'a dyn aiahr_core::Db,
+    name: ItemId,
     arena: &'a Bump,
     // TODO: This is bad but it's annoying to fix because rust won't let you take a mutable borrow
     // and then a second mutable borrow passed as a parameter to the original. Even though that'll
@@ -47,6 +49,16 @@ impl<'a, Var> AstBuilder<'a, Var> {
     pub fn new(db: &'a dyn aiahr_core::Db, arena: &'a Bump) -> Self {
         Self {
             db,
+            name: ItemId::from_raw(0),
+            arena,
+            spans: RefCell::new(FxHashMap::default()),
+        }
+    }
+
+    pub fn with_name(db: &'a dyn aiahr_core::Db, arena: &'a Bump, name: ItemId) -> Self {
+        Self {
+            db,
+            name,
             arena,
             spans: RefCell::new(FxHashMap::default()),
         }
@@ -61,7 +73,7 @@ impl<'a, Var: Eq + Hash> AstBuilder<'a, Var> {
 
     pub fn build(self, root: Term<'a, Var>) -> Ast<'a, Var> {
         let root = self.mk_term(root);
-        Ast::new(self.spans.into_inner(), root)
+        Ast::new(self.name, self.spans.into_inner(), root)
     }
 
     pub fn with_builder(

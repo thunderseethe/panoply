@@ -2,6 +2,8 @@ pub mod ast;
 pub mod cst;
 pub mod span;
 
+pub mod nst;
+
 /// Assert that each $id is an ident with text equal to it's variable name.
 #[macro_export]
 macro_rules! assert_ident_text_matches_name {

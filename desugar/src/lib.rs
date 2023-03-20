@@ -269,11 +269,21 @@ pub fn desugar<'n, 's: 'a, 'a>(
     db: &dyn crate::Db,
     arena: &'a Bump,
     vars: &mut IdGen<VarId, Ident>,
-    nst: &'n nst::Term<'n>,
+    nst: nst::Item<'n>,
 ) -> Result<Ast<'a, VarId>, PatternMatchError> {
-    let mut ds_ctx = DesugarCtx::new(db, arena, vars);
-    let tree = ds_ctx.ds_term(nst)?;
-    Ok(Ast::new(ds_ctx.spans, tree))
+    match nst {
+        nst::Item::Effect { .. } => todo!(),
+        nst::Item::Term {
+            name,
+            annotation: _annotation,
+            value,
+            ..
+        } => {
+            let mut ds_ctx = DesugarCtx::new(db, arena, vars);
+            let tree = ds_ctx.ds_term(value)?;
+            Ok(Ast::new(name.value, ds_ctx.spans, tree))
+        }
+    }
 }
 
 struct ClauseMatrix<'p, 't> {
@@ -415,6 +425,7 @@ mod tests {
     use aiahr_core::cst::{Field, IdField, ProductRow, Separated, SumRow};
     use aiahr_core::Db;
     use aiahr_core::{id::VarId, nst};
+    use aiahr_test::nst::random_term_item;
     use aiahr_test::{cst::*, span::*};
     use bumpalo::Bump;
 
@@ -431,7 +442,7 @@ mod tests {
         let db = TestDatabase::default();
         let mut vars = IdGen::new();
         let var = random_span_of(vars.push(db.ident_str("0")));
-        let nst = arena.alloc(nst::Term::VariableRef(var));
+        let nst = random_term_item(arena.alloc(nst::Term::VariableRef(var)));
         let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
 
         assert_eq!(ast.tree, &Variable(var.value));
@@ -452,13 +463,13 @@ mod tests {
         let start = random_span();
         let x = vars.push(db.ident_str("0"));
         let span_of_var = random_span_of(x);
-        let nst = arena.alloc(nst::Term::Abstraction {
+        let nst = random_term_item(arena.alloc(nst::Term::Abstraction {
             lbar: start,
             arg: random_span_of(VarId(0)),
             annotation: None,
             rbar: random_span(),
             body: arena.alloc(nst::Term::VariableRef(span_of_var)),
-        });
+        }));
         let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
 
         assert_eq!(
@@ -488,12 +499,12 @@ mod tests {
             &db,
             &arena,
             &mut vars,
-            &nst::Term::Application {
+            random_term_item(arena.alloc(nst::Term::Application {
                 func: arena.alloc(nst::Term::VariableRef(start)),
                 lpar: random_span(),
                 arg: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
                 rpar: end,
-            },
+            })),
         )
         .unwrap();
 
@@ -524,14 +535,14 @@ mod tests {
             &db,
             &arena,
             &mut vars,
-            arena.alloc(nst::Term::Binding {
+            random_term_item(arena.alloc(nst::Term::Binding {
                 var: start,
                 annotation: None,
                 eq: random_span(),
                 value: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(10)))),
                 semi: random_span(),
                 expr: arena.alloc(nst::Term::VariableRef(end)),
-            }),
+            })),
         )
         .unwrap();
 
@@ -564,11 +575,11 @@ mod tests {
             &db,
             &arena,
             &mut IdGen::new(),
-            arena.alloc(nst::Term::ProductRow(ProductRow {
+            random_term_item(arena.alloc(nst::Term::ProductRow(ProductRow {
                 lbrace: start,
                 fields: None,
                 rbrace: end,
-            })),
+            }))),
         )
         .unwrap();
 
@@ -597,7 +608,7 @@ mod tests {
             &db,
             &arena,
             &mut IdGen::new(),
-            arena.alloc(nst::Term::ProductRow(ProductRow {
+            random_term_item(arena.alloc(nst::Term::ProductRow(ProductRow {
                 lbrace: start,
                 fields: Some(Separated {
                     first: IdField {
@@ -611,8 +622,8 @@ mod tests {
                             IdField {
                                 label: random_span_of(b),
                                 sep: random_span(),
-                                target: arena
-                                    .alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
+                                target:
+                                    arena.alloc(nst::Term::VariableRef(random_span_of(VarId(1)))),
                             },
                         ),
                         (
@@ -620,15 +631,15 @@ mod tests {
                             IdField {
                                 label: random_span_of(c),
                                 sep: random_span(),
-                                target: arena
-                                    .alloc(nst::Term::VariableRef(random_span_of(VarId(2)))),
+                                target:
+                                    arena.alloc(nst::Term::VariableRef(random_span_of(VarId(2)))),
                             },
                         ),
                     ],
                     comma: None,
                 }),
                 rbrace: end,
-            })),
+            }))),
         )
         .unwrap();
 
@@ -669,11 +680,11 @@ mod tests {
 
         let base = random_span_of(VarId(0));
         let field = random_span_of(state);
-        let nst = arena.alloc(nst::Term::FieldAccess {
+        let nst = random_term_item(arena.alloc(nst::Term::FieldAccess {
             base: arena.alloc(nst::Term::VariableRef(base)),
             dot: random_span(),
             field,
-        });
+        }));
 
         let ast = desugar(&db, &arena, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
@@ -704,7 +715,7 @@ mod tests {
 
         let langle = random_span();
         let rangle = random_span();
-        let nst = arena.alloc(nst::Term::SumRow(aiahr_core::cst::SumRow {
+        let nst = random_term_item(arena.alloc(nst::Term::SumRow(aiahr_core::cst::SumRow {
             langle,
             field: Field {
                 label: random_span_of(tru),
@@ -712,7 +723,7 @@ mod tests {
                 target: arena.alloc(nst::Term::VariableRef(random_span_of(VarId(0)))),
             },
             rangle,
-        }));
+        })));
 
         let ast = desugar(&db, &arena, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
@@ -743,7 +754,7 @@ mod tests {
         let b = db.ident_str("B");
         let c = db.ident_str("C");
 
-        let nst = arena.alloc(nst::Term::Match {
+        let nst = random_term_item(arena.alloc(nst::Term::Match {
             match_: random_span(),
             langle: random_span(),
             rangle: random_span(),
@@ -797,7 +808,7 @@ mod tests {
                 ]),
                 comma: None,
             },
-        });
+        }));
 
         let mut vars = [a, b, c].into_iter().collect();
         let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
@@ -859,7 +870,7 @@ mod tests {
         let c = db.ident_str("C");
         let w = db.ident_str("_");
 
-        let nst = arena.alloc(nst::Term::Match {
+        let nst = random_term_item(arena.alloc(nst::Term::Match {
             match_: random_span(),
             langle: random_span(),
             rangle: random_span(),
@@ -921,7 +932,7 @@ mod tests {
                 ]),
                 comma: Some(random_span()),
             },
-        });
+        }));
 
         let mut vars = [a, b, c, w].into_iter().collect();
         let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
@@ -988,7 +999,7 @@ mod tests {
         let b = db.ident_str("B");
         let c = db.ident_str("C");
 
-        let nst = arena.alloc(nst::Term::Match {
+        let nst = random_term_item(arena.alloc(nst::Term::Match {
             match_: random_span(),
             langle: random_span(),
             rangle: random_span(),
@@ -1008,9 +1019,9 @@ mod tests {
                                     Field {
                                         label: random_span_of(b),
                                         sep: random_span(),
-                                        target: arena
-                                            .alloc(Pattern::Whole(random_span_of(VarId(1))))
-                                            as &_,
+                                        target:
+                                            arena.alloc(Pattern::Whole(random_span_of(VarId(1))))
+                                                as &_,
                                     },
                                 ),
                                 (
@@ -1018,9 +1029,9 @@ mod tests {
                                     Field {
                                         label: random_span_of(c),
                                         sep: random_span(),
-                                        target: arena
-                                            .alloc(Pattern::Whole(random_span_of(VarId(2))))
-                                            as &_,
+                                        target:
+                                            arena.alloc(Pattern::Whole(random_span_of(VarId(2))))
+                                                as &_,
                                     },
                                 ),
                             ]),
@@ -1034,7 +1045,7 @@ mod tests {
                 elems: &[],
                 comma: None,
             },
-        });
+        }));
 
         let mut vars = [a, b, c].into_iter().collect();
         let ast = desugar(&db, &arena, &mut vars, nst).unwrap();
@@ -1095,7 +1106,7 @@ mod tests {
         let y = db.ident_str("y");
         let z = db.ident_str("z");
 
-        let nst = arena.alloc(nst::Term::Match {
+        let nst = random_term_item(arena.alloc(nst::Term::Match {
             match_: random_span(),
             langle: random_span(),
             rangle: random_span(),
@@ -1112,12 +1123,14 @@ mod tests {
                                         random_span_of(x),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
-                                            field: random_field(
-                                                random_span_of(a),
-                                                arena
-                                                    .alloc(Pattern::Whole(random_span_of(VarId(0))))
-                                                    as &_,
-                                            ),
+                                            field:
+                                                random_field(
+                                                    random_span_of(a),
+                                                    arena.alloc(Pattern::Whole(random_span_of(
+                                                        VarId(0),
+                                                    )))
+                                                        as &_,
+                                                ),
                                             rangle: random_span(),
                                         })) as &_,
                                     ),
@@ -1125,12 +1138,14 @@ mod tests {
                                         random_span_of(y),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
-                                            field: random_field(
-                                                random_span_of(b),
-                                                arena
-                                                    .alloc(Pattern::Whole(random_span_of(VarId(1))))
-                                                    as &_,
-                                            ),
+                                            field:
+                                                random_field(
+                                                    random_span_of(b),
+                                                    arena.alloc(Pattern::Whole(random_span_of(
+                                                        VarId(1),
+                                                    )))
+                                                        as &_,
+                                                ),
                                             rangle: random_span(),
                                         })) as &_,
                                     ),
@@ -1158,12 +1173,14 @@ mod tests {
                                         random_span_of(y),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
-                                            field: random_field(
-                                                random_span_of(b),
-                                                arena
-                                                    .alloc(Pattern::Whole(random_span_of(VarId(1))))
-                                                    as &_,
-                                            ),
+                                            field:
+                                                random_field(
+                                                    random_span_of(b),
+                                                    arena.alloc(Pattern::Whole(random_span_of(
+                                                        VarId(1),
+                                                    )))
+                                                        as &_,
+                                                ),
                                             rangle: random_span(),
                                         })) as &_,
                                     ),
@@ -1195,12 +1212,14 @@ mod tests {
                                         random_span_of(z),
                                         arena.alloc(Pattern::SumRow(SumRow {
                                             langle: random_span(),
-                                            field: random_field(
-                                                random_span_of(c),
-                                                arena
-                                                    .alloc(Pattern::Whole(random_span_of(VarId(2))))
-                                                    as &_,
-                                            ),
+                                            field:
+                                                random_field(
+                                                    random_span_of(c),
+                                                    arena.alloc(Pattern::Whole(random_span_of(
+                                                        VarId(2),
+                                                    )))
+                                                        as &_,
+                                                ),
                                             rangle: random_span(),
                                         })) as &_,
                                     ),
@@ -1212,7 +1231,7 @@ mod tests {
                     ),
                 ],
             ),
-        });
+        }));
 
         let mut vars = [a, b, c, x, y, z].into_iter().collect();
         let ast = desugar(&db, &arena, &mut vars, nst).unwrap();

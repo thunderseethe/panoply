@@ -267,9 +267,6 @@ use folds::zonker::Zonker;
 mod infer;
 pub use infer::TyChkRes;
 
-mod evidence;
-pub use crate::evidence::Evidence;
-
 /// Information we need about effects during type checking
 pub trait EffectInfo<'s, 'ctx> {
     /// Lookup the name of an effect from it's ID
@@ -371,16 +368,6 @@ where
         ty: zonked_infer.ty,
     };
     (zonked_var_tys, zonked_term_tys, scheme, errors)
-}
-
-/// A type scheme (also know as a polymorphic type).
-/// Type schemes wrap a monomorphic type in any number of foralls binding the free variables within
-/// the monomorphic type. They may also assert constraints on the bound type variables.
-pub struct TyScheme<A: TypeAlloc> {
-    pub bound: Vec<A::TypeVar>,
-    pub constrs: Vec<Evidence<A>>,
-    pub eff: Row<A>,
-    pub ty: Ty<A>,
 }
 
 #[salsa::jar(db = Db)]

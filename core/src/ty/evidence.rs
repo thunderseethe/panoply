@@ -1,7 +1,14 @@
-use aiahr_core::ty::{infer::InArena, row::Row, FallibleTypeFold, InDb, TypeAlloc, TypeFoldable};
+use super::{row::Row, FallibleTypeFold, InDb, TypeAlloc, TypeFoldable};
 use salsa::DebugWithDb;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Evidence proving a piece of type level information.
+/// This allows type schemes to express constraints on it's type variables that type checking must
+/// prove true for the the scheme to type check.
+/// This will be things like row combinations or type class constraints.
+/// Once we drop down to the IR level where everything is explicitly typed each piece of required
+/// evidence will appear as a parameter to it's term, and passing the parameter provides a witness
+/// taht the evidence is true.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Evidence<A: TypeAlloc> {
     Row {
         left: Row<A>,
@@ -15,23 +22,7 @@ where
     Row<A>: Copy,
 {
 }
-impl<'ctx> std::fmt::Debug for Evidence<InArena<'ctx>> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Evidence::Row { left, right, goal } => f
-                .debug_struct("Evidence::Row")
-                .field("left", &left)
-                .field("right", &right)
-                .field("goal", &goal)
-                .finish(),
-        }
-    }
-}
-impl std::fmt::Debug for Evidence<InDb> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Use DebugWithDb for Evidence<InDb>.")
-    }
-}
+
 impl<Db> DebugWithDb<Db> for Evidence<InDb>
 where
     Db: crate::Db,

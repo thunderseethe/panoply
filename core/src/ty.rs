@@ -4,18 +4,21 @@ use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::ops::Deref;
 
-pub mod row;
-use row::{ClosedRow, Row};
-
-mod fold;
-pub use fold::{FallibleEndoTypeFold, FallibleTypeFold, TypeFoldable};
-
 mod alloc;
 use self::fold::DefaultFold;
 pub use alloc::{
     db::{InDb, SalsaRowFields, SalsaRowValues, TyData},
     AccessTy, MkTy, TypeAlloc, TypeVarOf,
 };
+
+mod evidence;
+pub use evidence::Evidence;
+
+mod fold;
+pub use fold::{FallibleEndoTypeFold, FallibleTypeFold, TypeFoldable};
+
+pub mod row;
+use row::{ClosedRow, Row};
 
 #[cfg(feature = "type_infer")]
 pub mod infer;
@@ -329,4 +332,15 @@ impl<A: TypeAlloc> ClosedRow<A> {
                 .into_doc(),
         )
     }
+}
+
+/// A type scheme (also know as a polymorphic type).
+/// Type schemes wrap a monomorphic type in any number of foralls binding the free variables within
+/// the monomorphic type. They may also assert constraints on the bound type variables.
+#[derive(Debug, Clone)]
+pub struct TyScheme<A: TypeAlloc> {
+    pub bound: Vec<A::TypeVar>,
+    pub constrs: Vec<Evidence<A>>,
+    pub eff: Row<A>,
+    pub ty: Ty<A>,
 }
