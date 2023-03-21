@@ -1,4 +1,4 @@
-use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, VarId};
+use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use crate::ident::Ident;
 use crate::modules::Module;
 use crate::span::Span;
@@ -329,7 +329,7 @@ pub struct AstModule {
     #[id]
     pub module: Module,
     #[return_ref]
-    pub items: Vec<indexed::Item<VarId>>,
+    pub items: Vec<indexed::SalsaItem>,
 }
 
 /// An ast definition of an effect

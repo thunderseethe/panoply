@@ -42,10 +42,7 @@ pub fn desugar_module(db: &dyn crate::Db, module: NstModule) -> AstModule {
 
 /// Desugar an NST Item into an AST Item.
 #[salsa::tracked]
-pub fn desugar_item(
-    db: &dyn crate::Db,
-    item: nst::indexed::SalsaItem,
-) -> ast::indexed::Item<VarId> {
+pub fn desugar_item(db: &dyn crate::Db, item: nst::indexed::SalsaItem) -> ast::indexed::SalsaItem {
     let arena = Bump::new();
     let mut alloc = nst::indexed::NstRefAlloc::new(&arena, item.alloc(db.as_core_db()));
     // TODO: Handle separation of name based Ids and desugar generated Ids better.
@@ -75,7 +72,7 @@ pub fn desugar_item(
         }
     };
 
-    indexed::Item::Function(salsa_ast)
+    indexed::SalsaItem::new(db.as_core_db(), indexed::Item::Function(salsa_ast))
 }
 
 /// Desugar a NST into an AST.
