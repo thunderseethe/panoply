@@ -398,12 +398,12 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
 /// Desugar a NST into an AST.
 /// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
 /// the NST.
-pub fn desugar<'n, 'a>(
+pub fn desugar<'a>(
     db: &dyn crate::Db,
     arena: &'a Bump,
     vars: &mut IdGen<VarId, Ident>,
     ty_vars: &mut IdGen<TyVarId, Ident>,
-    nst: nst::Item<'n>,
+    nst: nst::Item<'_>,
 ) -> Result<Ast<'a, VarId>, PatternMatchError> {
     match nst {
         nst::Item::Effect { .. } => todo!(),
