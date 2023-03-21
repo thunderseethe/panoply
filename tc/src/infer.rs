@@ -70,7 +70,7 @@ use std::collections::BTreeSet;
 use crate::{
     diagnostic::{into_diag, TypeCheckDiagnostic, TypeCheckError},
     folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
-    wip::{ClosedGoal, OpenGoal, OrderedRowXorRow, UnsolvedRowEquation},
+    unsolved_row::{ClosedGoal, OpenGoal, OrderedRowXorRow, UnsolvedRowEquation},
     Db, EffectInfo, Evidence, TyScheme,
 };
 use aiahr_core::ty::infer::{InArena, InferRow, InferTy, TcUnifierVar};

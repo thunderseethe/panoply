@@ -14,14 +14,12 @@ use salsa::DebugWithDb;
 use aiahr_core::ty::infer::{InArena, TcUnifierVar, TyCtx};
 use aiahr_core::ty::*;
 
-mod wip {
+mod unsolved_row {
     use std::cmp::Ordering;
 
     use aiahr_core::ty::infer::InArena;
     use aiahr_core::ty::row::{ClosedRow, Row};
-    use aiahr_core::ty::{FallibleTypeFold, TypeAlloc, TypeFoldable};
-
-    use crate::Evidence;
+    use aiahr_core::ty::{Evidence, FallibleTypeFold, TypeAlloc, TypeFoldable};
 
     impl<'ctx> From<OrderedRowXorRow<InArena<'ctx>>> for (Row<InArena<'ctx>>, Row<InArena<'ctx>>) {
         fn from(val: OrderedRowXorRow<InArena<'ctx>>) -> Self {
