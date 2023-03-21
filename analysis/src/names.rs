@@ -123,8 +123,8 @@ impl<'b, 'a> Names<'b, 'a> {
         }
     }
 
-    pub fn into_vars(self) -> IdGen<VarId, SpanOf<Ident>> {
-        self.gens.vars
+    pub fn into_ids(self) -> (IdGen<VarId, SpanOf<Ident>>, IdGen<TyVarId, SpanOf<Ident>>) {
+        (self.gens.vars, self.gens.ty_vars)
     }
 
     /// Executes the given function on a subscope of the current object.

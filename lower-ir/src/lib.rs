@@ -348,13 +348,18 @@ mod tests {
         let resolved = resolve_term(arena, unresolved, &mut names, &mut errors)
             .expect("Name resolution to succeed");
 
-        let mut vars = names
-            .into_vars()
-            .into_iter()
-            .map(|span_of| span_of.value)
-            .collect();
+        let (vars, ty_vars) = names.into_ids();
+        let mut vars = vars.into_iter().map(|span_of| span_of.value).collect();
+        let mut ty_vars = ty_vars.into_iter().map(|span_of| span_of.value).collect();
 
-        let ast = aiahr_desugar::desugar(db, arena, &mut vars, random_term_item(resolved)).unwrap();
+        let ast = aiahr_desugar::desugar(
+            db,
+            arena,
+            &mut vars,
+            &mut ty_vars,
+            random_term_item(resolved),
+        )
+        .unwrap();
 
         let (var_tys, term_tys, scheme, _) = aiahr_tc::type_check(db, &DummyEff(db), &ast);
         (LowerDb::new(db, var_tys, term_tys), scheme, ast)
