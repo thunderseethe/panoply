@@ -1,10 +1,11 @@
 use std::ops::Not;
 
-use aiahr_core::ast::Direction;
+use aiahr_core::ast::{indexed, AstModule, Direction};
 use aiahr_core::cst::{self, Field, RowAtom, Scheme, Type};
 use aiahr_core::id::{Id, IdGen, TyVarId};
 use aiahr_core::ident::Ident;
-use aiahr_core::nst::Pattern;
+use aiahr_core::indexed::ReferenceAllocate;
+use aiahr_core::nst::{NstModule, Pattern};
 use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::ty::row::Row;
 use aiahr_core::ty::{Evidence, InDb, MkTy, Ty, TyScheme, TypeKind};
@@ -19,9 +20,94 @@ use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 
 #[salsa::jar(db = Db)]
-pub struct Jar();
+pub struct Jar(desugar_module, desugar_item);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+
+/// Desugar an NST Module into an AST module.
+/// This will desugar all items in NST moduels into their corresponding AST items.
+#[salsa::tracked]
+pub fn desugar_module(db: &dyn crate::Db, module: NstModule) -> AstModule {
+    let core_db = db.as_core_db();
+    AstModule::new(
+        core_db,
+        module.module(core_db),
+        module
+            .items(core_db)
+            .iter()
+            .map(|nst_item| desugar_item(db, *nst_item))
+            .collect(),
+    )
+}
+
+/// Desugar an NST Item into an AST Item.
+#[salsa::tracked]
+pub fn desugar_item(
+    db: &dyn crate::Db,
+    item: nst::indexed::SalsaItem,
+) -> ast::indexed::Item<VarId> {
+    let arena = Bump::new();
+    let mut alloc = nst::indexed::NstRefAlloc::new(&arena, item.alloc(db.as_core_db()));
+    // TODO: Handle separation of name based Ids and desugar generated Ids better.
+    let mut ty_vars = IdGen::from_iter(
+        item.ty_vars(db.as_core_db())
+            .iter_enumerate()
+            .map(|(_, ident)| ident.value),
+    );
+    let mut vars = IdGen::from_iter(
+        item.vars(db.as_core_db())
+            .iter_enumerate()
+            .map(|(_, ident)| ident.value),
+    );
+
+    let ast_res = desugar(
+        db,
+        &arena,
+        &mut vars,
+        &mut ty_vars,
+        item.data(db.as_core_db()).ref_alloc(&mut alloc),
+    );
+
+    let salsa_ast = match ast_res {
+        Ok(ast) => indexed::Ast::from(&ast),
+        Err(_pat_err) => {
+            todo!()
+        }
+    };
+
+    indexed::Item::Function(salsa_ast)
+}
+
+/// Desugar a NST into an AST.
+/// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
+/// the NST.
+pub fn desugar<'a>(
+    db: &dyn crate::Db,
+    arena: &'a Bump,
+    vars: &mut IdGen<VarId, Ident>,
+    ty_vars: &mut IdGen<TyVarId, Ident>,
+    nst: nst::Item<'_>,
+) -> Result<Ast<'a, VarId>, PatternMatchError> {
+    match nst {
+        nst::Item::Effect { .. } => todo!(),
+        nst::Item::Term {
+            name,
+            annotation,
+            value,
+            ..
+        } => {
+            let mut ds_ctx = DesugarCtx::new(db, arena, vars, ty_vars);
+            let tree = ds_ctx.ds_term(value)?;
+            Ok(match annotation {
+                Some(scheme) => {
+                    let scheme = ds_ctx.ds_scheme(scheme.type_);
+                    Ast::with_ann(name.value, ds_ctx.spans, scheme, tree)
+                }
+                None => Ast::new(name.value, ds_ctx.spans, tree),
+            })
+        }
+    }
+}
 
 struct DesugarCtx<'a, 'ctx> {
     db: &'a dyn crate::Db,
@@ -390,37 +476,6 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 let b = b?;
                 let span = Span::join(&self.spans[a], &self.spans[b]);
                 Ok(mk_term(&mut self.spans, Branch { left: a, right: b }, span))
-            })
-        }
-    }
-}
-
-/// Desugar a NST into an AST.
-/// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
-/// the NST.
-pub fn desugar<'a>(
-    db: &dyn crate::Db,
-    arena: &'a Bump,
-    vars: &mut IdGen<VarId, Ident>,
-    ty_vars: &mut IdGen<TyVarId, Ident>,
-    nst: nst::Item<'_>,
-) -> Result<Ast<'a, VarId>, PatternMatchError> {
-    match nst {
-        nst::Item::Effect { .. } => todo!(),
-        nst::Item::Term {
-            name,
-            annotation,
-            value,
-            ..
-        } => {
-            let mut ds_ctx = DesugarCtx::new(db, arena, vars, ty_vars);
-            let tree = ds_ctx.ds_term(value)?;
-            Ok(match annotation {
-                Some(scheme) => {
-                    let scheme = ds_ctx.ds_scheme(scheme.type_);
-                    Ast::with_ann(name.value, ds_ctx.spans, scheme, tree)
-                }
-                None => Ast::new(name.value, ds_ctx.spans, tree),
             })
         }
     }

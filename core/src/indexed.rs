@@ -5,9 +5,12 @@ use la_arena::Arena;
 ///
 /// Allows types to implement `IndexedAllocate<A>` for a generic A as long as it has the required
 /// arena.
-pub trait HasArena<T> {
-    fn arena(&self) -> &Arena<T>;
+pub trait HasArenaMut<T>: HasArenaRef<T> {
     fn arena_mut(&mut self) -> &mut Arena<T>;
+}
+
+pub trait HasArenaRef<T> {
+    fn arena(&self) -> &Arena<T>;
 }
 
 /// A trait for a type that contains a `&'a Bump`

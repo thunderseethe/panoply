@@ -14,7 +14,7 @@ pub trait Id {
 }
 
 /// An array of `I` IDs for `T` values. Similar to a `[T]`, but indexed by `I`s.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Ids<I, T> {
     _phantom: PhantomData<I>,

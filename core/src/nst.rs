@@ -2,6 +2,7 @@ use crate::{
     cst::{EffectOp, Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation},
     id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
+    modules::Module,
     span::{Span, SpanOf, Spanned},
 };
 
@@ -13,68 +14,80 @@ pub mod indexed {
         EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation,
     };
     use crate::cst::Field;
-    use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
+    use crate::id::{EffectId, EffectOpId, Ids, ItemId, ModuleId, TyVarId, VarId};
     use crate::ident::Ident;
-    use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
+    use crate::indexed::{
+        HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
+    };
     use crate::span::{Span, SpanOf};
 
-    #[derive(Default)]
+    #[derive(Default, Debug, PartialEq)]
     pub struct NstIndxAlloc {
         types: Arena<Type<TyVarId>>,
         terms: Arena<Term>,
         pats: Arena<Pattern>,
     }
-    impl HasArena<Type<TyVarId>> for NstIndxAlloc {
+    impl Eq for NstIndxAlloc {}
+
+    impl HasArenaRef<Type<TyVarId>> for NstIndxAlloc {
         fn arena(&self) -> &Arena<Type<TyVarId>> {
             &self.types
         }
+    }
+    impl HasArenaMut<Type<TyVarId>> for NstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Type<TyVarId>> {
             &mut self.types
         }
     }
-    impl HasArena<Term> for NstIndxAlloc {
+    impl HasArenaRef<Term> for NstIndxAlloc {
         fn arena(&self) -> &Arena<Term> {
             &self.terms
         }
+    }
+    impl HasArenaMut<Term> for NstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Term> {
             &mut self.terms
         }
     }
-    impl HasArena<Pattern> for NstIndxAlloc {
+    impl HasArenaRef<Pattern> for NstIndxAlloc {
         fn arena(&self) -> &Arena<Pattern> {
             &self.pats
         }
+    }
+    impl HasArenaMut<Pattern> for NstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Pattern> {
             &mut self.pats
         }
     }
 
-    pub struct NstRefAlloc<'a> {
+    pub struct NstRefAlloc<'a, 'b> {
         /// Allocate the new reference based tree types.
         arena: &'a Bump,
         /// Included to expand indices encountered during conversion
-        indices: NstIndxAlloc,
+        indices: &'b NstIndxAlloc,
     }
-    impl<'a> HasRefArena<'a> for NstRefAlloc<'a> {
+
+    impl<'a, 'b> NstRefAlloc<'a, 'b> {
+        pub fn new(arena: &'a Bump, indices: &'b NstIndxAlloc) -> Self {
+            Self { arena, indices }
+        }
+    }
+    impl<'a> HasRefArena<'a> for NstRefAlloc<'a, '_> {
         fn ref_arena(&self) -> &'a Bump {
             self.arena
         }
     }
-    impl<T> HasArena<T> for NstRefAlloc<'_>
+    impl<T> HasArenaRef<T> for NstRefAlloc<'_, '_>
     where
-        NstIndxAlloc: HasArena<T>,
+        NstIndxAlloc: HasArenaRef<T>,
     {
         fn arena(&self) -> &Arena<T> {
             self.indices.arena()
         }
-
-        fn arena_mut(&mut self) -> &mut Arena<T> {
-            self.indices.arena_mut()
-        }
     }
 
     /// A pattern with names resolved.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub enum Pattern {
         ProductRow(ProductRow<Idx<Self>>),
         SumRow(SumRow<Idx<Self>>),
@@ -82,7 +95,7 @@ pub mod indexed {
     }
 
     /// An Aiahr term with names resolved.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub enum Term {
         Binding {
             var: SpanOf<VarId>,
@@ -134,8 +147,20 @@ pub mod indexed {
         },
     }
 
+    #[salsa::tracked]
+    pub struct SalsaItem {
+        #[id]
+        pub data: Item,
+        #[return_ref]
+        pub alloc: NstIndxAlloc,
+        #[return_ref]
+        pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,
+        #[return_ref]
+        pub vars: Box<Ids<VarId, SpanOf<Ident>>>,
+    }
+
     /// A top-level item in an Aiahr source file with names resolved.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Hash)]
     pub enum Item {
         Effect {
             effect: Span,
@@ -151,6 +176,7 @@ pub mod indexed {
             value: Idx<Term>,
         },
     }
+    impl Eq for Item {}
 
     impl<A> IndexedAllocate<A> for EffectOpId {
         type Out = EffectOpId;
@@ -184,7 +210,7 @@ pub mod indexed {
 
     impl<A> IndexedAllocate<A> for super::Pattern<'_>
     where
-        A: HasArena<Pattern>,
+        A: HasArenaMut<Pattern>,
     {
         type Out = Idx<Pattern>;
 
@@ -199,7 +225,7 @@ pub mod indexed {
     }
     impl<'a, A> ReferenceAllocate<'a, A> for Idx<Pattern>
     where
-        A: HasRefArena<'a> + HasArena<Pattern>,
+        A: HasRefArena<'a> + HasArenaRef<Pattern>,
     {
         type Out = &'a super::Pattern<'a>;
 
@@ -300,7 +326,7 @@ pub mod indexed {
     }
     impl<'a, A> ReferenceAllocate<'a, A> for Idx<Term>
     where
-        A: HasRefArena<'a> + HasArena<Term> + HasArena<Type<TyVarId>> + HasArena<Pattern>,
+        A: HasRefArena<'a> + HasArenaRef<Term> + HasArenaRef<Type<TyVarId>> + HasArenaRef<Pattern>,
     {
         type Out = &'a super::Term<'a>;
 
@@ -419,6 +445,51 @@ pub mod indexed {
             }
         }
     }
+    impl<'a, A> ReferenceAllocate<'a, A> for Item
+    where
+        A: HasRefArena<'a> + HasArenaRef<Type<TyVarId>> + HasArenaRef<Pattern> + HasArenaRef<Term>,
+    {
+        type Out = super::Item<'a>;
+
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
+            match self {
+                Item::Effect {
+                    effect,
+                    name,
+                    lbrace,
+                    ops,
+                    rbrace,
+                } => super::Item::Effect {
+                    effect: *effect,
+                    name: *name,
+                    lbrace: *lbrace,
+                    ops: alloc
+                        .ref_arena()
+                        .alloc_slice_fill_iter(ops.iter().map(|op| op.ref_alloc(alloc))),
+                    rbrace: *rbrace,
+                },
+                Item::Term {
+                    name,
+                    annotation,
+                    eq,
+                    value,
+                } => super::Item::Term {
+                    name: *name,
+                    annotation: annotation.ref_alloc(alloc),
+                    eq: *eq,
+                    value: value.ref_alloc(alloc),
+                },
+            }
+        }
+    }
+}
+
+#[salsa::tracked]
+pub struct NstModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub items: Vec<indexed::SalsaItem>,
 }
 
 /// A pattern with names resolved.

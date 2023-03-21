@@ -1,5 +1,6 @@
-use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
+use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, VarId};
 use crate::ident::Ident;
+use crate::modules::Module;
 use crate::span::Span;
 use crate::ty::{InDb, Ty, TyScheme};
 use rustc_hash::FxHashMap;
@@ -11,9 +12,11 @@ pub mod indexed {
     use la_arena::{Arena, Idx};
     use rustc_hash::FxHashMap;
 
-    use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
+    use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, VarId};
     use crate::ident::Ident;
-    use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
+    use crate::indexed::{
+        HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
+    };
     use crate::span::Span;
     use crate::ty::{InDb, Ty, TyScheme};
 
@@ -24,11 +27,12 @@ pub mod indexed {
         ref_spans: &'b FxHashMap<&'a super::Term<'a, Var>, Span>,
         idx_spans: FxHashMap<Idx<Term<Var>>, Span>,
     }
-    impl<Var> HasArena<Term<Var>> for AstIndxAlloc<'_, '_, Var> {
+    impl<Var> HasArenaRef<Term<Var>> for AstIndxAlloc<'_, '_, Var> {
         fn arena(&self) -> &Arena<Term<Var>> {
             &self.terms
         }
-
+    }
+    impl<Var> HasArenaMut<Term<Var>> for AstIndxAlloc<'_, '_, Var> {
         fn arena_mut(&mut self) -> &mut Arena<Term<Var>> {
             &mut self.terms
         }
@@ -45,13 +49,9 @@ pub mod indexed {
             self.arena
         }
     }
-    impl<Var> HasArena<Term<Var>> for AstRefAlloc<'_, '_, Var> {
+    impl<Var> HasArenaRef<Term<Var>> for AstRefAlloc<'_, '_, Var> {
         fn arena(&self) -> &Arena<Term<Var>> {
             &self.terms
-        }
-
-        fn arena_mut(&mut self) -> &mut Arena<Term<Var>> {
-            &mut self.terms
         }
     }
 
@@ -238,13 +238,27 @@ pub mod indexed {
     }
 
     /// Abstract Syntax Tree (AST)
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Ast<Var> {
         name: ItemId,
         // We store spans of the Ast out of band because we won't need them for most operations.
         spans: FxHashMap<Idx<Term<Var>>, Span>,
         annotation: Option<TyScheme<InDb>>,
+        terms: Arena<Term<Var>>,
         pub tree: Idx<Term<Var>>,
     }
+    impl<Var: Hash> std::hash::Hash for Ast<Var> {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.name.hash(state);
+            for (idx, span) in self.spans.iter() {
+                idx.hash(state);
+                span.hash(state);
+            }
+            self.terms.hash(state);
+            self.tree.hash(state);
+        }
+    }
+
     impl<Var: Copy + Eq + Hash> Ast<Var> {
         pub fn ref_alloc<'a>(
             &self,
@@ -279,14 +293,47 @@ pub mod indexed {
                 name: value.name,
                 spans: alloc.idx_spans,
                 annotation: value.annotation.clone(),
+                terms: alloc.terms,
                 tree,
+            }
+        }
+    }
+
+    #[salsa::tracked]
+    pub struct SalsaItem {
+        #[id]
+        pub item: Item<VarId>,
+    }
+
+    /// A top-level item in an Aiahr source file.
+    /// This is desugared from an NST item and all of it's spans are moved out of band to make working
+    /// with the semantic information of the tree easier.
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    pub enum Item<Var> {
+        Effect(super::EffectItem),
+        Function(Ast<Var>),
+    }
+
+    impl<'a, Var: Copy + Eq + Hash> From<&super::Item<'a, Var>> for Item<Var> {
+        fn from(value: &super::Item<'a, Var>) -> Self {
+            match value {
+                super::Item::Effect(eff) => Item::Effect(eff.clone()),
+                super::Item::Function(ast) => Item::Function(Ast::from(ast)),
             }
         }
     }
 }
 
+#[salsa::tracked]
+pub struct AstModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub items: Vec<indexed::Item<VarId>>,
+}
+
 /// An ast definition of an effect
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectItem {
     pub name: EffectId,
     pub ops: Vec<Option<(EffectOpId, Ty<InDb>)>>,

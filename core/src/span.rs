@@ -119,12 +119,13 @@ impl PartialOrd for ByPrecedence {
 }
 
 /// An object with a span in source code.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct SpanOf<T> {
     pub start: Loc,
     pub value: T,
     pub end: Loc,
 }
+impl<T: Eq> Eq for SpanOf<T> {}
 
 impl<T> SpanOf<T> {
     /// Converts a `Span<T>` into a `Span<&T>`.

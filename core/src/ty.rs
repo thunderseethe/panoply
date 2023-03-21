@@ -337,7 +337,7 @@ impl<A: TypeAlloc> ClosedRow<A> {
 /// A type scheme (also know as a polymorphic type).
 /// Type schemes wrap a monomorphic type in any number of foralls binding the free variables within
 /// the monomorphic type. They may also assert constraints on the bound type variables.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TyScheme<A: TypeAlloc> {
     pub bound: Vec<A::TypeVar>,
     pub constrs: Vec<Evidence<A>>,

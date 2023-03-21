@@ -13,7 +13,9 @@ pub mod indexed {
     use la_arena::{Arena, Idx};
 
     use crate::ident::Ident;
-    use crate::indexed::{HasArena, HasRefArena, IndexedAllocate, ReferenceAllocate};
+    use crate::indexed::{
+        HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
+    };
     use crate::span::{Span, SpanOf};
 
     #[derive(Default)]
@@ -22,26 +24,32 @@ pub mod indexed {
         terms: Arena<Term>,
         pats: Arena<Pattern>,
     }
-    impl HasArena<Pattern> for CstIndxAlloc {
+    impl HasArenaRef<Pattern> for CstIndxAlloc {
         fn arena(&self) -> &Arena<Pattern> {
             &self.pats
         }
+    }
+    impl HasArenaMut<Pattern> for CstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Pattern> {
             &mut self.pats
         }
     }
-    impl HasArena<Type<Ident>> for CstIndxAlloc {
+    impl HasArenaRef<Type<Ident>> for CstIndxAlloc {
         fn arena(&self) -> &Arena<Type<Ident>> {
             &self.types
         }
+    }
+    impl HasArenaMut<Type<Ident>> for CstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Type<Ident>> {
             &mut self.types
         }
     }
-    impl HasArena<Term> for CstIndxAlloc {
+    impl HasArenaRef<Term> for CstIndxAlloc {
         fn arena(&self) -> &Arena<Term> {
             &self.terms
         }
+    }
+    impl HasArenaMut<Term> for CstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Term> {
             &mut self.terms
         }
@@ -56,22 +64,18 @@ pub mod indexed {
             self.arena
         }
     }
-    impl<T> HasArena<T> for CstRefAlloc<'_>
+    impl<T> HasArenaRef<T> for CstRefAlloc<'_>
     where
-        CstIndxAlloc: HasArena<T>,
+        CstIndxAlloc: HasArenaRef<T>,
     {
         fn arena(&self) -> &Arena<T> {
             self.indices.arena()
-        }
-
-        fn arena_mut(&mut self) -> &mut Arena<T> {
-            self.indices.arena_mut()
         }
     }
 
     /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
     /// `Option`.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Hash)]
     pub struct Separated<T> {
         pub first: T,
         pub elems: Vec<(Span, T)>,
@@ -81,7 +85,7 @@ pub mod indexed {
     pub type IdField<T> = super::Field<SpanOf<Ident>, T>;
 
     /// A product row with values in `T`.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub struct ProductRow<T> {
         pub lbrace: Span,
         pub fields: Option<Separated<IdField<T>>>,
@@ -89,7 +93,7 @@ pub mod indexed {
     }
 
     /// A sum row with value in `T`.
-    #[derive(Clone, Copy, Debug)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct SumRow<T> {
         pub langle: Span,
         pub field: IdField<T>,
@@ -97,7 +101,7 @@ pub mod indexed {
     }
 
     /// A non-empty row with concrete fields in `C` and variables in `V`.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub enum Row<V, C> {
         Concrete(Separated<C>),
         Variable(Separated<SpanOf<V>>),
@@ -112,7 +116,7 @@ pub mod indexed {
     pub type TypeRow<V> = Row<V, IdField<Idx<Type<V>>>>;
 
     /// An unqualified Aiahr syntactic type.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq)]
     pub enum Type<V> {
         Named(SpanOf<V>),
         Sum {
@@ -138,7 +142,7 @@ pub mod indexed {
     }
 
     /// An atomic row for use in a type constraint.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Hash)]
     pub enum RowAtom<V> {
         Concrete {
             lpar: Span,
@@ -149,7 +153,7 @@ pub mod indexed {
     }
 
     /// A type constraint.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Hash)]
     pub enum Constraint<V> {
         RowSum {
             lhs: RowAtom<V>,
@@ -161,14 +165,14 @@ pub mod indexed {
     }
 
     /// A qualifiers for a type.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Hash)]
     pub struct Qualifiers<V> {
         pub constraints: Separated<Constraint<V>>,
         pub arrow: Span,
     }
 
     /// A polymorphic Aiahr type.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Hash)]
     pub struct Scheme<V> {
         pub quantifiers: Vec<super::Quantifier<V>>,
         pub qualifiers: Option<Qualifiers<V>>,
@@ -176,7 +180,7 @@ pub mod indexed {
     }
 
     /// An effect operation.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Hash)]
     pub struct EffectOp<O, V> {
         pub name: SpanOf<O>,
         pub colon: Span,
@@ -426,7 +430,7 @@ pub mod indexed {
 
     impl<'a, A, V: IndexedAllocate<A>> IndexedAllocate<A> for super::Type<'a, V>
     where
-        A: HasArena<Type<V::Out>>,
+        A: HasArenaMut<Type<V::Out>>,
     {
         type Out = Idx<Type<V::Out>>;
 
@@ -471,7 +475,7 @@ pub mod indexed {
     }
     impl<'a, A, V: Copy + ReferenceAllocate<'a, A>> ReferenceAllocate<'a, A> for Idx<Type<V>>
     where
-        A: HasRefArena<'a> + HasArena<Type<V>>,
+        A: HasRefArena<'a> + HasArenaRef<Type<V>>,
     {
         type Out = &'a super::Type<'a, V::Out>;
 
@@ -518,7 +522,7 @@ pub mod indexed {
     impl<A, O: IndexedAllocate<A>, V: IndexedAllocate<A>> IndexedAllocate<A>
         for super::EffectOp<'_, O, V>
     where
-        A: HasArena<Type<V::Out>>,
+        A: HasArenaMut<Type<V::Out>>,
     {
         type Out = EffectOp<O::Out, V::Out>;
 
@@ -532,7 +536,7 @@ pub mod indexed {
     }
     impl<'a, A, O, V> ReferenceAllocate<'a, A> for EffectOp<O, V>
     where
-        A: HasRefArena<'a> + HasArena<Type<V>>,
+        A: HasRefArena<'a> + HasArenaRef<Type<V>>,
         O: ReferenceAllocate<'a, A>,
         V: Copy + ReferenceAllocate<'a, A>,
     {
@@ -573,7 +577,7 @@ pub mod indexed {
 
     impl<'a, A, V: IndexedAllocate<A>> IndexedAllocate<A> for super::Scheme<'a, V>
     where
-        A: HasArena<Type<V::Out>>,
+        A: HasArenaMut<Type<V::Out>>,
     {
         type Out = Scheme<V::Out>;
 
@@ -591,7 +595,7 @@ pub mod indexed {
     }
     impl<'a, A, V> ReferenceAllocate<'a, A> for Scheme<V>
     where
-        A: HasRefArena<'a> + HasArena<Type<V>>,
+        A: HasRefArena<'a> + HasArenaRef<Type<V>>,
         V: 'a + Copy + ReferenceAllocate<'a, A>,
     {
         type Out = &'a super::Scheme<'a, V::Out>;
@@ -636,7 +640,7 @@ pub mod indexed {
 
     impl<A, V: IndexedAllocate<A>> IndexedAllocate<A> for super::Qualifiers<'_, V>
     where
-        A: HasArena<Type<V::Out>>,
+        A: HasArenaMut<Type<V::Out>>,
     {
         type Out = Qualifiers<V::Out>;
 
@@ -649,7 +653,7 @@ pub mod indexed {
     }
     impl<'a, A, V> ReferenceAllocate<'a, A> for Qualifiers<V>
     where
-        A: HasRefArena<'a> + HasArena<Type<V>>,
+        A: HasRefArena<'a> + HasArenaRef<Type<V>>,
         V: Copy + ReferenceAllocate<'a, A>,
     {
         type Out = super::Qualifiers<'a, V::Out>;
@@ -664,7 +668,7 @@ pub mod indexed {
 
     impl<A, V: IndexedAllocate<A>> IndexedAllocate<A> for super::Constraint<'_, V>
     where
-        A: HasArena<Type<V::Out>>,
+        A: HasArenaMut<Type<V::Out>>,
     {
         type Out = Constraint<V::Out>;
 
@@ -688,7 +692,7 @@ pub mod indexed {
     }
     impl<'a, A, V> ReferenceAllocate<'a, A> for Constraint<V>
     where
-        A: HasRefArena<'a> + HasArena<Type<V>>,
+        A: HasRefArena<'a> + HasArenaRef<Type<V>>,
         V: Copy + ReferenceAllocate<'a, A>,
     {
         type Out = super::Constraint<'a, V::Out>;
@@ -714,7 +718,7 @@ pub mod indexed {
 
     impl<A, V: IndexedAllocate<A>> IndexedAllocate<A> for super::RowAtom<'_, V>
     where
-        A: HasArena<Type<V::Out>>,
+        A: HasArenaMut<Type<V::Out>>,
     {
         type Out = RowAtom<V::Out>;
 
@@ -731,7 +735,7 @@ pub mod indexed {
     }
     impl<'a, A, V> ReferenceAllocate<'a, A> for RowAtom<V>
     where
-        A: HasRefArena<'a> + HasArena<Type<V>>,
+        A: HasRefArena<'a> + HasArenaRef<Type<V>>,
         V: Copy + ReferenceAllocate<'a, A>,
     {
         type Out = super::RowAtom<'a, V::Out>;
@@ -833,7 +837,7 @@ pub mod indexed {
     }
     impl<'a, A> ReferenceAllocate<'a, A> for Idx<Term>
     where
-        A: HasRefArena<'a> + HasArena<Term> + HasArena<Type<Ident>> + HasArena<Pattern>,
+        A: HasRefArena<'a> + HasArenaRef<Term> + HasArenaRef<Type<Ident>> + HasArenaRef<Pattern>,
     {
         type Out = &'a super::Term<'a>;
 
@@ -970,7 +974,7 @@ pub mod indexed {
 
     impl<A> IndexedAllocate<A> for super::Pattern<'_>
     where
-        A: HasArena<Pattern>,
+        A: HasArenaMut<Pattern>,
     {
         type Out = Idx<Pattern>;
 
@@ -986,7 +990,7 @@ pub mod indexed {
 
     impl<'a, A> ReferenceAllocate<'a, A> for Idx<Pattern>
     where
-        A: HasRefArena<'a> + HasArena<Pattern>,
+        A: HasRefArena<'a> + HasArenaRef<Pattern>,
     {
         type Out = &'a super::Pattern<'a>;
 
@@ -1034,7 +1038,7 @@ pub mod indexed {
     }
     impl<'a, A> ReferenceAllocate<'a, A> for Item
     where
-        A: HasRefArena<'a> + HasArena<Type<Ident>> + HasArena<Term> + HasArena<Pattern>,
+        A: HasRefArena<'a> + HasArenaRef<Type<Ident>> + HasArenaRef<Term> + HasArenaRef<Pattern>,
     {
         type Out = super::Item<'a>;
 
@@ -1073,7 +1077,7 @@ pub mod indexed {
 
 /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
 /// `Option`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Separated<'a, T> {
     pub first: T,
     pub elems: &'a [(Span, T)],
@@ -1146,7 +1150,7 @@ impl<'a, T> Iterator for Elements<'a, T> {
 }
 
 /// A field with a label in `L`, separator, and target in `T`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct Field<L, T> {
     pub label: L,
     pub sep: Span,
@@ -1205,7 +1209,7 @@ impl<T> Spanned for SumRow<T> {
 }
 
 /// A non-empty row with concrete fields in `C` and variables in `V`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Row<'a, V, C> {
     Concrete(Separated<'a, C>),
     Variable(Separated<'a, SpanOf<V>>),
@@ -1234,7 +1238,7 @@ impl<'a, V, C: Spanned> Spanned for Row<'a, V, C> {
 pub type TypeRow<'a, V> = Row<'a, V, IdField<&'a Type<'a, V>>>;
 
 /// An unqualified Aiahr type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Type<'a, V> {
     Named(SpanOf<V>),
     Sum {
@@ -1314,7 +1318,7 @@ impl<'a, V> Spanned for Constraint<'a, V> {
 }
 
 /// A quantifier for a polytype.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct Quantifier<V> {
     pub forall: Span,
     pub var: SpanOf<V>,
@@ -1400,7 +1404,7 @@ impl<'a> Spanned for Pattern<'a> {
 }
 
 /// A typing annotation for a variable.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 pub struct Annotation<T> {
     pub colon: Span,
     pub type_: T,

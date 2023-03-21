@@ -20,6 +20,7 @@ pub mod ty;
 pub mod ident {
     /// An interned identifier.
     #[salsa::interned]
+    #[derive(PartialEq)]
     pub struct Ident {
         #[return_ref]
         pub text: String,
@@ -33,6 +34,10 @@ pub struct Jar(
     ty::TyData,
     ty::SalsaRowFields,
     ty::SalsaRowValues,
+    nst::NstModule,
+    nst::indexed::SalsaItem,
+    ast::AstModule,
+    ast::indexed::SalsaItem,
 );
 pub trait Db: salsa::DbWithJar<Jar> {
     fn as_core_db(&self) -> &dyn crate::Db {
