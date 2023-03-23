@@ -25,13 +25,11 @@ mod lower;
 /// Slightly lower level of information than required by EffectInfo.
 /// However this is all calculatable off of the effect definition
 pub trait IrEffectInfo<'ctx> {
-    fn lookup_effect_by_member(&self, op_id: EffectOpId) -> EffectId;
+    fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)>;
 
-    fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId>;
-
-    fn effect_handler_return_index(&self, eff_id: EffectId) -> usize;
+    fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
     fn effect_member_op_index(&self, eff_id: EffectId, op_id: EffectOpId) -> usize;
-    fn effect_vector_index(&self, eff_id: EffectId) -> usize;
+    fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
 
     fn effect_handler_ir_ty(&self, eff_id: EffectId) -> IrTy<'ctx>;
 }
@@ -127,22 +125,16 @@ pub mod test_utils {
         }
     }
     impl<'ctx> EffectInfo<'ctx, 'ctx> for LowerDb<'_, 'ctx> {
-        fn effect_name(&self, eff: aiahr_core::id::EffectId) -> Ident {
-            self.eff_info.effect_name(eff)
+        fn effect_name(&self, mod_id: ModuleId, eff: aiahr_core::id::EffectId) -> Ident {
+            self.eff_info.effect_name(mod_id, eff)
         }
 
         fn effect_members(
             &self,
+            mod_id: ModuleId,
             eff: aiahr_core::id::EffectId,
         ) -> RefHandle<'static, [aiahr_core::id::EffectOpId]> {
-            self.eff_info.effect_members(eff)
-        }
-
-        fn lookup_effect_by_member(
-            &self,
-            member: aiahr_core::id::EffectOpId,
-        ) -> aiahr_core::id::EffectId {
-            self.eff_info.lookup_effect_by_member(member)
+            self.eff_info.effect_members(mod_id, eff)
         }
 
         fn effect_member_sig(
@@ -161,21 +153,20 @@ pub mod test_utils {
             self.eff_info.effect_member_name(eff, member)
         }
 
-        fn lookup_effect_by_member_names<'a>(&self, members: &[Ident]) -> Option<EffectId> {
+        fn lookup_effect_by_member_names<'a>(
+            &self,
+            members: &[Ident],
+        ) -> Option<(ModuleId, EffectId)> {
             self.eff_info.lookup_effect_by_member_names(members)
         }
 
-        fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId> {
+        fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)> {
             self.eff_info.lookup_effect_by_name(name)
         }
     }
 
     impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'_, 'ctx> {
-        fn lookup_effect_by_member(&self, op_id: EffectOpId) -> EffectId {
-            self.eff_info.lookup_effect_by_member(op_id)
-        }
-
-        fn effect_handler_return_index(&self, eff_id: EffectId) -> usize {
+        fn effect_handler_return_index(&self, _: ModuleId, eff_id: EffectId) -> usize {
             match eff_id {
                 DummyEff::STATE_ID => 2,
                 DummyEff::READER_ID => 1,
@@ -191,7 +182,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_vector_index(&self, eff_id: EffectId) -> usize {
+        fn effect_vector_index(&self, _: ModuleId, eff_id: EffectId) -> usize {
             match eff_id {
                 DummyEff::STATE_ID => 0,
                 DummyEff::READER_ID => 1,
@@ -244,7 +235,7 @@ pub mod test_utils {
             }
         }
 
-        fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId> {
+        fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)> {
             self.eff_info.lookup_effect_by_name(name)
         }
     }

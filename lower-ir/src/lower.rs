@@ -638,7 +638,7 @@ where
                 Ir::app(inj, [self.lower_term(subterm)])
             }
             // Effect stuff
-            Operation((_, eff_id, op)) => {
+            Operation((mod_id, eff_id, op)) => {
                 let (value_ty, _) = self
                     .db
                     .lookup_term(term)
@@ -666,7 +666,7 @@ where
                 };
 
                 let handler_index = self.db.effect_member_op_index(*eff_id, *op);
-                let eff_index = self.db.effect_vector_index(*eff_id);
+                let eff_index = self.db.effect_vector_index(*mod_id, *eff_id);
                 Ir::app(
                     Ir::abss(
                         [handle_var, value_var],
@@ -702,11 +702,11 @@ where
                         unreachable!("Handler effect expect to be closed row, found row variable")
                     }
                 };
-                let eff = self
+                let (mod_id, eff) = self
                     .db
                     .lookup_effect_by_name(eff_name)
                     .expect("Invalid effect name should've been caught in type checking");
-                let eff_index = self.db.effect_vector_index(eff);
+                let eff_index = self.db.effect_vector_index(mod_id, eff);
                 let handler_var = IrVar {
                     var: self.var_conv.generate(),
                     ty: self.lower_ty(handler_infer.ty),
@@ -716,7 +716,7 @@ where
                 let ret_ty = self.lower_ty(self.db.lookup_term(term).ty);
 
                 let body_ty = self.lower_ty(self.db.lookup_term(body).ty);
-                let ret_index = self.db.effect_handler_return_index(eff);
+                let ret_index = self.db.effect_handler_return_index(mod_id, eff);
                 let updated_evv = Ir::new(VectorSet(
                     self.evv_var,
                     eff_index,

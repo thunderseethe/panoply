@@ -1,6 +1,6 @@
 use aiahr_core::{
     ast::{Ast, Term},
-    id::{EffectId, EffectOpId, Id, TyVarId, VarId},
+    id::{EffectId, EffectOpId, Id, ModuleId, TyVarId, VarId},
     ident::Ident,
     memory::handle::RefHandle,
     ty::row::Row,
@@ -29,16 +29,14 @@ pub use infer::TyChkRes;
 /// Information we need about effects during type checking
 pub trait EffectInfo<'s, 'ctx> {
     /// Lookup the name of an effect from it's ID
-    fn effect_name(&self, eff: EffectId) -> Ident;
+    fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident;
     /// Lookup effect members from it's ID
-    fn effect_members(&self, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]>;
+    fn effect_members(&self, module: ModuleId, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]>;
 
-    /// Reverse index lookup, find an effect's ID from one of it's operation
-    fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId;
     /// Look up an effect by the name of it's members, this may fail if an invalid list of member
     /// names is passed.
-    fn lookup_effect_by_member_names(&self, members: &[Ident]) -> Option<EffectId>;
-    fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId>;
+    fn lookup_effect_by_member_names(&self, members: &[Ident]) -> Option<(ModuleId, EffectId)>;
+    fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)>;
     /// Lookup the type signature of an effect's member
     fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<InDb>;
     /// Lookup the name of an effect's member
@@ -164,7 +162,7 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
 }
 
 pub mod test_utils {
-    use aiahr_core::id::{EffectId, EffectOpId, TyVarId};
+    use aiahr_core::id::{EffectId, EffectOpId, ModuleId, TyVarId};
     use aiahr_core::ident::Ident;
     use aiahr_core::memory::handle::{self, RefHandle};
 
@@ -183,7 +181,7 @@ pub mod test_utils {
         pub const ASK_ID: EffectOpId = EffectOpId(2);
     }
     impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff<'_> {
-        fn effect_name(&self, eff: EffectId) -> Ident {
+        fn effect_name(&self, _: ModuleId, eff: EffectId) -> Ident {
             match eff {
                 DummyEff::STATE_ID => self.0.ident_str("State"),
                 DummyEff::READER_ID => self.0.ident_str("Reader"),
@@ -191,7 +189,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_members(&self, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]> {
+        fn effect_members(&self, _: ModuleId, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]> {
             match eff {
                 DummyEff::STATE_ID => handle::Handle(&[DummyEff::GET_ID, DummyEff::PUT_ID]),
                 DummyEff::READER_ID => handle::Handle(&[DummyEff::ASK_ID]),
@@ -199,24 +197,19 @@ pub mod test_utils {
             }
         }
 
-        fn lookup_effect_by_member(&self, member: EffectOpId) -> EffectId {
-            match member {
-                DummyEff::GET_ID | DummyEff::PUT_ID => DummyEff::STATE_ID,
-                DummyEff::ASK_ID => DummyEff::READER_ID,
-                _ => unimplemented!(),
-            }
-        }
-
-        fn lookup_effect_by_member_names<'a>(&self, members: &[Ident]) -> Option<EffectId> {
+        fn lookup_effect_by_member_names<'a>(
+            &self,
+            members: &[Ident],
+        ) -> Option<(ModuleId, EffectId)> {
             members
                 .get(0)
                 .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-                    "ask" => Some(DummyEff::READER_ID),
+                    "ask" => Some((ModuleId(0), DummyEff::READER_ID)),
                     "get" => {
                         members
                             .get(1)
                             .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-                                "put" => Some(DummyEff::STATE_ID),
+                                "put" => Some((ModuleId(0), DummyEff::STATE_ID)),
                                 _ => None,
                             })
                     }
@@ -224,7 +217,7 @@ pub mod test_utils {
                         members
                             .get(1)
                             .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-                                "get" => Some(DummyEff::STATE_ID),
+                                "get" => Some((ModuleId(0), DummyEff::STATE_ID)),
                                 _ => None,
                             })
                     }
@@ -232,10 +225,10 @@ pub mod test_utils {
                 })
         }
 
-        fn lookup_effect_by_name(&self, name: Ident) -> Option<EffectId> {
+        fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)> {
             match name.text(self.0.as_core_db()).as_str() {
-                "State" => Some(DummyEff::STATE_ID),
-                "Reader" => Some(DummyEff::READER_ID),
+                "State" => Some((ModuleId(0), DummyEff::STATE_ID)),
+                "Reader" => Some((ModuleId(0), DummyEff::READER_ID)),
                 _ => None,
             }
         }

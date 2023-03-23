@@ -681,7 +681,7 @@ where
 
                 InferResult::new(self.mk_ty(SumTy(big_row)), eff)
             }
-            Operation((_, eff_id, eff_op_id)) => {
+            Operation((mod_id, eff_id, eff_op_id)) => {
                 let sig = self.instantiate(
                     eff_info.effect_member_sig(*eff_id, *eff_op_id),
                     current_span(),
@@ -690,7 +690,7 @@ where
                 InferResult::new(
                     sig.ty,
                     Row::Closed(self.single_row(
-                        eff_info.effect_name(*eff_id),
+                        eff_info.effect_name(*mod_id, *eff_id),
                         self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
                     )),
                 )
@@ -1422,11 +1422,11 @@ where
 
         match (normal_handler, normal_eff) {
             (Row::Closed(handler), Row::Open(eff_var)) => {
-                let eff_id = eff_info
+                let (mod_id, eff_id) = eff_info
                     .lookup_effect_by_member_names(&handler.fields)
                     .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
                 let mut members_sig = eff_info
-                    .effect_members(eff_id)
+                    .effect_members(mod_id, eff_id)
                     .iter()
                     .map(|eff_op_id| {
                         (
@@ -1447,18 +1447,18 @@ where
 
                 // We succesfully unified the handler against it's expected signature.
                 // That means we can unify our eff_var against our effect
-                let eff_name = eff_info.effect_name(eff_id);
+                let eff_name = eff_info.effect_name(mod_id, eff_id);
                 let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
                 let eff_row = self.mk_row(&[eff_name], &[unit_ty]);
                 self.unify_var_ty(eff_var, self.mk_ty(RowTy(eff_row)))
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
-                let eff_id = eff_info
+                let (mod_id, eff_id) = eff_info
                     .lookup_effect_by_name(eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let mut members_sig = eff_info
-                    .effect_members(eff_id)
+                    .effect_members(mod_id, eff_id)
                     .iter()
                     .map(|eff_op_id| {
                         (
@@ -1477,11 +1477,11 @@ where
             }
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
-                let eff_id = eff_info
+                let (mod_id, eff_id) = eff_info
                     .lookup_effect_by_name(eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let members_sig = eff_info
-                    .effect_members(eff_id)
+                    .effect_members(mod_id, eff_id)
                     .iter()
                     .map(|eff_op_id| {
                         let scheme = eff_info.effect_member_sig(eff_id, *eff_op_id);
