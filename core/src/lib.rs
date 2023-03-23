@@ -29,13 +29,17 @@ pub mod ident {
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
+    ast::AstModule,
+    ast::indexed::SalsaItem,
     ident::Ident,
     modules::Module,
+    modules::SalsaModuleTree,
+    modules::all_modules,
+    modules::module_of,
     ty::TyData,
     ty::SalsaRowFields,
     ty::SalsaRowValues,
-    ast::AstModule,
-    ast::indexed::SalsaItem,
+    Top,
 );
 pub trait Db: salsa::DbWithJar<Jar> {
     fn as_core_db(&self) -> &dyn crate::Db {
@@ -53,6 +57,12 @@ pub trait Db: salsa::DbWithJar<Jar> {
     }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
+
+/// Trivial type to satisfy salsa's requirements
+/// Eventually all salsa tracked functions should be in terms of salsa tracked structs and we
+/// shouldn't need this anymore.
+#[salsa::tracked]
+pub struct Top {}
 
 #[cfg(test)]
 mod tests {

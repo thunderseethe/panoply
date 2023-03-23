@@ -2,7 +2,7 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     displayer::Displayer,
-    id::{IdGen, ModuleId},
+    id::{IdGen, Ids, ModuleId},
     ident::Ident,
 };
 
@@ -89,8 +89,48 @@ impl Displayer<ModuleId> for ModuleTree {
 #[salsa::tracked]
 pub struct Module {
     #[return_ref]
-    name: String,
+    name: Ident,
 
     #[return_ref]
-    uri: String,
+    uri: std::path::PathBuf,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct SalsaModuleData {
+    name: Ident,
+    data: Module,
+    submodules: FxHashMap<Ident, ModuleId>,
+}
+
+#[salsa::tracked]
+pub struct SalsaModuleTree {
+    #[return_ref]
+    packages: FxHashMap<Ident, ModuleId>,
+    #[return_ref]
+    modules: Box<Ids<ModuleId, SalsaModuleData>>,
+}
+
+#[salsa::tracked]
+pub fn all_modules(
+    _db: &dyn crate::Db, /* TODO: this should take some kind of config file? or be an input */
+) -> SalsaModuleTree {
+    todo!()
+}
+
+#[salsa::tracked]
+pub fn module_of(db: &dyn crate::Db, _unused: crate::Top, module_id: ModuleId) -> Module {
+    let tree = all_modules(db);
+
+    let (_, module_data) = tree
+        .modules(db)
+        .iter_enumerate()
+        .find(|(id, _)| id == &module_id)
+        .unwrap_or_else(|| {
+            panic!(
+                "Constructed ModuleId {:?} without associating it to a Module",
+                module_id
+            )
+        });
+
+    module_data.data
 }
