@@ -2,7 +2,6 @@ use crate::{
     cst::{EffectOp, Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation},
     id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
-    modules::Module,
     span::{Span, SpanOf, Spanned},
 };
 
@@ -14,7 +13,7 @@ pub mod indexed {
         EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation,
     };
     use crate::cst::Field;
-    use crate::id::{EffectId, EffectOpId, Ids, ItemId, ModuleId, TyVarId, VarId};
+    use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
     use crate::ident::Ident;
     use crate::indexed::{
         HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
@@ -145,18 +144,6 @@ pub mod indexed {
             term: Idx<Self>,
             rpar: Span,
         },
-    }
-
-    #[salsa::tracked]
-    pub struct SalsaItem {
-        #[id]
-        pub data: Item,
-        #[return_ref]
-        pub alloc: NstIndxAlloc,
-        #[return_ref]
-        pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,
-        #[return_ref]
-        pub vars: Box<Ids<VarId, SpanOf<Ident>>>,
     }
 
     /// A top-level item in an Aiahr source file with names resolved.
@@ -482,14 +469,6 @@ pub mod indexed {
             }
         }
     }
-}
-
-#[salsa::tracked]
-pub struct NstModule {
-    #[id]
-    pub module: Module,
-    #[return_ref]
-    pub items: Vec<indexed::SalsaItem>,
 }
 
 /// A pattern with names resolved.

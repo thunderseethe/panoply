@@ -349,8 +349,8 @@ mod tests {
             .expect("Name resolution to succeed");
 
         let (vars, ty_vars) = names.into_ids();
-        let mut vars = vars.into_iter().map(|span_of| span_of.value).collect();
-        let mut ty_vars = ty_vars.into_iter().map(|span_of| span_of.value).collect();
+        let mut vars = vars.into_iter().map(|_| false).collect();
+        let mut ty_vars = ty_vars.into_iter().map(|_| false).collect();
 
         let ast = aiahr_desugar::desugar(
             db,

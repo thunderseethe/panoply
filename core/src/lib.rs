@@ -34,8 +34,6 @@ pub struct Jar(
     ty::TyData,
     ty::SalsaRowFields,
     ty::SalsaRowValues,
-    nst::NstModule,
-    nst::indexed::SalsaItem,
     ast::AstModule,
     ast::indexed::SalsaItem,
 );

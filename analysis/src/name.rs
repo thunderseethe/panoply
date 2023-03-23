@@ -14,7 +14,7 @@ pub trait NameKinded {
 }
 
 /// A name that may appear as a top-level definition within a module.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleName {
     Effect(EffectId),
     Item(ItemId),

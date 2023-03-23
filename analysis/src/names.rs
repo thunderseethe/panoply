@@ -94,7 +94,7 @@ impl MatchesOps<VarId> for Matches {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct LocalIds {
     pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,
     pub vars: Box<Ids<VarId, SpanOf<Ident>>>,

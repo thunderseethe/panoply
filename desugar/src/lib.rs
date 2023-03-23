@@ -5,7 +5,7 @@ use aiahr_core::cst::{self, Field, RowAtom, Scheme, Type};
 use aiahr_core::id::{Id, IdGen, TyVarId};
 use aiahr_core::ident::Ident;
 use aiahr_core::indexed::ReferenceAllocate;
-use aiahr_core::nst::{NstModule, Pattern};
+use aiahr_core::nst::Pattern;
 use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::ty::row::Row;
 use aiahr_core::ty::{Evidence, InDb, MkTy, Ty, TyScheme, TypeKind};
@@ -21,48 +21,49 @@ use rustc_hash::FxHashMap;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(desugar_module, desugar_item);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {}
 
 /// Desugar an NST Module into an AST module.
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
-pub fn desugar_module(db: &dyn crate::Db, module: NstModule) -> AstModule {
+pub fn desugar_module(db: &dyn crate::Db, module: aiahr_analysis::NameResModule) -> AstModule {
     let core_db = db.as_core_db();
+    let resolution = module.items(db.as_analysis_db());
+    let ty_vars = resolution.local_ids.ty_vars.len();
+    let vars = resolution.local_ids.vars.len();
     AstModule::new(
         core_db,
-        module.module(core_db),
-        module
-            .items(core_db)
+        module.module(db.as_analysis_db()),
+        resolution
+            .resolved_items
             .iter()
-            .map(|nst_item| desugar_item(db, *nst_item))
+            .flat_map(|opt_item| opt_item.as_ref().into_iter())
+            .map(|nst_item| desugar_item(db, *nst_item, vars, ty_vars))
             .collect(),
     )
 }
 
 /// Desugar an NST Item into an AST Item.
 #[salsa::tracked]
-pub fn desugar_item(db: &dyn crate::Db, item: nst::indexed::SalsaItem) -> ast::indexed::SalsaItem {
+pub fn desugar_item(
+    db: &dyn crate::Db,
+    item: aiahr_analysis::SalsaItem,
+    vars: usize,
+    ty_vars: usize,
+) -> ast::indexed::SalsaItem {
     let arena = Bump::new();
-    let mut alloc = nst::indexed::NstRefAlloc::new(&arena, item.alloc(db.as_core_db()));
+    let mut alloc = nst::indexed::NstRefAlloc::new(&arena, item.alloc(db.as_analysis_db()));
     // TODO: Handle separation of name based Ids and desugar generated Ids better.
-    let mut ty_vars = IdGen::from_iter(
-        item.ty_vars(db.as_core_db())
-            .iter_enumerate()
-            .map(|(_, ident)| ident.value),
-    );
-    let mut vars = IdGen::from_iter(
-        item.vars(db.as_core_db())
-            .iter_enumerate()
-            .map(|(_, ident)| ident.value),
-    );
+    let mut ty_vars = IdGen::from_iter((0..ty_vars).map(|_| false));
+    let mut vars = IdGen::from_iter((0..vars).map(|_| false));
 
     let ast_res = desugar(
         db,
         &arena,
         &mut vars,
         &mut ty_vars,
-        item.data(db.as_core_db()).ref_alloc(&mut alloc),
+        item.data(db.as_analysis_db()).ref_alloc(&mut alloc),
     );
 
     let salsa_ast = match ast_res {
@@ -81,8 +82,8 @@ pub fn desugar_item(db: &dyn crate::Db, item: nst::indexed::SalsaItem) -> ast::i
 pub fn desugar<'a>(
     db: &dyn crate::Db,
     arena: &'a Bump,
-    vars: &mut IdGen<VarId, Ident>,
-    ty_vars: &mut IdGen<TyVarId, Ident>,
+    vars: &mut IdGen<VarId, bool>,
+    ty_vars: &mut IdGen<TyVarId, bool>,
     nst: nst::Item<'_>,
 ) -> Result<Ast<'a, VarId>, PatternMatchError> {
     match nst {
@@ -109,8 +110,8 @@ pub fn desugar<'a>(
 struct DesugarCtx<'a, 'ctx> {
     db: &'a dyn crate::Db,
     arena: &'ctx Bump,
-    vars: &'a mut IdGen<VarId, Ident>,
-    ty_vars: &'a mut IdGen<TyVarId, Ident>,
+    vars: &'a mut IdGen<VarId, bool>,
+    ty_vars: &'a mut IdGen<TyVarId, bool>,
     spans: FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>,
 }
 
@@ -118,8 +119,8 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
     fn new(
         db: &'a dyn crate::Db,
         arena: &'ctx Bump,
-        vars: &'a mut IdGen<VarId, Ident>,
-        ty_vars: &'a mut IdGen<TyVarId, Ident>,
+        vars: &'a mut IdGen<VarId, bool>,
+        ty_vars: &'a mut IdGen<TyVarId, bool>,
     ) -> Self {
         Self {
             db,
@@ -189,9 +190,10 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 // abstraction as, abs : ann -> tv<0> where return type is a fresh type var.
                 if let Some(ann) = annotation {
                     let arg_ty = self.ds_type(ann.type_);
-                    let ret_ty = self.db.as_core_db().mk_ty(TypeKind::VarTy(
-                        self.ty_vars.push(self.db.ident_str("__generated__")),
-                    ));
+                    let ret_ty = self
+                        .db
+                        .as_core_db()
+                        .mk_ty(TypeKind::VarTy(self.ty_vars.push(true)));
                     let ty = self.db.as_core_db().mk_ty(TypeKind::FunTy(arg_ty, ret_ty));
                     term = self.arena.alloc(Annotated { ty, term });
                 }
@@ -353,7 +355,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
             })
             .unwrap_or(vec![]);
         let ty = self.ds_type(nst.type_);
-        let eff = Row::Open(self.ty_vars.push(self.db.ident_str("__generated__")));
+        let eff = Row::Open(self.ty_vars.push(true));
         TyScheme {
             bound,
             constrs,
@@ -397,10 +399,9 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 .collect::<std::collections::BTreeMap<_, _>>();
             let mut matches = constrs.into_iter().map(|(c, p)| match c {
                 Constructor::ProductRow(ref lbls) => {
-                    let generated_var = self.db.ident_str("__generated__");
-                    let top_level = self.vars.push(generated_var);
+                    let top_level = self.vars.push(true);
                     let binders = (0..lbls.len())
-                        .map(|_| self.vars.push(generated_var))
+                        .map(|_| self.vars.push(true))
                         .collect::<Vec<_>>();
                     let mut occs = binders;
                     // replace first occurence by binder introduced here
@@ -434,7 +435,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     ))
                 }
                 Constructor::SumRow(label) => {
-                    let binder = self.vars.push(self.db.ident_str("__generated__"));
+                    let binder = self.vars.push(true);
                     let mut occs = vec![binder];
                     occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                     let func = self.desugar_pattern_matrix(&mut occs, matrix.specialize(&c))?;
@@ -622,7 +623,7 @@ mod tests {
     use bumpalo::Bump;
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_analysis::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
@@ -633,7 +634,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let mut vars = IdGen::new();
-        let var = random_span_of(vars.push(db.ident_str("0")));
+        let var = random_span_of(vars.push(false));
         let nst = random_term_item(arena.alloc(nst::Term::VariableRef(var)));
         let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst).unwrap();
 
@@ -653,7 +654,7 @@ mod tests {
         let db = TestDatabase::default();
         let mut vars = IdGen::new();
         let start = random_span();
-        let x = vars.push(db.ident_str("0"));
+        let x = vars.push(false);
         let span_of_var = random_span_of(x);
         let nst = random_term_item(arena.alloc(nst::Term::Abstraction {
             lbar: start,
@@ -1006,7 +1007,7 @@ mod tests {
             },
         }));
 
-        let mut vars = [a, b, c].into_iter().collect();
+        let mut vars = [false, false, false].into_iter().collect();
         let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
             ast.root(),
@@ -1064,7 +1065,6 @@ mod tests {
         let a = db.ident_str("A");
         let b = db.ident_str("B");
         let c = db.ident_str("C");
-        let w = db.ident_str("_");
 
         let nst = random_term_item(arena.alloc(nst::Term::Match {
             match_: random_span(),
@@ -1130,7 +1130,7 @@ mod tests {
             },
         }));
 
-        let mut vars = [a, b, c, w].into_iter().collect();
+        let mut vars = [false, false, false, false].into_iter().collect();
         let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
             ast.root(),
@@ -1243,7 +1243,7 @@ mod tests {
             },
         }));
 
-        let mut vars = [a, b, c].into_iter().collect();
+        let mut vars = [false, false, false].into_iter().collect();
         let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
             ast.root(),
@@ -1429,7 +1429,9 @@ mod tests {
             ),
         }));
 
-        let mut vars = [a, b, c, x, y, z].into_iter().collect();
+        let mut vars = [false, false, false, false, false, false]
+            .into_iter()
+            .collect();
         let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst).unwrap();
         assert_eq!(
             ast.root(),

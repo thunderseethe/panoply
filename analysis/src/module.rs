@@ -37,7 +37,7 @@ impl GensOps<ItemId> for Gens {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Matches {
     effect: Option<EffectId>,
     item: Option<ItemId>,
@@ -147,7 +147,7 @@ impl ModuleNamesBuilder {
 }
 
 /// A leaf module in the module tree. Holds top-level names.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct ModuleNames {
     effects: Box<Ids<EffectId, (SpanOf<Ident>, EffectNames)>>,
     items: Box<Ids<ItemId, SpanOf<Ident>>>,
