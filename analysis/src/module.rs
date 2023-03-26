@@ -149,7 +149,7 @@ impl ModuleNamesBuilder {
 /// A leaf module in the module tree. Holds top-level names.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ModuleNames {
-    effects: Box<Ids<EffectId, (SpanOf<Ident>, EffectNames)>>,
+    pub(crate) effects: Box<Ids<EffectId, (SpanOf<Ident>, EffectNames)>>,
     items: Box<Ids<ItemId, SpanOf<Ident>>>,
     names: FxHashMap<Ident, Matches>,
     id_order: Box<[ModuleName]>,

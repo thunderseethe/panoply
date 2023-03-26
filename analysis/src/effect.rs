@@ -40,7 +40,7 @@ impl EffectBuilder {
 /// The operation names of an effect.
 #[derive(Debug, PartialEq, Eq)]
 pub struct EffectNames {
-    ops: Box<Ids<EffectOpId, SpanOf<Ident>>>,
+    pub(crate) ops: Box<Ids<EffectOpId, SpanOf<Ident>>>,
     names: FxHashMap<Ident, EffectOpId>,
 }
 

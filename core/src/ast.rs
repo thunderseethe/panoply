@@ -336,7 +336,7 @@ pub struct AstModule {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectItem {
     pub name: EffectId,
-    pub ops: Vec<Option<(EffectOpId, Ty<InDb>)>>,
+    pub ops: Vec<Option<(EffectOpId, TyScheme<InDb>)>>,
 }
 
 /// A top-level item in an Aiahr source file.
@@ -346,6 +346,14 @@ pub struct EffectItem {
 pub enum Item<'a, Var> {
     Effect(EffectItem),
     Function(Ast<'a, Var>),
+}
+impl<'a, Var> Item<'a, Var> {
+    pub fn unwrap_func(self) -> Ast<'a, Var> {
+        match self {
+            Item::Effect(_) => panic!("Expected Function but got Effect"),
+            Item::Function(ast) => ast,
+        }
+    }
 }
 
 /// Abstract Syntax Tree (AST)

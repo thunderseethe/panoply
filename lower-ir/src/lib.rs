@@ -350,7 +350,8 @@ mod tests {
             &mut ty_vars,
             random_term_item(resolved),
         )
-        .unwrap();
+        .unwrap()
+        .unwrap_func();
 
         let (var_tys, term_tys, scheme, _) = aiahr_tc::type_check(db, &DummyEff(db), &ast);
         (LowerDb::new(db, var_tys, term_tys), scheme, ast)
