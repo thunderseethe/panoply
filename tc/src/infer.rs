@@ -56,7 +56,7 @@ impl<'infer> Constraints<'infer> {
 
 use aiahr_core::{
     ast::{Ast, Direction, Term, Term::*},
-    id::VarId,
+    id::{ModuleId, VarId},
     ident::Ident,
     memory::handle::Handle,
     span::Span,
@@ -216,6 +216,8 @@ pub(crate) struct InferCtx<'a, 'ctx, 'infer, I, State: InferState = Generation> 
     /// Allocator for types created during inference
     ctx: &'a I,
     db: &'a dyn Db,
+    /// Id of the module we're currently performing type checking within.
+    module: ModuleId,
     ast: &'a Ast<'ctx, VarId>,
     state: State::Storage<'ctx, 'infer>,
     _marker: std::marker::PhantomData<State>,
@@ -257,7 +259,12 @@ impl<'a, 'ctx, 'infer, I> InferCtx<'a, 'ctx, 'infer, I>
 where
     I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
 {
-    pub(crate) fn new(db: &'a dyn crate::Db, ctx: &'a I, ast: &'a Ast<'ctx, VarId>) -> Self {
+    pub(crate) fn new(
+        db: &'a dyn crate::Db,
+        ctx: &'a I,
+        module: ModuleId,
+        ast: &'a Ast<'ctx, VarId>,
+    ) -> Self {
         Self {
             local_env: FxHashMap::default(),
             unifiers: InPlaceUnificationTable::default(),
@@ -265,6 +272,7 @@ where
             constraints: Constraints::default(),
             ctx,
             db,
+            module,
             ast,
             state: GenerationStorage {
                 var_tys: FxHashMap::default(),
@@ -285,7 +293,7 @@ where
         InferResult<'infer>,
     )
     where
-        E: EffectInfo<'s, 'eff>,
+        E: EffectInfo<'eff>,
     {
         let res = self._infer(eff_info, term);
         let (var_tys, infer_ctx) = InferCtx::with_generation(self);
@@ -301,7 +309,7 @@ where
         term: &'ctx Term<'ctx, VarId>,
         expected: InferResult<'infer>,
     ) where
-        E: EffectInfo<'s, 'eff>,
+        E: EffectInfo<'eff>,
     {
         use TypeKind::*;
         self.state.term_tys.insert(term, expected);
@@ -494,7 +502,7 @@ where
         term: &'ctx Term<'ctx, VarId>,
     ) -> InferResult<'infer>
     where
-        E: EffectInfo<'s, 'eff>,
+        E: EffectInfo<'eff>,
     {
         let current_span = || {
             *self
@@ -683,7 +691,7 @@ where
             }
             Operation((mod_id, eff_id, eff_op_id)) => {
                 let sig = self.instantiate(
-                    eff_info.effect_member_sig(*eff_id, *eff_op_id),
+                    eff_info.effect_member_sig(*mod_id, *eff_id, *eff_op_id),
                     current_span(),
                 );
 
@@ -857,6 +865,7 @@ where
                 constraints: prior.constraints,
                 ctx: prior.ctx,
                 db: prior.db,
+                module: prior.module,
                 ast: prior.ast,
                 state: BTreeSet::new(),
                 _marker: std::marker::PhantomData,
@@ -866,7 +875,7 @@ where
 
     /// Solve a list of constraints to a mapping from unifiers to types.
     /// If there is no solution to the list of constraints we return a relevant error.
-    pub(crate) fn solve<'s, 'eff, E: EffectInfo<'s, 'eff>>(
+    pub(crate) fn solve<'s, 'eff, E: EffectInfo<'eff>>(
         mut self,
         eff_info: &E,
     ) -> (
@@ -1342,7 +1351,7 @@ where
         }
     }
 
-    fn lookup_effect_and_unify<'s, 'eff, E: EffectInfo<'s, 'eff>>(
+    fn lookup_effect_and_unify<'s, 'eff, E: EffectInfo<'eff>>(
         &mut self,
         eff_info: &E,
         handler: InferRow<'infer>,
@@ -1423,15 +1432,15 @@ where
         match (normal_handler, normal_eff) {
             (Row::Closed(handler), Row::Open(eff_var)) => {
                 let (mod_id, eff_id) = eff_info
-                    .lookup_effect_by_member_names(&handler.fields)
+                    .lookup_effect_by_member_names(self.module, &handler.fields)
                     .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
                 let mut members_sig = eff_info
                     .effect_members(mod_id, eff_id)
                     .iter()
                     .map(|eff_op_id| {
                         (
-                            eff_info.effect_member_name(eff_id, *eff_op_id),
-                            eff_info.effect_member_sig(eff_id, *eff_op_id),
+                            eff_info.effect_member_name(mod_id, eff_id, *eff_op_id),
+                            eff_info.effect_member_sig(mod_id, eff_id, *eff_op_id),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -1455,15 +1464,15 @@ where
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
                 let (mod_id, eff_id) = eff_info
-                    .lookup_effect_by_name(eff.fields[0])
+                    .lookup_effect_by_name(self.module, eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let mut members_sig = eff_info
                     .effect_members(mod_id, eff_id)
                     .iter()
                     .map(|eff_op_id| {
                         (
-                            eff_info.effect_member_name(eff_id, *eff_op_id),
-                            eff_info.effect_member_sig(eff_id, *eff_op_id),
+                            eff_info.effect_member_name(mod_id, eff_id, *eff_op_id),
+                            eff_info.effect_member_sig(mod_id, eff_id, *eff_op_id),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -1478,13 +1487,13 @@ where
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
                 let (mod_id, eff_id) = eff_info
-                    .lookup_effect_by_name(eff.fields[0])
+                    .lookup_effect_by_name(self.module, eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let members_sig = eff_info
                     .effect_members(mod_id, eff_id)
                     .iter()
                     .map(|eff_op_id| {
-                        let scheme = eff_info.effect_member_sig(eff_id, *eff_op_id);
+                        let scheme = eff_info.effect_member_sig(mod_id, eff_id, *eff_op_id);
                         let mut inst = Instantiate {
                             db: self.db,
                             ctx: self.ctx,
@@ -1508,7 +1517,10 @@ where
                             scheme.ty.try_fold_with(&mut inst).unwrap(),
                         )?;
 
-                        Ok((eff_info.effect_member_name(eff_id, *eff_op_id), member_ty))
+                        Ok((
+                            eff_info.effect_member_name(mod_id, eff_id, *eff_op_id),
+                            member_ty,
+                        ))
                     })
                     .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
 

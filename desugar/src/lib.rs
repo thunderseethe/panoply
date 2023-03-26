@@ -28,7 +28,11 @@ pub struct Jar(
     effect_of,
     effect_op_tyscheme_of,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {}
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {
+    fn as_desugar_db(&self) -> &dyn crate::Db {
+        <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
+    }
+}
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {}
 
 /// Desugar an NST Module into an AST module.

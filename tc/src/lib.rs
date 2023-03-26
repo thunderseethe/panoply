@@ -4,6 +4,7 @@ use aiahr_core::{
     ident::Ident,
     memory::handle::RefHandle,
     ty::row::Row,
+    Top,
 };
 use bumpalo::Bump;
 use diagnostic::TypeCheckDiagnostic;
@@ -27,7 +28,7 @@ mod infer;
 pub use infer::TyChkRes;
 
 /// Information we need about effects during type checking
-pub trait EffectInfo<'s, 'ctx> {
+pub trait EffectInfo<'ctx> {
     /// Lookup the name of an effect from it's ID
     fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident;
     /// Lookup effect members from it's ID
@@ -35,17 +36,27 @@ pub trait EffectInfo<'s, 'ctx> {
 
     /// Look up an effect by the name of it's members, this may fail if an invalid list of member
     /// names is passed.
-    fn lookup_effect_by_member_names(&self, members: &[Ident]) -> Option<(ModuleId, EffectId)>;
-    fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)>;
+    fn lookup_effect_by_member_names(
+        &self,
+        module: ModuleId,
+        members: &[Ident],
+    ) -> Option<(ModuleId, EffectId)>;
+    fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)>;
     /// Lookup the type signature of an effect's member
-    fn effect_member_sig(&self, eff: EffectId, member: EffectOpId) -> TyScheme<InDb>;
+    fn effect_member_sig(
+        &self,
+        module: ModuleId,
+        eff: EffectId,
+        member: EffectOpId,
+    ) -> TyScheme<InDb>;
     /// Lookup the name of an effect's member
-    fn effect_member_name(&self, eff: EffectId, member: EffectOpId) -> Ident;
+    fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident;
 }
 
 pub fn type_check<'ty, 's, 'eff, E>(
     db: &dyn crate::Db,
     eff_info: &E,
+    module: ModuleId,
     ast: &Ast<'ty, VarId>,
 ) -> (
     FxHashMap<VarId, Ty<InDb>>,
@@ -54,17 +65,18 @@ pub fn type_check<'ty, 's, 'eff, E>(
     Vec<TypeCheckDiagnostic>,
 )
 where
-    E: EffectInfo<'s, 'eff>,
+    E: EffectInfo<'eff>,
 {
     let arena = Bump::new();
     let infer_ctx = TyCtx::new(db.as_core_db(), &arena);
-    tc_term(db, &infer_ctx, eff_info, ast)
+    tc_term(db, &infer_ctx, eff_info, module, ast)
 }
 
 fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
     db: &dyn crate::Db,
     infer_ctx: &II,
     eff_info: &E,
+    module: ModuleId,
     ast: &Ast<'ty, VarId>,
 ) -> (
     FxHashMap<VarId, Ty<InDb>>,
@@ -74,10 +86,10 @@ fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
 )
 where
     II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
-    E: EffectInfo<'s, 'eff>,
+    E: EffectInfo<'eff>,
 {
     let term = ast.root();
-    let infer = InferCtx::new(db, infer_ctx, ast);
+    let infer = InferCtx::new(db, infer_ctx, module, ast);
 
     // Infer types for all our variables and the root term.
     let (infer, gen_storage, result) = infer.infer(eff_info, term);
@@ -129,8 +141,14 @@ where
 
 #[salsa::jar(db = Db)]
 pub struct Jar();
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+pub trait Db:
+    salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
+{
+}
+impl<DB> Db for DB where
+    DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
+{
+}
 
 impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
     fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
@@ -143,6 +161,76 @@ impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
 
     fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
         self.as_core_db().row_values(row)
+    }
+}
+
+impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_) {
+    fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
+        aiahr_analysis::effect_name(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            module,
+            eff,
+        )
+    }
+
+    fn effect_members(&self, module: ModuleId, eff: EffectId) -> RefHandle<'db, [EffectOpId]> {
+        aiahr_core::memory::handle::Handle(
+            aiahr_analysis::effect_members(
+                self.as_analysis_db(),
+                Top::new(self.as_core_db()),
+                module,
+                eff,
+            )
+            .as_slice(),
+        )
+    }
+
+    fn lookup_effect_by_member_names(
+        &self,
+        module: ModuleId,
+        members: &[Ident],
+    ) -> Option<(ModuleId, EffectId)> {
+        aiahr_analysis::lookup_effect_by_member_names(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            module,
+            members.to_vec().into_boxed_slice(),
+        )
+    }
+
+    fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
+        aiahr_analysis::lookup_effect_by_name(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            module,
+            name,
+        )
+    }
+
+    fn effect_member_sig(
+        &self,
+        module: ModuleId,
+        eff: EffectId,
+        member: EffectOpId,
+    ) -> TyScheme<InDb> {
+        aiahr_desugar::effect_op_tyscheme_of(
+            self.as_desugar_db(),
+            Top::new(self.as_core_db()),
+            module,
+            eff,
+            member,
+        )
+    }
+
+    fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident {
+        aiahr_analysis::effect_member_name(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            module,
+            eff,
+            member,
+        )
     }
 }
 
@@ -180,7 +268,7 @@ pub mod test_utils {
         pub const PUT_ID: EffectOpId = EffectOpId(1);
         pub const ASK_ID: EffectOpId = EffectOpId(2);
     }
-    impl<'s, 'ctx> EffectInfo<'s, 'ctx> for DummyEff<'_> {
+    impl<'ctx> EffectInfo<'ctx> for DummyEff<'_> {
         fn effect_name(&self, _: ModuleId, eff: EffectId) -> Ident {
             match eff {
                 DummyEff::STATE_ID => self.0.ident_str("State"),
@@ -199,6 +287,7 @@ pub mod test_utils {
 
         fn lookup_effect_by_member_names<'a>(
             &self,
+            _: ModuleId,
             members: &[Ident],
         ) -> Option<(ModuleId, EffectId)> {
             members
@@ -225,7 +314,7 @@ pub mod test_utils {
                 })
         }
 
-        fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)> {
+        fn lookup_effect_by_name(&self, _: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
             match name.text(self.0.as_core_db()).as_str() {
                 "State" => Some((ModuleId(0), DummyEff::STATE_ID)),
                 "Reader" => Some((ModuleId(0), DummyEff::READER_ID)),
@@ -233,7 +322,12 @@ pub mod test_utils {
             }
         }
 
-        fn effect_member_sig(&self, _eff: EffectId, member: EffectOpId) -> TyScheme<InDb> {
+        fn effect_member_sig(
+            &self,
+            _: ModuleId,
+            _eff: EffectId,
+            member: EffectOpId,
+        ) -> TyScheme<InDb> {
             use crate::TypeKind::*;
             match member {
                 // get: forall 0 . {} -{0}-> Int
@@ -268,7 +362,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_member_name(&self, _eff: EffectId, member: EffectOpId) -> Ident {
+        fn effect_member_name(&self, _: ModuleId, _eff: EffectId, member: EffectOpId) -> Ident {
             match member {
                 DummyEff::GET_ID => self.0.ident_str("get"),
                 DummyEff::PUT_ID => self.0.ident_str("put"),
@@ -321,11 +415,13 @@ mod tests {
     }
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_desugar::Jar, aiahr_analysis::Jar)]
     pub(crate) struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
     impl salsa::Database for TestDatabase {}
+
+    const MOD: ModuleId = ModuleId(0);
 
     #[test]
     fn test_tc_unlabel() {
@@ -339,7 +435,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -364,7 +460,7 @@ mod tests {
             )
         });
 
-        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         assert_matches!(
             errors[0],
@@ -385,7 +481,7 @@ mod tests {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -411,7 +507,7 @@ mod tests {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
 
-        let (var_to_tys, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (var_to_tys, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -447,7 +543,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -492,7 +588,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -535,7 +631,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         let ty = assert_vec_matches!(
             scheme.constrs,
@@ -593,7 +689,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
@@ -626,7 +722,7 @@ mod tests {
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |builder| {
             builder.mk_app(Operation((ModuleId(0), EffectId(0), EffectOpId(0))), Unit)
         });
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         assert_matches!(scheme.eff, Row::Closed(ClosedRow { fields, values }) => {
             assert_matches!(fields.fields(&db).as_slice(), [state] => {
@@ -676,7 +772,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, errors) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, scheme, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         assert_eq!(errors, vec![]);
         assert_matches!(
@@ -703,7 +799,7 @@ mod tests {
         let db = TestDatabase::default();
         let untyped_ast = AstBuilder::with_builder(&db, &arena, |_| Variable(VarId(0)));
 
-        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         assert_matches!(
             &errors[0],

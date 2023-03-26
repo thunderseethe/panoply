@@ -61,6 +61,7 @@ pub(crate) struct Evidentfull;
 pub(crate) struct LowerCtx<'a, 'b, 'ctx, Db, I, State = Evidenceless> {
     db: &'a Db,
     ctx: &'a I,
+    module: ModuleId,
     var_conv: &'b mut IdConverter<VarId, IrVarId>,
     tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
     ev_map: EvidenceMap<'ctx>,
@@ -390,11 +391,13 @@ where
         ctx: &'a I,
         var_conv: &'b mut IdConverter<VarId, IrVarId>,
         tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
+        module: ModuleId,
     ) -> Self {
         let evv_id = var_conv.generate();
         Self {
             db,
             ctx,
+            module,
             var_conv,
             tyvar_conv,
             ev_map: EvidenceMap::default(),
@@ -533,6 +536,7 @@ where
         Self {
             db: prior.db,
             ctx: prior.ctx,
+            module: prior.module,
             var_conv: prior.var_conv,
             tyvar_conv: prior.tyvar_conv,
             ev_map: prior.ev_map,
@@ -704,7 +708,7 @@ where
                 };
                 let (mod_id, eff) = self
                     .db
-                    .lookup_effect_by_name(eff_name)
+                    .lookup_effect_by_name(self.module, eff_name)
                     .expect("Invalid effect name should've been caught in type checking");
                 let eff_index = self.db.effect_vector_index(mod_id, eff);
                 let handler_var = IrVar {

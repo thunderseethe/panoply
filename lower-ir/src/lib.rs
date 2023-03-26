@@ -24,9 +24,7 @@ mod lower;
 
 /// Slightly lower level of information than required by EffectInfo.
 /// However this is all calculatable off of the effect definition
-pub trait IrEffectInfo<'ctx> {
-    fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)>;
-
+pub trait IrEffectInfo<'ctx>: EffectInfo<'ctx> {
     fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
     fn effect_member_op_index(&self, eff_id: EffectId, op_id: EffectOpId) -> usize;
     fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
@@ -39,6 +37,7 @@ pub trait IrEffectInfo<'ctx> {
 pub fn lower<'a, 'ctx, Db, I>(
     db: &'a Db,
     ctx: &'a I,
+    module: ModuleId,
     scheme: &TyScheme<InDb>,
     ast: &Ast<'ctx, VarId>,
 ) -> Ir<'ctx>
@@ -50,7 +49,7 @@ where
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
     let (mut lower_ctx, ev_locals, ev_params) =
-        LowerCtx::new(db, ctx, &mut var_conv, &mut tyvar_conv)
+        LowerCtx::new(db, ctx, &mut var_conv, &mut tyvar_conv, module)
             .collect_evidence_params(ast.root().row_ev_terms(), scheme.constrs.iter());
 
     let body = lower_ctx.lower_term(ast.root());
@@ -124,7 +123,7 @@ pub mod test_utils {
             todo!()
         }
     }
-    impl<'ctx> EffectInfo<'ctx, 'ctx> for LowerDb<'_, 'ctx> {
+    impl<'ctx> EffectInfo<'ctx> for LowerDb<'_, 'ctx> {
         fn effect_name(&self, mod_id: ModuleId, eff: aiahr_core::id::EffectId) -> Ident {
             self.eff_info.effect_name(mod_id, eff)
         }
@@ -139,29 +138,36 @@ pub mod test_utils {
 
         fn effect_member_sig(
             &self,
+            module: ModuleId,
             eff: aiahr_core::id::EffectId,
             member: aiahr_core::id::EffectOpId,
         ) -> TyScheme<InDb> {
-            self.eff_info.effect_member_sig(eff, member)
+            self.eff_info.effect_member_sig(module, eff, member)
         }
 
         fn effect_member_name(
             &self,
+            module: ModuleId,
             eff: aiahr_core::id::EffectId,
             member: aiahr_core::id::EffectOpId,
         ) -> Ident {
-            self.eff_info.effect_member_name(eff, member)
+            self.eff_info.effect_member_name(module, eff, member)
         }
 
         fn lookup_effect_by_member_names<'a>(
             &self,
+            module: ModuleId,
             members: &[Ident],
         ) -> Option<(ModuleId, EffectId)> {
-            self.eff_info.lookup_effect_by_member_names(members)
+            self.eff_info.lookup_effect_by_member_names(module, members)
         }
 
-        fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)> {
-            self.eff_info.lookup_effect_by_name(name)
+        fn lookup_effect_by_name(
+            &self,
+            module: ModuleId,
+            name: Ident,
+        ) -> Option<(ModuleId, EffectId)> {
+            self.eff_info.lookup_effect_by_name(module, name)
         }
     }
 
@@ -234,10 +240,6 @@ pub mod test_utils {
                 _ => unimplemented!(),
             }
         }
-
-        fn lookup_effect_by_name(&self, name: Ident) -> Option<(ModuleId, EffectId)> {
-            self.eff_info.lookup_effect_by_name(name)
-        }
     }
 
     impl<'a> AccessTy<'a, InDb> for LowerDb<'a, '_> {
@@ -303,6 +305,7 @@ mod tests {
     use ir_matcher::ir_matcher;
 
     const MODNAME: &str = "test_module";
+    const MOD: ModuleId = ModuleId(0);
 
     #[derive(Default)]
     #[salsa::db(
@@ -353,7 +356,8 @@ mod tests {
         .unwrap()
         .unwrap_func();
 
-        let (var_tys, term_tys, scheme, _) = aiahr_tc::type_check(db, &DummyEff(db), &ast);
+        let (var_tys, term_tys, scheme, _) =
+            aiahr_tc::type_check(db, &DummyEff(db), ModuleId(0), &ast);
         (LowerDb::new(db, var_tys, term_tys), scheme, ast)
     }
 
@@ -364,7 +368,7 @@ mod tests {
         let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|x| x");
 
         let ir_ctx = IrCtx::new(&arena);
-        let ir = lower(&db, &ir_ctx, &scheme, &ast);
+        let ir = lower(&db, &ir_ctx, MOD, &scheme, &ast);
 
         ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(var))) => {
             assert_eq!(var.ty.0.0, &VarTy(*ty_var));
@@ -378,7 +382,7 @@ mod tests {
         let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|a| { x = a, y = a }");
 
         let ir_ctx = IrCtx::new(&arena);
-        let ir = lower(&db, &ir_ctx, &scheme, &ast);
+        let ir = lower(&db, &ir_ctx, MOD, &scheme, &ast);
         ir_matcher!(ir,
             TyAbs([_ty_var],
                   App([
@@ -412,11 +416,12 @@ mod tests {
             )
         });
         let (var_tys, term_ress, scheme, _) =
-            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), &ast);
+            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), MOD, &ast);
 
         let ir = lower(
             &LowerDb::new(&db, var_tys, term_ress),
             &ir_ctx,
+            MOD,
             &scheme,
             &ast,
         );

@@ -102,7 +102,7 @@ pub fn effect_member_name(
         .value
 }
 
-#[salsa::tracked]
+#[salsa::tracked(return_ref)]
 pub fn effect_members(
     db: &dyn crate::Db,
     top: aiahr_core::Top,
