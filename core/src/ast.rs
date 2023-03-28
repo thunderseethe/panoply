@@ -40,9 +40,10 @@ pub mod indexed {
 
     pub struct AstRefAlloc<'b, 'a, Var> {
         arena: &'a Bump,
-        terms: Arena<Term<Var>>,
+        terms: &'b Arena<Term<Var>>,
         ref_spans: FxHashMap<&'a super::Term<'a, Var>, Span>,
         idx_spans: &'b FxHashMap<Idx<Term<Var>>, Span>,
+        mapping: FxHashMap<&'a super::Term<'a, Var>, Idx<Term<Var>>>,
     }
     impl<'a, Var> HasRefArena<'a> for AstRefAlloc<'_, 'a, Var> {
         fn ref_arena(&self) -> &'a Bump {
@@ -233,6 +234,7 @@ pub mod indexed {
             };
             let term_ref = alloc.ref_arena().alloc(term) as &_;
             alloc.ref_spans.insert(term_ref, span);
+            alloc.mapping.insert(term_ref, *self);
             term_ref
         }
     }
@@ -240,10 +242,10 @@ pub mod indexed {
     /// Abstract Syntax Tree (AST)
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub struct Ast<Var> {
-        name: ItemId,
+        pub name: ItemId,
         // We store spans of the Ast out of band because we won't need them for most operations.
         spans: FxHashMap<Idx<Term<Var>>, Span>,
-        annotation: Option<TyScheme<InDb>>,
+        pub annotation: Option<TyScheme<InDb>>,
         terms: Arena<Term<Var>>,
         pub tree: Idx<Term<Var>>,
     }
@@ -263,21 +265,27 @@ pub mod indexed {
         pub fn ref_alloc<'a>(
             &self,
             arena: &'a Bump,
-            terms: Arena<Term<Var>>,
-        ) -> super::Ast<'a, Var> {
+        ) -> (
+            super::Ast<'a, Var>,
+            FxHashMap<&'a super::Term<'a, Var>, Idx<Term<Var>>>,
+        ) {
             let mut alloc = AstRefAlloc {
                 arena,
-                terms,
+                terms: &self.terms,
                 ref_spans: FxHashMap::default(),
+                mapping: FxHashMap::default(),
                 idx_spans: &self.spans,
             };
             let tree = self.tree.ref_alloc(&mut alloc);
-            super::Ast {
-                name: self.name,
-                spans: alloc.ref_spans,
-                annotation: self.annotation.clone(),
-                tree,
-            }
+            (
+                super::Ast {
+                    name: self.name,
+                    spans: alloc.ref_spans,
+                    annotation: self.annotation.clone(),
+                    tree,
+                },
+                alloc.mapping,
+            )
         }
     }
 

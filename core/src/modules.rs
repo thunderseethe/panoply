@@ -1,4 +1,5 @@
 use rustc_hash::FxHashMap;
+use salsa::DebugWithDb;
 
 use crate::{
     displayer::Displayer,
@@ -115,6 +116,24 @@ pub fn all_modules(
     _db: &dyn crate::Db, /* TODO: this should take some kind of config file? or be an input */
 ) -> SalsaModuleTree {
     todo!()
+}
+
+#[salsa::tracked]
+pub fn module_id_of(db: &dyn crate::Db, module: Module) -> ModuleId {
+    let tree = all_modules(db);
+
+    let (module_id, _) = tree
+        .modules(db)
+        .iter_enumerate()
+        .find(|(_, mod_data)| mod_data.data == module)
+        .unwrap_or_else(|| {
+            panic!(
+                "ICE: Constructed Module {:?} but did not store it in Module Tree",
+                module.debug(db)
+            )
+        });
+
+    module_id
 }
 
 #[salsa::tracked]

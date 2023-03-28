@@ -36,6 +36,7 @@ pub struct Jar(
     modules::SalsaModuleTree,
     modules::all_modules,
     modules::module_of,
+    modules::module_id_of,
     ty::TyData,
     ty::SalsaRowFields,
     ty::SalsaRowValues,

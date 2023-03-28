@@ -105,7 +105,7 @@ macro_rules! ty_pat {
     };
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TyChkRes<A: TypeAlloc> {
     pub ty: Ty<A>,
     pub eff: Row<A>,
@@ -116,14 +116,6 @@ where
     Ty<A>: Copy,
     Row<A>: Copy,
 {
-}
-impl<'ctx> std::fmt::Debug for TyChkRes<InArena<'ctx>> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TyChkRes")
-            .field("ty", &self.ty)
-            .field("eff", &self.eff)
-            .finish()
-    }
 }
 impl<Db> DebugWithDb<Db> for TyChkRes<InDb>
 where

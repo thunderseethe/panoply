@@ -1,14 +1,17 @@
 use aiahr_core::{
-    ast::{Ast, Term},
-    id::{EffectId, EffectOpId, Id, ModuleId, TyVarId, VarId},
+    ast::{self, Ast, Term},
+    id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
     memory::handle::RefHandle,
+    modules::module_of,
     ty::row::Row,
     Top,
 };
+use aiahr_desugar::desugar_module_of;
 use bumpalo::Bump;
 use diagnostic::TypeCheckDiagnostic;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
+use la_arena::Idx;
 use rustc_hash::FxHashMap;
 use salsa::DebugWithDb;
 
@@ -53,94 +56,9 @@ pub trait EffectInfo<'ctx> {
     fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident;
 }
 
-pub fn type_check<'ty, 's, 'eff, E>(
-    db: &dyn crate::Db,
-    eff_info: &E,
-    module: ModuleId,
-    ast: &Ast<'ty, VarId>,
-) -> (
-    FxHashMap<VarId, Ty<InDb>>,
-    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
-    TyScheme<InDb>,
-    Vec<TypeCheckDiagnostic>,
-)
-where
-    E: EffectInfo<'eff>,
-{
-    let arena = Bump::new();
-    let infer_ctx = TyCtx::new(db.as_core_db(), &arena);
-    tc_term(db, &infer_ctx, eff_info, module, ast)
-}
-
-fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
-    db: &dyn crate::Db,
-    infer_ctx: &II,
-    eff_info: &E,
-    module: ModuleId,
-    ast: &Ast<'ty, VarId>,
-) -> (
-    FxHashMap<VarId, Ty<InDb>>,
-    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
-    TyScheme<InDb>,
-    Vec<TypeCheckDiagnostic>,
-)
-where
-    II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
-    E: EffectInfo<'eff>,
-{
-    let term = ast.root();
-    let infer = InferCtx::new(db, infer_ctx, module, ast);
-
-    // Infer types for all our variables and the root term.
-    let (infer, gen_storage, result) = infer.infer(eff_info, term);
-
-    // Solve constraints into the unifiers mapping.
-    let (mut unifiers, unsolved_eqs, errors) = infer.solve(eff_info);
-
-    //print_root_unifiers(&mut unifiers);
-    // Zonk the variable -> type mapping and the root term type.
-    let mut zonker = Zonker {
-        ctx: db,
-        unifiers: &mut unifiers,
-        free_vars: vec![],
-    };
-    println!("Infer result: {:?}", result);
-    let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
-    println!("Zonked result: {:?}", &zonked_infer.debug(db.as_core_db()));
-
-    let zonked_var_tys = gen_storage
-        .var_tys
-        .into_iter()
-        .map(|(var, ty)| (var, ty.try_fold_with(&mut zonker).unwrap()))
-        .collect::<FxHashMap<_, _>>();
-
-    let zonked_term_tys = gen_storage
-        .term_tys
-        .into_iter()
-        .map(|(term, ty)| (term, ty.try_fold_with(&mut zonker).unwrap()))
-        .collect::<FxHashMap<_, _>>();
-
-    let constrs = unsolved_eqs
-        .into_iter()
-        .map(|eq| Evidence::from(eq).try_fold_with(&mut zonker).unwrap())
-        .collect();
-
-    let scheme = TyScheme {
-        bound: zonker
-            .free_vars
-            .into_iter()
-            .enumerate()
-            .map(|(i, _)| TyVarId::from_raw(i))
-            .collect(),
-        constrs,
-        eff: zonked_infer.eff,
-        ty: zonked_infer.ty,
-    };
-    (zonked_var_tys, zonked_term_tys, scheme, errors)
-}
-
 #[salsa::jar(db = Db)]
-pub struct Jar();
+
+pub struct Jar(SalsaTypedItem, type_scheme_of);
 pub trait Db:
     salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
 {
@@ -232,6 +150,143 @@ impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_) {
             member,
         )
     }
+}
+
+#[salsa::tracked]
+pub struct SalsaTypedItem {
+    #[id]
+    item_id: ItemId,
+    var_to_tys: FxHashMap<VarId, Ty<InDb>>,
+    term_to_tys: FxHashMap<Idx<ast::indexed::Term<VarId>>, TyChkRes<InDb>>,
+    ty_scheme: TyScheme<InDb>,
+}
+
+#[salsa::tracked]
+pub fn type_scheme_of(
+    db: &dyn crate::Db,
+    top: Top,
+    module_id: ModuleId,
+    item_id: ItemId,
+) -> SalsaTypedItem {
+    let core_db = db.as_core_db();
+    let module = module_of(core_db, top, module_id);
+    let ast_module = desugar_module_of(db.as_desugar_db(), module);
+    let ast = ast_module
+        .items(core_db)
+        .iter()
+        .find_map(|item| match item.item(core_db) {
+            ast::indexed::Item::Effect(_) => None,
+            ast::indexed::Item::Function(ast) => (ast.name == item_id).then_some(ast),
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "ICE: Constructed ItemId {:?} without associated item",
+                item_id
+            )
+        });
+
+    let ref_arena = Bump::new();
+    let (ast, ref_to_indx) = ast.ref_alloc(&ref_arena);
+    let (var_to_tys, terms_to_tys, ty_scheme, diags) = type_check(db, &db, module_id, &ast);
+
+    //TODO: Push errors to diagnostic
+    drop(diags);
+    SalsaTypedItem::new(
+        db,
+        item_id,
+        var_to_tys,
+        terms_to_tys
+            .into_iter()
+            .map(|(ref_term, value)| (ref_to_indx[ref_term], value))
+            .collect(),
+        ty_scheme,
+    )
+}
+
+pub fn type_check<'ty, 's, 'eff, E>(
+    db: &dyn crate::Db,
+    eff_info: &E,
+    module: ModuleId,
+    ast: &Ast<'ty, VarId>,
+) -> (
+    FxHashMap<VarId, Ty<InDb>>,
+    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
+    TyScheme<InDb>,
+    Vec<TypeCheckDiagnostic>,
+)
+where
+    E: EffectInfo<'eff>,
+{
+    let arena = Bump::new();
+    let infer_ctx = TyCtx::new(db.as_core_db(), &arena);
+    tc_term(db, &infer_ctx, eff_info, module, ast)
+}
+
+fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
+    db: &dyn crate::Db,
+    infer_ctx: &II,
+    eff_info: &E,
+    module: ModuleId,
+    ast: &Ast<'ty, VarId>,
+) -> (
+    FxHashMap<VarId, Ty<InDb>>,
+    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
+    TyScheme<InDb>,
+    Vec<TypeCheckDiagnostic>,
+)
+where
+    II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+    E: EffectInfo<'eff>,
+{
+    let term = ast.root();
+    let infer = InferCtx::new(db, infer_ctx, module, ast);
+
+    // Infer types for all our variables and the root term.
+    let (infer, gen_storage, result) = infer.infer(eff_info, term);
+
+    // Solve constraints into the unifiers mapping.
+    let (mut unifiers, unsolved_eqs, errors) = infer.solve(eff_info);
+
+    //print_root_unifiers(&mut unifiers);
+    // Zonk the variable -> type mapping and the root term type.
+    let mut zonker = Zonker {
+        ctx: db,
+        unifiers: &mut unifiers,
+        free_vars: vec![],
+    };
+    println!("Infer result: {:?}", result);
+    let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
+    println!("Zonked result: {:?}", &zonked_infer.debug(db.as_core_db()));
+
+    let zonked_var_tys = gen_storage
+        .var_tys
+        .into_iter()
+        .map(|(var, ty)| (var, ty.try_fold_with(&mut zonker).unwrap()))
+        .collect::<FxHashMap<_, _>>();
+
+    let zonked_term_tys = gen_storage
+        .term_tys
+        .into_iter()
+        .map(|(term, ty)| (term, ty.try_fold_with(&mut zonker).unwrap()))
+        .collect::<FxHashMap<_, _>>();
+
+    let constrs = unsolved_eqs
+        .into_iter()
+        .map(|eq| Evidence::from(eq).try_fold_with(&mut zonker).unwrap())
+        .collect();
+
+    let scheme = TyScheme {
+        bound: zonker
+            .free_vars
+            .into_iter()
+            .enumerate()
+            .map(|(i, _)| TyVarId::from_raw(i))
+            .collect(),
+        constrs,
+        eff: zonked_infer.eff,
+        ty: zonked_infer.ty,
+    };
+    (zonked_var_tys, zonked_term_tys, scheme, errors)
 }
 
 #[allow(dead_code)]
