@@ -35,6 +35,7 @@ pub struct Jar(
     diagnostic::aiahr::AiahrcErrors,
     file::SourceFile,
     ident::Ident,
+    ir::indexed::IrTy,
     modules::Module,
     modules::SalsaModuleTree,
     modules::all_modules,

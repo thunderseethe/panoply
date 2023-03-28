@@ -3,6 +3,261 @@ use crate::memory::handle::RefHandle;
 use std::fmt;
 use std::ops::Deref;
 
+pub mod indexed {
+    use bumpalo::Bump;
+    use la_arena::{Arena, Idx};
+
+    use crate::indexed::{IndexedAllocate, ReferenceAllocate};
+    use crate::memory::handle::Handle;
+
+    use super::P;
+
+    #[derive(PartialEq, Eq, Clone, Hash, Debug)]
+    pub enum IrTyKind {
+        IntTy,
+        // TODO: Should this have a different name?
+        EvidenceVectorTy,
+        VarTy(super::IrVarTy),
+        FunTy(IrTy, IrTy),
+        ForallTy(super::IrVarTy, IrTy),
+        ProductTy(Vec<IrTy>),
+        CoproductTy(Vec<IrTy>),
+    }
+
+    #[salsa::interned]
+    #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+    pub struct IrTy {
+        pub kind: IrTyKind,
+    }
+
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+    pub struct IrVar {
+        pub var: super::IrVarId,
+        pub ty: IrTy,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Clone)]
+    pub enum Ir {
+        Int(usize),
+        Var(IrVar),
+        // Value abstraction and application
+        Abs(IrVar, Idx<Self>),
+        App(Idx<Self>, Idx<Self>),
+        // Type abstraction and application
+        TyAbs(super::IrVarTy, Idx<Self>),
+        TyApp(Idx<Self>, IrTy),
+        // Trivial products
+        Struct(Vec<Idx<Self>>),      // Intro
+        FieldProj(usize, Idx<Self>), // Elim
+        // Trivial coproducts
+        Tag(usize, Idx<Self>),           // Intro
+        Case(Idx<Self>, Vec<Idx<Self>>), // Elim
+        // Delimited control
+        // Generate a new prompt marker
+        NewPrompt(IrVar, Idx<Self>),
+        // Install a prompt for a marker
+        Prompt(Idx<Self>, Idx<Self>),
+        // Yield to a marker's prompt
+        Yield(Idx<Self>, Idx<Self>),
+        // Set index in an effect vector to value.
+        VectorSet(IrVar, usize, Idx<Self>),
+        VectorGet(IrVar, usize),
+    }
+
+    struct IrIndexAlloc<'a> {
+        db: &'a dyn crate::Db,
+        ir: Arena<Ir>,
+    }
+    struct IrRefAlloc<'a, 'ctx> {
+        arena: &'ctx Bump,
+        indx: &'a IrIndexAlloc<'a>,
+    }
+
+    impl<'db, 'ctx> IndexedAllocate<IrIndexAlloc<'db>> for super::IrTyKind<'ctx> {
+        type Out = IrTyKind;
+
+        fn alloc(&self, alloc: &mut IrIndexAlloc<'db>) -> Self::Out {
+            match self {
+                super::IrTyKind::IntTy => IrTyKind::IntTy,
+                super::IrTyKind::EvidenceVectorTy => IrTyKind::EvidenceVectorTy,
+                super::IrTyKind::VarTy(ty_var) => IrTyKind::VarTy(*ty_var),
+                super::IrTyKind::FunTy(arg, ret) => {
+                    IrTyKind::FunTy(arg.alloc(alloc), ret.alloc(alloc))
+                }
+                super::IrTyKind::ForallTy(ty_var, ty) => {
+                    IrTyKind::ForallTy(*ty_var, ty.alloc(alloc))
+                }
+                super::IrTyKind::ProductTy(elems) => {
+                    IrTyKind::ProductTy(elems.iter().map(|elem| elem.alloc(alloc)).collect())
+                }
+                super::IrTyKind::CoproductTy(elems) => {
+                    IrTyKind::CoproductTy(elems.iter().map(|elem| elem.alloc(alloc)).collect())
+                }
+            }
+        }
+    }
+
+    impl<'db, 'ctx> ReferenceAllocate<'ctx, IrRefAlloc<'db, 'ctx>> for IrTyKind {
+        type Out = &'ctx super::IrTyKind<'ctx>;
+
+        fn ref_alloc(&self, alloc: &mut IrRefAlloc<'db, 'ctx>) -> Self::Out {
+            let kind = match self {
+                IrTyKind::IntTy => super::IrTyKind::IntTy,
+                IrTyKind::EvidenceVectorTy => super::IrTyKind::EvidenceVectorTy,
+                IrTyKind::VarTy(var) => super::IrTyKind::VarTy(*var),
+                IrTyKind::FunTy(arg, ret) => {
+                    super::IrTyKind::FunTy(arg.ref_alloc(alloc), ret.ref_alloc(alloc))
+                }
+                IrTyKind::ForallTy(ty_var, ty) => {
+                    super::IrTyKind::ForallTy(*ty_var, ty.ref_alloc(alloc))
+                }
+                IrTyKind::ProductTy(elems) => super::IrTyKind::ProductTy(Handle(
+                    alloc
+                        .arena
+                        .alloc_slice_fill_iter(elems.iter().map(|elem| elem.ref_alloc(alloc))),
+                )),
+                IrTyKind::CoproductTy(elems) => super::IrTyKind::CoproductTy(Handle(
+                    alloc
+                        .arena
+                        .alloc_slice_fill_iter(elems.iter().map(|elem| elem.ref_alloc(alloc))),
+                )),
+            };
+            alloc.arena.alloc(kind)
+        }
+    }
+
+    impl<'db, 'ctx> IndexedAllocate<IrIndexAlloc<'db>> for super::IrTy<'ctx> {
+        type Out = IrTy;
+
+        fn alloc(&self, alloc: &mut IrIndexAlloc) -> Self::Out {
+            let kind = self.0.alloc(alloc);
+            IrTy::new(alloc.db, kind)
+        }
+    }
+    impl<'db, 'ctx> ReferenceAllocate<'ctx, IrRefAlloc<'db, 'ctx>> for IrTy {
+        type Out = super::IrTy<'ctx>;
+
+        fn ref_alloc(&self, alloc: &mut IrRefAlloc<'db, 'ctx>) -> Self::Out {
+            super::IrTy(Handle(self.kind(alloc.indx.db).ref_alloc(alloc)))
+        }
+    }
+
+    impl<'db, 'ctx> IndexedAllocate<IrIndexAlloc<'db>> for super::IrVar<'ctx> {
+        type Out = IrVar;
+
+        fn alloc(&self, alloc: &mut IrIndexAlloc<'db>) -> Self::Out {
+            IrVar {
+                var: self.var,
+                ty: self.ty.alloc(alloc),
+            }
+        }
+    }
+    impl<'db, 'ctx> ReferenceAllocate<'ctx, IrRefAlloc<'db, 'ctx>> for IrVar {
+        type Out = super::IrVar<'ctx>;
+
+        fn ref_alloc(&self, alloc: &mut IrRefAlloc<'db, 'ctx>) -> Self::Out {
+            super::IrVar {
+                var: self.var,
+                ty: self.ty.ref_alloc(alloc),
+            }
+        }
+    }
+
+    impl<'db, 'ctx> IndexedAllocate<IrIndexAlloc<'db>> for super::Ir<'ctx> {
+        type Out = Idx<Ir>;
+
+        fn alloc(&self, alloc: &mut IrIndexAlloc<'db>) -> Self::Out {
+            let kind = match self.kind() {
+                super::IrKind::Int(i) => Ir::Int(*i),
+                super::IrKind::Var(var) => Ir::Var(var.alloc(alloc)),
+                super::IrKind::Abs(var, body) => Ir::Abs(var.alloc(alloc), body.alloc(alloc)),
+                super::IrKind::App(func, arg) => Ir::App(func.alloc(alloc), arg.alloc(alloc)),
+                super::IrKind::TyAbs(ty_var, ty) => Ir::TyAbs(*ty_var, ty.alloc(alloc)),
+                super::IrKind::TyApp(forall, ty) => Ir::TyApp(forall.alloc(alloc), ty.alloc(alloc)),
+                super::IrKind::Struct(elems) => {
+                    Ir::Struct(elems.into_iter().map(|elem| elem.alloc(alloc)).collect())
+                }
+                super::IrKind::FieldProj(index, target) => {
+                    Ir::FieldProj(*index, target.alloc(alloc))
+                }
+                super::IrKind::Tag(tag, value) => Ir::Tag(*tag, value.alloc(alloc)),
+                super::IrKind::Case(discri, branches) => Ir::Case(
+                    discri.alloc(alloc),
+                    branches
+                        .into_iter()
+                        .map(|branch| branch.alloc(alloc))
+                        .collect(),
+                ),
+                super::IrKind::NewPrompt(prompt_var, body) => {
+                    Ir::NewPrompt(prompt_var.alloc(alloc), body.alloc(alloc))
+                }
+                super::IrKind::Prompt(marker, body) => {
+                    Ir::Prompt(marker.alloc(alloc), body.alloc(alloc))
+                }
+                super::IrKind::Yield(marker, value) => {
+                    Ir::Yield(marker.alloc(alloc), value.alloc(alloc))
+                }
+                super::IrKind::VectorSet(vec_var, index, value) => {
+                    Ir::VectorSet(vec_var.alloc(alloc), *index, value.alloc(alloc))
+                }
+                super::IrKind::VectorGet(vec_var, index) => {
+                    Ir::VectorGet(vec_var.alloc(alloc), *index)
+                }
+            };
+            alloc.ir.alloc(kind)
+        }
+    }
+    impl<'db, 'ctx> ReferenceAllocate<'ctx, IrRefAlloc<'db, 'ctx>> for Idx<Ir> {
+        type Out = P<super::Ir<'ctx>>;
+
+        fn ref_alloc(&self, alloc: &mut IrRefAlloc<'db, 'ctx>) -> Self::Out {
+            let kind = match &alloc.indx.ir[*self] {
+                Ir::Int(i) => super::IrKind::Int(*i),
+                Ir::Var(var) => super::IrKind::Var(var.ref_alloc(alloc)),
+                Ir::Abs(var, body) => {
+                    super::IrKind::Abs(var.ref_alloc(alloc), body.ref_alloc(alloc))
+                }
+                Ir::App(func, arg) => {
+                    super::IrKind::App(func.ref_alloc(alloc), arg.ref_alloc(alloc))
+                }
+                Ir::TyAbs(ty_var, ty) => super::IrKind::TyAbs(*ty_var, ty.ref_alloc(alloc)),
+                Ir::TyApp(forall, ty) => {
+                    super::IrKind::TyApp(forall.ref_alloc(alloc), ty.ref_alloc(alloc))
+                }
+                Ir::Struct(elems) => {
+                    super::IrKind::Struct(elems.iter().map(|elem| elem.ref_alloc(alloc)).collect())
+                }
+                Ir::FieldProj(index, prod) => {
+                    super::IrKind::FieldProj(*index, prod.ref_alloc(alloc))
+                }
+                Ir::Tag(tag, value) => super::IrKind::Tag(*tag, value.ref_alloc(alloc)),
+                Ir::Case(discri, branches) => super::IrKind::Case(
+                    discri.ref_alloc(alloc),
+                    branches.iter().map(|elem| elem.ref_alloc(alloc)).collect(),
+                ),
+                Ir::NewPrompt(prompt_var, body) => {
+                    super::IrKind::NewPrompt(prompt_var.ref_alloc(alloc), body.ref_alloc(alloc))
+                }
+                Ir::Prompt(marker, body) => {
+                    super::IrKind::Prompt(marker.ref_alloc(alloc), body.ref_alloc(alloc))
+                }
+                Ir::Yield(marker, value) => {
+                    super::IrKind::Yield(marker.ref_alloc(alloc), value.ref_alloc(alloc))
+                }
+                Ir::VectorSet(vec_var, index, value) => super::IrKind::VectorSet(
+                    vec_var.ref_alloc(alloc),
+                    *index,
+                    value.ref_alloc(alloc),
+                ),
+                Ir::VectorGet(vec_var, index) => {
+                    super::IrKind::VectorGet(vec_var.ref_alloc(alloc), *index)
+                }
+            };
+            P::new(super::Ir::new(kind))
+        }
+    }
+}
+
 /// An owned T that is frozen and exposes a reduced Box API.
 #[derive(Clone, PartialEq, Eq)]
 pub struct P<T: ?Sized> {
