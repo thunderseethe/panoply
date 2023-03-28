@@ -113,7 +113,7 @@ pub mod indexed {
             body: Idx<Self>,
         },
         Annotated {
-            ty: Ty<InDb>,
+            ty: Ty,
             term: Idx<Term<Var>>,
         },
     }
@@ -245,7 +245,7 @@ pub mod indexed {
         pub name: ItemId,
         // We store spans of the Ast out of band because we won't need them for most operations.
         spans: FxHashMap<Idx<Term<Var>>, Span>,
-        pub annotation: Option<TyScheme<InDb>>,
+        pub annotation: Option<TyScheme>,
         terms: Arena<Term<Var>>,
         pub tree: Idx<Term<Var>>,
     }
@@ -344,7 +344,7 @@ pub struct AstModule {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectItem {
     pub name: EffectId,
-    pub ops: Vec<Option<(EffectOpId, TyScheme<InDb>)>>,
+    pub ops: Vec<Option<(EffectOpId, TyScheme)>>,
 }
 
 /// A top-level item in an Aiahr source file.
@@ -370,7 +370,7 @@ pub struct Ast<'a, Var> {
     name: ItemId,
     // We store spans of the Ast out of band because we won't need them for most operations
     spans: FxHashMap<&'a Term<'a, Var>, Span>,
-    annotation: Option<TyScheme<InDb>>,
+    annotation: Option<TyScheme>,
     pub tree: &'a Term<'a, Var>,
 }
 
@@ -391,7 +391,7 @@ impl<'a, Var> Ast<'a, Var> {
     pub fn with_ann(
         name: ItemId,
         spans: FxHashMap<&'a Term<'a, Var>, Span>,
-        annotation: TyScheme<InDb>,
+        annotation: TyScheme,
         tree: &'a Term<'a, Var>,
     ) -> Self {
         Self {
@@ -482,7 +482,7 @@ pub enum Term<'a, Var> {
         body: &'a Term<'a, Var>,
     },
     Annotated {
-        ty: Ty<InDb>,
+        ty: Ty,
         term: &'a Term<'a, Var>,
     },
 }

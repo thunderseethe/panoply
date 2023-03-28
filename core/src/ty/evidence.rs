@@ -9,7 +9,7 @@ use salsa::DebugWithDb;
 /// evidence will appear as a parameter to it's term, and passing the parameter provides a witness
 /// taht the evidence is true.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum Evidence<A: TypeAlloc> {
+pub enum Evidence<A: TypeAlloc = InDb> {
     Row {
         left: Row<A>,
         right: Row<A>,

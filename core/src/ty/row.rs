@@ -1,4 +1,5 @@
 use crate::ident::Ident;
+use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 use salsa::DebugWithDb;
 
 use std::convert::Infallible;
@@ -19,7 +20,7 @@ pub type RowLabel = Ident;
 /// 2. The field at index i is the key for the type at index i in values
 /// 3. fields is sorted lexographically
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
-pub struct ClosedRow<A: TypeAlloc> {
+pub struct ClosedRow<A: TypeAlloc = InDb> {
     pub fields: A::RowFields,
     pub values: A::RowValues,
 }
@@ -37,6 +38,40 @@ impl<A: TypeAlloc> ClosedRow<A> {
     pub fn len(&self, acc: &dyn AccessTy<'_, A>) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
         acc.row_fields(&self.fields).len()
+    }
+
+    pub fn pretty<'a, 'b, D>(
+        &self,
+        a: &'a D,
+        db: &dyn crate::Db,
+        acc: &impl AccessTy<'b, A>,
+    ) -> DocBuilder<'a, D>
+    where
+        D: ?Sized + DocAllocator<'a>,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+        A::TypeVar: Pretty<'a, D>,
+        A: 'b,
+    {
+        let docs = acc
+            .row_fields(&self.fields)
+            .iter()
+            .zip(acc.row_values(&self.values).iter())
+            .map(|(field, value)| {
+                docs![
+                    a,
+                    a.as_string(field.text(db.as_core_db())),
+                    a.space(),
+                    "|>",
+                    a.softline(),
+                    value.pretty(a, db, acc)
+                ]
+                .group()
+            });
+        a.intersperse(
+            docs,
+            a.concat([a.softline_(), a.as_string(","), a.space()])
+                .into_doc(),
+        )
     }
 }
 
@@ -201,7 +236,7 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for ClosedRow<A> {
 /// A row is our representaion of data, it maps fields to values.
 /// Rows come in two flavors: Open and Closed.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
-pub enum Row<A: TypeAlloc> {
+pub enum Row<A: TypeAlloc = InDb> {
     /// An open row is a polymorphic set of data. Used to allow generic row programming.
     Open(A::TypeVar),
     /// A closed row is a concrete mapping from fields to values.
@@ -235,6 +270,25 @@ impl DebugWithDb<dyn crate::Db + '_> for Row<InDb> {
         match self {
             Row::Open(var) => f.debug_tuple("Open").field(var).finish(),
             Row::Closed(row) => f.debug_tuple("Closed").field(&row.debug(db)).finish(),
+        }
+    }
+}
+impl<A: TypeAlloc> Row<A> {
+    pub fn pretty<'a, 'b, D>(
+        &self,
+        allocator: &'a D,
+        db: &dyn crate::Db,
+        acc: &impl AccessTy<'b, A>,
+    ) -> pretty::DocBuilder<'a, D>
+    where
+        D: ?Sized + DocAllocator<'a>,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+        A::TypeVar: Pretty<'a, D>,
+        A: 'b,
+    {
+        match self {
+            Row::Open(tv) => pretty::Pretty::pretty(tv.clone(), allocator),
+            Row::Closed(row) => row.pretty(allocator, db, acc),
         }
     }
 }

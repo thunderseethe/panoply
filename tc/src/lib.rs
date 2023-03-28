@@ -46,12 +46,7 @@ pub trait EffectInfo<'ctx> {
     ) -> Option<(ModuleId, EffectId)>;
     fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)>;
     /// Lookup the type signature of an effect's member
-    fn effect_member_sig(
-        &self,
-        module: ModuleId,
-        eff: EffectId,
-        member: EffectOpId,
-    ) -> TyScheme<InDb>;
+    fn effect_member_sig(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> TyScheme;
     /// Lookup the name of an effect's member
     fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident;
 }
@@ -126,12 +121,7 @@ impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_) {
         )
     }
 
-    fn effect_member_sig(
-        &self,
-        module: ModuleId,
-        eff: EffectId,
-        member: EffectOpId,
-    ) -> TyScheme<InDb> {
+    fn effect_member_sig(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> TyScheme {
         aiahr_desugar::effect_op_tyscheme_of(
             self.as_desugar_db(),
             Top::new(self.as_core_db()),
@@ -158,7 +148,7 @@ pub struct SalsaTypedItem {
     item_id: ItemId,
     var_to_tys: FxHashMap<VarId, Ty<InDb>>,
     term_to_tys: FxHashMap<Idx<ast::indexed::Term<VarId>>, TyChkRes<InDb>>,
-    ty_scheme: TyScheme<InDb>,
+    ty_scheme: TyScheme,
 }
 
 #[salsa::tracked]
@@ -211,7 +201,7 @@ pub fn type_check<'ty, 's, 'eff, E>(
 ) -> (
     FxHashMap<VarId, Ty<InDb>>,
     FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
-    TyScheme<InDb>,
+    TyScheme,
     Vec<TypeCheckDiagnostic>,
 )
 where
@@ -231,7 +221,7 @@ fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
 ) -> (
     FxHashMap<VarId, Ty<InDb>>,
     FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
-    TyScheme<InDb>,
+    TyScheme,
     Vec<TypeCheckDiagnostic>,
 )
 where
@@ -377,12 +367,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_member_sig(
-            &self,
-            _: ModuleId,
-            _eff: EffectId,
-            member: EffectOpId,
-        ) -> TyScheme<InDb> {
+        fn effect_member_sig(&self, _: ModuleId, _eff: EffectId, member: EffectOpId) -> TyScheme {
             use crate::TypeKind::*;
             match member {
                 // get: forall 0 . {} -{0}-> Int

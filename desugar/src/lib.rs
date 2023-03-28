@@ -119,7 +119,7 @@ pub fn effect_op_tyscheme_of(
     module_id: ModuleId,
     eff_id: EffectId,
     op_id: EffectOpId,
-) -> TyScheme<InDb> {
+) -> TyScheme {
     let module = module_of(db.as_core_db(), top, module_id);
     let eff = effect_of(db, module, eff_id);
     eff.ops
@@ -355,7 +355,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
     fn ds_row<'n>(
         &mut self,
         row: &'n cst::Row<TyVarId, Field<SpanOf<Ident>, &'n Type<'n, TyVarId>>>,
-    ) -> Row<InDb> {
+    ) -> Row {
         match row {
             cst::Row::Concrete(closed) => Row::Closed(
                 self.db.as_core_db().construct_row(
@@ -377,7 +377,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
         }
     }
 
-    fn ds_type<'n>(&mut self, nst: &'n cst::Type<'n, TyVarId>) -> Ty<InDb> {
+    fn ds_type<'n>(&mut self, nst: &'n cst::Type<'n, TyVarId>) -> Ty {
         match nst {
             cst::Type::Named(ty_var) => self.db.as_core_db().mk_ty(TypeKind::VarTy(ty_var.value)),
             cst::Type::Sum { variants, .. } => self
@@ -400,7 +400,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
         }
     }
 
-    fn ds_row_atom<'n>(&mut self, row_atom: &'n RowAtom<'n, TyVarId>) -> Row<InDb> {
+    fn ds_row_atom<'n>(&mut self, row_atom: &'n RowAtom<'n, TyVarId>) -> Row {
         match row_atom {
             RowAtom::Concrete { fields, .. } => Row::Closed(
                 self.db.as_core_db().construct_row(
@@ -414,7 +414,7 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
         }
     }
 
-    fn ds_scheme<'n>(&mut self, nst: &'n Scheme<'n, TyVarId>) -> TyScheme<InDb> {
+    fn ds_scheme<'n>(&mut self, nst: &'n Scheme<'n, TyVarId>) -> TyScheme {
         let bound = nst
             .quantifiers
             .iter()

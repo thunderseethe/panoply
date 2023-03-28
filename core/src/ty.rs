@@ -28,7 +28,7 @@ pub mod infer;
 /// This is just a wrapper around an interned reference to the `TypeKind` which contains the actual
 /// data.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Ty<A: TypeAlloc>(pub A::TypeData);
+pub struct Ty<A: TypeAlloc = InDb>(pub A::TypeData);
 
 impl<A: TypeAlloc> Copy for Ty<A>
 where
@@ -100,7 +100,7 @@ where
 /// Data for `Ty`.
 /// `TypeKind` is interned to produce a `Ty`.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TypeKind<A: TypeAlloc> {
+pub enum TypeKind<A: TypeAlloc = InDb> {
     /// Marker that signifies an operation produced an error. This exists so that we can try to
     /// gracefully recover from a type checking error and produce a list of errors at the end of type checking
     ErrorTy,
@@ -238,7 +238,6 @@ impl<A: TypeAlloc> Ty<A> {
         A::TypeVar: Pretty<'a, D>,
         A: 'b,
     {
-        //self.0.deref().pretty(a, db)
         acc.kind(self).pretty(a, db, acc)
     }
 }
@@ -278,67 +277,11 @@ impl<A: TypeAlloc> TypeKind<A> {
     }
 }
 
-impl<A: TypeAlloc> Row<A> {
-    pub fn pretty<'a, 'b, D>(
-        &self,
-        allocator: &'a D,
-        db: &dyn crate::Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> pretty::DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-        A::TypeVar: Pretty<'a, D>,
-        A: 'b,
-    {
-        match self {
-            Row::Open(tv) => pretty::Pretty::pretty(tv.clone(), allocator),
-            Row::Closed(row) => row.pretty(allocator, db, acc),
-        }
-    }
-}
-
-impl<A: TypeAlloc> ClosedRow<A> {
-    pub fn pretty<'a, 'b, D>(
-        &self,
-        a: &'a D,
-        db: &dyn crate::Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> DocBuilder<'a, D>
-    where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-        A::TypeVar: Pretty<'a, D>,
-        A: 'b,
-    {
-        let docs = acc
-            .row_fields(&self.fields)
-            .iter()
-            .zip(acc.row_values(&self.values).iter())
-            .map(|(field, value)| {
-                docs![
-                    a,
-                    a.as_string(field.text(db.as_core_db())),
-                    a.space(),
-                    "|>",
-                    a.softline(),
-                    value.pretty(a, db, acc)
-                ]
-                .group()
-            });
-        a.intersperse(
-            docs,
-            a.concat([a.softline_(), a.as_string(","), a.space()])
-                .into_doc(),
-        )
-    }
-}
-
 /// A type scheme (also know as a polymorphic type).
 /// Type schemes wrap a monomorphic type in any number of foralls binding the free variables within
 /// the monomorphic type. They may also assert constraints on the bound type variables.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TyScheme<A: TypeAlloc> {
+pub struct TyScheme<A: TypeAlloc = InDb> {
     pub bound: Vec<A::TypeVar>,
     pub constrs: Vec<Evidence<A>>,
     pub eff: Row<A>,

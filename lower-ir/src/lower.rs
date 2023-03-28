@@ -20,7 +20,7 @@ use crate::{
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_prod_ty<'a, A: AccessTy<'a, InDb>>(db: &A, ty: Ty<InDb>) -> Row<InDb> {
+fn expect_prod_ty<'a, A: AccessTy<'a, InDb>>(db: &A, ty: Ty) -> Row {
     ty.try_as_prod_row(db).unwrap_or_else(|_| unreachable!())
 }
 
@@ -28,7 +28,7 @@ fn expect_prod_ty<'a, A: AccessTy<'a, InDb>>(db: &A, ty: Ty<InDb>) -> Row<InDb> 
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_sum_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty<InDb>) -> Row<InDb> {
+fn expect_sum_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty) -> Row {
     ty.try_as_sum_row(db).unwrap_or_else(|_| unreachable!())
 }
 
@@ -38,17 +38,17 @@ fn expect_sum_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty<InDb>) -> Row<InDb> {
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_branch_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty<InDb>) -> Row<InDb> {
+fn expect_branch_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty) -> Row {
     ty.try_as_fn_ty(db)
         .and_then(|(arg, _)| arg.try_as_sum_row(db))
         .unwrap_or_else(|_| unreachable!())
 }
 
 pub trait ItemSchemes<'ctx> {
-    fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme<InDb>;
+    fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme;
 }
 pub trait VarTys<'ctx> {
-    fn lookup_var(&self, var_id: VarId) -> Ty<InDb>;
+    fn lookup_var(&self, var_id: VarId) -> Ty;
 }
 pub trait TermTys<'ctx> {
     fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<InDb>;
@@ -74,7 +74,7 @@ where
     Db: AccessTy<'a, InDb>,
     I: MkIrTy<'ctx>,
 {
-    fn lower_ty(&mut self, ty: Ty<InDb>) -> IrTy<'ctx> {
+    fn lower_ty(&mut self, ty: Ty) -> IrTy<'ctx> {
         match self.db.kind(&ty) {
             TypeKind::RowTy(_) => panic!("This should not be allowed"),
             TypeKind::ErrorTy => unreachable!(),
@@ -113,12 +113,7 @@ where
         }
     }
 
-    fn row_evidence_ir(
-        &mut self,
-        left: ClosedRow<InDb>,
-        right: ClosedRow<InDb>,
-        goal: ClosedRow<InDb>,
-    ) -> Ir<'ctx> {
+    fn row_evidence_ir(&mut self, left: ClosedRow, right: ClosedRow, goal: ClosedRow) -> Ir<'ctx> {
         let (left_prod, left_coprod) = self.row_ir_tys(&Row::Closed(left));
         let (right_prod, right_coprod) = self.row_ir_tys(&Row::Closed(right));
         let (goal_prod, goal_coprod) = self.row_ir_tys(&Row::Closed(goal));
@@ -319,7 +314,7 @@ where
         ]))
     }
 
-    fn row_ir_tys(&mut self, row: &Row<InDb>) -> (IrTy<'ctx>, IrTy<'ctx>) {
+    fn row_ir_tys(&mut self, row: &Row) -> (IrTy<'ctx>, IrTy<'ctx>) {
         match row {
             Row::Open(row_var) => {
                 let var = self.ctx.mk_ir_ty(VarTy(IrVarTy {
@@ -343,7 +338,7 @@ where
         }
     }
 
-    fn row_evidence_ir_ty(&mut self, ev: &Evidence<InDb>) -> IrTy<'ctx> {
+    fn row_evidence_ir_ty(&mut self, ev: &Evidence) -> IrTy<'ctx> {
         match ev {
             Evidence::Row { left, right, goal } => {
                 let (left_prod, left_coprod) = self.row_ir_tys(left);
@@ -419,7 +414,7 @@ where
         // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
         // Since we type-checked successfully we know nothing refers to that variable and we can use
         // whatever row type for it.
-        let unit_row: ClosedRow<InDb> = self.db.mk_row(&[], &[]);
+        let unit_row: ClosedRow = self.db.mk_row(&[], &[]);
 
         let mut solved_ev = term_rows
             .into_iter()
@@ -482,7 +477,7 @@ where
     pub(crate) fn collect_evidence_params<'ev>(
         mut self,
         term_evs: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
-        scheme_constrs: impl IntoIterator<Item = &'ev Evidence<InDb>>,
+        scheme_constrs: impl IntoIterator<Item = &'ev Evidence>,
     ) -> (
         LowerCtx<'a, 'b, 'ctx, Db, I, Evidentfull>,
         Vec<(IrVar<'ctx>, Ir<'ctx>)>,
@@ -516,7 +511,7 @@ where
         (LowerCtx::with_evidenceless(self), locals, params)
     }
 
-    fn lower_evidence(&mut self, ev: &Evidence<InDb>) -> IrVar<'ctx> {
+    fn lower_evidence(&mut self, ev: &Evidence) -> IrVar<'ctx> {
         let ev_term = self.var_conv.generate();
         let row_ev_ty = self.row_evidence_ir_ty(ev);
         IrVar {

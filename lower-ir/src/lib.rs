@@ -38,7 +38,7 @@ pub fn lower<'a, 'ctx, Db, I>(
     db: &'a Db,
     ctx: &'a I,
     module: ModuleId,
-    scheme: &TyScheme<InDb>,
+    scheme: &TyScheme,
     ast: &Ast<'ctx, VarId>,
 ) -> Ir<'ctx>
 where
@@ -89,7 +89,7 @@ pub mod test_utils {
 
     pub struct LowerDb<'a, 'ctx> {
         db: &'a dyn aiahr_tc::Db,
-        var_tys: FxHashMap<VarId, Ty<InDb>>,
+        var_tys: FxHashMap<VarId, Ty>,
         term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
         eff_info: DummyEff<'a>,
     }
@@ -97,7 +97,7 @@ pub mod test_utils {
     impl<'a, 'ctx> LowerDb<'a, 'ctx> {
         pub fn new(
             db: &'a dyn aiahr_tc::Db,
-            var_tys: FxHashMap<VarId, Ty<InDb>>,
+            var_tys: FxHashMap<VarId, Ty>,
             term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
         ) -> Self {
             Self {
@@ -109,7 +109,7 @@ pub mod test_utils {
         }
     }
     impl<'ctx> VarTys<'ctx> for LowerDb<'_, 'ctx> {
-        fn lookup_var(&self, var_id: VarId) -> Ty<InDb> {
+        fn lookup_var(&self, var_id: VarId) -> Ty {
             self.var_tys[&var_id]
         }
     }
@@ -119,7 +119,7 @@ pub mod test_utils {
         }
     }
     impl<'ctx> ItemSchemes<'ctx> for LowerDb<'_, 'ctx> {
-        fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme<InDb> {
+        fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme {
             todo!()
         }
     }
@@ -141,7 +141,7 @@ pub mod test_utils {
             module: ModuleId,
             eff: aiahr_core::id::EffectId,
             member: aiahr_core::id::EffectOpId,
-        ) -> TyScheme<InDb> {
+        ) -> TyScheme {
             self.eff_info.effect_member_sig(module, eff, member)
         }
 
@@ -325,7 +325,7 @@ mod tests {
         db: &'a TestDatabase,
         arena: &'ctx Bump,
         input: &str,
-    ) -> (LowerDb<'a, 'ctx>, TyScheme<InDb>, Ast<'ctx, VarId>) {
+    ) -> (LowerDb<'a, 'ctx>, TyScheme, Ast<'ctx, VarId>) {
         let (m, modules) = {
             let mut modules = ModuleTree::new();
             let m = modules.add_package(db.ident_str(MODNAME));

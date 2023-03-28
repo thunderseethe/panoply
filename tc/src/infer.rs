@@ -769,7 +769,7 @@ where
         res
     }
 
-    fn instantiate(&mut self, ty_scheme: TyScheme<InDb>, span: Span) -> InferResult<'infer> {
+    fn instantiate(&mut self, ty_scheme: TyScheme, span: Span) -> InferResult<'infer> {
         let mut inst = Instantiate {
             db: self.db,
             ctx: self.ctx,
@@ -1376,7 +1376,7 @@ where
         };
 
         let unify_sig_handler = |ctx: &mut Self,
-                                 members_sig: Vec<(Ident, TyScheme<InDb>)>,
+                                 members_sig: Vec<(Ident, TyScheme)>,
                                  sig: ClosedRow<InArena<'infer>>| {
             let sig_unify = members_sig
                 .into_iter()
