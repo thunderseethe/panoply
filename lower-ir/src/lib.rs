@@ -26,10 +26,15 @@ mod lower;
 /// However this is all calculatable off of the effect definition
 pub trait IrEffectInfo<'ctx>: EffectInfo<'ctx> {
     fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
-    fn effect_member_op_index(&self, eff_id: EffectId, op_id: EffectOpId) -> usize;
+    fn effect_handler_op_index(
+        &self,
+        mod_id: ModuleId,
+        eff_id: EffectId,
+        op_id: EffectOpId,
+    ) -> usize;
     fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
 
-    fn effect_handler_ir_ty(&self, eff_id: EffectId) -> IrTy<'ctx>;
+    fn effect_handler_ir_ty(&self, mod_id: ModuleId, eff_id: EffectId) -> IrTy<'ctx>;
 }
 
 /// Lower an `Ast` into an `Ir`.
@@ -180,7 +185,12 @@ pub mod test_utils {
             }
         }
 
-        fn effect_member_op_index(&self, _eff_id: EffectId, op_id: EffectOpId) -> usize {
+        fn effect_handler_op_index(
+            &self,
+            _mod_id: ModuleId,
+            _eff_id: EffectId,
+            op_id: EffectOpId,
+        ) -> usize {
             match op_id {
                 DummyEff::GET_ID | DummyEff::ASK_ID => 0,
                 DummyEff::PUT_ID => 1,
@@ -196,7 +206,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_handler_ir_ty(&self, eff_id: EffectId) -> IrTy<'ctx> {
+        fn effect_handler_ir_ty(&self, _mod_id: ModuleId, eff_id: EffectId) -> IrTy<'ctx> {
             // Find a better solution for this
             // Guessing a big enough irvartyid that we won't hit it in tests is flaky.
             static R: IrVarTy = IrVarTy {

@@ -650,7 +650,7 @@ where
                 };
                 let handle_var = IrVar {
                     var: self.var_conv.generate(),
-                    ty: self.db.effect_handler_ir_ty(*eff_id),
+                    ty: self.db.effect_handler_ir_ty(*mod_id, *eff_id),
                 };
                 let kont_var = IrVar {
                     var: self.var_conv.generate(),
@@ -664,7 +664,7 @@ where
                     ty: self.ctx.mk_ir_ty(IntTy),
                 };
 
-                let handler_index = self.db.effect_member_op_index(*eff_id, *op);
+                let handler_index = self.db.effect_handler_op_index(*mod_id, *eff_id, *op);
                 let eff_index = self.db.effect_vector_index(*mod_id, *eff_id);
                 Ir::app(
                     Ir::abss(

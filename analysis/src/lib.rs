@@ -1,6 +1,7 @@
 use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use aiahr_core::ident::Ident;
-use aiahr_core::modules::{module_of, Module};
+use aiahr_core::modules::{all_modules, module_of, Module};
+use aiahr_core::Top;
 use rustc_hash::FxHashMap;
 
 use crate::ops::IdOps;
@@ -21,10 +22,16 @@ pub mod top_level;
 pub struct Jar(
     NameResModule,
     SalsaItem,
+    all_effects,
     nameres_module_of,
     effect_name,
     effect_member_name,
     effect_members,
+    effect_handler_order,
+    effect_handler_return_index,
+    effect_handler_op_index,
+    effect_vector_index,
+    module_effects,
     lookup_effect_by_member_names,
     lookup_effect_by_name,
 );
@@ -169,4 +176,111 @@ fn lookup_effect_by(
         })
         .find(|(_, names)| find_by(*names))
         .map(|(ids, _)| ids)
+}
+
+#[salsa::tracked(return_ref)]
+fn effect_handler_order(
+    db: &dyn crate::Db,
+    top: Top,
+    mod_id: ModuleId,
+    eff_id: EffectId,
+) -> Vec<Ident> {
+    let mut members = effect_members(db, top, mod_id, eff_id)
+        .iter()
+        .map(|op_id| effect_member_name(db, top, mod_id, eff_id, *op_id))
+        .collect::<Vec<_>>();
+
+    // Insert `return` so it get's ordered as well.
+    members.push(db.ident_str("return"));
+    members.sort();
+
+    return members;
+}
+
+#[salsa::tracked]
+pub fn effect_handler_return_index(
+    db: &dyn crate::Db,
+    top: Top,
+    module_id: ModuleId,
+    effect_id: EffectId,
+) -> usize {
+    let return_id = db.ident_str("return");
+    effect_handler_order(db, top, module_id, effect_id)
+        .binary_search(&return_id)
+        .unwrap_or_else(|_| {
+            panic!(
+                "ICE: Created handler order for effect {:?} that did not contain `return`",
+                effect_id
+            )
+        })
+}
+
+#[salsa::tracked]
+pub fn effect_handler_op_index(
+    db: &dyn crate::Db,
+    top: Top,
+    module_id: ModuleId,
+    effect_id: EffectId,
+    op_id: EffectOpId,
+) -> usize {
+    let member_id = effect_member_name(db, top, module_id, effect_id, op_id);
+    effect_handler_order(db, top, module_id, effect_id)
+        .binary_search(&member_id)
+        .unwrap_or_else(|_| {
+            panic!(
+                "ICE: Created handler order for effect {:?} that did not contain member {:?}",
+                effect_id, op_id
+            )
+        })
+}
+
+#[salsa::tracked(return_ref)]
+pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
+    let nameres_module = nameres_module_of(db, module);
+    nameres_module
+        .items(db)
+        .resolved_items
+        .iter()
+        .filter_map(|item| item.as_ref())
+        .filter_map(|item| match item.data(db) {
+            aiahr_core::nst::indexed::Item::Term { .. } => None,
+            aiahr_core::nst::indexed::Item::Effect { name, .. } => Some(name.value),
+        })
+        .collect()
+}
+
+#[salsa::tracked(return_ref)]
+pub fn all_effects(db: &dyn crate::Db) -> Vec<(ModuleId, EffectId)> {
+    let core_db = db.as_core_db();
+    let module_tree = all_modules(core_db);
+    let mut effects: Vec<(ModuleId, EffectId)> = module_tree
+        .modules(core_db)
+        .iter_enumerate()
+        .flat_map(|(mod_id, module)| {
+            module_effects(db, module.data)
+                .iter()
+                .map(move |eff_id| (mod_id, *eff_id))
+        })
+        .collect();
+
+    effects.sort();
+    effects
+}
+
+#[salsa::tracked]
+pub fn effect_vector_index(
+    db: &dyn crate::Db,
+    _top: Top,
+    module_id: ModuleId,
+    effect_id: EffectId,
+) -> usize {
+    let effects = all_effects(db);
+    effects
+        .binary_search(&(module_id, effect_id))
+        .unwrap_or_else(|_| {
+            panic!(
+                "ICE: {:?} expected effect to exist but it was not found",
+                (module_id, effect_id)
+            )
+        })
 }

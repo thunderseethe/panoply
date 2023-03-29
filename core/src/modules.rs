@@ -98,17 +98,17 @@ pub struct Module {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SalsaModuleData {
-    name: Ident,
-    data: Module,
-    submodules: FxHashMap<Ident, ModuleId>,
+    pub name: Ident,
+    pub data: Module,
+    pub submodules: FxHashMap<Ident, ModuleId>,
 }
 
 #[salsa::tracked]
 pub struct SalsaModuleTree {
     #[return_ref]
-    packages: FxHashMap<Ident, ModuleId>,
+    pub packages: FxHashMap<Ident, ModuleId>,
     #[return_ref]
-    modules: Box<Ids<ModuleId, SalsaModuleData>>,
+    pub modules: Box<Ids<ModuleId, SalsaModuleData>>,
 }
 
 #[salsa::tracked]
