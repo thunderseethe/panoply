@@ -14,7 +14,7 @@ use crate::id::ModuleId;
 ///
 /// `Loc` implements `Eq`, `Hash`, `PartialEq`, and `PartialOrd`, but those comparisons only use the
 /// `module` and `byte` fields.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct Loc {
     /// The module ID of the source text.
     pub module: ModuleId,
@@ -29,6 +29,13 @@ pub struct Loc {
     /// The 0-indexed column that the byte offset lies on on the line. Measured in characters
     /// (unicode scalar values) after the start of the line.
     pub col: usize,
+}
+impl std::fmt::Debug for Loc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Loc")
+            .field("byte", &self.byte)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Loc {

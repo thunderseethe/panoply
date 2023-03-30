@@ -2,7 +2,7 @@ use crate::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use crate::ident::Ident;
 use crate::modules::Module;
 use crate::span::Span;
-use crate::ty::{InDb, Ty, TyScheme};
+use crate::ty::{Ty, TyScheme};
 use rustc_hash::FxHashMap;
 
 pub mod indexed {
@@ -18,7 +18,7 @@ pub mod indexed {
         HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
     };
     use crate::span::Span;
-    use crate::ty::{InDb, Ty, TyScheme};
+    use crate::ty::{Ty, TyScheme};
 
     use super::Direction;
 

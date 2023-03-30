@@ -88,9 +88,10 @@ impl Displayer<ModuleId> for ModuleTree {
 /// This stores input for a module and ties together the metadata produced by each pass for a given
 /// module.
 #[salsa::tracked]
+#[derive(DebugWithDb)]
 pub struct Module {
     #[return_ref]
-    name: Ident,
+    name: ModuleId,
 
     #[return_ref]
     uri: std::path::PathBuf,

@@ -1,7 +1,8 @@
 use aiahr_core::{
-    cst::indexed::Module,
+    cst::indexed::CstModule,
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
     file::SourceFile,
+    modules::Module,
 };
 use bumpalo::Bump;
 use chumsky::Parser;
@@ -16,29 +17,54 @@ pub mod lexer;
 pub mod parser;
 
 #[salsa::jar(db = Db)]
-pub struct Jar(parse_module);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+pub struct Jar(parse_module, ParseModule);
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
+    fn as_parser_db(&self) -> &dyn crate::Db {
+        <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
+    }
+
+    fn parse_module(&self, file: SourceFile) -> ParseModule {
+        parse_module(self.as_parser_db(), file)
+    }
+}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db {}
 
 #[salsa::tracked]
-pub fn parse_module(db: &dyn Db, file: SourceFile) -> Option<Module> {
+#[derive(DebugWithDb)]
+pub struct ParseModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub data: CstModule,
+}
+
+#[salsa::tracked]
+fn parse_module(db: &dyn Db, file: SourceFile) -> ParseModule {
+    let core_db = db.as_core_db();
+    let mod_id = file.module(core_db);
+    let module = Module::new(core_db, mod_id, file.path(core_db).clone());
     let lexer = aiahr_lexer(db);
-    let (tokens, eoi) = lexer
-        .lex(file.module(db.as_core_db()), file.contents(db.as_core_db()))
-        .map_err(|err| AiahrcErrors::push(db, AiahrcError::from(err)))
-        .ok()?;
+    let (tokens, eoi) = match lexer.lex(mod_id, file.contents(core_db)) {
+        Ok(tokens) => tokens,
+        Err(err) => {
+            AiahrcErrors::push(db, AiahrcError::from(err));
+            return ParseModule::new(db, module, CstModule::default());
+        }
+    };
 
     let arena = Bump::new();
     let parser = aiahr_parser(&arena);
-    parser
+    let cst_module = parser
         .parse(to_stream(tokens, eoi))
         .map_err(|errs| {
             for err in errs.into_iter().flat_map(|list| list.0.into_iter()) {
                 AiahrcErrors::push(db, AiahrcError::from(err))
             }
         })
-        .ok()
-        .map(Module::from)
+        .map(CstModule::from)
+        .unwrap_or_default();
+
+    ParseModule::new(db, module, cst_module)
 }
 
 #[cfg(test)]

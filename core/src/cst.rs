@@ -9,6 +9,8 @@ pub mod indexed {
     //! Variant of the same data types as cst but using owned data and indexed arenas instead of
     //! reference arenas. This is to ease the transition to Salsa.
 
+    use std::fmt::Debug;
+
     use bumpalo::Bump;
     use la_arena::{Arena, Idx};
 
@@ -271,8 +273,8 @@ pub mod indexed {
     }
 
     /// A parsed module.
-    #[derive(Clone, Debug, Eq, PartialEq)]
-    pub struct Module {
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
+    pub struct CstModule {
         pub indices: CstIndxAlloc,
         pub items: Vec<Item>,
     }
@@ -1043,6 +1045,7 @@ pub mod indexed {
             }
         }
     }
+
     impl<'a, A> ReferenceAllocate<'a, A> for Item
     where
         A: HasRefArena<'a> + HasArenaRef<Type<Ident>> + HasArenaRef<Term> + HasArenaRef<Pattern>,
@@ -1081,7 +1084,7 @@ pub mod indexed {
         }
     }
 
-    impl From<super::Module<'_>> for Module {
+    impl From<super::Module<'_>> for CstModule {
         fn from(value: super::Module<'_>) -> Self {
             let mut indices = CstIndxAlloc::default();
             let items = value
@@ -1093,7 +1096,7 @@ pub mod indexed {
         }
     }
 
-    impl<'a, A> ReferenceAllocate<'a, A> for Module
+    impl<'a, A> ReferenceAllocate<'a, A> for CstModule
     where
         A: HasRefArena<'a> + HasArenaRef<Type<Ident>> + HasArenaRef<Term> + HasArenaRef<Pattern>,
     {

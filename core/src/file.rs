@@ -1,6 +1,6 @@
 use crate::id::ModuleId;
 
-#[salsa::tracked]
+#[salsa::input]
 pub struct SourceFile {
     pub module: ModuleId,
     #[return_ref]

@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use la_arena::Arena;
 
-/// A trait for a type that contains an `Arena<T>`
+/// A trait for a type that contains a mutable `Arena<T>` reference.
 ///
 /// Allows types to implement `IndexedAllocate<A>` for a generic A as long as it has the required
 /// arena.
@@ -9,6 +9,9 @@ pub trait HasArenaMut<T>: HasArenaRef<T> {
     fn arena_mut(&mut self) -> &mut Arena<T>;
 }
 
+/// A trait for a type that contains an immutable `Arena<T>` reference.
+///
+/// Allows types to readback indexed allocated terms without having mutable access.
 pub trait HasArenaRef<T> {
     fn arena(&self) -> &Arena<T>;
 }

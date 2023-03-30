@@ -9,7 +9,7 @@ use aiahr_core::modules::{module_of, Module};
 use aiahr_core::nst::Pattern;
 use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::ty::row::Row;
-use aiahr_core::ty::{Evidence, InDb, MkTy, Ty, TyScheme, TypeKind};
+use aiahr_core::ty::{Evidence, MkTy, Ty, TyScheme, TypeKind};
 use aiahr_core::{
     ast,
     ast::{Ast, Item, Term::*},
