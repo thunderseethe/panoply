@@ -99,7 +99,12 @@ impl<'db> IrEffectInfo<'db> for &'db dyn crate::Db {
     }
 
     fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
-        aiahr_analysis::effect_vector_index(self.as_analysis_db(), Top::new(self.as_core_db()), mod_id, eff_id)
+        aiahr_analysis::effect_vector_index(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            mod_id,
+            eff_id,
+        )
     }
 
     fn effect_handler_ir_ty(&self, _mod_id: ModuleId, _eff_id: EffectId) -> IrTy<'db> {

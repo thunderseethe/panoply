@@ -80,8 +80,7 @@ impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
     }
 }
 
-impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_)
-{
+impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_) {
     fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
         aiahr_analysis::effect_name(
             self.as_analysis_db(),
