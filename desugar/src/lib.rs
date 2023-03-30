@@ -90,7 +90,7 @@ pub fn desugar_item(
 
 #[salsa::tracked]
 pub fn desugar_module_of(db: &dyn crate::Db, module: Module) -> AstModule {
-    let nameres_module = aiahr_analysis::nameres_module_of(db.as_analysis_db(), module);
+    let nameres_module = db.nameres_module_of(module.name(db.as_core_db()));
     desugar_module(db, nameres_module)
 }
 

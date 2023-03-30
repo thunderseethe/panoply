@@ -3,6 +3,7 @@ use salsa::DebugWithDb;
 
 use crate::{
     displayer::Displayer,
+    file::SourceFileSet,
     id::{IdGen, Ids, ModuleId},
     ident::Ident,
 };
@@ -90,7 +91,6 @@ impl Displayer<ModuleId> for ModuleTree {
 #[salsa::tracked]
 #[derive(DebugWithDb)]
 pub struct Module {
-    #[return_ref]
     pub name: ModuleId,
 
     #[return_ref]
@@ -99,24 +99,30 @@ pub struct Module {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SalsaModuleData {
-    pub name: Ident,
     pub data: Module,
-    pub submodules: FxHashMap<Ident, ModuleId>,
 }
 
 #[salsa::tracked]
 pub struct SalsaModuleTree {
     #[return_ref]
-    pub packages: FxHashMap<Ident, ModuleId>,
-    #[return_ref]
-    pub modules: Box<Ids<ModuleId, SalsaModuleData>>,
+    pub modules: Box<Ids<ModuleId, Module>>,
 }
 
 #[salsa::tracked]
 pub fn all_modules(
-    _db: &dyn crate::Db, /* TODO: this should take some kind of config file? or be an input */
+    db: &dyn crate::Db, /* TODO: this should take some kind of config file? or be an input */
 ) -> SalsaModuleTree {
-    todo!()
+    let source_file_set = SourceFileSet::get(db);
+
+    let mut files = source_file_set.files(db).clone();
+    // Ensure that our SourceFiles are in order before re-assigning them a ModuleId
+    files.sort_by(|a, b| a.module(db).cmp(&b.module(db)));
+    let modules = files
+        .into_iter()
+        .map(|file| Module::new(db, file.module(db), file.path(db).clone()))
+        .collect::<IdGen<ModuleId, Module>>();
+
+    SalsaModuleTree::new(db, modules.into_boxed_ids())
 }
 
 #[salsa::tracked]
@@ -126,7 +132,7 @@ pub fn module_id_of(db: &dyn crate::Db, module: Module) -> ModuleId {
     let (module_id, _) = tree
         .modules(db)
         .iter_enumerate()
-        .find(|(_, mod_data)| mod_data.data == module)
+        .find(|(_, mod_data)| (*mod_data) == &module)
         .unwrap_or_else(|| {
             panic!(
                 "ICE: Constructed Module {:?} but did not store it in Module Tree",
@@ -152,5 +158,5 @@ pub fn module_of(db: &dyn crate::Db, _unused: crate::Top, module_id: ModuleId) -
             )
         });
 
-    module_data.data
+    *module_data
 }

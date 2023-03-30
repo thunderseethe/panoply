@@ -62,6 +62,10 @@ pub trait Db: salsa::DbWithJar<Jar> {
     fn ident_str(&self, text: &str) -> ident::Ident {
         self.ident(text.to_string())
     }
+
+    fn top(&self) -> Top {
+        Top::new(self.as_core_db())
+    }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
 

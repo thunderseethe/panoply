@@ -2,7 +2,9 @@ use aiahr_core::{
     cst::indexed::CstModule,
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
     file::SourceFile,
+    id::ModuleId,
     modules::Module,
+    Top,
 };
 use bumpalo::Bump;
 use chumsky::Parser;
@@ -17,7 +19,7 @@ pub mod lexer;
 pub mod parser;
 
 #[salsa::jar(db = Db)]
-pub struct Jar(parse_module, ParseModule);
+pub struct Jar(parse_module, parse_module_of, ParseModule);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     fn as_parser_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -25,6 +27,10 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
 
     fn parse_module(&self, file: SourceFile) -> ParseModule {
         parse_module(self.as_parser_db(), file)
+    }
+
+    fn parse_module_of(&self, mod_id: ModuleId) -> ParseModule {
+        parse_module_of(self.as_parser_db(), self.top(), mod_id)
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db {}
@@ -36,6 +42,12 @@ pub struct ParseModule {
     pub module: Module,
     #[return_ref]
     pub data: CstModule,
+}
+
+#[salsa::tracked]
+fn parse_module_of(db: &dyn Db, top: Top, mod_id: ModuleId) -> ParseModule {
+    let file = aiahr_core::file::module_source_file(db.as_core_db(), top, mod_id);
+    db.parse_module(file)
 }
 
 #[salsa::tracked]
