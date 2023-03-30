@@ -269,7 +269,6 @@ pub mod indexed {
             value: Idx<Term>,
         },
     }
-    impl Eq for Item {}
 
     /// A parsed module.
     #[derive(Clone, Debug, Eq, PartialEq)]
