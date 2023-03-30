@@ -3,6 +3,7 @@ pub mod cst;
 pub mod diagnostic;
 mod display_iter;
 pub mod displayer;
+pub mod file;
 pub mod graph;
 pub mod id;
 pub mod indexed;
@@ -31,6 +32,8 @@ pub mod ident {
 pub struct Jar(
     ast::AstModule,
     ast::indexed::SalsaItem,
+    diagnostic::aiahr::AiahrcErrors,
+    file::SourceFile,
     ident::Ident,
     modules::Module,
     modules::SalsaModuleTree,

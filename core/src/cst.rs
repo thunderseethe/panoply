@@ -18,7 +18,7 @@ pub mod indexed {
     };
     use crate::span::{Span, SpanOf};
 
-    #[derive(Default)]
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
     pub struct CstIndxAlloc {
         types: Arena<Type<Ident>>,
         terms: Arena<Term>,
@@ -75,7 +75,7 @@ pub mod indexed {
 
     /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
     /// `Option`.
-    #[derive(Clone, Debug, PartialEq, Hash)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Separated<T> {
         pub first: T,
         pub elems: Vec<(Span, T)>,
@@ -85,7 +85,7 @@ pub mod indexed {
     pub type IdField<T> = super::Field<SpanOf<Ident>, T>;
 
     /// A product row with values in `T`.
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct ProductRow<T> {
         pub lbrace: Span,
         pub fields: Option<Separated<IdField<T>>>,
@@ -93,7 +93,7 @@ pub mod indexed {
     }
 
     /// A sum row with value in `T`.
-    #[derive(Clone, Copy, Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct SumRow<T> {
         pub langle: Span,
         pub field: IdField<T>,
@@ -101,7 +101,7 @@ pub mod indexed {
     }
 
     /// A non-empty row with concrete fields in `C` and variables in `V`.
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum Row<V, C> {
         Concrete(Separated<C>),
         Variable(Separated<SpanOf<V>>),
@@ -116,7 +116,7 @@ pub mod indexed {
     pub type TypeRow<V> = Row<V, IdField<Idx<Type<V>>>>;
 
     /// An unqualified Aiahr syntactic type.
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum Type<V> {
         Named(SpanOf<V>),
         Sum {
@@ -142,7 +142,7 @@ pub mod indexed {
     }
 
     /// An atomic row for use in a type constraint.
-    #[derive(Clone, Debug, PartialEq, Hash)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub enum RowAtom<V> {
         Concrete {
             lpar: Span,
@@ -153,7 +153,7 @@ pub mod indexed {
     }
 
     /// A type constraint.
-    #[derive(Clone, Debug, PartialEq, Hash)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub enum Constraint<V> {
         RowSum {
             lhs: RowAtom<V>,
@@ -165,14 +165,14 @@ pub mod indexed {
     }
 
     /// A qualifiers for a type.
-    #[derive(Clone, Debug, PartialEq, Hash)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Qualifiers<V> {
         pub constraints: Separated<Constraint<V>>,
         pub arrow: Span,
     }
 
     /// A polymorphic Aiahr type.
-    #[derive(Clone, Debug, PartialEq, Hash)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct Scheme<V> {
         pub quantifiers: Vec<super::Quantifier<V>>,
         pub qualifiers: Option<Qualifiers<V>>,
@@ -180,7 +180,7 @@ pub mod indexed {
     }
 
     /// An effect operation.
-    #[derive(Clone, Debug, PartialEq, Hash)]
+    #[derive(Clone, Debug, Eq, PartialEq, Hash)]
     pub struct EffectOp<O, V> {
         pub name: SpanOf<O>,
         pub colon: Span,
@@ -188,7 +188,7 @@ pub mod indexed {
     }
 
     /// An Aiahr pattern.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum Pattern {
         ProductRow(ProductRow<Idx<Self>>),
         SumRow(SumRow<Idx<Self>>),
@@ -202,7 +202,7 @@ pub mod indexed {
     pub type SchemeAnnotation<V> = super::Annotation<Scheme<V>>;
 
     /// An Aiahr term.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum Term {
         Binding {
             var: SpanOf<Ident>,
@@ -253,7 +253,7 @@ pub mod indexed {
     }
 
     /// A top-level item in an Aiahr source file.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub enum Item {
         Effect {
             effect: Span,
@@ -268,6 +268,13 @@ pub mod indexed {
             eq: Span,
             value: Idx<Term>,
         },
+    }
+
+    /// A parsed module.
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct Module {
+        pub indices: CstIndxAlloc,
+        pub items: Vec<Item>,
     }
 
     impl<A> IndexedAllocate<A> for Ident {
@@ -1073,6 +1080,33 @@ pub mod indexed {
             }
         }
     }
+
+    impl From<super::Module<'_>> for Module {
+        fn from(value: super::Module<'_>) -> Self {
+            let mut indices = CstIndxAlloc::default();
+            let items = value
+                .items
+                .iter()
+                .map(|item| item.alloc(&mut indices))
+                .collect();
+            Self { indices, items }
+        }
+    }
+
+    impl<'a, A> ReferenceAllocate<'a, A> for Module
+    where
+        A: HasRefArena<'a> + HasArenaRef<Type<Ident>> + HasArenaRef<Term> + HasArenaRef<Pattern>,
+    {
+        type Out = super::Module<'a>;
+
+        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
+            super::Module {
+                items: alloc
+                    .ref_arena()
+                    .alloc_slice_fill_iter(self.items.iter().map(|item| item.ref_alloc(alloc))),
+            }
+        }
+    }
 }
 
 /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
@@ -1150,7 +1184,7 @@ impl<'a, T> Iterator for Elements<'a, T> {
 }
 
 /// A field with a label in `L`, separator, and target in `T`.
-#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Field<L, T> {
     pub label: L,
     pub sep: Span,
@@ -1318,7 +1352,7 @@ impl<'a, V> Spanned for Constraint<'a, V> {
 }
 
 /// A quantifier for a polytype.
-#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Quantifier<V> {
     pub forall: Span,
     pub var: SpanOf<V>,
@@ -1404,7 +1438,7 @@ impl<'a> Spanned for Pattern<'a> {
 }
 
 /// A typing annotation for a variable.
-#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct Annotation<T> {
     pub colon: Span,
     pub type_: T,
@@ -1518,6 +1552,12 @@ impl<'a> Spanned for Item<'a> {
             Item::Term { name, value, .. } => Span::join(name, *value),
         }
     }
+}
+
+/// A parsed module.
+#[derive(Clone, Copy, Debug)]
+pub struct Module<'a> {
+    pub items: &'a [Item<'a>],
 }
 
 // CST pattern macros. Used to construct patterns that ignore spans.

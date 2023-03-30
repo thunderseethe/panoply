@@ -8,7 +8,7 @@ use super::{
 };
 
 /// Any Aiahr compilation error.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AiahrcError {
     LexError(LexError),
     NameResolutionError(NameResolutionError),
@@ -64,3 +64,6 @@ impl Diagnostic for AiahrcError {
         }
     }
 }
+
+#[salsa::accumulator]
+pub struct AiahrcErrors(AiahrcError);

@@ -8,8 +8,9 @@ use crate::{
 };
 use aiahr_core::{
     cst::{
-        self, Annotation, Constraint, EffectOp, Field, IdField, ProductRow, Qualifiers, Quantifier,
-        Row, RowAtom, Scheme, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation, TypeRow,
+        self, Annotation, Constraint, EffectOp, Field, IdField, Module, ProductRow, Qualifiers,
+        Quantifier, Row, RowAtom, Scheme, SchemeAnnotation, Separated, SumRow, Type,
+        TypeAnnotation, TypeRow,
     },
     diagnostic::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
@@ -924,7 +925,7 @@ pub struct ModuleResolution<'a> {
 /// Resolves the given module.
 pub fn resolve_module<'a, 'b: 'a, E>(
     arena: &'a Bump,
-    items: &[cst::Item<'b>],
+    module: Module<'b>,
     base: BaseNames<'_, 'a>,
     errors: &mut E,
 ) -> ModuleResolution<'a>
@@ -932,45 +933,44 @@ where
     E: DiagnosticSink<NameResolutionError>,
 {
     let mut names = Names::new(&base);
-    let resolved_items =
-        arena.alloc_slice_fill_iter(base.iter().zip(items.iter()).map(|(name, item)| {
-            match (name, item) {
-                (
-                    ModuleName::Effect(e),
-                    &cst::Item::Effect {
-                        effect,
-                        name,
-                        lbrace,
-                        ops,
-                        rbrace,
-                    },
-                ) => resolve_effect(
-                    arena,
-                    base.me(),
-                    *e,
+    let resolved_items = arena.alloc_slice_fill_iter(base.iter().zip(module.items.iter()).map(
+        |(name, item)| match (name, item) {
+            (
+                ModuleName::Effect(e),
+                &cst::Item::Effect {
                     effect,
                     name,
                     lbrace,
                     ops,
                     rbrace,
-                    &mut names,
-                    errors,
-                ),
-                (
-                    ModuleName::Item(i),
-                    &cst::Item::Term {
-                        name,
-                        annotation,
-                        eq,
-                        value,
-                    },
-                ) => resolve_term_item(arena, *i, name, annotation, eq, value, &mut names, errors),
-                _ => panic!(
-                    "Expected same kinds of names, got {:?} and {:?}",
-                    name, item
-                ),
-            }
-        }));
+                },
+            ) => resolve_effect(
+                arena,
+                base.me(),
+                *e,
+                effect,
+                name,
+                lbrace,
+                ops,
+                rbrace,
+                &mut names,
+                errors,
+            ),
+            (
+                ModuleName::Item(i),
+                &cst::Item::Term {
+                    name,
+                    annotation,
+                    eq,
+                    value,
+                },
+            ) => resolve_term_item(arena, *i, name, annotation, eq, value, &mut names, errors),
+            _ => panic!(
+                "Expected same kinds of names, got {:?} and {:?}",
+                name, item
+            ),
+        },
+    ));
     ModuleResolution {
         locals: names.into_local_ids(),
         resolved_items,
@@ -1066,12 +1066,9 @@ mod tests {
         let mut errors = Vec::new();
 
         let mut module_names = FxHashMap::default();
-        let base = BaseBuilder::new().add_slice(unresolved, &mut errors).build(
-            arena,
-            m,
-            &modules,
-            &mut module_names,
-        );
+        let base = BaseBuilder::new()
+            .add_slice(unresolved.items, &mut errors)
+            .build(arena, m, &modules, &mut module_names);
 
         (
             resolve_module(arena, unresolved, base, &mut errors),

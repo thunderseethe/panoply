@@ -1,7 +1,8 @@
 use aiahr_core::{
     cst::{
-        Annotation, Constraint, EffectOp, Field, IdField, Item, Pattern, ProductRow, Qualifiers,
-        Quantifier, Row, RowAtom, Scheme, Separated, SumRow, Term, Type, TypeAnnotation,
+        Annotation, Constraint, EffectOp, Field, IdField, Item, Module, Pattern, ProductRow,
+        Qualifiers, Quantifier, Row, RowAtom, Scheme, Separated, SumRow, Term, Type,
+        TypeAnnotation,
     },
     diagnostic::parser::ParseErrors,
     ident::Ident,
@@ -462,7 +463,7 @@ pub fn term(arena: &Bump) -> impl Parser<Token, &Term<'_>, Error = ParseErrors> 
 }
 
 /// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
-pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, &[Item<'_>], Error = ParseErrors> {
+pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, Module<'_>, Error = ParseErrors> {
     let effect = lit(Token::KwEffect)
         .then(ident())
         .then(lit(Token::LBrace))
@@ -489,7 +490,9 @@ pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, &[Item<'_>], Error = Par
 
     choice((effect, term))
         .repeated()
-        .map(|items| arena.alloc_slice_fill_iter(items.into_iter()) as &[_])
+        .map(|items| Module {
+            items: arena.alloc_slice_fill_iter(items.into_iter()) as &[_],
+        })
         .then_ignore(end())
 }
 
@@ -529,7 +532,7 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
     use aiahr_core::{
-        cst::{Item, Scheme, Term, Type},
+        cst::{Module, Scheme, Term, Type},
         ct_rowsum, eff_op, field,
         id::ModuleId,
         id_field,
@@ -590,11 +593,7 @@ mod tests {
             .unwrap()
     }
 
-    fn parse_file_unwrap<'a>(
-        db: &'a dyn crate::Db,
-        arena: &'a Bump,
-        input: &str,
-    ) -> &'a [Item<'a>] {
+    fn parse_file_unwrap<'a>(db: &'a dyn crate::Db, arena: &'a Bump, input: &str) -> Module<'a> {
         let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
         aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
@@ -978,7 +977,7 @@ mod tests {
                 &db,
                 &Bump::new(),
                 "effect foo { foo: a -> a }"
-            ),
+            ).items,
             &[item_effect!(
                 foo,
                 eff_op!(foo1, type_func!(type_named!(a), type_named!(a1)))
@@ -997,7 +996,7 @@ mod tests {
                 &db,
                 &Bump::new(),
                 "x = a\ny = |b| b\nz = t = x; t"
-            ),
+            ).items,
             &[
                 item_term!(x, term_sym!(a)),
                 item_term!(y, term_abs!(b, term_sym!(b1))),
@@ -1012,7 +1011,7 @@ mod tests {
                 &db,
                 &Bump::new(),
                 "x: a = a\ny: forall b. b -> b = |b| b"
-            ),
+            ).items,
             &[
                 item_term!(x, scheme!(type_named!(a)), term_sym!(a1)),
                 item_term!(

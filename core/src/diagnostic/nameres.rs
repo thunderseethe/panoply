@@ -120,7 +120,7 @@ pub struct Suggestion {
 }
 
 /// A name resolution error.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum NameResolutionError {
     /// A duplicate name in the same layer, where the new name is not allowed to shadow the old one.
     Duplicate {
