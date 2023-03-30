@@ -57,9 +57,12 @@ pub struct Jar(SalsaTypedItem, type_scheme_of);
 pub trait Db:
     salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
 {
+    fn as_tc_db(&self) -> &dyn crate::Db {
+        <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
+    }
 }
 impl<DB> Db for DB where
-    DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
+    DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
 {
 }
 
@@ -77,7 +80,8 @@ impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
     }
 }
 
-impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_) {
+impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_)
+{
     fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
         aiahr_analysis::effect_name(
             self.as_analysis_db(),
@@ -299,7 +303,7 @@ pub mod test_utils {
     use aiahr_core::ident::Ident;
     use aiahr_core::memory::handle::{self, RefHandle};
 
-    use crate::{EffectInfo, InDb, MkTy, Row, TyScheme};
+    use crate::{EffectInfo, MkTy, Row, TyScheme};
 
     // Utility trait to remove a lot of the intermediate allocation when creating ASTs
     // Helps make tests a little more readable

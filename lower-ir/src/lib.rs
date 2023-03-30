@@ -1,6 +1,7 @@
 use aiahr_core::id::{EffectId, EffectOpId};
 use aiahr_core::ident::Ident;
 use aiahr_core::ty::TyScheme;
+use aiahr_core::Top;
 use aiahr_core::{
     ast::{Ast, Term},
     id::{IrTyVarId, ItemId, ModuleId, VarId},
@@ -35,6 +36,75 @@ pub trait IrEffectInfo<'ctx>: EffectInfo<'ctx> {
     fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
 
     fn effect_handler_ir_ty(&self, mod_id: ModuleId, eff_id: EffectId) -> IrTy<'ctx>;
+}
+
+#[salsa::jar(db = Db)]
+pub struct Jar();
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db {}
+
+impl<'db> EffectInfo<'db> for &'db dyn crate::Db {
+    fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
+        self.as_tc_db().effect_name(module, eff)
+    }
+
+    fn effect_members(&self, module: ModuleId, eff: EffectId) -> RefHandle<'db, [EffectOpId]> {
+        self.as_tc_db().effect_members(module, eff)
+    }
+
+    fn lookup_effect_by_member_names(
+        &self,
+        module: ModuleId,
+        members: &[Ident],
+    ) -> Option<(ModuleId, EffectId)> {
+        self.as_tc_db()
+            .lookup_effect_by_member_names(module, members)
+    }
+
+    fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
+        self.as_tc_db().lookup_effect_by_name(module, name)
+    }
+
+    fn effect_member_sig(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> TyScheme {
+        self.as_tc_db().effect_member_sig(module, eff, member)
+    }
+
+    fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident {
+        self.as_tc_db().effect_member_name(module, eff, member)
+    }
+}
+impl<'db> IrEffectInfo<'db> for &'db dyn crate::Db {
+    fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
+        aiahr_analysis::effect_handler_return_index(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            mod_id,
+            eff_id,
+        )
+    }
+
+    fn effect_handler_op_index(
+        &self,
+        mod_id: ModuleId,
+        eff_id: EffectId,
+        op_id: EffectOpId,
+    ) -> usize {
+        aiahr_analysis::effect_handler_op_index(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            mod_id,
+            eff_id,
+            op_id,
+        )
+    }
+
+    fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
+        aiahr_analysis::effect_vector_index(self.as_analysis_db(), Top::new(self.as_core_db()), mod_id, eff_id)
+    }
+
+    fn effect_handler_ir_ty(&self, _mod_id: ModuleId, _eff_id: EffectId) -> IrTy<'db> {
+        todo!()
+    }
 }
 
 /// Lower an `Ast` into an `Ir`.
