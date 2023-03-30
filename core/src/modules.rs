@@ -91,10 +91,10 @@ impl Displayer<ModuleId> for ModuleTree {
 #[derive(DebugWithDb)]
 pub struct Module {
     #[return_ref]
-    name: ModuleId,
+    pub name: ModuleId,
 
     #[return_ref]
-    uri: std::path::PathBuf,
+    pub uri: std::path::PathBuf,
 }
 
 #[derive(Debug, PartialEq, Eq)]

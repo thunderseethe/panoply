@@ -458,7 +458,13 @@ mod tests {
     }
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_desugar::Jar, aiahr_analysis::Jar)]
+    #[salsa::db(
+        crate::Jar,
+        aiahr_core::Jar,
+        aiahr_desugar::Jar,
+        aiahr_analysis::Jar,
+        aiahr_parser::Jar
+    )]
     pub(crate) struct TestDatabase {
         storage: salsa::Storage<Self>,
     }

@@ -11,5 +11,6 @@ rustc-hash.workspace = true
 salsa.workspace = true
 
 [dev-dependencies]
+aiahr-parser.workspace = true
 aiahr-test.workspace = true
 rand.workspace = true

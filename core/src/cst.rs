@@ -58,8 +58,8 @@ pub mod indexed {
     }
 
     pub struct CstRefAlloc<'a> {
-        arena: &'a Bump,
-        indices: CstIndxAlloc,
+        pub arena: &'a Bump,
+        pub indices: CstIndxAlloc,
     }
     impl<'a> HasRefArena<'a> for CstRefAlloc<'a> {
         fn ref_arena(&self) -> &'a Bump {
@@ -1084,8 +1084,8 @@ pub mod indexed {
         }
     }
 
-    impl From<super::Module<'_>> for CstModule {
-        fn from(value: super::Module<'_>) -> Self {
+    impl From<super::CstModule<'_>> for CstModule {
+        fn from(value: super::CstModule<'_>) -> Self {
             let mut indices = CstIndxAlloc::default();
             let items = value
                 .items
@@ -1100,10 +1100,10 @@ pub mod indexed {
     where
         A: HasRefArena<'a> + HasArenaRef<Type<Ident>> + HasArenaRef<Term> + HasArenaRef<Pattern>,
     {
-        type Out = super::Module<'a>;
+        type Out = super::CstModule<'a>;
 
         fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
-            super::Module {
+            super::CstModule {
                 items: alloc
                     .ref_arena()
                     .alloc_slice_fill_iter(self.items.iter().map(|item| item.ref_alloc(alloc))),
@@ -1559,7 +1559,7 @@ impl<'a> Spanned for Item<'a> {
 
 /// A parsed module.
 #[derive(Clone, Copy, Debug)]
-pub struct Module<'a> {
+pub struct CstModule<'a> {
     pub items: &'a [Item<'a>],
 }
 

@@ -7,12 +7,12 @@ edition.workspace = true
 
 [dependencies]
 aiahr-core.workspace = true
+aiahr-parser.workspace = true
 bumpalo.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
 
 [dev-dependencies]
-aiahr-parser.workspace = true
 assert_matches.workspace = true
 chumsky.workspace = true
 aiahr-test.workspace = true

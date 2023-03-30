@@ -1,10 +1,17 @@
-use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId};
+use aiahr_core::cst::indexed::CstRefAlloc;
+use aiahr_core::id::{EffectId, EffectOpId, ModuleId};
 use aiahr_core::ident::Ident;
-use aiahr_core::modules::{all_modules, module_of, Module};
+use aiahr_core::indexed::{IndexedAllocate, ReferenceAllocate};
+use aiahr_core::modules::{all_modules, module_of, Module, ModuleTree};
+use aiahr_core::nst::indexed::NstIndxAlloc;
 use aiahr_core::Top;
+use aiahr_parser::ParseModule;
 use rustc_hash::FxHashMap;
 
+use crate::name::ModuleName;
 use crate::ops::IdOps;
+use crate::resolve::resolve_module;
+use crate::top_level::BaseBuilder;
 
 use self::module::ModuleNames;
 use self::names::LocalIds;
@@ -23,6 +30,7 @@ pub struct Jar(
     NameResModule,
     SalsaItem,
     all_effects,
+    nameres_module,
     nameres_module_of,
     effect_name,
     effect_member_name,
@@ -35,17 +43,17 @@ pub struct Jar(
     lookup_effect_by_member_names,
     lookup_effect_by_name,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {
     fn as_analysis_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {}
 
 #[salsa::tracked]
 pub struct SalsaItem {
     #[id]
-    pub name: ItemId,
+    pub name: ModuleName,
     #[return_ref]
     pub data: aiahr_core::nst::indexed::Item,
     #[return_ref]
@@ -70,12 +78,64 @@ pub struct NameResModule {
 }
 
 #[salsa::tracked]
+pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResModule {
+    let arena = bumpalo::Bump::new();
+
+    let cst_module = parse_module.data(db.as_parser_db());
+    let mod_id = parse_module.module(db.as_parser_db()).name(db.as_core_db());
+    let mut ref_alloc = CstRefAlloc {
+        arena: &arena,
+        // TODO: Take this as a ref not an owned value
+        indices: cst_module.indices.clone(),
+    };
+    let ref_cst_module = cst_module.ref_alloc(&mut ref_alloc);
+
+    let modules = ModuleTree::default();
+    let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = vec![];
+    let mut module_names = FxHashMap::default();
+    let base = BaseBuilder::new()
+        .add_slice(ref_cst_module.items, &mut errors)
+        .build(&arena, *mod_id, &modules, &mut module_names);
+    let mod_resolution = resolve_module(&arena, ref_cst_module, base, &mut errors);
+
+    let salsa_resolution = SalsaModuleResolution {
+        local_ids: mod_resolution.locals,
+        resolved_items: mod_resolution
+            .resolved_items
+            .iter()
+            .map(|oi| {
+                oi.map(|item| {
+                    let mut alloc = NstIndxAlloc::default();
+                    let item = item.alloc(&mut alloc);
+                    let name = match item {
+                        aiahr_core::nst::indexed::Item::Effect { name, .. } => {
+                            ModuleName::from(name.value)
+                        }
+                        aiahr_core::nst::indexed::Item::Term { name, .. } => {
+                            ModuleName::from(name.value)
+                        }
+                    };
+                    SalsaItem::new(db, name, item, alloc)
+                })
+            })
+            .collect(),
+    };
+
+    NameResModule::new(
+        db,
+        parse_module.module(db.as_parser_db()),
+        module_names
+            .into_iter()
+            .map(|(key, value)| (key, value.clone()))
+            .collect(),
+        salsa_resolution,
+    )
+}
+
+#[salsa::tracked]
 pub fn nameres_module_of(_db: &dyn crate::Db, _module: Module) -> NameResModule {
-    // TODO
-    // 1. Get the parsed module for `module`
-    // 2. Perform name res on that module
-    // 3. Return the name resolved module
-    todo!()
+    // Replace this method with one that relies on a concept of module set.
+    unimplemented!()
 }
 
 #[salsa::tracked]

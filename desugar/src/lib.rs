@@ -704,7 +704,7 @@ mod tests {
     use bumpalo::Bump;
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_analysis::Jar)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_analysis::Jar, aiahr_parser::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }

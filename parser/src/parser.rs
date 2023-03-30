@@ -1,6 +1,6 @@
 use aiahr_core::{
     cst::{
-        Annotation, Constraint, EffectOp, Field, IdField, Item, Module, Pattern, ProductRow,
+        Annotation, Constraint, CstModule, EffectOp, Field, IdField, Item, Pattern, ProductRow,
         Qualifiers, Quantifier, Row, RowAtom, Scheme, Separated, SumRow, Term, Type,
         TypeAnnotation,
     },
@@ -463,7 +463,7 @@ pub fn term(arena: &Bump) -> impl Parser<Token, &Term<'_>, Error = ParseErrors> 
 }
 
 /// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
-pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, Module<'_>, Error = ParseErrors> {
+pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, CstModule<'_>, Error = ParseErrors> {
     let effect = lit(Token::KwEffect)
         .then(ident())
         .then(lit(Token::LBrace))
@@ -490,7 +490,7 @@ pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, Module<'_>, Error = Pars
 
     choice((effect, term))
         .repeated()
-        .map(|items| Module {
+        .map(|items| CstModule {
             items: arena.alloc_slice_fill_iter(items.into_iter()) as &[_],
         })
         .then_ignore(end())
@@ -534,16 +534,16 @@ mod tests {
     use std::path::PathBuf;
 
     use aiahr_core::{
-        cst::{Module, Scheme, Term, Type},
+        cst::{Scheme, Term, Type},
         ct_rowsum, field,
         file::SourceFile,
         id::ModuleId,
         id_field,
         ident::Ident,
-        item_term, pat_prod, pat_sum, pat_var, qual, quant, row_concrete, row_mixed, row_variable,
-        rwx_concrete, rwx_variable, scheme, term_abs, term_app, term_dot, term_local, term_match,
-        term_paren, term_prod, term_sum, term_sym, term_with, type_func, type_named, type_par,
-        type_prod, type_sum,
+        pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed, row_variable, rwx_concrete,
+        rwx_variable, scheme, term_abs, term_app, term_dot, term_local, term_match, term_paren,
+        term_prod, term_sum, term_sym, term_with, type_func, type_named, type_par, type_prod,
+        type_sum,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
@@ -551,11 +551,10 @@ mod tests {
 
     use aiahr_test::assert_ident_text_matches_name;
     use expect_test::expect;
-    use salsa::DebugWithDb;
 
     use crate::{lexer::aiahr_lexer, Db};
 
-    use super::{aiahr_parser, scheme, term, to_stream, type_};
+    use super::{scheme, term, to_stream, type_};
 
     #[derive(Default)]
     #[salsa::db(crate::Jar, aiahr_core::Jar)]
@@ -596,11 +595,6 @@ mod tests {
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
-    }
-
-    fn parse_file_unwrap<'a>(db: &'a dyn crate::Db, arena: &'a Bump, input: &str) -> Module<'a> {
-        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
-        aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap()
     }
 
     #[test]

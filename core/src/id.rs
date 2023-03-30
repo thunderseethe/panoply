@@ -21,6 +21,15 @@ pub struct Ids<I, T> {
     slice: [T],
 }
 
+impl<I, T> Clone for Box<Ids<I, T>>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Ids::from_boxed_raw(self.slice.to_vec().into_boxed_slice())
+    }
+}
+
 impl<I, T> Ids<I, T> {
     fn from_raw(raw: &[T]) -> &Ids<I, T> {
         // Safe because of #[repr(transparent)].

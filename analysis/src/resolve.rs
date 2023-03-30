@@ -8,7 +8,7 @@ use crate::{
 };
 use aiahr_core::{
     cst::{
-        self, Annotation, Constraint, EffectOp, Field, IdField, Module, ProductRow, Qualifiers,
+        self, Annotation, Constraint, CstModule, EffectOp, Field, IdField, ProductRow, Qualifiers,
         Quantifier, Row, RowAtom, Scheme, SchemeAnnotation, Separated, SumRow, Type,
         TypeAnnotation, TypeRow,
     },
@@ -925,7 +925,7 @@ pub struct ModuleResolution<'a> {
 /// Resolves the given module.
 pub fn resolve_module<'a, 'b: 'a, E>(
     arena: &'a Bump,
-    module: Module<'b>,
+    module: CstModule<'b>,
     base: BaseNames<'_, 'a>,
     errors: &mut E,
 ) -> ModuleResolution<'a>

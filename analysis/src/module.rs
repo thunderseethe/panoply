@@ -147,7 +147,7 @@ impl ModuleNamesBuilder {
 }
 
 /// A leaf module in the module tree. Holds top-level names.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleNames {
     pub(crate) effects: Box<Ids<EffectId, (SpanOf<Ident>, EffectNames)>>,
     items: Box<Ids<ItemId, SpanOf<Ident>>>,
