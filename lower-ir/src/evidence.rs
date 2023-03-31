@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use aiahr_core::ir::IrVar;
+use aiahr_core::ir::indexed::IrVar;
 use aiahr_core::ty::{
     row::{ClosedRow, Row},
     Evidence, InDb,
@@ -16,16 +16,16 @@ pub(crate) struct PartialEv {
 impl Copy for PartialEv where InDb: Copy {}
 
 #[derive(Default, Debug)]
-pub(crate) struct EvidenceMap<'ctx> {
+pub(crate) struct EvidenceMap {
     /// Unique list of parameters we've generated so far
-    params: Vec<IrVar<'ctx>>,
+    params: Vec<IrVar>,
     // Find evidence when we only have partial information about it.
     // Like when we encounter a Project or Inject node.
     partial_map: FxHashMap<PartialEv, usize>,
     complete_map: FxHashMap<Evidence, usize>,
 }
-impl<'ctx> EvidenceMap<'ctx> {
-    pub(crate) fn insert(&mut self, ev: Evidence, param: IrVar<'ctx>) {
+impl<'ctx> EvidenceMap {
+    pub(crate) fn insert(&mut self, ev: Evidence, param: IrVar) {
         let idx = self
             .params
             .iter()
@@ -58,15 +58,15 @@ impl<'ctx> EvidenceMap<'ctx> {
         self.complete_map.insert(ev, idx);
     }
 }
-impl<'ctx> Index<&Evidence> for EvidenceMap<'ctx> {
-    type Output = IrVar<'ctx>;
+impl<'ctx> Index<&Evidence> for EvidenceMap {
+    type Output = IrVar;
 
     fn index(&self, index: &Evidence) -> &Self::Output {
         &self.params[self.complete_map[index]]
     }
 }
-impl<'ctx> Index<&PartialEv> for EvidenceMap<'ctx> {
-    type Output = IrVar<'ctx>;
+impl<'ctx> Index<&PartialEv> for EvidenceMap {
+    type Output = IrVar;
 
     fn index(&self, index: &PartialEv) -> &Self::Output {
         &self.params[*self.partial_map.get(index).unwrap_or_else(|| {

@@ -1,18 +1,25 @@
-use aiahr_core::ty::{
-    row::{ClosedRow, Row},
-    AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
-};
 use aiahr_core::{
     ast::{Direction, RowTerm, RowTermView, Term},
     id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
-    ir::{Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, P},
+    ir::{
+        indexed::{IrTy, IrTyKind, IrTyKind::*, IrVar},
+        Ir, IrKind,
+        IrKind::*,
+        IrVarTy, Kind, P,
+    },
+};
+use aiahr_core::{
+    ir::indexed::MkIrTy,
+    ty::{
+        row::{ClosedRow, Row},
+        AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
+    },
 };
 use aiahr_tc::TyChkRes;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv, SolvedRowEv},
     id_converter::IdConverter,
-    ir_ctx::MkIrTy,
     IrEffectInfo,
 };
 
@@ -58,37 +65,58 @@ pub trait TermTys<'ctx> {
 pub(crate) struct Evidenceless;
 pub(crate) struct Evidentfull;
 
-pub(crate) struct LowerCtx<'a, 'b, 'ctx, Db, I, State = Evidenceless> {
+pub(crate) struct LowerCtx<'a, 'b, Db: ?Sized, State = Evidenceless> {
     db: &'a Db,
-    ctx: &'a I,
     module: ModuleId,
     var_conv: &'b mut IdConverter<VarId, IrVarId>,
     tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
-    ev_map: EvidenceMap<'ctx>,
-    evv_var: IrVar<'ctx>,
+    ev_map: EvidenceMap,
+    evv_var: IrVar,
     _marker: std::marker::PhantomData<State>,
 }
 
-impl<'a, 'ctx, Db, I, S> LowerCtx<'a, '_, 'ctx, Db, I, S>
+impl<'a, 'b, Db, S> MkIrTy for LowerCtx<'a, 'b, Db, S>
 where
-    Db: AccessTy<'a, InDb>,
-    I: MkIrTy<'ctx>,
+    Db: MkIrTy,
 {
-    fn lower_ty(&mut self, ty: Ty) -> IrTy<'ctx> {
+    fn mk_ir_ty(&self, kind: IrTyKind) -> IrTy {
+        self.db.mk_ir_ty(kind)
+    }
+
+    fn mk_prod_ty(&self, elems: &[IrTy]) -> IrTy {
+        self.db.mk_prod_ty(elems)
+    }
+
+    fn mk_coprod_ty(&self, elems: &[IrTy]) -> IrTy {
+        self.db.mk_coprod_ty(elems)
+    }
+}
+
+impl<'a, 'ctx, Db, S> LowerCtx<'a, '_, Db, S>
+where
+    Db: AccessTy<'a, InDb> + MkIrTy,
+{
+    fn lower_ty(&mut self, ty: Ty) -> IrTy {
         match self.db.kind(&ty) {
             TypeKind::RowTy(_) => panic!("This should not be allowed"),
             TypeKind::ErrorTy => unreachable!(),
-            TypeKind::IntTy => self.ctx.mk_ir_ty(IrTyKind::IntTy),
-            TypeKind::VarTy(var) => self.ctx.mk_ir_ty(IrTyKind::VarTy(IrVarTy {
-                var: self.tyvar_conv.convert(*var),
-                kind: Kind::Type,
-            })),
-            TypeKind::FunTy(arg, ret) => self
-                .ctx
-                .mk_ir_ty(IrTyKind::FunTy(self.lower_ty(*arg), self.lower_ty(*ret))),
+            TypeKind::IntTy => self.mk_ir_ty(IrTyKind::IntTy),
+            TypeKind::VarTy(var) => {
+                let var = self.tyvar_conv.convert(*var);
+                self.mk_ir_ty(IrTyKind::VarTy(IrVarTy {
+                    var,
+                    kind: Kind::Type,
+                }))
+            }
+            TypeKind::FunTy(arg, ret) => {
+                let arg = self.lower_ty(*arg);
+                let ret = self.lower_ty(*ret);
+                self.mk_ir_ty(IrTyKind::FunTy(arg, ret))
+            }
             TypeKind::SumTy(Row::Open(row_var)) | TypeKind::ProdTy(Row::Open(row_var)) => {
-                self.ctx.mk_ir_ty(IrTyKind::VarTy(IrVarTy {
-                    var: self.tyvar_conv.convert(*row_var),
+                let var = self.tyvar_conv.convert(*row_var);
+                self.mk_ir_ty(IrTyKind::VarTy(IrVarTy {
+                    var,
                     kind: Kind::Row,
                 }))
             }
@@ -99,7 +127,7 @@ where
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
-                self.ctx.mk_prod_ty(elems.as_slice())
+                self.mk_prod_ty(elems.as_slice())
             }
             TypeKind::SumTy(Row::Closed(row)) => {
                 let elems = self
@@ -108,12 +136,12 @@ where
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
-                self.ctx.mk_coprod_ty(elems.as_slice())
+                self.mk_coprod_ty(elems.as_slice())
             }
         }
     }
 
-    fn row_evidence_ir(&mut self, left: ClosedRow, right: ClosedRow, goal: ClosedRow) -> Ir<'ctx> {
+    fn row_evidence_ir(&mut self, left: ClosedRow, right: ClosedRow, goal: ClosedRow) -> Ir {
         let (left_prod, left_coprod) = self.row_ir_tys(&Row::Closed(left));
         let (right_prod, right_coprod) = self.row_ir_tys(&Row::Closed(right));
         let (goal_prod, goal_coprod) = self.row_ir_tys(&Row::Closed(goal));
@@ -195,15 +223,11 @@ where
 
         let left_branch_var = IrVar {
             var: left_var_id,
-            ty: self
-                .ctx
-                .mk_ir_ty(FunTy(left_coprod, self.ctx.mk_ir_ty(VarTy(branch_tyvar)))),
+            ty: self.mk_ir_ty(FunTy(left_coprod, self.mk_ir_ty(VarTy(branch_tyvar)))),
         };
         let right_branch_var = IrVar {
             var: right_var_id,
-            ty: self
-                .ctx
-                .mk_ir_ty(FunTy(right_coprod, self.ctx.mk_ir_ty(VarTy(branch_tyvar)))),
+            ty: self.mk_ir_ty(FunTy(right_coprod, self.mk_ir_ty(VarTy(branch_tyvar)))),
         };
         let goal_branch_var = IrVar {
             var: goal_var_id,
@@ -314,11 +338,12 @@ where
         ]))
     }
 
-    fn row_ir_tys(&mut self, row: &Row) -> (IrTy<'ctx>, IrTy<'ctx>) {
+    fn row_ir_tys(&mut self, row: &Row) -> (IrTy, IrTy) {
         match row {
             Row::Open(row_var) => {
-                let var = self.ctx.mk_ir_ty(VarTy(IrVarTy {
-                    var: self.tyvar_conv.convert(*row_var),
+                let var = self.tyvar_conv.convert(*row_var);
+                let var = self.mk_ir_ty(VarTy(IrVarTy {
+                    var,
                     kind: Kind::Row,
                 }));
                 (var, var)
@@ -331,14 +356,14 @@ where
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
                 (
-                    self.ctx.mk_prod_ty(elems.as_slice()),
-                    self.ctx.mk_coprod_ty(elems.as_slice()),
+                    self.mk_prod_ty(elems.as_slice()),
+                    self.mk_coprod_ty(elems.as_slice()),
                 )
             }
         }
     }
 
-    fn row_evidence_ir_ty(&mut self, ev: &Evidence) -> IrTy<'ctx> {
+    fn row_evidence_ir_ty(&mut self, ev: &Evidence) -> IrTy {
         match ev {
             Evidence::Row { left, right, goal } => {
                 let (left_prod, left_coprod) = self.row_ir_tys(left);
@@ -349,25 +374,25 @@ where
                     var: self.tyvar_conv.generate(),
                     kind: Kind::Type,
                 };
-                let branch_var_ty = self.ctx.mk_ir_ty(VarTy(branch_var));
+                let branch_var_ty = self.mk_ir_ty(VarTy(branch_var));
 
-                self.ctx.mk_prod_ty(&[
-                    self.ctx.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
-                    self.ctx.mk_ir_ty(ForallTy(
+                self.mk_prod_ty(&[
+                    self.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
+                    self.mk_ir_ty(ForallTy(
                         branch_var,
-                        self.ctx.mk_binary_fun_ty(
+                        self.mk_binary_fun_ty(
                             FunTy(left_coprod, branch_var_ty),
                             FunTy(right_coprod, branch_var_ty),
                             FunTy(goal_coprod, branch_var_ty),
                         ),
                     )),
-                    self.ctx.mk_prod_ty(&[
-                        self.ctx.mk_ir_ty(FunTy(goal_prod, left_prod)),
-                        self.ctx.mk_ir_ty(FunTy(left_coprod, goal_coprod)),
+                    self.mk_prod_ty(&[
+                        self.mk_ir_ty(FunTy(goal_prod, left_prod)),
+                        self.mk_ir_ty(FunTy(left_coprod, goal_coprod)),
                     ]),
-                    self.ctx.mk_prod_ty(&[
-                        self.ctx.mk_ir_ty(FunTy(goal_prod, right_prod)),
-                        self.ctx.mk_ir_ty(FunTy(right_coprod, goal_coprod)),
+                    self.mk_prod_ty(&[
+                        self.mk_ir_ty(FunTy(goal_prod, right_prod)),
+                        self.mk_ir_ty(FunTy(right_coprod, goal_coprod)),
                     ]),
                 ])
             }
@@ -375,15 +400,13 @@ where
     }
 }
 
-impl<'a, 'b, 'ctx, Db, I> LowerCtx<'a, 'b, 'ctx, Db, I, Evidenceless>
+impl<'a, 'b, 'ctx, Db> LowerCtx<'a, 'b, Db, Evidenceless>
 where
     Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx> + MkTy<InDb>,
-    Db: AccessTy<'a, InDb>,
-    I: MkIrTy<'ctx>,
+    Db: AccessTy<'a, InDb> + MkIrTy,
 {
     pub(crate) fn new(
         db: &'a Db,
-        ctx: &'a I,
         var_conv: &'b mut IdConverter<VarId, IrVarId>,
         tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
         module: ModuleId,
@@ -391,14 +414,13 @@ where
         let evv_id = var_conv.generate();
         Self {
             db,
-            ctx,
             module,
             var_conv,
             tyvar_conv,
             ev_map: EvidenceMap::default(),
             evv_var: IrVar {
                 var: evv_id,
-                ty: ctx.mk_ir_ty(EvidenceVectorTy),
+                ty: db.mk_ir_ty(EvidenceVectorTy),
             },
             _marker: std::marker::PhantomData,
         }
@@ -479,9 +501,9 @@ where
         term_evs: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
         scheme_constrs: impl IntoIterator<Item = &'ev Evidence>,
     ) -> (
-        LowerCtx<'a, 'b, 'ctx, Db, I, Evidentfull>,
-        Vec<(IrVar<'ctx>, Ir<'ctx>)>,
-        Vec<IrVar<'ctx>>,
+        LowerCtx<'a, 'b, Db, Evidentfull>,
+        Vec<(IrVar, Ir)>,
+        Vec<IrVar>,
     )
     where
         'ctx: 'ev,
@@ -511,7 +533,7 @@ where
         (LowerCtx::with_evidenceless(self), locals, params)
     }
 
-    fn lower_evidence(&mut self, ev: &Evidence) -> IrVar<'ctx> {
+    fn lower_evidence(&mut self, ev: &Evidence) -> IrVar {
         let ev_term = self.var_conv.generate();
         let row_ev_ty = self.row_evidence_ir_ty(ev);
         IrVar {
@@ -521,16 +543,14 @@ where
     }
 }
 
-impl<'a, 'b, 'ctx, Db, I> LowerCtx<'a, 'b, 'ctx, Db, I, Evidentfull>
+impl<'a, 'b, 'ctx, Db> LowerCtx<'a, 'b, Db, Evidentfull>
 where
     Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
-    Db: AccessTy<'a, InDb>,
-    I: MkIrTy<'ctx>,
+    Db: AccessTy<'a, InDb> + MkIrTy,
 {
-    fn with_evidenceless(prior: LowerCtx<'a, 'b, 'ctx, Db, I, Evidenceless>) -> Self {
+    fn with_evidenceless(prior: LowerCtx<'a, 'b, Db, Evidenceless>) -> Self {
         Self {
             db: prior.db,
-            ctx: prior.ctx,
             module: prior.module,
             var_conv: prior.var_conv,
             tyvar_conv: prior.tyvar_conv,
@@ -540,7 +560,7 @@ where
         }
     }
 
-    pub(crate) fn lower_term(&mut self, term: &'ctx Term<'ctx, VarId>) -> Ir<'ctx> {
+    pub(crate) fn lower_term(&mut self, term: &'ctx Term<'ctx, VarId>) -> Ir {
         use Term::*;
         match term {
             Unit => Ir::new(Struct(vec![])),
@@ -661,7 +681,7 @@ where
                     // that when we look up the effet row here the effect we're yielding too should
                     // hold the innermost return type and we can make use of it to know how to type
                     // our continuation.
-                    ty: self.ctx.mk_ir_ty(IntTy),
+                    ty: self.mk_ir_ty(IntTy),
                 };
 
                 let handler_index = self.db.effect_handler_op_index(*mod_id, *eff_id, *op);
@@ -689,7 +709,7 @@ where
             Handle { handler, body } => {
                 let prompt_var = IrVar {
                     var: self.var_conv.generate(),
-                    ty: self.ctx.mk_ir_ty(IntTy),
+                    ty: self.mk_ir_ty(IntTy),
                 };
                 let handler_infer = self.db.lookup_term(handler);
                 let eff_name = match handler_infer.eff {

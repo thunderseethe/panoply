@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use aiahr_core::id::IrVarId;
-use aiahr_core::ir::{Ir, IrKind, IrVar, P};
+use aiahr_core::ir::{indexed::IrVar, Ir, IrKind, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -9,31 +9,31 @@ use rustc_hash::{FxHashMap, FxHashSet};
 struct Prompt(usize);
 
 /// A mapping from variables to values
-type Env<'ctx> = FxHashMap<IrVarId, Value<'ctx>>;
+type Env = FxHashMap<IrVarId, Value>;
 
 /// An interpreter value.
 /// This will be the result of interpretation and all intermediate computations
 #[derive(Debug, Clone, PartialEq)]
-enum Value<'ctx> {
+enum Value {
     Int(usize),
     /// A lambda (or closure). Stores any captured variables in env.
     Lam {
-        env: FxHashMap<IrVarId, Value<'ctx>>,
-        arg: IrVar<'ctx>,
-        body: P<Ir<'ctx>>,
+        env: FxHashMap<IrVarId, Value>,
+        arg: IrVar,
+        body: P<Ir>,
     },
     /// A tuple of values
-    Tuple(Vec<Value<'ctx>>),
+    Tuple(Vec<Value>),
     /// A tagged value, this is used as the discriminant of case
-    Tag(usize, Box<Value<'ctx>>),
+    Tag(usize, Box<Value>),
     /// A prompt that can be used to delimit the stack
     Prompt(Prompt),
     /// A continuation is a slice of the stack reified as a value
-    Cont(Stack<'ctx>),
-    Vector(im::Vector<Value<'ctx>>),
+    Cont(Stack),
+    Vector(im::Vector<Value>),
 }
 
-impl<'ctx> Value<'ctx> {
+impl Value {
     fn unwrap_prompt(self) -> Prompt {
         match self {
             Value::Prompt(prompt) => prompt,
@@ -41,7 +41,7 @@ impl<'ctx> Value<'ctx> {
         }
     }
 
-    fn unwrap_vector(self) -> im::Vector<Value<'ctx>> {
+    fn unwrap_vector(self) -> im::Vector<Value> {
         match self {
             Value::Vector(evv) => evv,
             _ => panic!("Stuck: expected vector value but received {:?}", self),
@@ -52,57 +52,35 @@ impl<'ctx> Value<'ctx> {
 /// An evaluation context
 /// These store in process computation, and are pushed onto the stack as we interpret.
 #[derive(Debug, Clone, PartialEq)]
-enum EvalCtx<'ctx> {
-    FnApp {
-        arg: Value<'ctx>,
-    },
-    ArgApp {
-        func: P<Ir<'ctx>>,
-    },
-    PromptMarker {
-        body: P<Ir<'ctx>>,
-    },
-    YieldMarker {
-        value: P<Ir<'ctx>>,
-    },
-    YieldValue {
-        marker: Value<'ctx>,
-    },
-    StructEval {
-        vals: Vec<Value<'ctx>>,
-        rest: Vec<P<Ir<'ctx>>>,
-    },
-    Index {
-        index: usize,
-    },
-    Tag {
-        tag: usize,
-    },
-    CaseScrutinee {
-        branches: Vec<P<Ir<'ctx>>>,
-    },
-    VectorSet {
-        evv: IrVar<'ctx>,
-        index: usize,
-    },
+enum EvalCtx {
+    FnApp { arg: Value },
+    ArgApp { func: P<Ir> },
+    PromptMarker { body: P<Ir> },
+    YieldMarker { value: P<Ir> },
+    YieldValue { marker: Value },
+    StructEval { vals: Vec<Value>, rest: Vec<P<Ir>> },
+    Index { index: usize },
+    Tag { tag: usize },
+    CaseScrutinee { branches: Vec<P<Ir>> },
+    VectorSet { evv: IrVar, index: usize },
 }
 
 /// A stack frame is either a prompt or a list of evaluation contexts.
 #[derive(Debug, Clone, PartialEq)]
-enum StackFrame<'ctx> {
+enum StackFrame {
     Prompt(Prompt),
-    Eval(Env<'ctx>, Vec<EvalCtx<'ctx>>),
+    Eval(Env, Vec<EvalCtx>),
 }
 
 /// A stack is a sequence of stack frames
-type Stack<'ctx> = Vec<StackFrame<'ctx>>;
+type Stack = Vec<StackFrame>;
 trait StackExt
 where
     Self: Sized,
 {
     fn split_off_prompt(&mut self, prompt: Prompt) -> Self;
 }
-impl<'ctx> StackExt for Stack<'ctx> {
+impl<'ctx> StackExt for Stack {
     fn split_off_prompt(&mut self, prompt: Prompt) -> Self {
         // rposition so we find the innermost instance of a prompt
         let idx = self
@@ -118,20 +96,20 @@ impl<'ctx> StackExt for Stack<'ctx> {
 
 /// Virtual Machine that interprets the
 #[derive(Default)]
-struct Machine<'ctx> {
-    stack: Stack<'ctx>,
+struct Machine {
+    stack: Stack,
     prompt: usize,
-    cur_frame: Vec<EvalCtx<'ctx>>,
-    cur_env: Env<'ctx>,
+    cur_frame: Vec<EvalCtx>,
+    cur_env: Env,
 }
 
-enum InterpretResult<'ctx> {
-    Step(P<Ir<'ctx>>),
-    Done(Value<'ctx>),
+enum InterpretResult {
+    Step(P<Ir>),
+    Done(Value),
 }
 
-impl<'ctx> Machine<'ctx> {
-    fn pop_stack(&mut self, val: Value<'ctx>) -> InterpretResult<'ctx> {
+impl Machine {
+    fn pop_stack(&mut self, val: Value) -> InterpretResult {
         match self.stack.pop() {
             // If we found a new stack frame move it into current and unwind into it
             Some(StackFrame::Eval(env, frame)) => {
@@ -146,7 +124,7 @@ impl<'ctx> Machine<'ctx> {
         }
     }
 
-    fn unwind(&mut self, val: Value<'ctx>) -> InterpretResult<'ctx> {
+    fn unwind(&mut self, val: Value) -> InterpretResult {
         match self.cur_frame.pop() {
             None => self.pop_stack(val),
             Some(eval_ctx) => match eval_ctx {
@@ -243,7 +221,7 @@ impl<'ctx> Machine<'ctx> {
         }
     }
 
-    fn lookup_var(&self, v: IrVar) -> Value<'ctx> {
+    fn lookup_var(&self, v: IrVar) -> Value {
         self.cur_env
             .get(&v.var)
             .or_else(|| {
@@ -257,7 +235,7 @@ impl<'ctx> Machine<'ctx> {
             .clone()
     }
 
-    fn step(&mut self, ir: Ir<'ctx>) -> InterpretResult<'ctx> {
+    fn step(&mut self, ir: Ir) -> InterpretResult {
         match ir.kind {
             // Literals
             IrKind::Int(i) => self.unwind(Value::Int(i)),
@@ -342,7 +320,7 @@ impl<'ctx> Machine<'ctx> {
     }
 
     /// Interpret an IR term until it is a value, or diverge.
-    pub fn interpret(&mut self, top: Ir<'ctx>) -> Value<'ctx> {
+    pub fn interpret(&mut self, top: Ir) -> Value {
         let mut ir = top;
         loop {
             match self.step(ir) {
@@ -355,16 +333,30 @@ impl<'ctx> Machine<'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::ir::{IrTy, IrTyKind};
-    use aiahr_core::memory::handle::Handle;
+    use aiahr_core::ir::indexed::{IrTyKind, MkIrTy};
 
     use super::*;
 
+    #[derive(Default)]
+    #[salsa::db(
+        aiahr_analysis::Jar,
+        aiahr_core::Jar,
+        aiahr_desugar::Jar,
+        aiahr_lower_ir::Jar,
+        aiahr_parser::Jar,
+        aiahr_tc::Jar
+    )]
+    struct TestDatabase {
+        storage: salsa::Storage<Self>,
+    }
+    impl salsa::Database for TestDatabase {}
+
     #[test]
     fn interpret_id_fun() {
+        let db = TestDatabase::default();
         let x = IrVar {
             var: IrVarId(0),
-            ty: IrTy(Handle(&IrTyKind::IntTy)),
+            ty: db.mk_ir_ty(IrTyKind::IntTy),
         };
         let ir = Ir::app(Ir::abss([x], Ir::var(x)), [Ir::new(IrKind::Int(1))]);
         let mut interpreter = Machine::default();
@@ -373,13 +365,14 @@ mod tests {
 
     #[test]
     fn interpret_lamba_captures_env_as_expected() {
+        let db = TestDatabase::default();
         let x = IrVar {
             var: IrVarId(0),
-            ty: IrTy(Handle(&IrTyKind::IntTy)),
+            ty: db.mk_ir_ty(IrTyKind::IntTy),
         };
         let y = IrVar {
             var: IrVarId(1),
-            ty: IrTy(Handle(&IrTyKind::IntTy)),
+            ty: db.mk_ir_ty(IrTyKind::IntTy),
         };
         let ir = Ir::app(
             Ir::abss([x, y], Ir::var(x)),

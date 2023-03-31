@@ -4,8 +4,15 @@ version = "0.1.0"
 edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dev-dependencies]
+aiahr-analysis.workspace = true
+aiahr-parser.workspace = true
+aiahr-desugar.workspace = true
+aiahr-tc.workspace = true
+aiahr-lower-ir.workspace = true
 
 [dependencies]
 aiahr-core.workspace = true
-rustc-hash.workspace = true
 im.workspace = true
+rustc-hash.workspace = true
+salsa.workspace = true

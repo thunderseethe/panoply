@@ -1,20 +1,18 @@
 use aiahr_core::id::{EffectId, EffectOpId};
 use aiahr_core::ident::Ident;
+use aiahr_core::ir::indexed::{IrTy, MkIrTy};
+use aiahr_core::ir::{Ir, IrKind::*, IrVarTy, Kind, P};
 use aiahr_core::ty::TyScheme;
 use aiahr_core::Top;
 use aiahr_core::{
     ast::{Ast, Term},
     id::{IrTyVarId, ItemId, ModuleId, VarId},
-    ir::{IrKind::*, IrTyKind::*, *},
-    memory::handle::{Handle, RefHandle},
+    memory::handle::RefHandle,
     ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
 };
 use aiahr_tc::EffectInfo;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use rustc_hash::FxHashMap;
-
-mod ir_ctx;
-use ir_ctx::MkIrTy;
 
 pub(crate) mod id_converter;
 use id_converter::IdConverter;
@@ -35,7 +33,7 @@ pub trait IrEffectInfo<'ctx>: EffectInfo<'ctx> {
     ) -> usize;
     fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
 
-    fn effect_handler_ir_ty(&self, mod_id: ModuleId, eff_id: EffectId) -> IrTy<'ctx>;
+    fn effect_handler_ir_ty(&self, mod_id: ModuleId, eff_id: EffectId) -> IrTy;
 }
 
 #[salsa::jar(db = Db)]
@@ -107,29 +105,27 @@ impl<'db> IrEffectInfo<'db> for &'db dyn crate::Db {
         )
     }
 
-    fn effect_handler_ir_ty(&self, _mod_id: ModuleId, _eff_id: EffectId) -> IrTy<'db> {
+    fn effect_handler_ir_ty(&self, _mod_id: ModuleId, _eff_id: EffectId) -> IrTy {
         todo!()
     }
 }
 
 /// Lower an `Ast` into an `Ir`.
 /// TODO: Real documentation.
-pub fn lower<'a, 'ctx, Db, I>(
+pub fn lower<'a, 'ctx, Db>(
     db: &'a Db,
-    ctx: &'a I,
     module: ModuleId,
     scheme: &TyScheme,
     ast: &Ast<'ctx, VarId>,
-) -> Ir<'ctx>
+) -> Ir
 where
     Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx> + MkTy<InDb> + 'a,
-    Db: AccessTy<'a, InDb>,
-    I: MkIrTy<'ctx>,
+    Db: AccessTy<'a, InDb> + MkIrTy,
 {
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
     let (mut lower_ctx, ev_locals, ev_params) =
-        LowerCtx::new(db, ctx, &mut var_conv, &mut tyvar_conv, module)
+        LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, module)
             .collect_evidence_params(ast.root().row_ev_terms(), scheme.constrs.iter());
 
     let body = lower_ctx.lower_term(ast.root());
@@ -161,14 +157,8 @@ pub mod test_utils {
 
     use super::*;
 
-    macro_rules! ir_ty {
-        ($ty:expr) => {{
-            IrTy(Handle(&$ty))
-        }};
-    }
-
     pub struct LowerDb<'a, 'ctx> {
-        db: &'a dyn aiahr_tc::Db,
+        pub db: &'a dyn crate::Db,
         var_tys: FxHashMap<VarId, Ty>,
         term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
         eff_info: DummyEff<'a>,
@@ -176,7 +166,7 @@ pub mod test_utils {
 
     impl<'a, 'ctx> LowerDb<'a, 'ctx> {
         pub fn new(
-            db: &'a dyn aiahr_tc::Db,
+            db: &'a dyn crate::Db,
             var_tys: FxHashMap<VarId, Ty>,
             term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
         ) -> Self {
@@ -281,7 +271,8 @@ pub mod test_utils {
             }
         }
 
-        fn effect_handler_ir_ty(&self, _mod_id: ModuleId, eff_id: EffectId) -> IrTy<'ctx> {
+        fn effect_handler_ir_ty(&self, _mod_id: ModuleId, eff_id: EffectId) -> IrTy {
+            use aiahr_core::ir::indexed::IrTyKind::*;
             // Find a better solution for this
             // Guessing a big enough irvartyid that we won't hit it in tests is flaky.
             static R: IrVarTy = IrVarTy {
@@ -292,36 +283,46 @@ pub mod test_utils {
                 var: IrTyVarId(1025),
                 kind: Kind::Type,
             };
-            static RET_TY: IrTy<'static> = ir_ty!(VarTy(R));
-            static UNIT_TY: IrTy<'static> = ir_ty!(ProductTy(Handle(&[])));
-            static INT_TY: IrTy<'static> = ir_ty!(IntTy);
-            static UNIT_KONT_TY: IrTy<'static> = ir_ty!(FunTy(UNIT_TY, RET_TY));
-            static INT_KONT_TY: IrTy<'static> = ir_ty!(FunTy(INT_TY, RET_TY));
+            let ret_ty: IrTy = self.db.mk_ir_ty(VarTy(R));
+            let unit_ty: IrTy = self.db.mk_prod_ty(&[]);
+            let int_ty: IrTy = self.db.mk_ir_ty(IntTy);
+            let unit_kont_ty: IrTy = self.db.mk_ir_ty(FunTy(unit_ty, ret_ty));
+            let int_kont_ty: IrTy = self.db.mk_ir_ty(FunTy(int_ty, ret_ty));
 
-            static RETURN_TY: IrTy<'static> = ir_ty!(ForallTy(
+            let return_ty: IrTy = self.db.mk_ir_ty(ForallTy(
                 A,
-                ir_ty!(FunTy(ir_ty!(VarTy(A)), ir_ty!(VarTy(R))))
+                self.db.mk_ir_ty(FunTy(
+                    self.db.mk_ir_ty(VarTy(A)),
+                    self.db.mk_ir_ty(VarTy(R)),
+                )),
             ));
-            static STATE_HANDLER_TY: IrTy<'static> = ir_ty!(ForallTy(
+            let state_handler_ty: IrTy = self.db.mk_ir_ty(ForallTy(
                 R,
-                ir_ty!(ProductTy(Handle(&[
-                    ir_ty!(FunTy(UNIT_TY, ir_ty!(FunTy(UNIT_KONT_TY, RET_TY)))),
-                    ir_ty!(FunTy(INT_TY, ir_ty!(FunTy(INT_KONT_TY, RET_TY)))),
-                    RETURN_TY
-                ])))
+                self.db.mk_prod_ty(&[
+                    self.db.mk_ir_ty(FunTy(
+                        unit_ty,
+                        self.db.mk_ir_ty(FunTy(unit_kont_ty, ret_ty)),
+                    )),
+                    self.db
+                        .mk_ir_ty(FunTy(int_ty, self.db.mk_ir_ty(FunTy(int_kont_ty, ret_ty)))),
+                    return_ty,
+                ]),
             ));
 
-            static READER_HANDLER_TY: IrTy<'static> = ir_ty!(ForallTy(
+            let reader_handler_ty: IrTy = self.db.mk_ir_ty(ForallTy(
                 R,
-                ir_ty!(ProductTy(Handle(&[
-                    ir_ty!(FunTy(UNIT_TY, ir_ty!(FunTy(UNIT_KONT_TY, RET_TY)))),
-                    RETURN_TY
-                ])))
+                self.db.mk_prod_ty(&[
+                    self.db.mk_ir_ty(FunTy(
+                        unit_ty,
+                        self.db.mk_ir_ty(FunTy(unit_kont_ty, ret_ty)),
+                    )),
+                    return_ty,
+                ]),
             ));
 
             match eff_id {
-                DummyEff::STATE_ID => STATE_HANDLER_TY,
-                DummyEff::READER_ID => READER_HANDLER_TY,
+                DummyEff::STATE_ID => state_handler_ty,
+                DummyEff::READER_ID => reader_handler_ty,
                 _ => unimplemented!(),
             }
         }
@@ -329,28 +330,41 @@ pub mod test_utils {
 
     impl<'a> AccessTy<'a, InDb> for LowerDb<'a, '_> {
         fn kind(&self, ty: &Ty<InDb>) -> &'a TypeKind<InDb> {
-            self.db.kind(ty)
+            self.db.as_tc_db().kind(ty)
         }
 
         fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'a [Ident] {
-            self.db.row_fields(row)
+            self.db.as_tc_db().row_fields(row)
         }
 
         fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'a [Ty<InDb>] {
-            self.db.row_values(row)
+            self.db.as_tc_db().row_values(row)
         }
     }
     impl<'a> AccessTy<'a, InDb> for &LowerDb<'a, '_> {
         fn kind(&self, ty: &Ty<InDb>) -> &'a TypeKind<InDb> {
-            self.db.kind(ty)
+            self.db.as_tc_db().kind(ty)
         }
 
         fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'a [Ident] {
-            self.db.row_fields(row)
+            self.db.as_tc_db().row_fields(row)
         }
 
         fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'a [Ty<InDb>] {
-            self.db.row_values(row)
+            self.db.as_tc_db().row_values(row)
+        }
+    }
+    impl MkIrTy for LowerDb<'_, '_> {
+        fn mk_ir_ty(&self, kind: aiahr_core::ir::indexed::IrTyKind) -> IrTy {
+            self.db.mk_ir_ty(kind)
+        }
+
+        fn mk_prod_ty(&self, elems: &[IrTy]) -> IrTy {
+            self.db.mk_prod_ty(elems)
+        }
+
+        fn mk_coprod_ty(&self, elems: &[IrTy]) -> IrTy {
+            self.db.mk_coprod_ty(elems)
         }
     }
 
@@ -373,14 +387,18 @@ pub mod test_utils {
 mod tests {
     use std::ops::Deref;
 
-    use crate::ir_ctx::IrCtx;
+    use crate::lower;
 
-    use super::{test_utils::LowerDb, *};
+    use super::test_utils::LowerDb;
     use aiahr_analysis::names::Names;
     use aiahr_analysis::resolve::resolve_term;
     use aiahr_analysis::top_level::BaseBuilder;
-    use aiahr_core::ast::Direction;
+    use aiahr_core::ast::{Ast, Direction, Term};
+    use aiahr_core::id::{ModuleId, VarId};
+    use aiahr_core::ir::indexed::IrTyKind::*;
+    use aiahr_core::ir::IrKind::{self, *};
     use aiahr_core::modules::ModuleTree;
+    use aiahr_core::ty::TyScheme;
     use aiahr_core::Db;
     use aiahr_tc::test_utils::DummyEff;
     use aiahr_test::ast::*;
@@ -388,12 +406,14 @@ mod tests {
     use assert_matches::assert_matches;
     use bumpalo::Bump;
     use ir_matcher::ir_matcher;
+    use rustc_hash::FxHashMap;
 
     const MODNAME: &str = "test_module";
     const MOD: ModuleId = ModuleId(0);
 
     #[derive(Default)]
     #[salsa::db(
+        crate::Jar,
         aiahr_core::Jar,
         aiahr_tc::Jar,
         aiahr_desugar::Jar,
@@ -452,11 +472,10 @@ mod tests {
         let db = TestDatabase::default();
         let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|x| x");
 
-        let ir_ctx = IrCtx::new(&arena);
-        let ir = lower(&db, &ir_ctx, MOD, &scheme, &ast);
+        let ir = lower(&db, MOD, &scheme, &ast);
 
         ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(var))) => {
-            assert_eq!(var.ty.0.0, &VarTy(*ty_var));
+            assert_eq!(var.ty.kind(db.db.as_core_db()), VarTy(*ty_var));
         })
     }
 
@@ -466,8 +485,7 @@ mod tests {
         let db = TestDatabase::default();
         let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|a| { x = a, y = a }");
 
-        let ir_ctx = IrCtx::new(&arena);
-        let ir = lower(&db, &ir_ctx, MOD, &scheme, &ast);
+        let ir = lower(&db, MOD, &scheme, &ast);
         ir_matcher!(ir,
             TyAbs([_ty_var],
                   App([
@@ -485,7 +503,6 @@ mod tests {
     fn lower_wand() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let ir_ctx = IrCtx::new(&arena);
         let m = VarId(0);
         let n = VarId(1);
         let ast = AstBuilder::with_builder(&db, &arena, |builder| {
@@ -503,13 +520,7 @@ mod tests {
         let (var_tys, term_ress, scheme, _) =
             aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), MOD, &ast);
 
-        let ir = lower(
-            &LowerDb::new(&db, var_tys, term_ress),
-            &ir_ctx,
-            MOD,
-            &scheme,
-            &ast,
-        );
+        let ir = lower(&LowerDb::new(&db, var_tys, term_ress), MOD, &scheme, &ast);
 
         ir_matcher!(
             ir,

@@ -1,16 +1,14 @@
 use crate::id::{IrTyVarId, IrVarId};
 use crate::memory::handle::RefHandle;
+use rustc_hash::FxHashSet;
 use std::fmt;
 use std::ops::Deref;
 
 pub mod indexed {
     use bumpalo::Bump;
-    use la_arena::{Arena, Idx};
 
     use crate::indexed::{IndexedAllocate, ReferenceAllocate};
     use crate::memory::handle::Handle;
-
-    use super::P;
 
     #[derive(PartialEq, Eq, Clone, Hash, Debug)]
     pub enum IrTyKind {
@@ -36,37 +34,57 @@ pub mod indexed {
         pub ty: IrTy,
     }
 
-    #[derive(Debug, PartialEq, Eq, Clone)]
-    pub enum Ir {
-        Int(usize),
-        Var(IrVar),
-        // Value abstraction and application
-        Abs(IrVar, Idx<Self>),
-        App(Idx<Self>, Idx<Self>),
-        // Type abstraction and application
-        TyAbs(super::IrVarTy, Idx<Self>),
-        TyApp(Idx<Self>, IrTy),
-        // Trivial products
-        Struct(Vec<Idx<Self>>),      // Intro
-        FieldProj(usize, Idx<Self>), // Elim
-        // Trivial coproducts
-        Tag(usize, Idx<Self>),           // Intro
-        Case(Idx<Self>, Vec<Idx<Self>>), // Elim
-        // Delimited control
-        // Generate a new prompt marker
-        NewPrompt(IrVar, Idx<Self>),
-        // Install a prompt for a marker
-        Prompt(Idx<Self>, Idx<Self>),
-        // Yield to a marker's prompt
-        Yield(Idx<Self>, Idx<Self>),
-        // Set index in an effect vector to value.
-        VectorSet(IrVar, usize, Idx<Self>),
-        VectorGet(IrVar, usize),
+    pub trait MkIrTy {
+        fn mk_ir_ty(&self, kind: IrTyKind) -> IrTy;
+        fn mk_prod_ty(&self, elems: &[IrTy]) -> IrTy;
+        fn mk_coprod_ty(&self, elems: &[IrTy]) -> IrTy;
+
+        fn mk_binary_fun_ty<F, S, R>(&self, fst_arg: F, snd_arg: S, ret: R) -> IrTy
+        where
+            F: IntoIrTy,
+            S: IntoIrTy,
+            R: IntoIrTy,
+        {
+            use IrTyKind::*;
+            self.mk_ir_ty(FunTy(
+                fst_arg.into_ir_ty(self),
+                self.mk_ir_ty(FunTy(snd_arg.into_ir_ty(self), ret.into_ir_ty(self))),
+            ))
+        }
+    }
+    pub trait IntoIrTy {
+        fn into_ir_ty<I: ?Sized + MkIrTy>(self, ctx: &I) -> IrTy;
+    }
+    impl IntoIrTy for IrTy {
+        fn into_ir_ty<I: ?Sized + MkIrTy>(self, _ctx: &I) -> IrTy {
+            self
+        }
+    }
+    impl IntoIrTy for IrTyKind {
+        fn into_ir_ty<I: ?Sized + MkIrTy>(self, ctx: &I) -> IrTy {
+            ctx.mk_ir_ty(self)
+        }
+    }
+
+    impl<DB> MkIrTy for DB
+    where
+        DB: ?Sized + crate::Db,
+    {
+        fn mk_ir_ty(&self, kind: IrTyKind) -> IrTy {
+            IrTy::new(self.as_core_db(), kind)
+        }
+
+        fn mk_prod_ty(&self, elems: &[IrTy]) -> IrTy {
+            self.mk_ir_ty(IrTyKind::ProductTy(elems.to_owned()))
+        }
+
+        fn mk_coprod_ty(&self, elems: &[IrTy]) -> IrTy {
+            self.mk_ir_ty(IrTyKind::CoproductTy(elems.to_owned()))
+        }
     }
 
     struct IrIndexAlloc<'a> {
         db: &'a dyn crate::Db,
-        ir: Arena<Ir>,
     }
     struct IrRefAlloc<'a, 'ctx> {
         arena: &'ctx Bump,
@@ -162,100 +180,6 @@ pub mod indexed {
             }
         }
     }
-
-    impl<'db, 'ctx> IndexedAllocate<IrIndexAlloc<'db>> for super::Ir<'ctx> {
-        type Out = Idx<Ir>;
-
-        fn alloc(&self, alloc: &mut IrIndexAlloc<'db>) -> Self::Out {
-            let kind = match self.kind() {
-                super::IrKind::Int(i) => Ir::Int(*i),
-                super::IrKind::Var(var) => Ir::Var(var.alloc(alloc)),
-                super::IrKind::Abs(var, body) => Ir::Abs(var.alloc(alloc), body.alloc(alloc)),
-                super::IrKind::App(func, arg) => Ir::App(func.alloc(alloc), arg.alloc(alloc)),
-                super::IrKind::TyAbs(ty_var, ty) => Ir::TyAbs(*ty_var, ty.alloc(alloc)),
-                super::IrKind::TyApp(forall, ty) => Ir::TyApp(forall.alloc(alloc), ty.alloc(alloc)),
-                super::IrKind::Struct(elems) => {
-                    Ir::Struct(elems.into_iter().map(|elem| elem.alloc(alloc)).collect())
-                }
-                super::IrKind::FieldProj(index, target) => {
-                    Ir::FieldProj(*index, target.alloc(alloc))
-                }
-                super::IrKind::Tag(tag, value) => Ir::Tag(*tag, value.alloc(alloc)),
-                super::IrKind::Case(discri, branches) => Ir::Case(
-                    discri.alloc(alloc),
-                    branches
-                        .into_iter()
-                        .map(|branch| branch.alloc(alloc))
-                        .collect(),
-                ),
-                super::IrKind::NewPrompt(prompt_var, body) => {
-                    Ir::NewPrompt(prompt_var.alloc(alloc), body.alloc(alloc))
-                }
-                super::IrKind::Prompt(marker, body) => {
-                    Ir::Prompt(marker.alloc(alloc), body.alloc(alloc))
-                }
-                super::IrKind::Yield(marker, value) => {
-                    Ir::Yield(marker.alloc(alloc), value.alloc(alloc))
-                }
-                super::IrKind::VectorSet(vec_var, index, value) => {
-                    Ir::VectorSet(vec_var.alloc(alloc), *index, value.alloc(alloc))
-                }
-                super::IrKind::VectorGet(vec_var, index) => {
-                    Ir::VectorGet(vec_var.alloc(alloc), *index)
-                }
-            };
-            alloc.ir.alloc(kind)
-        }
-    }
-    impl<'db, 'ctx> ReferenceAllocate<'ctx, IrRefAlloc<'db, 'ctx>> for Idx<Ir> {
-        type Out = P<super::Ir<'ctx>>;
-
-        fn ref_alloc(&self, alloc: &mut IrRefAlloc<'db, 'ctx>) -> Self::Out {
-            let kind = match &alloc.indx.ir[*self] {
-                Ir::Int(i) => super::IrKind::Int(*i),
-                Ir::Var(var) => super::IrKind::Var(var.ref_alloc(alloc)),
-                Ir::Abs(var, body) => {
-                    super::IrKind::Abs(var.ref_alloc(alloc), body.ref_alloc(alloc))
-                }
-                Ir::App(func, arg) => {
-                    super::IrKind::App(func.ref_alloc(alloc), arg.ref_alloc(alloc))
-                }
-                Ir::TyAbs(ty_var, ty) => super::IrKind::TyAbs(*ty_var, ty.ref_alloc(alloc)),
-                Ir::TyApp(forall, ty) => {
-                    super::IrKind::TyApp(forall.ref_alloc(alloc), ty.ref_alloc(alloc))
-                }
-                Ir::Struct(elems) => {
-                    super::IrKind::Struct(elems.iter().map(|elem| elem.ref_alloc(alloc)).collect())
-                }
-                Ir::FieldProj(index, prod) => {
-                    super::IrKind::FieldProj(*index, prod.ref_alloc(alloc))
-                }
-                Ir::Tag(tag, value) => super::IrKind::Tag(*tag, value.ref_alloc(alloc)),
-                Ir::Case(discri, branches) => super::IrKind::Case(
-                    discri.ref_alloc(alloc),
-                    branches.iter().map(|elem| elem.ref_alloc(alloc)).collect(),
-                ),
-                Ir::NewPrompt(prompt_var, body) => {
-                    super::IrKind::NewPrompt(prompt_var.ref_alloc(alloc), body.ref_alloc(alloc))
-                }
-                Ir::Prompt(marker, body) => {
-                    super::IrKind::Prompt(marker.ref_alloc(alloc), body.ref_alloc(alloc))
-                }
-                Ir::Yield(marker, value) => {
-                    super::IrKind::Yield(marker.ref_alloc(alloc), value.ref_alloc(alloc))
-                }
-                Ir::VectorSet(vec_var, index, value) => super::IrKind::VectorSet(
-                    vec_var.ref_alloc(alloc),
-                    *index,
-                    value.ref_alloc(alloc),
-                ),
-                Ir::VectorGet(vec_var, index) => {
-                    super::IrKind::VectorGet(vec_var.ref_alloc(alloc), *index)
-                }
-            };
-            P::new(super::Ir::new(kind))
-        }
-    }
 }
 
 /// An owned T that is frozen and exposes a reduced Box API.
@@ -349,15 +273,15 @@ pub struct IrVar<'ctx> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
+pub enum IrKind<IR = P<Ir>> {
     Int(usize),
-    Var(IrVar<'ctx>),
+    Var(indexed::IrVar),
     // Value abstraction and application
-    Abs(IrVar<'ctx>, IR),
+    Abs(indexed::IrVar, IR),
     App(IR, IR),
     // Type abstraction and application
     TyAbs(IrVarTy, IR),
-    TyApp(IR, IrTy<'ctx>),
+    TyApp(IR, indexed::IrTy),
     // Trivial products
     Struct(Vec<IR>),      // Intro
     FieldProj(usize, IR), // Elim
@@ -366,24 +290,16 @@ pub enum IrKind<'ctx, IR = P<Ir<'ctx>>> {
     Case(IR, Vec<IR>), // Elim
     // Delimited control
     // Generate a new prompt marker
-    NewPrompt(IrVar<'ctx>, IR),
+    NewPrompt(indexed::IrVar, IR),
     // Install a prompt for a marker
     Prompt(IR, IR),
     // Yield to a marker's prompt
     Yield(IR, IR),
     // Set index in an effect vector to value.
-    VectorSet(IrVar<'ctx>, usize, IR),
-    VectorGet(IrVar<'ctx>, usize),
+    VectorSet(indexed::IrVar, usize, IR),
+    VectorGet(indexed::IrVar, usize),
 }
-use rustc_hash::FxHashSet;
 use IrKind::*;
-#[derive(PartialEq, Eq, Clone, Copy)]
-struct IK<'a, 'ctx>(&'a IrKind<'ctx, IK<'a, 'ctx>>);
-impl<'a, 'ctx> fmt::Debug for IK<'a, 'ctx> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
 
 /// An Ir node
 /// `Ir` is much more explicit than `Term`. It is based on System F with some modest
@@ -398,25 +314,25 @@ impl<'a, 'ctx> fmt::Debug for IK<'a, 'ctx> {
 /// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
 /// the primitives to express delimited control which is how we implement effects under the hood.
 #[derive(Clone, PartialEq)]
-pub struct Ir<'ctx> {
-    pub kind: IrKind<'ctx>,
+pub struct Ir {
+    pub kind: IrKind,
 }
 
-impl<'ctx> fmt::Debug for Ir<'ctx> {
+impl<'ctx> fmt::Debug for Ir {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.kind.fmt(f)
     }
 }
-impl<'ctx> Ir<'ctx> {
-    pub fn new(kind: IrKind<'ctx>) -> Self {
+impl<'ctx> Ir {
+    pub fn new(kind: IrKind) -> Self {
         Self { kind }
     }
 
-    pub fn kind<'a>(&'a self) -> &'a IrKind<'ctx> {
+    pub fn kind<'a>(&'a self) -> &'a IrKind {
         &self.kind
     }
 
-    pub fn var(var: IrVar<'ctx>) -> Self {
+    pub fn var(var: indexed::IrVar) -> Self {
         Ir::new(Var(var))
     }
 
@@ -426,34 +342,34 @@ impl<'ctx> Ir<'ctx> {
             .fold(head, |func, arg| Ir::new(App(P::new(func), P::new(arg))))
     }
 
-    pub fn abss<I>(vars: I, body: Ir<'ctx>) -> Self
+    pub fn abss<I>(vars: I, body: Ir) -> Self
     where
         I: IntoIterator,
-        I::IntoIter: DoubleEndedIterator<Item = IrVar<'ctx>>,
+        I::IntoIter: DoubleEndedIterator<Item = indexed::IrVar>,
     {
         vars.into_iter()
             .rfold(body, |body, var| Ir::new(Abs(var, P::new(body))))
     }
 
-    pub fn case_on_var(var: IrVar<'ctx>, cases: impl IntoIterator<Item = Ir<'ctx>>) -> Self {
+    pub fn case_on_var(var: indexed::IrVar, cases: impl IntoIterator<Item = Ir>) -> Self {
         Ir::new(Case(
             P::new(Ir::var(var)),
             cases.into_iter().map(P::new).collect(),
         ))
     }
 
-    pub fn local(var: IrVar<'ctx>, value: Ir<'ctx>, body: Ir<'ctx>) -> Self {
+    pub fn local(var: indexed::IrVar, value: Ir, body: Ir) -> Self {
         Ir::new(App(P::new(Ir::new(Abs(var, P::new(body)))), P::new(value)))
     }
 
-    pub fn unbound_vars<'a>(&'a self) -> impl Iterator<Item = IrVar<'ctx>> + 'a {
+    pub fn unbound_vars<'a>(&'a self) -> impl Iterator<Item = indexed::IrVar> + 'a {
         self.unbound_vars_with_bound(FxHashSet::default())
     }
 
     pub fn unbound_vars_with_bound<'a>(
         &'a self,
         bound: FxHashSet<IrVarId>,
-    ) -> impl Iterator<Item = IrVar<'ctx>> + 'a {
+    ) -> impl Iterator<Item = indexed::IrVar> + 'a {
         UnboundVars {
             bound,
             stack: vec![self],
@@ -461,12 +377,12 @@ impl<'ctx> Ir<'ctx> {
     }
 }
 
-struct UnboundVars<'a, 'ctx> {
+struct UnboundVars<'a> {
     bound: FxHashSet<IrVarId>,
-    stack: Vec<&'a Ir<'ctx>>,
+    stack: Vec<&'a Ir>,
 }
-impl<'ctx> Iterator for UnboundVars<'_, 'ctx> {
-    type Item = IrVar<'ctx>;
+impl Iterator for UnboundVars<'_> {
+    type Item = indexed::IrVar;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.stack.pop().and_then(|ir| match ir.kind() {
@@ -506,11 +422,10 @@ impl<'ctx> Iterator for UnboundVars<'_, 'ctx> {
     }
 }
 
-#[cfg(feature = "pretty")]
+//#[cfg(feature = "pretty")]
 mod pretty_ir {
-    use super::{IrKind::*, IrTyKind::*, *};
-    use bumpalo::Bump;
-    use pretty::*;
+    use super::*;
+    use pretty::{DocAllocator, *};
 
     impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &IrVarTy {
         fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, ()> {
@@ -526,6 +441,14 @@ mod pretty_ir {
         }
     }
 
+    impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &indexed::IrVar {
+        fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, ()> {
+            arena
+                .text("Var")
+                .append(arena.text(self.var.0.to_string()).parens())
+        }
+    }
+
     impl<'a, 'ctx, D> Pretty<'a, D> for &IrVar<'ctx>
     where
         D: ?Sized + DocAllocator<'a>,
@@ -537,15 +460,15 @@ mod pretty_ir {
         }
     }
 
-    impl<'a, 'ctx> Pretty<'a, pretty::Arena<'a>> for &IrKind<'ctx> {
+    impl<'a, 'ctx> Pretty<'a, pretty::Arena<'a>> for &IrKind {
         fn pretty(
             self,
             arena: &'a pretty::Arena<'a>,
         ) -> pretty::DocBuilder<'a, pretty::Arena<'a>, ()> {
             fn gather_abs<'a, 'ctx>(
-                vars: &mut Vec<IrVar<'ctx>>,
-                kind: &'a IrKind<'ctx>,
-            ) -> &'a IrKind<'ctx> {
+                vars: &mut Vec<indexed::IrVar>,
+                kind: &'a IrKind,
+            ) -> &'a IrKind {
                 match kind {
                     Abs(arg, body) => {
                         vars.push(*arg);
@@ -554,10 +477,7 @@ mod pretty_ir {
                     _ => kind,
                 }
             }
-            fn gather_ty_abs<'a, 'ctx>(
-                vars: &mut Vec<IrVarTy>,
-                kind: &'a IrKind<'ctx>,
-            ) -> &'a IrKind<'ctx> {
+            fn gather_ty_abs<'a, 'ctx>(vars: &mut Vec<IrVarTy>, kind: &'a IrKind) -> &'a IrKind {
                 match kind {
                     TyAbs(arg, body) => {
                         vars.push(*arg);
@@ -566,7 +486,7 @@ mod pretty_ir {
                     _ => kind,
                 }
             }
-            let paren_app_arg = |arg: &IrKind<'ctx>| match arg {
+            let paren_app_arg = |arg: &IrKind| match arg {
                 App(_, _) => arg.pretty(arena).parens(),
                 _ => arg.pretty(arena),
             };
