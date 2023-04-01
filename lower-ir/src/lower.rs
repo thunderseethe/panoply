@@ -1,5 +1,6 @@
 use aiahr_core::{
-    ast::{Direction, RowTerm, RowTermView, Term},
+    ast::indexed::{Ast, RowTerm, RowTermView, Term},
+    ast::Direction,
     id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
     ir::{
         indexed::{IrTy, IrTyKind, IrTyKind::*, IrVar},
@@ -16,6 +17,7 @@ use aiahr_core::{
     },
 };
 use aiahr_tc::TyChkRes;
+use la_arena::Idx;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv, SolvedRowEv},
@@ -58,7 +60,7 @@ pub trait VarTys<'ctx> {
     fn lookup_var(&self, var_id: VarId) -> Ty;
 }
 pub trait TermTys<'ctx> {
-    fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<InDb>;
+    fn lookup_term(&self, term: Idx<Term<VarId>>) -> TyChkRes<InDb>;
 }
 
 // TODO: Wip name
@@ -428,7 +430,7 @@ where
 
     fn solved_row_ev<'ev>(
         &self,
-        term_rows: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
+        term_rows: impl IntoIterator<Item = RowTermView<VarId>>,
     ) -> Vec<SolvedRowEv>
     where
         'ctx: 'ev,
@@ -498,7 +500,7 @@ where
 
     pub(crate) fn collect_evidence_params<'ev>(
         mut self,
-        term_evs: impl IntoIterator<Item = RowTermView<'ctx, VarId>>,
+        term_evs: impl IntoIterator<Item = RowTermView<VarId>>,
         scheme_constrs: impl IntoIterator<Item = &'ev Evidence>,
     ) -> (
         LowerCtx<'a, 'b, Db, Evidentfull>,
@@ -560,9 +562,9 @@ where
         }
     }
 
-    pub(crate) fn lower_term(&mut self, term: &'ctx Term<'ctx, VarId>) -> Ir {
+    pub(crate) fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> Ir {
         use Term::*;
-        match term {
+        match ast.view(term) {
             Unit => Ir::new(Struct(vec![])),
             Abstraction { arg, body } => {
                 let term_ty = self.db.lookup_var(*arg);
@@ -571,11 +573,11 @@ where
                     var: self.var_conv.convert(*arg),
                     ty,
                 };
-                Ir::new(Abs(var, P::new(self.lower_term(body))))
+                Ir::new(Abs(var, P::new(self.lower_term(ast, *body))))
             }
             Application { func, arg } => Ir::new(App(
-                P::new(self.lower_term(func)),
-                P::new(self.lower_term(arg)),
+                P::new(self.lower_term(ast, *func)),
+                P::new(self.lower_term(ast, *arg)),
             )),
             Variable(var) => {
                 let ty = self.db.lookup_var(*var);
@@ -587,13 +589,13 @@ where
             Term::Int(i) => Ir::new(IrKind::Int(*i)),
             Item((_module_id, _item_id)) => todo!(),
             // At this level Label/Unlabel are removed
-            Label { term, .. } => self.lower_term(term),
-            Unlabel { term, .. } => self.lower_term(term),
+            Label { term, .. } => self.lower_term(ast, *term),
+            Unlabel { term, .. } => self.lower_term(ast, *term),
             // Row stuff
             Concat { left, right } => {
                 let goal_row = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
-                let left_row = expect_prod_ty(self.db, self.db.lookup_term(left).ty);
-                let right_row = expect_prod_ty(self.db, self.db.lookup_term(right).ty);
+                let left_row = expect_prod_ty(self.db, self.db.lookup_term(*left).ty);
+                let right_row = expect_prod_ty(self.db, self.db.lookup_term(*right).ty);
                 let ev = Evidence::Row {
                     left: left_row,
                     right: right_row,
@@ -602,11 +604,14 @@ where
                 let param = self.ev_map[&ev];
                 let concat = Ir::new(FieldProj(0, P::new(Ir::new(Var(param)))));
 
-                Ir::app(concat, [self.lower_term(left), self.lower_term(right)])
+                Ir::app(
+                    concat,
+                    [self.lower_term(ast, *left), self.lower_term(ast, *right)],
+                )
             }
             Branch { left, right } => {
-                let left_row = expect_branch_ty(self.db, self.db.lookup_term(left).ty);
-                let right_row = expect_branch_ty(self.db, self.db.lookup_term(right).ty);
+                let left_row = expect_branch_ty(self.db, self.db.lookup_term(*left).ty);
+                let right_row = expect_branch_ty(self.db, self.db.lookup_term(*right).ty);
                 let goal_row = expect_branch_ty(self.db, self.db.lookup_term(term).ty);
 
                 let param = self.ev_map[&(Evidence::Row {
@@ -616,13 +621,16 @@ where
                 })];
                 let branch = Ir::new(FieldProj(1, P::new(Ir::var(param))));
 
-                Ir::app(branch, [self.lower_term(left), self.lower_term(right)])
+                Ir::app(
+                    branch,
+                    [self.lower_term(ast, *left), self.lower_term(ast, *right)],
+                )
             }
             Project {
                 direction,
                 term: subterm,
             } => {
-                let goal = expect_prod_ty(self.db, self.db.lookup_term(subterm).ty);
+                let goal = expect_prod_ty(self.db, self.db.lookup_term(*subterm).ty);
                 let other = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
 
                 let param = self.ev_map[&PartialEv { goal, other }];
@@ -635,14 +643,14 @@ where
                     0,
                     P::new(Ir::new(FieldProj(idx, P::new(Ir::var(param))))),
                 ));
-                Ir::app(prj, [self.lower_term(subterm)])
+                Ir::app(prj, [self.lower_term(ast, *subterm)])
             }
             Inject {
                 direction,
                 term: subterm,
             } => {
                 let goal = expect_sum_ty(self.db, self.db.lookup_term(term).ty);
-                let other = expect_sum_ty(self.db, self.db.lookup_term(subterm).ty);
+                let other = expect_sum_ty(self.db, self.db.lookup_term(*subterm).ty);
 
                 let param = self.ev_map[&PartialEv { other, goal }];
                 let idx = match direction {
@@ -654,7 +662,7 @@ where
                     1,
                     P::new(Ir::new(FieldProj(idx, P::new(Ir::var(param))))),
                 ));
-                Ir::app(inj, [self.lower_term(subterm)])
+                Ir::app(inj, [self.lower_term(ast, *subterm)])
             }
             // Effect stuff
             Operation((mod_id, eff_id, op)) => {
@@ -711,7 +719,7 @@ where
                     var: self.var_conv.generate(),
                     ty: self.mk_ir_ty(IntTy),
                 };
-                let handler_infer = self.db.lookup_term(handler);
+                let handler_infer = self.db.lookup_term(*handler);
                 let eff_name = match handler_infer.eff {
                     Row::Closed(eff_row) => {
                         debug_assert!(eff_row.len(self.db) == 1);
@@ -730,11 +738,11 @@ where
                     var: self.var_conv.generate(),
                     ty: self.lower_ty(handler_infer.ty),
                 };
-                let handler_ir = self.lower_term(handler);
+                let handler_ir = self.lower_term(ast, *handler);
 
                 let ret_ty = self.lower_ty(self.db.lookup_term(term).ty);
 
-                let body_ty = self.lower_ty(self.db.lookup_term(body).ty);
+                let body_ty = self.lower_ty(self.db.lookup_term(*body).ty);
                 let ret_index = self.db.effect_handler_return_index(mod_id, eff);
                 let updated_evv = Ir::new(VectorSet(
                     self.evv_var,
@@ -761,7 +769,7 @@ where
                                     ))),
                                     body_ty,
                                 )),
-                                [self.lower_term(body)],
+                                [self.lower_term(ast, *body)],
                             )),
                         )),
                     )),
@@ -775,7 +783,7 @@ where
             }
             Annotated { term, .. } => {
                 // We type checked so this is handled, we can just unwrap here.
-                self.lower_term(term)
+                self.lower_term(ast, *term)
             }
         }
     }

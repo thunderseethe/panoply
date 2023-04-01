@@ -16,5 +16,6 @@ aiahr-core.workspace = true
 aiahr-tc.workspace = true
 aiahr-analysis.workspace = true
 bumpalo.workspace = true
+la-arena.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true

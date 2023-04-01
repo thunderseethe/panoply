@@ -72,7 +72,7 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
 /// Trivial type to satisfy salsa's requirements
 /// Eventually all salsa tracked functions should be in terms of salsa tracked structs and we
 /// shouldn't need this anymore.
-#[salsa::tracked]
+#[salsa::input]
 pub struct Top {}
 
 #[cfg(test)]

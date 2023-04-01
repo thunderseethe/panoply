@@ -118,6 +118,122 @@ pub mod indexed {
         },
     }
 
+    use super::ZeroOneOrTwo;
+    impl<Var: Eq> Term<Var> {
+        /// Return an iterator over all terms that require row evidence in this term.
+        pub fn row_ev_terms<'a>(
+            &self,
+            arena: &'a Arena<Term<Var>>,
+        ) -> impl Iterator<Item = RowTermView<Var>> + 'a {
+            let index = arena
+                .iter()
+                .position(|(_, term)| self == term)
+                .unwrap_or_else(|| panic!("Expected arena to contain term but it did not"))
+                as u32;
+            let root_idx = Idx::from_raw(index.into());
+            TermTraverse::new(root_idx, arena).filter_map(|term| RowTermView::try_from(term).ok())
+        }
+    }
+
+    impl<Var> Term<Var> {
+        fn children(&self) -> ZeroOneOrTwo<Idx<Term<Var>>> {
+            match self {
+                Term::Abstraction { body, .. } => ZeroOneOrTwo::One(*body),
+                Term::Application { func, arg } => ZeroOneOrTwo::Two(*func, *arg),
+                Term::Label { term, .. } | Term::Unlabel { term, .. } => ZeroOneOrTwo::One(*term),
+                Term::Concat { left, right } | Term::Branch { left, right } => {
+                    ZeroOneOrTwo::Two(*left, *right)
+                }
+                Term::Project { term, .. } | Term::Inject { term, .. } => ZeroOneOrTwo::One(*term),
+                Term::Handle { handler, body, .. } => ZeroOneOrTwo::Two(*handler, *body),
+                Term::Variable(_)
+                | Term::Int(_)
+                | Term::Item(_)
+                | Term::Unit
+                | Term::Operation(_) => ZeroOneOrTwo::Zero,
+                Term::Annotated { term, .. } => ZeroOneOrTwo::One(*term),
+            }
+        }
+    }
+
+    /// Convenience wrapper around a term to encode that is must be a row term (Concat, Branch, etc.) and not any other kind
+    /// of term.
+    pub struct RowTermView<Var> {
+        pub parent: Idx<Term<Var>>,
+        pub view: RowTerm<Var>,
+    }
+    pub enum RowTerm<Var> {
+        Concat {
+            left: Idx<Term<Var>>,
+            right: Idx<Term<Var>>,
+        },
+        Branch {
+            left: Idx<Term<Var>>,
+            right: Idx<Term<Var>>,
+        },
+        Project {
+            direction: Direction,
+            term: Idx<Term<Var>>,
+        },
+        Inject {
+            direction: Direction,
+            term: Idx<Term<Var>>,
+        },
+    }
+
+    impl<Var> TryFrom<(Idx<Term<Var>>, &Term<Var>)> for RowTermView<Var> {
+        type Error = Idx<Term<Var>>;
+
+        fn try_from((parent, view): (Idx<Term<Var>>, &Term<Var>)) -> Result<Self, Self::Error> {
+            let view = match view {
+                Term::Concat { left, right } => RowTerm::Concat {
+                    left: *left,
+                    right: *right,
+                },
+                Term::Project { direction, term } => RowTerm::Project {
+                    direction: *direction,
+                    term: *term,
+                },
+                Term::Branch { left, right } => RowTerm::Branch {
+                    left: *left,
+                    right: *right,
+                },
+                Term::Inject { direction, term } => RowTerm::Inject {
+                    direction: *direction,
+                    term: *term,
+                },
+                _ => return Err(parent),
+            };
+            Ok(RowTermView { parent, view })
+        }
+    }
+
+    /// Traverse a term as an iterator, producing each child term.
+    struct TermTraverse<'a, Var> {
+        arena: &'a Arena<Term<Var>>,
+        stack: Vec<Idx<Term<Var>>>,
+    }
+
+    impl<'a, Var> TermTraverse<'a, Var> {
+        fn new(root: Idx<Term<Var>>, arena: &'a Arena<Term<Var>>) -> Self {
+            Self {
+                stack: vec![root],
+                arena,
+            }
+        }
+    }
+    impl<'a, Var> Iterator for TermTraverse<'a, Var> {
+        type Item = (Idx<Term<Var>>, &'a Term<Var>);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.stack.pop().map(|idx| {
+                let view = &self.arena[idx];
+                self.stack.extend(view.children());
+                (idx, view)
+            })
+        }
+    }
+
     impl<'a, Var: Copy + Eq + Hash> IndexedAllocate<AstIndxAlloc<'_, 'a, Var>>
         for &'a super::Term<'a, Var>
     {
@@ -248,6 +364,49 @@ pub mod indexed {
         pub annotation: Option<TyScheme>,
         terms: Arena<Term<Var>>,
         pub tree: Idx<Term<Var>>,
+    }
+    impl<Var> Ast<Var> {
+        pub fn new(
+            name: ItemId,
+            spans: FxHashMap<Idx<Term<Var>>, Span>,
+            annotation: TyScheme,
+            terms: Arena<Term<Var>>,
+            tree: Idx<Term<Var>>,
+        ) -> Self {
+            Self {
+                name,
+                spans,
+                annotation: Some(annotation),
+                terms,
+                tree,
+            }
+        }
+        pub fn with_untyped(
+            name: ItemId,
+            spans: FxHashMap<Idx<Term<Var>>, Span>,
+            terms: Arena<Term<Var>>,
+            tree: Idx<Term<Var>>,
+        ) -> Self {
+            Self {
+                name,
+                spans,
+                annotation: None,
+                terms,
+                tree,
+            }
+        }
+
+        pub fn root(&self) -> &Term<Var> {
+            self.view(self.tree)
+        }
+
+        pub fn arena(&self) -> &Arena<Term<Var>> {
+            &self.terms
+        }
+
+        pub fn view(&self, term: Idx<Term<Var>>) -> &Term<Var> {
+            &self.terms[term]
+        }
     }
     impl<Var: Hash> std::hash::Hash for Ast<Var> {
         fn hash<H: std::hash::Hasher>(&self, state: &mut H) {

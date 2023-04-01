@@ -32,6 +32,10 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     fn parse_module_of(&self, mod_id: ModuleId) -> ParseModule {
         parse_module_of(self.as_parser_db(), self.top(), mod_id)
     }
+
+    fn parse_errors(&self, file: SourceFile) -> Vec<AiahrcError> {
+        parse_module::accumulated::<AiahrcErrors>(self.as_parser_db(), file)
+    }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db {}
 

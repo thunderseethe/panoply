@@ -5,7 +5,7 @@ use aiahr_core::ir::{Ir, IrKind::*, IrVarTy, Kind, P};
 use aiahr_core::ty::TyScheme;
 use aiahr_core::Top;
 use aiahr_core::{
-    ast::{Ast, Term},
+    ast::indexed::{Ast, Term},
     id::{IrTyVarId, ItemId, ModuleId, VarId},
     memory::handle::RefHandle,
     ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
@@ -112,12 +112,7 @@ impl<'db> IrEffectInfo<'db> for &'db dyn crate::Db {
 
 /// Lower an `Ast` into an `Ir`.
 /// TODO: Real documentation.
-pub fn lower<'a, 'ctx, Db>(
-    db: &'a Db,
-    module: ModuleId,
-    scheme: &TyScheme,
-    ast: &Ast<'ctx, VarId>,
-) -> Ir
+pub fn lower<'a, 'ctx, Db>(db: &'a Db, module: ModuleId, scheme: &TyScheme, ast: &Ast<VarId>) -> Ir
 where
     Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx> + MkTy<InDb> + 'a,
     Db: AccessTy<'a, InDb> + MkIrTy,
@@ -126,9 +121,9 @@ where
     let mut tyvar_conv = IdConverter::new();
     let (mut lower_ctx, ev_locals, ev_params) =
         LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, module)
-            .collect_evidence_params(ast.root().row_ev_terms(), scheme.constrs.iter());
+            .collect_evidence_params(ast.root().row_ev_terms(ast.arena()), scheme.constrs.iter());
 
-    let body = lower_ctx.lower_term(ast.root());
+    let body = lower_ctx.lower_term(ast, ast.tree);
     // Bind all unique solved row evidence to local variables at top of the term
     let body = ev_locals.into_iter().fold(body, |body, (ev_param, ev_ir)| {
         Ir::app(Ir::abss([ev_param], body), [ev_ir])
@@ -154,21 +149,22 @@ pub mod test_utils {
     use aiahr_core::ty::{TyData, TypeAlloc};
     use aiahr_tc::test_utils::DummyEff;
     use aiahr_tc::TyChkRes;
+    use la_arena::Idx;
 
     use super::*;
 
-    pub struct LowerDb<'a, 'ctx> {
+    pub struct LowerDb<'a> {
         pub db: &'a dyn crate::Db,
         var_tys: FxHashMap<VarId, Ty>,
-        term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
+        term_tys: FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
         eff_info: DummyEff<'a>,
     }
 
-    impl<'a, 'ctx> LowerDb<'a, 'ctx> {
+    impl<'a> LowerDb<'a> {
         pub fn new(
             db: &'a dyn crate::Db,
             var_tys: FxHashMap<VarId, Ty>,
-            term_tys: FxHashMap<&'ctx Term<'ctx, VarId>, TyChkRes<InDb>>,
+            term_tys: FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
         ) -> Self {
             Self {
                 db,
@@ -178,22 +174,22 @@ pub mod test_utils {
             }
         }
     }
-    impl<'ctx> VarTys<'ctx> for LowerDb<'_, 'ctx> {
+    impl<'ctx> VarTys<'ctx> for LowerDb<'_> {
         fn lookup_var(&self, var_id: VarId) -> Ty {
             self.var_tys[&var_id]
         }
     }
-    impl<'ctx> TermTys<'ctx> for LowerDb<'_, 'ctx> {
-        fn lookup_term(&self, term: &'ctx Term<'ctx, VarId>) -> TyChkRes<InDb> {
-            self.term_tys[term]
+    impl<'ctx> TermTys<'ctx> for LowerDb<'_> {
+        fn lookup_term(&self, term: Idx<Term<VarId>>) -> TyChkRes<InDb> {
+            self.term_tys[&term]
         }
     }
-    impl<'ctx> ItemSchemes<'ctx> for LowerDb<'_, 'ctx> {
+    impl<'ctx> ItemSchemes<'ctx> for LowerDb<'_> {
         fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme {
             todo!()
         }
     }
-    impl<'ctx> EffectInfo<'ctx> for LowerDb<'_, 'ctx> {
+    impl<'ctx> EffectInfo<'ctx> for LowerDb<'_> {
         fn effect_name(&self, mod_id: ModuleId, eff: aiahr_core::id::EffectId) -> Ident {
             self.eff_info.effect_name(mod_id, eff)
         }
@@ -241,7 +237,7 @@ pub mod test_utils {
         }
     }
 
-    impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'_, 'ctx> {
+    impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'_> {
         fn effect_handler_return_index(&self, _: ModuleId, eff_id: EffectId) -> usize {
             match eff_id {
                 DummyEff::STATE_ID => 2,
@@ -328,7 +324,7 @@ pub mod test_utils {
         }
     }
 
-    impl<'a> AccessTy<'a, InDb> for LowerDb<'a, '_> {
+    impl<'a> AccessTy<'a, InDb> for LowerDb<'a> {
         fn kind(&self, ty: &Ty<InDb>) -> &'a TypeKind<InDb> {
             self.db.as_tc_db().kind(ty)
         }
@@ -341,7 +337,7 @@ pub mod test_utils {
             self.db.as_tc_db().row_values(row)
         }
     }
-    impl<'a> AccessTy<'a, InDb> for &LowerDb<'a, '_> {
+    impl<'a> AccessTy<'a, InDb> for &LowerDb<'a> {
         fn kind(&self, ty: &Ty<InDb>) -> &'a TypeKind<InDb> {
             self.db.as_tc_db().kind(ty)
         }
@@ -354,7 +350,7 @@ pub mod test_utils {
             self.db.as_tc_db().row_values(row)
         }
     }
-    impl MkIrTy for LowerDb<'_, '_> {
+    impl MkIrTy for LowerDb<'_> {
         fn mk_ir_ty(&self, kind: aiahr_core::ir::indexed::IrTyKind) -> IrTy {
             self.db.mk_ir_ty(kind)
         }
@@ -368,7 +364,7 @@ pub mod test_utils {
         }
     }
 
-    impl MkTy<InDb> for LowerDb<'_, '_> {
+    impl MkTy<InDb> for LowerDb<'_> {
         fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
             Ty(TyData::new(self.db.as_core_db(), kind))
         }
@@ -390,25 +386,20 @@ mod tests {
     use crate::lower;
 
     use super::test_utils::LowerDb;
-    use aiahr_analysis::names::Names;
-    use aiahr_analysis::resolve::resolve_term;
-    use aiahr_analysis::top_level::BaseBuilder;
-    use aiahr_core::ast::{Ast, Direction, Term};
-    use aiahr_core::id::{ModuleId, VarId};
+    use aiahr_core::ast::indexed::{Ast, Term};
+    use aiahr_core::ast::Direction;
+    use aiahr_core::file::{SourceFile, SourceFileSet};
+    use aiahr_core::id::{ItemId, ModuleId, VarId};
     use aiahr_core::ir::indexed::IrTyKind::*;
     use aiahr_core::ir::IrKind::{self, *};
-    use aiahr_core::modules::ModuleTree;
     use aiahr_core::ty::TyScheme;
-    use aiahr_core::Db;
-    use aiahr_tc::test_utils::DummyEff;
-    use aiahr_test::ast::*;
-    use aiahr_test::nst::random_term_item;
+    use aiahr_core::Top;
+    use aiahr_tc::type_scheme_of;
+    use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
     use bumpalo::Bump;
     use ir_matcher::ir_matcher;
-    use rustc_hash::FxHashMap;
 
-    const MODNAME: &str = "test_module";
     const MOD: ModuleId = ModuleId(0);
 
     #[derive(Default)]
@@ -428,49 +419,38 @@ mod tests {
     /// Compile an input string up to (but not including) the lower stage.
     fn compile_upto_lower<'a: 'ctx, 'ctx>(
         db: &'a TestDatabase,
-        arena: &'ctx Bump,
         input: &str,
-    ) -> (LowerDb<'a, 'ctx>, TyScheme, Ast<'ctx, VarId>) {
-        let (m, modules) = {
-            let mut modules = ModuleTree::new();
-            let m = modules.add_package(db.ident_str(MODNAME));
-            (m, modules)
-        };
-
-        let unresolved = aiahr_parser::parser::test_utils::parse_term(db, arena, input);
-        let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = Vec::new();
-
-        let mut module_names = FxHashMap::default();
-        let base = BaseBuilder::new().build(arena, m, &modules, &mut module_names);
-        let mut names = Names::new(&base);
-
-        let resolved = resolve_term(arena, unresolved, &mut names, &mut errors)
-            .expect("Name resolution to succeed");
-
-        let (vars, ty_vars) = names.into_ids();
-        let mut vars = vars.into_iter().map(|_| false).collect();
-        let mut ty_vars = ty_vars.into_iter().map(|_| false).collect();
-
-        let ast = aiahr_desugar::desugar(
+    ) -> (LowerDb<'a>, TyScheme, Ast<VarId>) {
+        let file = SourceFile::new(
             db,
-            arena,
-            &mut vars,
-            &mut ty_vars,
-            random_term_item(resolved),
-        )
-        .unwrap()
-        .unwrap_func();
+            ModuleId(0),
+            std::path::PathBuf::from("test.aiahr"),
+            input.to_string(),
+        );
+        SourceFileSet::new(db, vec![file]);
 
-        let (var_tys, term_tys, scheme, _) =
-            aiahr_tc::type_check(db, &DummyEff(db), ModuleId(0), &ast);
-        (LowerDb::new(db, var_tys, term_tys), scheme, ast)
+        let top = Top::new(db);
+        let salsa_typed_item = type_scheme_of(db, top, MOD, ItemId(0));
+        let item = aiahr_desugar::desugar_item_of_id(db, top, MOD, ItemId(0));
+        let ast = match item.item(db) {
+            aiahr_core::ast::indexed::Item::Effect(_) => unreachable!(),
+            aiahr_core::ast::indexed::Item::Function(ast) => ast,
+        };
+        (
+            LowerDb::new(
+                db,
+                salsa_typed_item.var_to_tys(db).clone(),
+                salsa_typed_item.term_to_tys(db).clone(),
+            ),
+            salsa_typed_item.ty_scheme(db),
+            ast,
+        )
     }
 
     #[test]
     fn lower_id() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
-        let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|x| x");
+        let (db, scheme, ast) = compile_upto_lower(&db, "id = |x| x");
 
         let ir = lower(&db, MOD, &scheme, &ast);
 
@@ -481,9 +461,8 @@ mod tests {
 
     #[test]
     fn lower_product_literal() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
-        let (db, scheme, ast) = compile_upto_lower(&db, &arena, "|a| { x = a, y = a }");
+        let (db, scheme, ast) = compile_upto_lower(&db, "f = |a| { x = a, y = a }");
 
         let ir = lower(&db, MOD, &scheme, &ast);
         ir_matcher!(ir,
@@ -501,11 +480,10 @@ mod tests {
 
     #[test]
     fn lower_wand() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
         let m = VarId(0);
         let n = VarId(1);
-        let ast = AstBuilder::with_builder(&db, &arena, |builder| {
+        let ast = AstBuilder::with_builder(&db, |builder| {
             builder.mk_abss(
                 [m, n],
                 builder.mk_unlabel(
@@ -517,11 +495,17 @@ mod tests {
                 ),
             )
         });
-        let (var_tys, term_ress, scheme, _) =
-            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), MOD, &ast);
+        let arena = Bump::new();
+        let (ref_ast, map) = ast.ref_alloc(&arena);
+        let (var_tys, term_tys, scheme, _) =
+            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), MOD, &ref_ast);
 
-        let ir = lower(&LowerDb::new(&db, var_tys, term_ress), MOD, &scheme, &ast);
-
+        //let (db, scheme, ast) = compile_upto_lower(&db, "wand m n = {m, n}.x");
+        let term_tys = term_tys
+            .into_iter()
+            .map(|(key, value)| (map[&key], value))
+            .collect();
+        let ir = lower(&LowerDb::new(&db, var_tys, term_tys), MOD, &scheme, &ast);
         ir_matcher!(
             ir,
             TyAbs(

@@ -1,8 +1,9 @@
 use std::ops::Not;
 
+use aiahr_core::ast::indexed::SalsaItem;
 use aiahr_core::ast::{indexed, AstModule, Direction};
 use aiahr_core::cst::{self, Field, RowAtom, Scheme, Type};
-use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ModuleId, TyVarId};
+use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId};
 use aiahr_core::ident::Ident;
 use aiahr_core::indexed::ReferenceAllocate;
 use aiahr_core::modules::{module_of, Module};
@@ -10,6 +11,7 @@ use aiahr_core::nst::Pattern;
 use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::ty::row::Row;
 use aiahr_core::ty::{Evidence, MkTy, Ty, TyScheme, TypeKind};
+use aiahr_core::Top;
 use aiahr_core::{
     ast,
     ast::{Ast, Item, Term::*},
@@ -25,6 +27,7 @@ pub struct Jar(
     desugar_module,
     desugar_module_of,
     desugar_item,
+    desugar_item_of_id,
     effect_of,
     effect_op_tyscheme_of,
 );
@@ -92,6 +95,31 @@ pub fn desugar_item(
 pub fn desugar_module_of(db: &dyn crate::Db, module: Module) -> AstModule {
     let nameres_module = db.nameres_module_of(module.name(db.as_core_db()));
     desugar_module(db, nameres_module)
+}
+
+#[salsa::tracked]
+pub fn desugar_item_of_id(
+    db: &dyn crate::Db,
+    _top: Top,
+    module_id: ModuleId,
+    item_id: ItemId,
+) -> SalsaItem {
+    let nameres_module = db.nameres_module_of(module_id);
+    let ast_module = desugar_module(db, nameres_module);
+    ast_module
+        .items(db.as_core_db())
+        .iter()
+        .find(|item| match item.item(db.as_core_db()) {
+            indexed::Item::Effect(_) => false,
+            indexed::Item::Function(ast) => ast.name == item_id,
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            panic!(
+                "ICE: Created ItemId {:?} without corresponding Item",
+                item_id
+            )
+        })
 }
 
 #[salsa::tracked]
