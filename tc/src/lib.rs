@@ -11,7 +11,6 @@ use diagnostic::TypeCheckDiagnostic;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use la_arena::Idx;
 use rustc_hash::FxHashMap;
-use salsa::DebugWithDb;
 
 use aiahr_core::ty::infer::{InArena, TcUnifierVar, TyCtx};
 use aiahr_core::ty::*;
@@ -235,9 +234,7 @@ where
         unifiers: &mut unifiers,
         free_vars: vec![],
     };
-    println!("Infer result: {:?}", result);
     let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
-    println!("Zonked result: {:?}", &zonked_infer.debug(db.as_core_db()));
 
     let zonked_var_tys = gen_storage
         .var_tys

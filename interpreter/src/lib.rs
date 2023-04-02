@@ -6,7 +6,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
-struct Prompt(usize);
+pub struct Prompt(usize);
 
 /// A mapping from variables to values
 type Env = FxHashMap<IrVarId, Value>;
@@ -14,7 +14,7 @@ type Env = FxHashMap<IrVarId, Value>;
 /// An interpreter value.
 /// This will be the result of interpretation and all intermediate computations
 #[derive(Debug, Clone, PartialEq)]
-enum Value {
+pub enum Value {
     Int(usize),
     /// A lambda (or closure). Stores any captured variables in env.
     Lam {
@@ -52,7 +52,7 @@ impl Value {
 /// An evaluation context
 /// These store in process computation, and are pushed onto the stack as we interpret.
 #[derive(Debug, Clone, PartialEq)]
-enum EvalCtx {
+pub enum EvalCtx {
     FnApp { arg: Value },
     ArgApp { func: P<Ir> },
     PromptMarker { body: P<Ir> },
@@ -67,7 +67,7 @@ enum EvalCtx {
 
 /// A stack frame is either a prompt or a list of evaluation contexts.
 #[derive(Debug, Clone, PartialEq)]
-enum StackFrame {
+pub enum StackFrame {
     Prompt(Prompt),
     Eval(Env, Vec<EvalCtx>),
 }
@@ -96,7 +96,7 @@ impl<'ctx> StackExt for Stack {
 
 /// Virtual Machine that interprets the
 #[derive(Default)]
-struct Machine {
+pub struct Machine {
     stack: Stack,
     prompt: usize,
     cur_frame: Vec<EvalCtx>,
@@ -314,7 +314,8 @@ impl Machine {
                 self.unwind(val.clone())
             }
             // Type applications
-            IrKind::TyAbs(_, _) => todo!(),
+            // TODO:
+            IrKind::TyAbs(_, body) => InterpretResult::Step(body),
             IrKind::TyApp(_, _) => todo!(),
         }
     }

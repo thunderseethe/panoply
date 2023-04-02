@@ -498,10 +498,14 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 .first()
                 .iter()
                 .rfold(matrix.arms[0], |body, pat| match pat {
-                    Pattern::Whole(var) => self.arena.alloc(Abstraction {
-                        arg: var.value,
-                        body,
-                    }),
+                    Pattern::Whole(var) => mk_term(
+                        &mut self.spans,
+                        Abstraction {
+                            arg: var.value,
+                            body,
+                        },
+                        pat.span(),
+                    ),
                     _ => unreachable!(),
                 }))
         } else {

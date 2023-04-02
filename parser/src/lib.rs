@@ -1,7 +1,7 @@
 use aiahr_core::{
     cst::indexed::CstModule,
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
-    file::SourceFile,
+    file::{SourceFile, SourceFileSet},
     id::ModuleId,
     modules::Module,
     Top,
@@ -33,8 +33,15 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
         parse_module_of(self.as_parser_db(), self.top(), mod_id)
     }
 
-    fn parse_errors(&self, file: SourceFile) -> Vec<AiahrcError> {
-        parse_module::accumulated::<AiahrcErrors>(self.as_parser_db(), file)
+    fn parse_errors(&self) -> Vec<AiahrcError> {
+        let file_set = SourceFileSet::get(self.as_core_db());
+        file_set
+            .files(self.as_core_db())
+            .into_iter()
+            .flat_map(|file| {
+                parse_module::accumulated::<AiahrcErrors>(self.as_parser_db(), file).into_iter()
+            })
+            .collect()
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db {}

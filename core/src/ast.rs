@@ -6,6 +6,7 @@ use crate::ty::{Ty, TyScheme};
 use rustc_hash::FxHashMap;
 
 pub mod indexed {
+    use std::fmt::Debug;
     use std::hash::Hash;
 
     use bumpalo::Bump;
@@ -234,13 +235,16 @@ pub mod indexed {
         }
     }
 
-    impl<'a, Var: Copy + Eq + Hash> IndexedAllocate<AstIndxAlloc<'_, 'a, Var>>
+    impl<'a, Var: Copy + Eq + Hash + std::fmt::Debug> IndexedAllocate<AstIndxAlloc<'_, 'a, Var>>
         for &'a super::Term<'a, Var>
     {
         type Out = Idx<Term<Var>>;
 
         fn alloc(&self, alloc: &mut AstIndxAlloc<'_, 'a, Var>) -> Self::Out {
-            let span = alloc.ref_spans[*self];
+            let span = alloc
+                .ref_spans
+                .get(self)
+                .unwrap_or_else(|| panic!("No span for {:?}", self));
             let term = match self {
                 super::Term::Abstraction { arg, body } => Term::Abstraction {
                     arg: *arg,
@@ -289,7 +293,7 @@ pub mod indexed {
                 },
             };
             let idx = alloc.arena_mut().alloc(term);
-            alloc.idx_spans.insert(idx, span);
+            alloc.idx_spans.insert(idx, *span);
             idx
         }
     }
@@ -448,7 +452,7 @@ pub mod indexed {
         }
     }
 
-    impl<'a, Var: Copy + Eq + Hash> From<&super::Ast<'a, Var>> for Ast<Var> {
+    impl<'a, Var: Copy + Eq + Hash + Debug> From<&super::Ast<'a, Var>> for Ast<Var> {
         fn from(value: &super::Ast<'a, Var>) -> Self {
             let mut alloc = AstIndxAlloc {
                 terms: Arena::default(),
@@ -481,7 +485,7 @@ pub mod indexed {
         Function(Ast<Var>),
     }
 
-    impl<'a, Var: Copy + Eq + Hash> From<&super::Item<'a, Var>> for Item<Var> {
+    impl<'a, Var: Copy + Eq + Hash + Debug> From<&super::Item<'a, Var>> for Item<Var> {
         fn from(value: &super::Item<'a, Var>) -> Self {
             match value {
                 super::Item::Effect(eff) => Item::Effect(eff.clone()),

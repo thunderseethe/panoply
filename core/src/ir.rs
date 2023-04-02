@@ -422,7 +422,6 @@ impl Iterator for UnboundVars<'_> {
     }
 }
 
-//#[cfg(feature = "pretty")]
 mod pretty_ir {
     use super::*;
     use pretty::{DocAllocator, *};

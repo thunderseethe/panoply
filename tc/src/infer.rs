@@ -955,7 +955,6 @@ where
     ) -> Result<(), TypeCheckError<'infer>> {
         // We want any unifications we do as a byproduct of this to see the updated state so we
         // save them here until we've finished our intial removals from state
-        println!("dispatch solved: {:?} {:?}", var, row);
         let mut combos = vec![];
         self.state = self
             .state

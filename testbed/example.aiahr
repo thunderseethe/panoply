@@ -1,0 +1,4 @@
+main = (match <
+  <and = y> => y,
+  <or = x> => x
+>)(<and = <test = {}> >)
