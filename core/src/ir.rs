@@ -313,7 +313,7 @@ use IrKind::*;
 /// Effect typing is also made explicit and transformed to a lower level reprsentation in `Ir`.
 /// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
 /// the primitives to express delimited control which is how we implement effects under the hood.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Ir {
     pub kind: IrKind,
 }

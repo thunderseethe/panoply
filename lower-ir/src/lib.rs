@@ -1,21 +1,26 @@
+use aiahr_analysis::name::ModuleName;
+use aiahr_core::ast::AstModule;
 use aiahr_core::id::{EffectId, EffectOpId};
 use aiahr_core::ident::Ident;
-use aiahr_core::ir::indexed::{IrTy, MkIrTy};
+use aiahr_core::ir::indexed::{IrTy, IrTyKind, MkIrTy};
 use aiahr_core::ir::{Ir, IrKind::*, IrVarTy, Kind, P};
+use aiahr_core::modules::Module;
 use aiahr_core::ty::TyScheme;
 use aiahr_core::Top;
 use aiahr_core::{
     ast::indexed::{Ast, Term},
     id::{IrTyVarId, ItemId, ModuleId, VarId},
-    memory::handle::RefHandle,
     ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
 };
 use aiahr_tc::EffectInfo;
+use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use rustc_hash::FxHashMap;
 
 pub(crate) mod id_converter;
 use id_converter::IdConverter;
+
+use self::lower::ItemSelector;
 
 pub(crate) mod evidence;
 
@@ -23,7 +28,7 @@ mod lower;
 
 /// Slightly lower level of information than required by EffectInfo.
 /// However this is all calculatable off of the effect definition
-pub trait IrEffectInfo<'ctx>: EffectInfo<'ctx> {
+pub trait IrEffectInfo: EffectInfo {
     fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
     fn effect_handler_op_index(
         &self,
@@ -37,41 +42,105 @@ pub trait IrEffectInfo<'ctx>: EffectInfo<'ctx> {
 }
 
 #[salsa::jar(db = Db)]
-pub struct Jar();
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {}
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db {}
-
-impl<'db> EffectInfo<'db> for &'db dyn crate::Db {
-    fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
-        self.as_tc_db().effect_name(module, eff)
+pub struct Jar(IrModule, IrItem, lower_module, effect_handler_ir_ty);
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {
+    fn as_lower_ir_db(&self) -> &dyn crate::Db {
+        <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 
-    fn effect_members(&self, module: ModuleId, eff: EffectId) -> RefHandle<'db, [EffectOpId]> {
-        self.as_tc_db().effect_members(module, eff)
-    }
-
-    fn lookup_effect_by_member_names(
-        &self,
-        module: ModuleId,
-        members: &[Ident],
-    ) -> Option<(ModuleId, EffectId)> {
-        self.as_tc_db()
-            .lookup_effect_by_member_names(module, members)
-    }
-
-    fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
-        self.as_tc_db().lookup_effect_by_name(module, name)
-    }
-
-    fn effect_member_sig(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> TyScheme {
-        self.as_tc_db().effect_member_sig(module, eff, member)
-    }
-
-    fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident {
-        self.as_tc_db().effect_member_name(module, eff, member)
+    fn lower_module(&self, module: AstModule) -> IrModule {
+        lower_module(self.as_lower_ir_db(), module)
     }
 }
-impl<'db> IrEffectInfo<'db> for &'db dyn crate::Db {
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db {}
+
+#[salsa::tracked]
+pub struct IrModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub items: Vec<IrItem>,
+}
+
+#[salsa::tracked]
+pub struct IrItem {
+    #[id]
+    pub name: ModuleName,
+    #[return_ref]
+    pub item: Ir,
+}
+
+#[salsa::tracked]
+fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
+    let core_db = db.as_core_db();
+    let items = module
+        .items(core_db)
+        .iter()
+        .map(|salsa_item| {
+            let ast_item = salsa_item.item(core_db);
+            match ast_item {
+                aiahr_core::ast::indexed::Item::Effect(_) => todo!(),
+                aiahr_core::ast::indexed::Item::Function(ast) => {
+                    let mod_id = module.module(core_db).name(core_db);
+                    let scheme = db.lookup_scheme(mod_id, ast.name);
+                    let ir = lower(db, mod_id, &scheme, &ast);
+                    IrItem::new(db, ModuleName::from(ast.name), ir)
+                }
+            }
+        })
+        .collect();
+    IrModule::new(db, module.module(core_db), items)
+}
+
+#[salsa::tracked]
+fn effect_handler_ir_ty(
+    db: &dyn crate::Db,
+    _top: Top,
+    module_id: ModuleId,
+    effect_id: EffectId,
+) -> IrTy {
+    let mut var_conv = IdConverter::new();
+    let mut tyvar_conv = IdConverter::new();
+    let bogus_item = ItemId(usize::MAX);
+    // TODO: Clean this up so we can access lower ty without requiring a full LowerCtx
+    // TODO: Do we need to create a new tyvar_conv per scheme we lower?
+    let mut lower_ctx = LowerCtx::new(
+        db.as_lower_ir_db(),
+        &mut var_conv,
+        &mut tyvar_conv,
+        ItemSelector {
+            module: module_id,
+            item: bogus_item,
+        },
+    );
+
+    // TODO: Produce members in order so we don't have to sort or get names here.
+    let mut members = db
+        .effect_members(module_id, effect_id)
+        .into_iter()
+        .map(|op_id| {
+            let scheme = db.effect_member_sig(module_id, effect_id, *op_id);
+            (
+                db.effect_member_name(module_id, effect_id, *op_id),
+                lower_ctx.lower_scheme(&scheme),
+            )
+        })
+        .collect::<Vec<_>>();
+    members.sort_by(|a, b| a.0.cmp(&b.0));
+    let handler_ty = db.mk_prod_ty(
+        members
+            .into_iter()
+            .map(|(_, ir_ty)| ir_ty)
+            .collect::<Vec<_>>()
+            .as_slice(),
+    );
+    db.mk_prod_ty(&[db.mk_ir_ty(IrTyKind::IntTy), handler_ty])
+}
+
+impl<DB> IrEffectInfo for DB
+where
+    DB: ?Sized + crate::Db,
+{
     fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
         aiahr_analysis::effect_handler_return_index(
             self.as_analysis_db(),
@@ -105,8 +174,55 @@ impl<'db> IrEffectInfo<'db> for &'db dyn crate::Db {
         )
     }
 
-    fn effect_handler_ir_ty(&self, _mod_id: ModuleId, _eff_id: EffectId) -> IrTy {
-        todo!()
+    fn effect_handler_ir_ty(&self, mod_id: ModuleId, eff_id: EffectId) -> IrTy {
+        effect_handler_ir_ty(self.as_lower_ir_db(), self.top(), mod_id, eff_id)
+    }
+}
+impl<DB> ItemSchemes for DB
+where
+    DB: ?Sized + crate::Db,
+{
+    fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme {
+        let typed_item = aiahr_tc::type_scheme_of(
+            self.as_tc_db(),
+            Top::new(self.as_core_db()),
+            module_id,
+            item_id,
+        );
+        typed_item.ty_scheme(self.as_tc_db())
+    }
+}
+impl<DB> VarTys for DB
+where
+    DB: ?Sized + crate::Db,
+{
+    fn lookup_var(&self, module_id: ModuleId, item_id: ItemId, var_id: VarId) -> Ty {
+        let typed_item = aiahr_tc::type_scheme_of(
+            self.as_tc_db(),
+            Top::new(self.as_core_db()),
+            module_id,
+            item_id,
+        );
+        typed_item.var_to_tys(self.as_tc_db())[&var_id]
+    }
+}
+impl<DB> TermTys for DB
+where
+    DB: ?Sized + crate::Db,
+{
+    fn lookup_term(
+        &self,
+        module_id: ModuleId,
+        item_id: ItemId,
+        term: Idx<Term<VarId>>,
+    ) -> aiahr_tc::TyChkRes<InDb> {
+        let typed_item = aiahr_tc::type_scheme_of(
+            self.as_tc_db(),
+            Top::new(self.as_core_db()),
+            module_id,
+            item_id,
+        );
+        typed_item.term_to_tys(self.as_tc_db())[&term]
     }
 }
 
@@ -114,14 +230,21 @@ impl<'db> IrEffectInfo<'db> for &'db dyn crate::Db {
 /// TODO: Real documentation.
 pub fn lower<'a, 'ctx, Db>(db: &'a Db, module: ModuleId, scheme: &TyScheme, ast: &Ast<VarId>) -> Ir
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx> + MkTy<InDb> + 'a,
-    Db: AccessTy<'a, InDb> + MkIrTy,
+    Db: ?Sized + ItemSchemes + VarTys + TermTys + MkTy<InDb> + MkIrTy + IrEffectInfo + 'a,
+    &'a Db: AccessTy<'a, InDb>,
 {
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
-    let (mut lower_ctx, ev_locals, ev_params) =
-        LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, module)
-            .collect_evidence_params(ast.root().row_ev_terms(ast.arena()), scheme.constrs.iter());
+    let (mut lower_ctx, ev_locals, ev_params) = LowerCtx::new(
+        db,
+        &mut var_conv,
+        &mut tyvar_conv,
+        ItemSelector {
+            module,
+            item: ast.name,
+        },
+    )
+    .collect_evidence_params(ast.root().row_ev_terms(ast.arena()), scheme.constrs.iter());
 
     let body = lower_ctx.lower_term(ast, ast.tree);
     // Bind all unique solved row evidence to local variables at top of the term
@@ -174,22 +297,27 @@ pub mod test_utils {
             }
         }
     }
-    impl<'ctx> VarTys<'ctx> for LowerDb<'_> {
-        fn lookup_var(&self, var_id: VarId) -> Ty {
+    impl VarTys for LowerDb<'_> {
+        fn lookup_var(&self, _module_id: ModuleId, _item_id: ItemId, var_id: VarId) -> Ty {
             self.var_tys[&var_id]
         }
     }
-    impl<'ctx> TermTys<'ctx> for LowerDb<'_> {
-        fn lookup_term(&self, term: Idx<Term<VarId>>) -> TyChkRes<InDb> {
+    impl TermTys for LowerDb<'_> {
+        fn lookup_term(
+            &self,
+            _module_id: ModuleId,
+            _item_id: ItemId,
+            term: Idx<Term<VarId>>,
+        ) -> TyChkRes<InDb> {
             self.term_tys[&term]
         }
     }
-    impl<'ctx> ItemSchemes<'ctx> for LowerDb<'_> {
+    impl ItemSchemes for LowerDb<'_> {
         fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme {
             todo!()
         }
     }
-    impl<'ctx> EffectInfo<'ctx> for LowerDb<'_> {
+    impl EffectInfo for LowerDb<'_> {
         fn effect_name(&self, mod_id: ModuleId, eff: aiahr_core::id::EffectId) -> Ident {
             self.eff_info.effect_name(mod_id, eff)
         }
@@ -198,7 +326,7 @@ pub mod test_utils {
             &self,
             mod_id: ModuleId,
             eff: aiahr_core::id::EffectId,
-        ) -> RefHandle<'static, [aiahr_core::id::EffectOpId]> {
+        ) -> &[aiahr_core::id::EffectOpId] {
             self.eff_info.effect_members(mod_id, eff)
         }
 
@@ -237,7 +365,7 @@ pub mod test_utils {
         }
     }
 
-    impl<'ctx> IrEffectInfo<'ctx> for LowerDb<'_> {
+    impl IrEffectInfo for LowerDb<'_> {
         fn effect_handler_return_index(&self, _: ModuleId, eff_id: EffectId) -> usize {
             match eff_id {
                 DummyEff::STATE_ID => 2,

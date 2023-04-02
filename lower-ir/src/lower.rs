@@ -18,6 +18,7 @@ use aiahr_core::{
 };
 use aiahr_tc::TyChkRes;
 use la_arena::Idx;
+use rustc_hash::FxHashSet;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv, SolvedRowEv},
@@ -29,7 +30,7 @@ use crate::{
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_prod_ty<'a, A: AccessTy<'a, InDb>>(db: &A, ty: Ty) -> Row {
+fn expect_prod_ty<'a, A: ?Sized + AccessTy<'a, InDb>>(db: &A, ty: Ty) -> Row {
     ty.try_as_prod_row(db).unwrap_or_else(|_| unreachable!())
 }
 
@@ -37,7 +38,7 @@ fn expect_prod_ty<'a, A: AccessTy<'a, InDb>>(db: &A, ty: Ty) -> Row {
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_sum_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty) -> Row {
+fn expect_sum_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row {
     ty.try_as_sum_row(db).unwrap_or_else(|_| unreachable!())
 }
 
@@ -47,20 +48,31 @@ fn expect_sum_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty) -> Row {
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_branch_ty<'a>(db: &impl AccessTy<'a, InDb>, ty: Ty) -> Row {
+fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row {
     ty.try_as_fn_ty(db)
         .and_then(|(arg, _)| arg.try_as_sum_row(db))
         .unwrap_or_else(|_| unreachable!())
 }
 
-pub trait ItemSchemes<'ctx> {
+pub trait ItemSchemes {
     fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme;
 }
-pub trait VarTys<'ctx> {
-    fn lookup_var(&self, var_id: VarId) -> Ty;
+pub trait VarTys {
+    fn lookup_var(&self, module_id: ModuleId, item_id: ItemId, var_id: VarId) -> Ty;
 }
-pub trait TermTys<'ctx> {
-    fn lookup_term(&self, term: Idx<Term<VarId>>) -> TyChkRes<InDb>;
+pub trait TermTys {
+    fn lookup_term(
+        &self,
+        module_id: ModuleId,
+        item_id: ItemId,
+        term: Idx<Term<VarId>>,
+    ) -> TyChkRes<InDb>;
+}
+
+/// Selects an item based on it's module id and item id.
+pub(crate) struct ItemSelector {
+    pub(crate) module: ModuleId,
+    pub(crate) item: ItemId,
 }
 
 // TODO: Wip name
@@ -69,7 +81,7 @@ pub(crate) struct Evidentfull;
 
 pub(crate) struct LowerCtx<'a, 'b, Db: ?Sized, State = Evidenceless> {
     db: &'a Db,
-    module: ModuleId,
+    current: ItemSelector,
     var_conv: &'b mut IdConverter<VarId, IrVarId>,
     tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
     ev_map: EvidenceMap,
@@ -79,7 +91,7 @@ pub(crate) struct LowerCtx<'a, 'b, Db: ?Sized, State = Evidenceless> {
 
 impl<'a, 'b, Db, S> MkIrTy for LowerCtx<'a, 'b, Db, S>
 where
-    Db: MkIrTy,
+    Db: ?Sized + MkIrTy,
 {
     fn mk_ir_ty(&self, kind: IrTyKind) -> IrTy {
         self.db.mk_ir_ty(kind)
@@ -96,8 +108,63 @@ where
 
 impl<'a, 'ctx, Db, S> LowerCtx<'a, '_, Db, S>
 where
-    Db: AccessTy<'a, InDb> + MkIrTy,
+    Db: ?Sized + TermTys,
 {
+    fn lookup_term(&self, term: Idx<Term<VarId>>) -> TyChkRes<InDb> {
+        self.db
+            .lookup_term(self.current.module, self.current.item, term)
+    }
+}
+
+impl<'a, 'ctx, Db, S> LowerCtx<'a, '_, Db, S>
+where
+    Db: ?Sized + VarTys,
+{
+    fn lookup_var(&self, var_id: VarId) -> Ty {
+        self.db
+            .lookup_var(self.current.module, self.current.item, var_id)
+    }
+}
+
+impl<'a, 'ctx, Db, S> LowerCtx<'a, '_, Db, S>
+where
+    Db: ?Sized + MkIrTy,
+    &'a Db: AccessTy<'a, InDb>,
+{
+    pub(crate) fn lower_scheme(&mut self, scheme: &TyScheme) -> IrTy {
+        let ir_ty = self.lower_ty(scheme.ty);
+        let mut row_kinds = FxHashSet::default();
+        // Add parameter to type for each constraint
+        let constrs_ty = scheme.constrs.iter().rfold(ir_ty, |ty, constr| {
+            match constr {
+                Evidence::Row { left, right, goal } => {
+                    if let Row::Open(ty_var) = left {
+                        row_kinds.insert(ty_var);
+                    }
+                    if let Row::Open(ty_var) = right {
+                        row_kinds.insert(ty_var);
+                    }
+                    if let Row::Open(ty_var) = goal {
+                        row_kinds.insert(ty_var);
+                    }
+                }
+            };
+            let arg = self.row_evidence_ir_ty(constr);
+            self.mk_ir_ty(IrTyKind::FunTy(arg, ty))
+        });
+        // Add each type variable around type
+        scheme.bound.iter().rfold(constrs_ty, |ty, ty_var| {
+            let ir_ty_var_id = self.tyvar_conv.convert(*ty_var);
+            let var = IrVarTy {
+                var: ir_ty_var_id,
+                kind: (row_kinds.contains(&ty_var))
+                    .then_some(Kind::Row)
+                    .unwrap_or(Kind::Type),
+            };
+            self.mk_ir_ty(ForallTy(var, ty))
+        })
+    }
+
     fn lower_ty(&mut self, ty: Ty) -> IrTy {
         match self.db.kind(&ty) {
             TypeKind::RowTy(_) => panic!("This should not be allowed"),
@@ -177,12 +244,12 @@ where
                 Ir::new(FieldProj(index, P::new(prod)))
             }
         };
-        let left_len = left.len(self.db);
-        let right_len = right.len(self.db);
-        let goal_len = goal.len(self.db);
+        let left_len = left.len(&self.db);
+        let right_len = right.len(&self.db);
+        let goal_len = goal.len(&self.db);
         let concat = P::new(Ir::abss(
             [left_prod_var, right_prod_var],
-            Ir::new(match (left.is_empty(self.db), right.is_empty(self.db)) {
+            Ir::new(match (left.is_empty(&self.db), right.is_empty(&self.db)) {
                 (true, true) => Struct(vec![]),
                 (true, false) => Var(right_prod_var),
                 (false, true) => Var(left_prod_var),
@@ -246,7 +313,7 @@ where
             branch_tyvar,
             P::new(Ir::abss(
                 [left_branch_var, right_branch_var, goal_branch_var],
-                match (left.is_empty(self.db), right.is_empty(self.db)) {
+                match (left.is_empty(&self.db), right.is_empty(&self.db)) {
                     // we're discriminating void, produce a case with no branches
                     (true, true) => Ir::case_on_var(goal_branch_var, vec![]),
                     (true, false) => Ir::app(Ir::var(left_branch_var), [Ir::var(goal_branch_var)]),
@@ -404,19 +471,19 @@ where
 
 impl<'a, 'b, 'ctx, Db> LowerCtx<'a, 'b, Db, Evidenceless>
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx> + MkTy<InDb>,
-    Db: AccessTy<'a, InDb> + MkIrTy,
+    Db: ?Sized + ItemSchemes + VarTys + TermTys + IrEffectInfo + MkTy<InDb> + MkIrTy,
+    &'a Db: AccessTy<'a, InDb>,
 {
     pub(crate) fn new(
         db: &'a Db,
         var_conv: &'b mut IdConverter<VarId, IrVarId>,
         tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
-        module: ModuleId,
+        current: ItemSelector,
     ) -> Self {
         let evv_id = var_conv.generate();
         Self {
             db,
-            module,
+            current,
             var_conv,
             tyvar_conv,
             ev_map: EvidenceMap::default(),
@@ -444,9 +511,9 @@ where
             .into_iter()
             .filter_map(|row_view| match row_view.view {
                 RowTerm::Concat { left, right } => {
-                    let left_row = expect_prod_ty(self.db, self.db.lookup_term(left).ty);
-                    let right_row = expect_prod_ty(self.db, self.db.lookup_term(right).ty);
-                    let goal_row = expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
+                    let left_row = expect_prod_ty(&self.db, self.lookup_term(left).ty);
+                    let right_row = expect_prod_ty(&self.db, self.lookup_term(right).ty);
+                    let goal_row = expect_prod_ty(&self.db, self.lookup_term(row_view.parent).ty);
 
                     match (left_row, right_row, goal_row) {
                         (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
@@ -456,10 +523,9 @@ where
                     }
                 }
                 RowTerm::Branch { left, right } => {
-                    let left_row = expect_branch_ty(self.db, self.db.lookup_term(left).ty);
-                    let right_row = expect_branch_ty(self.db, self.db.lookup_term(right).ty);
-                    let goal_row =
-                        expect_branch_ty(self.db, self.db.lookup_term(row_view.parent).ty);
+                    let left_row = expect_branch_ty(&self.db, self.lookup_term(left).ty);
+                    let right_row = expect_branch_ty(&self.db, self.lookup_term(right).ty);
+                    let goal_row = expect_branch_ty(&self.db, self.lookup_term(row_view.parent).ty);
 
                     match (left_row, right_row, goal_row) {
                         (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
@@ -469,8 +535,8 @@ where
                     }
                 }
                 RowTerm::Project { direction, term } => {
-                    let sub_row = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
-                    let goal_row = expect_prod_ty(self.db, self.db.lookup_term(row_view.parent).ty);
+                    let sub_row = expect_prod_ty(&self.db, self.lookup_term(term).ty);
+                    let goal_row = expect_prod_ty(&self.db, self.lookup_term(row_view.parent).ty);
 
                     match (sub_row, goal_row) {
                         (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
@@ -481,8 +547,8 @@ where
                     }
                 }
                 RowTerm::Inject { direction, term } => {
-                    let sub_row = expect_sum_ty(self.db, self.db.lookup_term(term).ty);
-                    let goal_row = expect_sum_ty(self.db, self.db.lookup_term(row_view.parent).ty);
+                    let sub_row = expect_sum_ty(&self.db, self.lookup_term(term).ty);
+                    let goal_row = expect_sum_ty(&self.db, self.lookup_term(row_view.parent).ty);
 
                     match (sub_row, goal_row) {
                         (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
@@ -547,13 +613,13 @@ where
 
 impl<'a, 'b, 'ctx, Db> LowerCtx<'a, 'b, Db, Evidentfull>
 where
-    Db: ItemSchemes<'ctx> + VarTys<'ctx> + TermTys<'ctx> + IrEffectInfo<'ctx>,
-    Db: AccessTy<'a, InDb> + MkIrTy,
+    Db: ?Sized + ItemSchemes + VarTys + TermTys + IrEffectInfo + MkIrTy,
+    &'a Db: AccessTy<'a, InDb>,
 {
     fn with_evidenceless(prior: LowerCtx<'a, 'b, Db, Evidenceless>) -> Self {
         Self {
             db: prior.db,
-            module: prior.module,
+            current: prior.current,
             var_conv: prior.var_conv,
             tyvar_conv: prior.tyvar_conv,
             ev_map: prior.ev_map,
@@ -567,7 +633,7 @@ where
         match ast.view(term) {
             Unit => Ir::new(Struct(vec![])),
             Abstraction { arg, body } => {
-                let term_ty = self.db.lookup_var(*arg);
+                let term_ty = self.lookup_var(*arg);
                 let ty = self.lower_ty(term_ty);
                 let var = IrVar {
                     var: self.var_conv.convert(*arg),
@@ -580,7 +646,7 @@ where
                 P::new(self.lower_term(ast, *arg)),
             )),
             Variable(var) => {
-                let ty = self.db.lookup_var(*var);
+                let ty = self.lookup_var(*var);
                 Ir::new(Var(IrVar {
                     var: self.var_conv.convert(*var),
                     ty: self.lower_ty(ty),
@@ -593,9 +659,9 @@ where
             Unlabel { term, .. } => self.lower_term(ast, *term),
             // Row stuff
             Concat { left, right } => {
-                let goal_row = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
-                let left_row = expect_prod_ty(self.db, self.db.lookup_term(*left).ty);
-                let right_row = expect_prod_ty(self.db, self.db.lookup_term(*right).ty);
+                let goal_row = expect_prod_ty(&self.db, self.lookup_term(term).ty);
+                let left_row = expect_prod_ty(&self.db, self.lookup_term(*left).ty);
+                let right_row = expect_prod_ty(&self.db, self.lookup_term(*right).ty);
                 let ev = Evidence::Row {
                     left: left_row,
                     right: right_row,
@@ -610,9 +676,9 @@ where
                 )
             }
             Branch { left, right } => {
-                let left_row = expect_branch_ty(self.db, self.db.lookup_term(*left).ty);
-                let right_row = expect_branch_ty(self.db, self.db.lookup_term(*right).ty);
-                let goal_row = expect_branch_ty(self.db, self.db.lookup_term(term).ty);
+                let left_row = expect_branch_ty(&self.db, self.lookup_term(*left).ty);
+                let right_row = expect_branch_ty(&self.db, self.lookup_term(*right).ty);
+                let goal_row = expect_branch_ty(&self.db, self.lookup_term(term).ty);
 
                 let param = self.ev_map[&(Evidence::Row {
                     left: left_row,
@@ -630,8 +696,8 @@ where
                 direction,
                 term: subterm,
             } => {
-                let goal = expect_prod_ty(self.db, self.db.lookup_term(*subterm).ty);
-                let other = expect_prod_ty(self.db, self.db.lookup_term(term).ty);
+                let goal = expect_prod_ty(&self.db, self.lookup_term(*subterm).ty);
+                let other = expect_prod_ty(&self.db, self.lookup_term(term).ty);
 
                 let param = self.ev_map[&PartialEv { goal, other }];
                 let idx = match direction {
@@ -649,8 +715,8 @@ where
                 direction,
                 term: subterm,
             } => {
-                let goal = expect_sum_ty(self.db, self.db.lookup_term(term).ty);
-                let other = expect_sum_ty(self.db, self.db.lookup_term(*subterm).ty);
+                let goal = expect_sum_ty(&self.db, self.lookup_term(term).ty);
+                let other = expect_sum_ty(&self.db, self.lookup_term(*subterm).ty);
 
                 let param = self.ev_map[&PartialEv { other, goal }];
                 let idx = match direction {
@@ -667,10 +733,9 @@ where
             // Effect stuff
             Operation((mod_id, eff_id, op)) => {
                 let (value_ty, _) = self
-                    .db
                     .lookup_term(term)
                     .ty
-                    .try_as_fn_ty(self.db)
+                    .try_as_fn_ty(&self.db)
                     .unwrap_or_else(|_| unreachable!());
                 let value_var = IrVar {
                     var: self.var_conv.generate(),
@@ -719,10 +784,10 @@ where
                     var: self.var_conv.generate(),
                     ty: self.mk_ir_ty(IntTy),
                 };
-                let handler_infer = self.db.lookup_term(*handler);
+                let handler_infer = self.lookup_term(*handler);
                 let eff_name = match handler_infer.eff {
                     Row::Closed(eff_row) => {
-                        debug_assert!(eff_row.len(self.db) == 1);
+                        debug_assert!(eff_row.len(&self.db) == 1);
                         self.db.row_fields(&eff_row.fields)[0]
                     }
                     Row::Open(_) => {
@@ -731,7 +796,7 @@ where
                 };
                 let (mod_id, eff) = self
                     .db
-                    .lookup_effect_by_name(self.module, eff_name)
+                    .lookup_effect_by_name(self.current.module, eff_name)
                     .expect("Invalid effect name should've been caught in type checking");
                 let eff_index = self.db.effect_vector_index(mod_id, eff);
                 let handler_var = IrVar {
@@ -740,9 +805,9 @@ where
                 };
                 let handler_ir = self.lower_term(ast, *handler);
 
-                let ret_ty = self.lower_ty(self.db.lookup_term(term).ty);
+                let ret_ty = self.lower_ty(self.lookup_term(term).ty);
 
-                let body_ty = self.lower_ty(self.db.lookup_term(*body).ty);
+                let body_ty = self.lower_ty(self.lookup_term(*body).ty);
                 let ret_index = self.db.effect_handler_return_index(mod_id, eff);
                 let updated_evv = Ir::new(VectorSet(
                     self.evv_var,

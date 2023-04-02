@@ -158,32 +158,12 @@ pub mod db {
     {
     }
 
-    impl MkTy<InDb> for dyn crate::Db + '_ {
-        fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
-            Ty(TyData::new(self, kind))
-        }
-
-        fn mk_label(&self, label: &str) -> RowLabel {
-            self.ident_str(label)
-        }
-
-        fn mk_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
-            debug_assert_eq!(fields.len(), values.len());
-            debug_assert!(fields.iter().considered_sorted());
-
-            ClosedRow {
-                fields: SalsaRowFields::new(self, fields.to_vec()),
-                values: SalsaRowValues::new(self, values.to_vec()),
-            }
-        }
-    }
-
     impl<DB> MkTy<InDb> for DB
     where
-        DB: crate::Db,
+        DB: ?Sized + crate::Db,
     {
         fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
-            Ty(TyData::new(self, kind))
+            Ty(TyData::new(self.as_core_db(), kind))
         }
 
         fn mk_label(&self, label: &str) -> RowLabel {
@@ -195,39 +175,26 @@ pub mod db {
             debug_assert!(fields.iter().considered_sorted());
 
             ClosedRow {
-                fields: SalsaRowFields::new(self, fields.to_vec()),
-                values: SalsaRowValues::new(self, values.to_vec()),
+                fields: SalsaRowFields::new(self.as_core_db(), fields.to_vec()),
+                values: SalsaRowValues::new(self.as_core_db(), values.to_vec()),
             }
         }
     }
 
     impl<'db, DB> AccessTy<'db, InDb> for &'db DB
     where
-        DB: crate::Db,
+        DB: ?Sized + crate::Db,
     {
         fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
-            ty.0.kind(*self)
+            ty.0.kind(self.as_core_db())
         }
 
         fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
-            row.fields(*self).as_slice()
+            row.fields(self.as_core_db()).as_slice()
         }
 
         fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
-            row.values(*self).as_slice()
-        }
-    }
-    impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
-        fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
-            ty.0.kind(*self)
-        }
-
-        fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
-            row.fields(*self)
-        }
-
-        fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
-            row.values(*self)
+            row.values(self.as_core_db()).as_slice()
         }
     }
 }

@@ -285,7 +285,7 @@ where
         InferResult<'infer>,
     )
     where
-        E: EffectInfo<'eff>,
+        E: ?Sized + EffectInfo,
     {
         let res = self._infer(eff_info, term);
         let (var_tys, infer_ctx) = InferCtx::with_generation(self);
@@ -301,7 +301,7 @@ where
         term: &'ctx Term<'ctx, VarId>,
         expected: InferResult<'infer>,
     ) where
-        E: EffectInfo<'eff>,
+        E: ?Sized + EffectInfo,
     {
         use TypeKind::*;
         self.state.term_tys.insert(term, expected);
@@ -494,7 +494,7 @@ where
         term: &'ctx Term<'ctx, VarId>,
     ) -> InferResult<'infer>
     where
-        E: EffectInfo<'eff>,
+        E: ?Sized + EffectInfo,
     {
         let current_span = || {
             *self
@@ -867,14 +867,17 @@ where
 
     /// Solve a list of constraints to a mapping from unifiers to types.
     /// If there is no solution to the list of constraints we return a relevant error.
-    pub(crate) fn solve<'s, 'eff, E: EffectInfo<'eff>>(
+    pub(crate) fn solve<'s, 'eff, E>(
         mut self,
         eff_info: &E,
     ) -> (
         InPlaceUnificationTable<TcUnifierVar<'infer>>,
         <Solution as InferState>::Storage<'ctx, 'infer>,
         Vec<TypeCheckDiagnostic>,
-    ) {
+    )
+    where
+        E: ?Sized + EffectInfo,
+    {
         let constraints = std::mem::take(&mut self.constraints);
         for (left, right, span) in constraints.tys {
             self.unify_ty_ty(left, right)
@@ -1343,13 +1346,16 @@ where
         }
     }
 
-    fn lookup_effect_and_unify<'s, 'eff, E: EffectInfo<'eff>>(
+    fn lookup_effect_and_unify<'s, 'eff, E>(
         &mut self,
         eff_info: &E,
         handler: InferRow<'infer>,
         eff: InferRow<'infer>,
         ret: InferTy<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> {
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        E: ?Sized + EffectInfo,
+    {
         let normal_handler = self.normalize_row(handler);
         let normal_eff = self.normalize_row(eff);
         let normal_ret = self.normalize_ty(ret);

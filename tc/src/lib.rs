@@ -2,7 +2,6 @@ use aiahr_core::{
     ast::{self, Ast, Term},
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
-    memory::handle::RefHandle,
     modules::module_of,
     ty::row::Row,
     Top,
@@ -31,11 +30,11 @@ mod infer;
 pub use infer::TyChkRes;
 
 /// Information we need about effects during type checking
-pub trait EffectInfo<'ctx> {
+pub trait EffectInfo {
     /// Lookup the name of an effect from it's ID
     fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident;
     /// Lookup effect members from it's ID
-    fn effect_members(&self, module: ModuleId, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]>;
+    fn effect_members(&self, module: ModuleId, eff: EffectId) -> &[EffectOpId];
 
     /// Look up an effect by the name of it's members, this may fail if an invalid list of member
     /// names is passed.
@@ -66,21 +65,10 @@ impl<DB> Db for DB where
 {
 }
 
-impl<'db> AccessTy<'db, InDb> for &'db (dyn crate::Db + '_) {
-    fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
-        self.as_core_db().kind(ty)
-    }
-
-    fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [row::RowLabel] {
-        self.as_core_db().row_fields(row)
-    }
-
-    fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
-        self.as_core_db().row_values(row)
-    }
-}
-
-impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_) {
+impl<DB> EffectInfo for DB
+where
+    DB: ?Sized + crate::Db,
+{
     fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
         aiahr_analysis::effect_name(
             self.as_analysis_db(),
@@ -90,16 +78,14 @@ impl<'db> EffectInfo<'db> for &'db (dyn crate::Db + '_) {
         )
     }
 
-    fn effect_members(&self, module: ModuleId, eff: EffectId) -> RefHandle<'db, [EffectOpId]> {
-        aiahr_core::memory::handle::Handle(
-            aiahr_analysis::effect_members(
-                self.as_analysis_db(),
-                Top::new(self.as_core_db()),
-                module,
-                eff,
-            )
-            .as_slice(),
+    fn effect_members(&self, module: ModuleId, eff: EffectId) -> &[EffectOpId] {
+        aiahr_analysis::effect_members(
+            self.as_analysis_db(),
+            Top::new(self.as_core_db()),
+            module,
+            eff,
         )
+        .as_slice()
     }
 
     fn lookup_effect_by_member_names(
@@ -183,7 +169,7 @@ pub fn type_scheme_of(
 
     let ref_arena = Bump::new();
     let (ast, ref_to_indx) = ast.ref_alloc(&ref_arena);
-    let (var_to_tys, terms_to_tys, ty_scheme, diags) = type_check(db, &db, module_id, &ast);
+    let (var_to_tys, terms_to_tys, ty_scheme, diags) = type_check(db, db, module_id, &ast);
 
     //TODO: Push errors to diagnostic
     drop(diags);
@@ -211,7 +197,7 @@ pub fn type_check<'ty, 's, 'eff, E>(
     Vec<TypeCheckDiagnostic>,
 )
 where
-    E: EffectInfo<'eff>,
+    E: ?Sized + EffectInfo,
 {
     let arena = Bump::new();
     let infer_ctx = TyCtx::new(db.as_core_db(), &arena);
@@ -232,7 +218,7 @@ fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
 )
 where
     II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
-    E: EffectInfo<'eff>,
+    E: ?Sized + EffectInfo,
 {
     let term = ast.root();
     let infer = InferCtx::new(db, infer_ctx, module, ast);
@@ -303,7 +289,6 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
 pub mod test_utils {
     use aiahr_core::id::{EffectId, EffectOpId, ModuleId, TyVarId};
     use aiahr_core::ident::Ident;
-    use aiahr_core::memory::handle::{self, RefHandle};
 
     use crate::{EffectInfo, MkTy, Row, TyScheme};
 
@@ -319,7 +304,7 @@ pub mod test_utils {
         pub const PUT_ID: EffectOpId = EffectOpId(1);
         pub const ASK_ID: EffectOpId = EffectOpId(2);
     }
-    impl<'ctx> EffectInfo<'ctx> for DummyEff<'_> {
+    impl<'ctx> EffectInfo for DummyEff<'_> {
         fn effect_name(&self, _: ModuleId, eff: EffectId) -> Ident {
             match eff {
                 DummyEff::STATE_ID => self.0.ident_str("State"),
@@ -328,10 +313,10 @@ pub mod test_utils {
             }
         }
 
-        fn effect_members(&self, _: ModuleId, eff: EffectId) -> RefHandle<'ctx, [EffectOpId]> {
+        fn effect_members(&self, _: ModuleId, eff: EffectId) -> &[EffectOpId] {
             match eff {
-                DummyEff::STATE_ID => handle::Handle(&[DummyEff::GET_ID, DummyEff::PUT_ID]),
-                DummyEff::READER_ID => handle::Handle(&[DummyEff::ASK_ID]),
+                DummyEff::STATE_ID => &[DummyEff::GET_ID, DummyEff::PUT_ID],
+                DummyEff::READER_ID => &[DummyEff::ASK_ID],
                 _ => unimplemented!(),
             }
         }

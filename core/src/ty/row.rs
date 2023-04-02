@@ -31,11 +31,11 @@ where
 {
 }
 impl<A: TypeAlloc> ClosedRow<A> {
-    pub fn is_empty(&self, acc: &dyn AccessTy<'_, A>) -> bool {
+    pub fn is_empty<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> bool {
         acc.row_fields(&self.fields).is_empty()
     }
 
-    pub fn len(&self, acc: &dyn AccessTy<'_, A>) -> usize {
+    pub fn len<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
         acc.row_fields(&self.fields).len()
     }

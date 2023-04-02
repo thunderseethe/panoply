@@ -62,7 +62,10 @@ impl DebugWithDb<dyn crate::Db + '_> for Ty<InDb> {
 }
 
 impl Ty<InDb> {
-    pub fn try_as_prod_row<'a>(self, db: &impl AccessTy<'a, InDb>) -> Result<Row<InDb>, Self> {
+    pub fn try_as_prod_row<'a>(
+        self,
+        db: &(impl ?Sized + AccessTy<'a, InDb>),
+    ) -> Result<Row<InDb>, Self> {
         match db.kind(&self) {
             TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
             TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
@@ -70,7 +73,10 @@ impl Ty<InDb> {
         }
     }
 
-    pub fn try_as_sum_row<'a>(self, db: &impl AccessTy<'a, InDb>) -> Result<Row<InDb>, Self> {
+    pub fn try_as_sum_row<'a>(
+        self,
+        db: &(impl ?Sized + AccessTy<'a, InDb>),
+    ) -> Result<Row<InDb>, Self> {
         match db.kind(&self) {
             TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
             TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
@@ -78,7 +84,10 @@ impl Ty<InDb> {
         }
     }
 
-    pub fn try_as_fn_ty<'a>(self, db: &impl AccessTy<'a, InDb>) -> Result<(Self, Self), Self> {
+    pub fn try_as_fn_ty<'a>(
+        self,
+        db: &(impl ?Sized + AccessTy<'a, InDb>),
+    ) -> Result<(Self, Self), Self> {
         match db.kind(&self) {
             TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
             _ => Err(self),
