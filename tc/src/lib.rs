@@ -6,7 +6,6 @@ use aiahr_core::{
     ty::row::Row,
     Top,
 };
-use aiahr_desugar::desugar_module_of;
 use bumpalo::Bump;
 use diagnostic::TypeCheckDiagnostic;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
@@ -151,7 +150,7 @@ pub fn type_scheme_of(
 ) -> SalsaTypedItem {
     let core_db = db.as_core_db();
     let module = module_of(core_db, top, module_id);
-    let ast_module = desugar_module_of(db.as_desugar_db(), module);
+    let ast_module = db.desugar_module_of(module);
     let ast = ast_module
         .items(core_db)
         .iter()

@@ -36,6 +36,7 @@ pub struct Jar(
     file::SourceFile,
     file::SourceFileSet,
     file::module_source_file,
+    file::module_id_for_path,
     ident::Ident,
     ir::indexed::IrTy,
     modules::Module,

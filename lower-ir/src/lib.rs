@@ -42,7 +42,13 @@ pub trait IrEffectInfo: EffectInfo {
 }
 
 #[salsa::jar(db = Db)]
-pub struct Jar(IrModule, IrItem, lower_module, effect_handler_ir_ty);
+pub struct Jar(
+    IrModule,
+    IrItem,
+    lower_module,
+    lower_item,
+    effect_handler_ir_ty,
+);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {
     fn as_lower_ir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -50,6 +56,21 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {
 
     fn lower_module(&self, module: AstModule) -> IrModule {
         lower_module(self.as_lower_ir_db(), module)
+    }
+
+    fn lower_item(&self, module_id: ModuleId, item_id: ItemId) -> IrItem {
+        lower_item(self.as_lower_ir_db(), self.top(), module_id, item_id)
+    }
+
+    fn lower_module_of(&self, module_id: ModuleId) -> IrModule {
+        let module = aiahr_core::modules::module_of(self.as_core_db(), self.top(), module_id);
+        let ast_module = self.desugar_module_of(module);
+        self.lower_module(ast_module)
+    }
+
+    fn lower_module_for_path(&self, path: std::path::PathBuf) -> IrModule {
+        let module_id = aiahr_core::file::module_id_for_path(self.as_core_db(), self.top(), path);
+        self.lower_module_of(module_id)
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db {}
@@ -90,6 +111,16 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
         })
         .collect();
     IrModule::new(db, module.module(core_db), items)
+}
+
+#[salsa::tracked]
+fn lower_item(db: &dyn crate::Db, _top: Top, module_id: ModuleId, item_id: ItemId) -> IrItem {
+    let ir_module = db.lower_module_of(module_id);
+    *ir_module
+        .items(db)
+        .iter()
+        .find(|item| item.name(db) == ModuleName::from(item_id))
+        .unwrap_or_else(|| panic!("ICE: No IrItem constructed for ItemId {:?}", item_id))
 }
 
 #[salsa::tracked]

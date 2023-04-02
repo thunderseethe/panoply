@@ -25,7 +25,6 @@ use rustc_hash::FxHashMap;
 #[salsa::jar(db = Db)]
 pub struct Jar(
     desugar_module,
-    desugar_module_of,
     desugar_item,
     desugar_item_of_id,
     effect_of,
@@ -34,6 +33,15 @@ pub struct Jar(
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {
     fn as_desugar_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
+    }
+
+    fn desugar_module_of(&self, module: Module) -> AstModule {
+        self.desugar_module_id_of(module.name(self.as_core_db()))
+    }
+
+    fn desugar_module_id_of(&self, module_id: ModuleId) -> AstModule {
+        let nameres_module = self.nameres_module_of(module_id);
+        desugar_module(self.as_desugar_db(), nameres_module)
     }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {}
@@ -92,12 +100,6 @@ pub fn desugar_item(
 }
 
 #[salsa::tracked]
-pub fn desugar_module_of(db: &dyn crate::Db, module: Module) -> AstModule {
-    let nameres_module = db.nameres_module_of(module.name(db.as_core_db()));
-    desugar_module(db, nameres_module)
-}
-
-#[salsa::tracked]
 pub fn desugar_item_of_id(
     db: &dyn crate::Db,
     _top: Top,
@@ -124,7 +126,7 @@ pub fn desugar_item_of_id(
 
 #[salsa::tracked]
 pub fn effect_of(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> ast::EffectItem {
-    let ast_mod = desugar_module_of(db, module);
+    let ast_mod = db.desugar_module_of(module);
     ast_mod
         .items(db.as_core_db())
         .iter()

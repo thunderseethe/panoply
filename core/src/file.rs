@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::id::ModuleId;
 
 #[salsa::input]
@@ -27,4 +29,15 @@ pub fn module_source_file(db: &dyn crate::Db, _top: crate::Top, mod_id: ModuleId
                 mod_id
             )
         })
+}
+
+#[salsa::tracked]
+pub fn module_id_for_path(db: &dyn crate::Db, _top: crate::Top, path: PathBuf) -> ModuleId {
+    let source_file_set = SourceFileSet::get(db);
+    source_file_set
+        .files(db)
+        .iter()
+        .find(|file| file.path(db) == &path)
+        .map(|file| file.module(db))
+        .unwrap_or_else(|| panic!("ICE: No source file for path {:?}", path))
 }
