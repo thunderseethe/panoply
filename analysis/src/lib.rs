@@ -1,6 +1,6 @@
 use aiahr_core::cst::indexed::CstRefAlloc;
 use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
-use aiahr_core::id::{EffectId, EffectOpId, ModuleId};
+use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use aiahr_core::ident::Ident;
 use aiahr_core::indexed::{IndexedAllocate, ReferenceAllocate};
 use aiahr_core::modules::{all_modules, Module, ModuleTree};
@@ -31,8 +31,6 @@ pub struct Jar(
     NameResModule,
     SalsaItem,
     all_effects,
-    nameres_module,
-    nameres_module_of,
     effect_name,
     effect_member_name,
     effect_members,
@@ -40,9 +38,13 @@ pub struct Jar(
     effect_handler_return_index,
     effect_handler_op_index,
     effect_vector_index,
-    module_effects,
+    id_for_name,
+    item_name,
     lookup_effect_by_member_names,
     lookup_effect_by_name,
+    module_effects,
+    nameres_module,
+    nameres_module_of,
 );
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {
     fn as_analysis_db(&self) -> &dyn crate::Db {
@@ -51,6 +53,14 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {
 
     fn nameres_module_of(&self, mod_id: ModuleId) -> NameResModule {
         nameres_module_of(self.as_analysis_db(), self.top(), mod_id)
+    }
+
+    fn item_name(&self, mod_id: ModuleId, item_id: ItemId) -> Ident {
+        item_name(self.as_analysis_db(), self.top(), mod_id, item_id)
+    }
+
+    fn id_for_name(&self, mod_id: ModuleId, name: Ident) -> Option<ItemId> {
+        id_for_name(self.as_analysis_db(), self.top(), mod_id, name)
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {}
@@ -144,6 +154,23 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
 fn nameres_module_of(db: &dyn crate::Db, _top: Top, mod_id: ModuleId) -> NameResModule {
     let parse_module = db.parse_module_of(mod_id);
     nameres_module(db, parse_module)
+}
+
+#[salsa::tracked]
+fn item_name(db: &dyn crate::Db, _top: Top, mod_id: ModuleId, item_id: ItemId) -> Ident {
+    let module = db.nameres_module_of(mod_id);
+    module.names(db)[&mod_id].get(item_id).value
+}
+
+#[salsa::tracked]
+fn id_for_name(db: &dyn crate::Db, _top: Top, mod_id: ModuleId, name: Ident) -> Option<ItemId> {
+    let module = db.nameres_module_of(mod_id);
+    module.names(db)[&mod_id]
+        .find(name)
+        .find_map(|module_name| match module_name.value {
+            ModuleName::Effect(_) => None,
+            ModuleName::Item(item_id) => Some(item_id),
+        })
 }
 
 #[salsa::tracked]

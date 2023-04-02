@@ -72,6 +72,12 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {
         let module_id = aiahr_core::file::module_id_for_path(self.as_core_db(), self.top(), path);
         self.lower_module_of(module_id)
     }
+
+    fn lower_item_for_file_name(&self, path: std::path::PathBuf, item: Ident) -> Option<IrItem> {
+        let module_id = aiahr_core::file::module_id_for_path(self.as_core_db(), self.top(), path);
+        let item_id = self.id_for_name(module_id, item)?;
+        Some(self.lower_item(module_id, item_id))
+    }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db {}
 
