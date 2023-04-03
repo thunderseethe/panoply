@@ -281,7 +281,10 @@ where
             item: ast.name,
         },
     )
-    .collect_evidence_params(ast.root().row_ev_terms(ast.arena()), scheme.constrs.iter());
+    .collect_evidence_params(
+        ast.view(ast.root()).row_ev_terms(ast.arena()),
+        scheme.constrs.iter(),
+    );
 
     let body = lower_ctx.lower_term(ast, ast.tree);
     // Bind all unique solved row evidence to local variables at top of the term
@@ -562,7 +565,6 @@ mod tests {
     use aiahr_tc::type_scheme_of;
     use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
-    use bumpalo::Bump;
     use ir_matcher::ir_matcher;
 
     const MOD: ModuleId = ModuleId(0);
@@ -660,16 +662,9 @@ mod tests {
                 ),
             )
         });
-        let arena = Bump::new();
-        let (ref_ast, map) = ast.ref_alloc(&arena);
         let (var_tys, term_tys, scheme, _) =
-            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), MOD, &ref_ast);
+            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), MOD, &ast);
 
-        //let (db, scheme, ast) = compile_upto_lower(&db, "wand m n = {m, n}.x");
-        let term_tys = term_tys
-            .into_iter()
-            .map(|(key, value)| (map[&key], value))
-            .collect();
         let ir = lower(&LowerDb::new(&db, var_tys, term_tys), MOD, &scheme, &ast);
         ir_matcher!(
             ir,

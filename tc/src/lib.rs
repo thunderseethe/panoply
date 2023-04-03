@@ -1,5 +1,6 @@
 use aiahr_core::{
-    ast::{self, Ast, Term},
+    ast,
+    ast::indexed::{Ast, Term},
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
     modules::module_of,
@@ -165,32 +166,21 @@ pub fn type_scheme_of(
             )
         });
 
-    let ref_arena = Bump::new();
-    let (ast, ref_to_indx) = ast.ref_alloc(&ref_arena);
     let (var_to_tys, terms_to_tys, ty_scheme, diags) = type_check(db, db, module_id, &ast);
 
     //TODO: Push errors to diagnostic
     drop(diags);
-    SalsaTypedItem::new(
-        db,
-        item_id,
-        var_to_tys,
-        terms_to_tys
-            .into_iter()
-            .map(|(ref_term, value)| (ref_to_indx[ref_term], value))
-            .collect(),
-        ty_scheme,
-    )
+    SalsaTypedItem::new(db, item_id, var_to_tys, terms_to_tys, ty_scheme)
 }
 
 pub fn type_check<'ty, 's, 'eff, E>(
     db: &dyn crate::Db,
     eff_info: &E,
     module: ModuleId,
-    ast: &Ast<'ty, VarId>,
+    ast: &Ast<VarId>,
 ) -> (
     FxHashMap<VarId, Ty<InDb>>,
-    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
+    FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
     TyScheme,
     Vec<TypeCheckDiagnostic>,
 )
@@ -207,10 +197,10 @@ fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
     infer_ctx: &II,
     eff_info: &E,
     module: ModuleId,
-    ast: &Ast<'ty, VarId>,
+    ast: &Ast<VarId>,
 ) -> (
     FxHashMap<VarId, Ty<InDb>>,
-    FxHashMap<&'ty Term<'ty, VarId>, TyChkRes<InDb>>,
+    FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
     TyScheme,
     Vec<TypeCheckDiagnostic>,
 )
@@ -415,7 +405,6 @@ mod tests {
     };
     use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
-    use bumpalo::Bump;
 
     use crate::type_check;
     use crate::{diagnostic::TypeCheckDiagnostic, test_utils::DummyEff, Evidence};
@@ -459,7 +448,6 @@ mod tests {
 
     #[test]
     fn test_tc_unlabel() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
         let x = VarId(0);
         let untyped_ast = AstBuilder::with_builder(&db, |builder| {
@@ -468,7 +456,6 @@ mod tests {
                 builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
             )
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -485,7 +472,6 @@ mod tests {
 
     #[test]
     fn test_tc_unlabel_fails_on_wrong_label() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
         let x = VarId(0);
         let untyped_ast = AstBuilder::with_builder(&db, |builder| {
@@ -494,7 +480,6 @@ mod tests {
                 builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
             )
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, _, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -510,13 +495,11 @@ mod tests {
 
     #[test]
     fn test_tc_label() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
         let x = VarId(0);
         let untyped_ast = AstBuilder::with_builder(&db, |builder| {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -536,14 +519,12 @@ mod tests {
 
     #[test]
     fn test_tc_abs() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
         let x = VarId(0);
         let y = VarId(1);
         let untyped_ast = AstBuilder::with_builder(&db, |builder| {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (var_to_tys, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -570,7 +551,6 @@ mod tests {
 
     #[test]
     fn test_tc_sum_literal() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
         let t = VarId(0);
         let f = VarId(1);
@@ -580,7 +560,6 @@ mod tests {
                 builder.mk_abs(f, builder.mk_unlabel("false", Variable(f))),
             )
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -607,7 +586,6 @@ mod tests {
 
     #[test]
     fn test_tc_product_literal() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
 
         let x = VarId(0);
@@ -626,7 +604,6 @@ mod tests {
                 ),
             )
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -653,7 +630,6 @@ mod tests {
 
     #[test]
     fn test_tc_product_wand() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
 
         let m = VarId(0);
@@ -670,7 +646,6 @@ mod tests {
                 ),
             )
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -709,7 +684,6 @@ mod tests {
 
     #[test]
     fn test_tc_applied_wand() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
 
         let m = VarId(0);
@@ -729,7 +703,6 @@ mod tests {
                 builder.mk_label("x", Unit),
             )
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -758,13 +731,11 @@ mod tests {
 
     #[test]
     fn test_tc_eff_operation_infers_correct_effect() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
 
         let untyped_ast = AstBuilder::with_builder(&db, |builder| {
             builder.mk_app(Operation((ModuleId(0), EffectId(0), EffectOpId(0))), Unit)
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
         let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
         assert_matches!(scheme.eff, Row::Closed(ClosedRow { fields, values }) => {
@@ -781,7 +752,6 @@ mod tests {
 
     #[test]
     fn test_tc_eff_handler_removes_correct_effect() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
 
         let untyped_ast = AstBuilder::with_builder(&db, |builder| {
@@ -814,7 +784,6 @@ mod tests {
                 ),
             )
         });
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, scheme, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 
@@ -839,10 +808,8 @@ mod tests {
 
     #[test]
     fn test_tc_undefined_var_fails() {
-        let arena = Bump::new();
         let db = TestDatabase::default();
         let untyped_ast = AstBuilder::with_builder(&db, |_| Variable(VarId(0)));
-        let (untyped_ast, _) = untyped_ast.ref_alloc(&arena);
 
         let (_, _, _, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
 

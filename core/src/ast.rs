@@ -53,7 +53,7 @@ pub mod indexed {
     }
     impl<Var> HasArenaRef<Term<Var>> for AstRefAlloc<'_, '_, Var> {
         fn arena(&self) -> &Arena<Term<Var>> {
-            &self.terms
+            self.terms
         }
     }
 
@@ -360,7 +360,7 @@ pub mod indexed {
     }
 
     /// Abstract Syntax Tree (AST)
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, Eq)]
     pub struct Ast<Var> {
         pub name: ItemId,
         // We store spans of the Ast out of band because we won't need them for most operations.
@@ -400,8 +400,8 @@ pub mod indexed {
             }
         }
 
-        pub fn root(&self) -> &Term<Var> {
-            self.view(self.tree)
+        pub fn root(&self) -> Idx<Term<Var>> {
+            self.tree
         }
 
         pub fn arena(&self) -> &Arena<Term<Var>> {
@@ -410,6 +410,19 @@ pub mod indexed {
 
         pub fn view(&self, term: Idx<Term<Var>>) -> &Term<Var> {
             &self.terms[term]
+        }
+
+        pub fn span_of(&self, node: Idx<Term<Var>>) -> Option<&Span> {
+            self.spans.get(&node)
+        }
+    }
+    impl<Var: PartialEq> PartialEq for Ast<Var> {
+        fn eq(&self, other: &Self) -> bool {
+            self.name == other.name
+                && self.tree == other.tree
+                && self.annotation == other.annotation
+                && self.spans == other.spans
+                && self.terms == other.terms
         }
     }
     impl<Var: Hash> std::hash::Hash for Ast<Var> {
