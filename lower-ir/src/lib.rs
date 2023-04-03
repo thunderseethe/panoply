@@ -154,7 +154,7 @@ fn effect_handler_ir_ty(
     // TODO: Produce members in order so we don't have to sort or get names here.
     let mut members = db
         .effect_members(module_id, effect_id)
-        .into_iter()
+        .iter()
         .map(|op_id| {
             let scheme = db.effect_member_sig(module_id, effect_id, *op_id);
             (

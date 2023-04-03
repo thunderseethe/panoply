@@ -80,7 +80,7 @@ where
 {
     fn split_off_prompt(&mut self, prompt: Prompt) -> Self;
 }
-impl<'ctx> StackExt for Stack {
+impl StackExt for Stack {
     fn split_off_prompt(&mut self, prompt: Prompt) -> Self {
         // rposition so we find the innermost instance of a prompt
         let idx = self

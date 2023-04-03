@@ -970,9 +970,9 @@ mod tests {
 
     #[test]
     fn test_effect_items() {
-        let mut db = TestDatabase::default();
+        let db = TestDatabase::default();
         let file = SourceFile::new(
-            &mut db,
+            &db,
             ModuleId(0),
             PathBuf::from("/eff_foo.aiahr"),
             "effect foo { foo: a -> a }".to_string(),

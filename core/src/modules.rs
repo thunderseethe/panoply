@@ -109,14 +109,12 @@ pub struct SalsaModuleTree {
 }
 
 #[salsa::tracked]
-pub fn all_modules(
-    db: &dyn crate::Db, /* TODO: this should take some kind of config file? or be an input */
-) -> SalsaModuleTree {
+pub fn all_modules(db: &dyn crate::Db) -> SalsaModuleTree {
     let source_file_set = SourceFileSet::get(db);
 
-    let mut files = source_file_set.files(db).clone();
+    let mut files = source_file_set.files(db);
     // Ensure that our SourceFiles are in order before re-assigning them a ModuleId
-    files.sort_by(|a, b| a.module(db).cmp(&b.module(db)));
+    files.sort_by_key(|module| module.module(db));
     let modules = files
         .into_iter()
         .map(|file| Module::new(db, file.module(db), file.path(db).clone()))

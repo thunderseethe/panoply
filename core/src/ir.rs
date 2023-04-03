@@ -318,17 +318,17 @@ pub struct Ir {
     pub kind: IrKind,
 }
 
-impl<'ctx> fmt::Debug for Ir {
+impl fmt::Debug for Ir {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.kind.fmt(f)
     }
 }
-impl<'ctx> Ir {
+impl Ir {
     pub fn new(kind: IrKind) -> Self {
         Self { kind }
     }
 
-    pub fn kind<'a>(&'a self) -> &'a IrKind {
+    pub fn kind(&self) -> &IrKind {
         &self.kind
     }
 
@@ -362,14 +362,14 @@ impl<'ctx> Ir {
         Ir::new(App(P::new(Ir::new(Abs(var, P::new(body)))), P::new(value)))
     }
 
-    pub fn unbound_vars<'a>(&'a self) -> impl Iterator<Item = indexed::IrVar> + 'a {
+    pub fn unbound_vars(&self) -> impl Iterator<Item = indexed::IrVar> + '_ {
         self.unbound_vars_with_bound(FxHashSet::default())
     }
 
-    pub fn unbound_vars_with_bound<'a>(
-        &'a self,
+    pub fn unbound_vars_with_bound(
+        &self,
         bound: FxHashSet<IrVarId>,
-    ) -> impl Iterator<Item = indexed::IrVar> + 'a {
+    ) -> impl Iterator<Item = indexed::IrVar> + '_ {
         UnboundVars {
             bound,
             stack: vec![self],
@@ -459,15 +459,12 @@ mod pretty_ir {
         }
     }
 
-    impl<'a, 'ctx> Pretty<'a, pretty::Arena<'a>> for &IrKind {
+    impl<'a> Pretty<'a, pretty::Arena<'a>> for &IrKind {
         fn pretty(
             self,
             arena: &'a pretty::Arena<'a>,
         ) -> pretty::DocBuilder<'a, pretty::Arena<'a>, ()> {
-            fn gather_abs<'a, 'ctx>(
-                vars: &mut Vec<indexed::IrVar>,
-                kind: &'a IrKind,
-            ) -> &'a IrKind {
+            fn gather_abs<'a>(vars: &mut Vec<indexed::IrVar>, kind: &'a IrKind) -> &'a IrKind {
                 match kind {
                     Abs(arg, body) => {
                         vars.push(*arg);
@@ -476,7 +473,7 @@ mod pretty_ir {
                     _ => kind,
                 }
             }
-            fn gather_ty_abs<'a, 'ctx>(vars: &mut Vec<IrVarTy>, kind: &'a IrKind) -> &'a IrKind {
+            fn gather_ty_abs<'a>(vars: &mut Vec<IrVarTy>, kind: &'a IrKind) -> &'a IrKind {
                 match kind {
                     TyAbs(arg, body) => {
                         vars.push(*arg);

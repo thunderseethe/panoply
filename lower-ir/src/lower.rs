@@ -106,7 +106,7 @@ where
     }
 }
 
-impl<'a, 'ctx, Db, S> LowerCtx<'a, '_, Db, S>
+impl<'a, Db, S> LowerCtx<'a, '_, Db, S>
 where
     Db: ?Sized + TermTys,
 {
@@ -116,7 +116,7 @@ where
     }
 }
 
-impl<'a, 'ctx, Db, S> LowerCtx<'a, '_, Db, S>
+impl<'a, Db, S> LowerCtx<'a, '_, Db, S>
 where
     Db: ?Sized + VarTys,
 {
@@ -126,7 +126,7 @@ where
     }
 }
 
-impl<'a, 'ctx, Db, S> LowerCtx<'a, '_, Db, S>
+impl<'a, Db, S> LowerCtx<'a, '_, Db, S>
 where
     Db: ?Sized + MkIrTy,
     &'a Db: AccessTy<'a, InDb>,
@@ -157,9 +157,11 @@ where
             let ir_ty_var_id = self.tyvar_conv.convert(*ty_var);
             let var = IrVarTy {
                 var: ir_ty_var_id,
-                kind: (row_kinds.contains(&ty_var))
-                    .then_some(Kind::Row)
-                    .unwrap_or(Kind::Type),
+                kind: if row_kinds.contains(&ty_var) {
+                    Kind::Row
+                } else {
+                    Kind::Type
+                },
             };
             self.mk_ir_ty(ForallTy(var, ty))
         })
@@ -469,7 +471,7 @@ where
     }
 }
 
-impl<'a, 'b, 'ctx, Db> LowerCtx<'a, 'b, Db, Evidenceless>
+impl<'a, 'b, Db> LowerCtx<'a, 'b, Db, Evidenceless>
 where
     Db: ?Sized + ItemSchemes + VarTys + TermTys + IrEffectInfo + MkTy<InDb> + MkIrTy,
     &'a Db: AccessTy<'a, InDb>,
@@ -495,13 +497,10 @@ where
         }
     }
 
-    fn solved_row_ev<'ev>(
+    fn solved_row_ev(
         &self,
         term_rows: impl IntoIterator<Item = RowTermView<VarId>>,
-    ) -> Vec<SolvedRowEv>
-    where
-        'ctx: 'ev,
-    {
+    ) -> Vec<SolvedRowEv> {
         // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
         // Since we type-checked successfully we know nothing refers to that variable and we can use
         // whatever row type for it.
@@ -572,10 +571,7 @@ where
         LowerCtx<'a, 'b, Db, Evidentfull>,
         Vec<(IrVar, Ir)>,
         Vec<IrVar>,
-    )
-    where
-        'ctx: 'ev,
-    {
+    ) {
         let locals = self
             .solved_row_ev(term_evs)
             .into_iter()
@@ -611,7 +607,7 @@ where
     }
 }
 
-impl<'a, 'b, 'ctx, Db> LowerCtx<'a, 'b, Db, Evidentfull>
+impl<'a, 'b, Db> LowerCtx<'a, 'b, Db, Evidentfull>
 where
     Db: ?Sized + ItemSchemes + VarTys + TermTys + IrEffectInfo + MkIrTy,
     &'a Db: AccessTy<'a, InDb>,

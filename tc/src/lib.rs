@@ -173,7 +173,7 @@ pub fn type_scheme_of(
     SalsaTypedItem::new(db, item_id, var_to_tys, terms_to_tys, ty_scheme)
 }
 
-pub fn type_check<'ty, 's, 'eff, E>(
+pub fn type_check<E>(
     db: &dyn crate::Db,
     eff_info: &E,
     module: ModuleId,
@@ -290,7 +290,7 @@ pub mod test_utils {
         pub const PUT_ID: EffectOpId = EffectOpId(1);
         pub const ASK_ID: EffectOpId = EffectOpId(2);
     }
-    impl<'ctx> EffectInfo for DummyEff<'_> {
+    impl EffectInfo for DummyEff<'_> {
         fn effect_name(&self, _: ModuleId, eff: EffectId) -> Ident {
             match eff {
                 DummyEff::STATE_ID => self.0.ident_str("State"),
@@ -725,7 +725,7 @@ mod tests {
         let db = &db;
         assert_matches!(db.kind(&scheme.ty), FunTy(arg, ret) => {
             assert_matches!(db.kind(arg), ProdTy(Row::Open(_)));
-            assert_matches_unit_ty!(db, &ret);
+            assert_matches_unit_ty!(db, ret);
         })
     }
 

@@ -265,7 +265,7 @@ fn lookup_effect_by(
                 .iter_enumerate()
                 .map(|(eff_id, names)| ((*mod_id, eff_id), names))
         })
-        .find(|(_, names)| find_by(*names))
+        .find(|(_, names)| find_by(names))
         .map(|(ids, _)| ids)
 }
 
@@ -284,8 +284,7 @@ fn effect_handler_order(
     // Insert `return` so it get's ordered as well.
     members.push(db.ident_str("return"));
     members.sort();
-
-    return members;
+    members
 }
 
 #[salsa::tracked]

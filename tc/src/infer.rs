@@ -217,7 +217,7 @@ pub(crate) struct InferCtx<'a, 'infer, I, State: InferState = Generation> {
     _marker: std::marker::PhantomData<State>,
 }
 
-impl<'ctx, 'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx<'_, 'infer, I, S> {
+impl<'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx<'_, 'infer, I, S> {
     fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A> {
         self.ctx.mk_ty(kind)
     }
@@ -231,7 +231,7 @@ impl<'ctx, 'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx
     }
 }
 
-impl<'ctx, 'infer, A: TypeAlloc, I: AccessTy<'infer, A>, S: InferState> AccessTy<'infer, A>
+impl<'infer, A: TypeAlloc, I: AccessTy<'infer, A>, S: InferState> AccessTy<'infer, A>
     for InferCtx<'_, 'infer, I, S>
 {
     fn kind(&self, ty: &Ty<A>) -> &'infer TypeKind<A> {
@@ -247,7 +247,7 @@ impl<'ctx, 'infer, A: TypeAlloc, I: AccessTy<'infer, A>, S: InferState> AccessTy
     }
 }
 
-impl<'a, 'ctx, 'infer, I> InferCtx<'a, 'infer, I>
+impl<'a, 'infer, I> InferCtx<'a, 'infer, I>
 where
     I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
 {
@@ -275,7 +275,7 @@ where
     }
     /// This is the entrypoint to the bidirectional type checker. Since our language uses
     /// damnas-milner type inference we will always begin type checking with a call to infer.
-    pub(crate) fn infer<'s, 'eff, E>(
+    pub(crate) fn infer<E>(
         mut self,
         eff_info: &E,
         term: Idx<Term<VarId>>,
@@ -294,7 +294,7 @@ where
 
     /// Check a term against a given type.
     /// This method pairs with _infer to form a bidirectional type checker
-    fn _check<'s, 'eff, E>(
+    fn _check<E>(
         &mut self,
         //var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
         eff_info: &E,
@@ -317,7 +317,7 @@ where
                 // the function return type with the function argument type in scope.
                 self.local_env.insert(*arg, arg_ty);
                 self._check(eff_info, *body, expected.with_ty(body_ty));
-                self.local_env.remove(&arg);
+                self.local_env.remove(arg);
             }
             (Label { .. }, ProdTy(row)) => {
                 // A label can check against a product, if it checks against the product's internal
@@ -487,7 +487,7 @@ where
 
     /// Infer a type for a term
     /// This method pairs with check to form a bidirectional type checker
-    fn _infer<'s, 'eff, E>(
+    fn _infer<E>(
         &mut self,
         //var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
         eff_info: &E,
@@ -514,7 +514,7 @@ where
                 self.state.var_tys.insert(*arg, arg_ty);
                 self.local_env.insert(*arg, arg_ty);
                 self._check(eff_info, *body, InferResult::new(body_ty, eff));
-                self.local_env.remove(&arg);
+                self.local_env.remove(arg);
 
                 InferResult::new(self.mk_ty(TypeKind::FunTy(arg_ty, body_ty)), eff)
             }
@@ -840,7 +840,7 @@ where
     }
 }
 
-impl<'a, 'ctx, 'infer, I> InferCtx<'a, 'infer, I, Solution>
+impl<'a, 'infer, I> InferCtx<'a, 'infer, I, Solution>
 where
     I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
 {
@@ -867,7 +867,7 @@ where
 
     /// Solve a list of constraints to a mapping from unifiers to types.
     /// If there is no solution to the list of constraints we return a relevant error.
-    pub(crate) fn solve<'s, 'eff, E>(
+    pub(crate) fn solve<E>(
         mut self,
         eff_info: &E,
     ) -> (
@@ -1345,7 +1345,7 @@ where
         }
     }
 
-    fn lookup_effect_and_unify<'s, 'eff, E>(
+    fn lookup_effect_and_unify<E>(
         &mut self,
         eff_info: &E,
         handler: InferRow<'infer>,

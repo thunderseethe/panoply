@@ -24,7 +24,7 @@ pub(crate) struct EvidenceMap {
     partial_map: FxHashMap<PartialEv, usize>,
     complete_map: FxHashMap<Evidence, usize>,
 }
-impl<'ctx> EvidenceMap {
+impl EvidenceMap {
     pub(crate) fn insert(&mut self, ev: Evidence, param: IrVar) {
         let idx = self
             .params
@@ -58,14 +58,14 @@ impl<'ctx> EvidenceMap {
         self.complete_map.insert(ev, idx);
     }
 }
-impl<'ctx> Index<&Evidence> for EvidenceMap {
+impl Index<&Evidence> for EvidenceMap {
     type Output = IrVar;
 
     fn index(&self, index: &Evidence) -> &Self::Output {
         &self.params[self.complete_map[index]]
     }
 }
-impl<'ctx> Index<&PartialEv> for EvidenceMap {
+impl Index<&PartialEv> for EvidenceMap {
     type Output = IrVar;
 
     fn index(&self, index: &PartialEv) -> &Self::Output {
