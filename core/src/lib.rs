@@ -31,7 +31,7 @@ pub mod ident {
 #[salsa::jar(db = Db)]
 pub struct Jar(
     ast::AstModule,
-    ast::indexed::SalsaItem,
+    ast::SalsaItem,
     diagnostic::aiahr::AiahrcErrors,
     file::SourceFile,
     file::SourceFileSet,

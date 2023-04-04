@@ -1,8 +1,5 @@
 use aiahr_core::{
-    ast::{
-        indexed::{Ast, Term, Term::*},
-        Direction,
-    },
+    ast::{Ast, Direction, Term, Term::*},
     id::{Id, ItemId},
     span::Span,
 };

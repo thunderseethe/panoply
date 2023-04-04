@@ -1,6 +1,5 @@
 use aiahr_core::{
-    ast::indexed::{Ast, RowTerm, RowTermView, Term},
-    ast::Direction,
+    ast::{Ast, Direction, RowTerm, RowTermView, Term},
     id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
     ir::{
         indexed::{IrTy, IrTyKind, IrTyKind::*, IrVar},

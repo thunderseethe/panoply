@@ -8,7 +8,7 @@ use aiahr_core::modules::Module;
 use aiahr_core::ty::TyScheme;
 use aiahr_core::Top;
 use aiahr_core::{
-    ast::indexed::{Ast, Term},
+    ast::{Ast, Term},
     id::{IrTyVarId, ItemId, ModuleId, VarId},
     ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
 };
@@ -106,8 +106,8 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
         .map(|salsa_item| {
             let ast_item = salsa_item.item(core_db);
             match ast_item {
-                aiahr_core::ast::indexed::Item::Effect(_) => todo!(),
-                aiahr_core::ast::indexed::Item::Function(ast) => {
+                aiahr_core::ast::Item::Effect(_) => todo!(),
+                aiahr_core::ast::Item::Function(ast) => {
                     let mod_id = module.module(core_db).name(core_db);
                     let scheme = db.lookup_scheme(mod_id, ast.name);
                     let ir = lower(db, mod_id, &scheme, &ast);
@@ -554,8 +554,7 @@ mod tests {
     use crate::lower;
 
     use super::test_utils::LowerDb;
-    use aiahr_core::ast::indexed::{Ast, Term};
-    use aiahr_core::ast::Direction;
+    use aiahr_core::ast::{Ast, Direction, Term};
     use aiahr_core::file::{SourceFile, SourceFileSet};
     use aiahr_core::id::{ItemId, ModuleId, VarId};
     use aiahr_core::ir::indexed::IrTyKind::*;
@@ -600,8 +599,8 @@ mod tests {
         let salsa_typed_item = type_scheme_of(db, top, MOD, ItemId(0));
         let item = aiahr_desugar::desugar_item_of_id(db, top, MOD, ItemId(0));
         let ast = match item.item(db) {
-            aiahr_core::ast::indexed::Item::Effect(_) => unreachable!(),
-            aiahr_core::ast::indexed::Item::Function(ast) => ast,
+            aiahr_core::ast::Item::Effect(_) => unreachable!(),
+            aiahr_core::ast::Item::Function(ast) => ast,
         };
         (
             LowerDb::new(

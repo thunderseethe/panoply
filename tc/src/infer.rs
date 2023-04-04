@@ -1,6 +1,5 @@
 use aiahr_core::{
-    ast::indexed::{Ast, Term, Term::*},
-    ast::Direction,
+    ast::{Ast, Direction, Term, Term::*},
     id::{ModuleId, VarId},
     ident::Ident,
     memory::handle::Handle,

@@ -1,7 +1,7 @@
 use std::ops::Not;
 
-use aiahr_core::ast::indexed::{Ast, Item, SalsaItem, Term, Term::*};
 use aiahr_core::ast::{self, AstModule, Direction};
+use aiahr_core::ast::{Ast, Item, SalsaItem, Term, Term::*};
 use aiahr_core::cst::{self, Field, RowAtom, Scheme, Type};
 use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId};
 use aiahr_core::ident::Ident;
@@ -68,7 +68,7 @@ pub fn desugar_item(
     item: aiahr_analysis::SalsaItem,
     vars: usize,
     ty_vars: usize,
-) -> ast::indexed::SalsaItem {
+) -> ast::SalsaItem {
     let arena = Bump::new();
     let mut alloc = nst::indexed::NstRefAlloc::new(&arena, item.alloc(db.as_analysis_db()));
     // TODO: Handle separation of name based Ids and desugar generated Ids better.
@@ -168,7 +168,7 @@ pub fn desugar(
     vars: &mut IdGen<VarId, bool>,
     ty_vars: &mut IdGen<TyVarId, bool>,
     nst: nst::Item<'_>,
-) -> Result<ast::indexed::Item<VarId>, PatternMatchError> {
+) -> Result<ast::Item<VarId>, PatternMatchError> {
     let terms = la_arena::Arena::default();
     let mut ds_ctx = DesugarCtx::new(db, terms, vars, ty_vars);
     Ok(match nst {

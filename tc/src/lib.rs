@@ -1,6 +1,6 @@
 use aiahr_core::{
     ast,
-    ast::indexed::{Ast, Term},
+    ast::{Ast, Term},
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
     modules::module_of,
@@ -137,7 +137,7 @@ pub struct SalsaTypedItem {
     #[return_ref]
     pub var_to_tys: FxHashMap<VarId, Ty<InDb>>,
     #[return_ref]
-    pub term_to_tys: FxHashMap<Idx<ast::indexed::Term<VarId>>, TyChkRes<InDb>>,
+    pub term_to_tys: FxHashMap<Idx<ast::Term<VarId>>, TyChkRes<InDb>>,
     pub ty_scheme: TyScheme,
 }
 
@@ -155,8 +155,8 @@ pub fn type_scheme_of(
         .items(core_db)
         .iter()
         .find_map(|item| match item.item(core_db) {
-            ast::indexed::Item::Effect(_) => None,
-            ast::indexed::Item::Function(ast) => (ast.name == item_id).then_some(ast),
+            ast::Item::Effect(_) => None,
+            ast::Item::Function(ast) => (ast.name == item_id).then_some(ast),
         })
         .unwrap_or_else(|| {
             dbg!(ast_module.items(db.as_core_db()));
@@ -394,8 +394,7 @@ pub mod test_utils {
 mod tests {
 
     use aiahr_core::{
-        ast::indexed::Term::*,
-        ast::Direction,
+        ast::{Direction, Term::*},
         id::{EffectId, EffectOpId, ModuleId, TyVarId, VarId},
         ty::{
             row::{ClosedRow, Row},
