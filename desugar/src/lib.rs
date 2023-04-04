@@ -1,7 +1,7 @@
 use std::ops::Not;
 
-use aiahr_core::ast::indexed::SalsaItem;
-use aiahr_core::ast::{indexed, AstModule, Direction};
+use aiahr_core::ast::indexed::{Ast, Item, SalsaItem, Term, Term::*};
+use aiahr_core::ast::{self, AstModule, Direction};
 use aiahr_core::cst::{self, Field, RowAtom, Scheme, Type};
 use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId};
 use aiahr_core::ident::Ident;
@@ -12,14 +12,9 @@ use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::ty::row::Row;
 use aiahr_core::ty::{Evidence, MkTy, Ty, TyScheme, TypeKind};
 use aiahr_core::Top;
-use aiahr_core::{
-    ast,
-    ast::{Ast, Item, Term::*},
-    id::VarId,
-    nst,
-    span::Span,
-};
+use aiahr_core::{id::VarId, nst, span::Span};
 use bumpalo::Bump;
+use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
 
 #[salsa::jar(db = Db)]
@@ -82,21 +77,19 @@ pub fn desugar_item(
 
     let ast_res = desugar(
         db,
-        &arena,
         &mut vars,
         &mut ty_vars,
         item.data(db.as_analysis_db()).ref_alloc(&mut alloc),
     );
 
     let salsa_ast = match ast_res {
-        Ok(Item::Effect(eff_item)) => indexed::Item::Effect(eff_item),
-        Ok(Item::Function(ast)) => indexed::Item::Function(indexed::Ast::from(&ast)),
+        Ok(item) => item,
         Err(_pat_err) => {
             todo!()
         }
     };
 
-    indexed::SalsaItem::new(db.as_core_db(), salsa_ast)
+    SalsaItem::new(db.as_core_db(), salsa_ast)
 }
 
 #[salsa::tracked]
@@ -112,8 +105,8 @@ pub fn desugar_item_of_id(
         .items(db.as_core_db())
         .iter()
         .find(|item| match item.item(db.as_core_db()) {
-            indexed::Item::Effect(_) => false,
-            indexed::Item::Function(ast) => ast.name == item_id,
+            Item::Effect(_) => false,
+            Item::Function(ast) => ast.name == item_id,
         })
         .cloned()
         .unwrap_or_else(|| {
@@ -131,8 +124,8 @@ pub fn effect_of(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> ast
         .items(db.as_core_db())
         .iter()
         .find_map(|item| match item.item(db.as_core_db()) {
-            indexed::Item::Effect(eff_item) => (eff_item.name == effect_id).then_some(eff_item),
-            indexed::Item::Function(_) => None,
+            Item::Effect(eff_item) => (eff_item.name == effect_id).then_some(eff_item),
+            Item::Function(_) => None,
         })
         .unwrap_or_else(|| {
             panic!(
@@ -170,14 +163,14 @@ pub fn effect_op_tyscheme_of(
 /// Desugar a NST into an AST.
 /// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
 /// the NST.
-pub fn desugar<'a>(
+pub fn desugar(
     db: &dyn crate::Db,
-    arena: &'a Bump,
     vars: &mut IdGen<VarId, bool>,
     ty_vars: &mut IdGen<TyVarId, bool>,
     nst: nst::Item<'_>,
-) -> Result<ast::Item<'a, VarId>, PatternMatchError> {
-    let mut ds_ctx = DesugarCtx::new(db, arena, vars, ty_vars);
+) -> Result<ast::indexed::Item<VarId>, PatternMatchError> {
+    let terms = la_arena::Arena::default();
+    let mut ds_ctx = DesugarCtx::new(db, terms, vars, ty_vars);
     Ok(match nst {
         nst::Item::Effect { name, ops, .. } => Item::Effect(ast::EffectItem {
             name: name.value,
@@ -207,56 +200,57 @@ pub fn desugar<'a>(
             ..
         } => {
             let tree = ds_ctx.ds_term(value)?;
-            ast::Item::Function(match annotation {
+            Item::Function(match annotation {
                 Some(scheme) => {
                     let scheme = ds_ctx.ds_scheme(scheme.type_);
-                    Ast::with_ann(name.value, ds_ctx.spans, scheme, tree)
+                    Ast::new(name.value, ds_ctx.spans, scheme, ds_ctx.terms, tree)
                 }
-                None => Ast::new(name.value, ds_ctx.spans, tree),
+                None => Ast::with_untyped(name.value, ds_ctx.spans, ds_ctx.terms, tree),
             })
         }
     })
 }
 
-struct DesugarCtx<'a, 'ctx> {
+struct DesugarCtx<'a> {
     db: &'a dyn crate::Db,
-    arena: &'ctx Bump,
+    terms: Arena<Term<VarId>>,
     pub(crate) vars: &'a mut IdGen<VarId, bool>,
     pub(crate) ty_vars: &'a mut IdGen<TyVarId, bool>,
-    spans: FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>,
+    spans: FxHashMap<Idx<Term<VarId>>, Span>,
 }
 
-impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
+impl<'a> DesugarCtx<'a> {
     fn new(
         db: &'a dyn crate::Db,
-        arena: &'ctx Bump,
+        terms: Arena<Term<VarId>>,
         vars: &'a mut IdGen<VarId, bool>,
         ty_vars: &'a mut IdGen<TyVarId, bool>,
     ) -> Self {
         Self {
             db,
-            arena,
+            terms,
             vars,
             ty_vars,
             spans: FxHashMap::default(),
         }
     }
 
+    fn mk_term(&mut self, span: Span, term: Term<VarId>) -> Idx<Term<VarId>> {
+        let t = self.terms.alloc(term);
+        self.spans.insert(t, span);
+        t
+    }
+
     /// Desugar a NST Term into it's corresponding AST Term.
     fn ds_term<'n>(
         &mut self,
         nst: &'n nst::Term<'n>,
-    ) -> Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> {
-        let mk_term = |term, spans: &mut FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>| {
-            let t = self.arena.alloc(term) as &_;
-            spans.insert(t, nst.span());
-            t
-        };
+    ) -> Result<Idx<Term<VarId>>, PatternMatchError> {
         let ast = match nst {
-            nst::Term::VariableRef(var) => self.arena.alloc(ast::Term::Variable(var.value)) as &_,
-            nst::Term::ItemRef(item) => self.arena.alloc(ast::Term::Item(item.value)) as &_,
+            nst::Term::VariableRef(var) => self.terms.alloc(Term::Variable(var.value)),
+            nst::Term::ItemRef(item) => self.terms.alloc(Term::Item(item.value)),
             nst::Term::EffectOpRef(SpanOf { value, .. }) => {
-                self.arena.alloc(ast::Term::Operation(*value)) as &_
+                self.terms.alloc(Term::Operation(*value))
             }
             nst::Term::Binding {
                 var,
@@ -269,17 +263,17 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 // If our binding is annotated wrap our value in it's annotated type
                 if let Some(ann) = annotation {
                     let ty = self.ds_type(ann.type_);
-                    value = mk_term(Annotated { ty, term: value }, &mut self.spans)
+                    value = self.mk_term(nst.span(), Annotated { ty, term: value })
                 }
                 let expr = self.ds_term(expr)?;
-                let func = mk_term(
+                let func = self.mk_term(
+                    nst.span(),
                     Abstraction {
                         arg: var.value,
                         body: expr,
                     },
-                    &mut self.spans,
                 );
-                self.arena.alloc(Application { func, arg: value }) as &_
+                self.terms.alloc(Application { func, arg: value })
             }
             nst::Term::Abstraction {
                 arg,
@@ -290,12 +284,12 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 let body = self.ds_term(body)?;
                 // If there's no annotation, we double insert spans which is fine as our map is
                 // idempotent
-                let mut term = mk_term(
+                let mut term = self.mk_term(
+                    nst.span(),
                     Abstraction {
                         arg: arg.value,
                         body,
                     },
-                    &mut self.spans,
                 );
                 // Our annotation here is for the argument, so we want to annotate our whole
                 // abstraction as, abs : ann -> tv<0> where return type is a fresh type var.
@@ -306,36 +300,38 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                         .as_core_db()
                         .mk_ty(TypeKind::VarTy(self.ty_vars.push(true)));
                     let ty = self.db.as_core_db().mk_ty(TypeKind::FunTy(arg_ty, ret_ty));
-                    term = self.arena.alloc(Annotated { ty, term });
+                    term = self.terms.alloc(Annotated { ty, term });
                 }
                 term
             }
             nst::Term::Application { func, arg, .. } => {
                 let func = self.ds_term(func)?;
                 let arg = self.ds_term(arg)?;
-                self.arena.alloc(Application { func, arg }) as &_
+                self.terms.alloc(Application { func, arg })
             }
             nst::Term::Parenthesized { term, .. } => {
-                // We'll replace the span of this node with the parenthesized span
+                // We replace the span of this node with the parenthesized span
                 self.ds_term(term)?
             }
             nst::Term::ProductRow(product) => match product.fields {
-                None => self.arena.alloc(Unit),
+                None => self.terms.alloc(Unit),
                 Some(fields) => {
-                    let head = self.arena.alloc(Label {
+                    let term = self.ds_term(fields.first.target)?;
+                    let head = self.terms.alloc(Label {
                         label: fields.first.label.value,
-                        term: self.ds_term(fields.first.target)?,
-                    }) as &_;
+                        term,
+                    });
                     self.spans
                         .insert(head, fields.first.label.join_spans(fields.first.target));
                     fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
-                        let right = self.arena.alloc(Label {
+                        let term = self.ds_term(field.target)?;
+                        let right = self.terms.alloc(Label {
                             label: field.label.value,
-                            term: self.ds_term(field.target)?,
-                        }) as &_;
+                            term,
+                        });
                         self.spans
                             .insert(right, field.label.join_spans(field.target));
-                        Ok(self.arena.alloc(Concat {
+                        Ok(self.terms.alloc(Concat {
                             left: concat?,
                             right,
                         }))
@@ -344,29 +340,31 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
             },
             nst::Term::FieldAccess { base, field, .. } => {
                 let term = self.ds_term(base)?;
-                self.arena.alloc(Unlabel {
+                let unlabel = Unlabel {
                     label: field.value,
-                    term: mk_term(
+                    term: self.mk_term(
+                        nst.span(),
                         Project {
                             direction: Direction::Right,
                             term,
                         },
-                        &mut self.spans,
                     ),
-                })
+                };
+                self.terms.alloc(unlabel)
             }
             nst::Term::SumRow(sum) => {
                 let term = self.ds_term(sum.field.target)?;
-                self.arena.alloc(Inject {
+                let inj = Inject {
                     direction: Direction::Right,
-                    term: mk_term(
+                    term: self.mk_term(
+                        nst.span(),
                         Label {
                             label: sum.field.label.value,
                             term,
                         },
-                        &mut self.spans,
                     ),
-                })
+                };
+                self.terms.alloc(inj)
             }
             // This is gonna take a little more work.
             nst::Term::Match { cases, .. } => {
@@ -476,16 +474,11 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
     }
 
     /// Compile a matrix of patterns into an AST term that performs pattern matching.
-    fn desugar_pattern_matrix<'p>(
+    fn desugar_pattern_matrix(
         &mut self,
         occurences: &mut [VarId],
-        matrix: ClauseMatrix<'p, 'ctx>,
-    ) -> Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> {
-        let mk_term = |spans: &mut FxHashMap<&'ctx ast::Term<'ctx, VarId>, Span>, term, span| {
-            let t = self.arena.alloc(term) as &_;
-            spans.insert(t, span);
-            t
-        };
+        matrix: ClauseMatrix<'_>,
+    ) -> Result<Idx<Term<VarId>>, PatternMatchError> {
         if matrix.is_empty() {
             Err(PatternMatchError::NonExhaustivePatterns)
         // Row is all wild cards
@@ -498,13 +491,12 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 .first()
                 .iter()
                 .rfold(matrix.arms[0], |body, pat| match pat {
-                    Pattern::Whole(var) => mk_term(
-                        &mut self.spans,
+                    Pattern::Whole(var) => self.mk_term(
+                        pat.span(),
                         Abstraction {
                             arg: var.value,
                             body,
                         },
-                        pat.span(),
                     ),
                     _ => unreachable!(),
                 }))
@@ -524,29 +516,29 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     let init =
                         self.desugar_pattern_matrix(occs.as_mut_slice(), matrix.specialize(&c))?;
                     let body = lbls.iter().cloned().fold(init, |body, label| {
-                        let destructure = self.arena.alloc(Unlabel {
-                            label,
-                            term: self.arena.alloc(Project {
+                        let term = self.mk_term(p.span(), Variable(top_level));
+                        let term = self.mk_term(
+                            p.span(),
+                            Project {
                                 direction: Direction::Right,
-                                term: self.arena.alloc(Variable(top_level)),
-                            }),
-                        });
-                        mk_term(
-                            &mut self.spans,
+                                term,
+                            },
+                        );
+                        let destructure = self.mk_term(p.span(), Unlabel { label, term });
+                        self.mk_term(
+                            p.span(),
                             Application {
                                 func: body,
                                 arg: destructure,
                             },
-                            p.span(),
                         )
                     });
-                    Ok(mk_term(
-                        &mut self.spans,
+                    Ok(self.mk_term(
+                        p.span(),
                         Abstraction {
                             arg: top_level,
                             body,
                         },
-                        p.span(),
                     ))
                 }
                 Constructor::SumRow(label) => {
@@ -554,26 +546,21 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                     let mut occs = vec![binder];
                     occs.extend(occurences.iter_mut().skip(1).map(|var| *var));
                     let func = self.desugar_pattern_matrix(&mut occs, matrix.specialize(&c))?;
-                    let term = mk_term(&mut self.spans, Variable(binder), p.span());
-                    let arg = mk_term(&mut self.spans, Unlabel { label, term }, p.span());
-                    let body = mk_term(&mut self.spans, Application { func, arg }, p.span());
-                    Ok(mk_term(
-                        &mut self.spans,
-                        Abstraction { arg: binder, body },
-                        p.span(),
-                    ))
+                    let term = self.mk_term(p.span(), Variable(binder));
+                    let arg = self.mk_term(p.span(), Unlabel { label, term });
+                    let body = self.mk_term(p.span(), Application { func, arg });
+                    Ok(self.mk_term(p.span(), Abstraction { arg: binder, body }))
                 }
                 Constructor::WildCard => {
                     if let Pattern::Whole(var) = p {
                         // For a wild card we don't need a let binding so just pass through binder as is
                         let body = self.desugar_pattern_matrix(occurences, matrix.default())?;
-                        Ok(mk_term(
-                            &mut self.spans,
+                        Ok(self.mk_term(
+                            p.span(),
                             Abstraction {
                                 arg: var.value,
                                 body,
                             },
-                            p.span(),
                         ))
                     } else {
                         unreachable!()
@@ -581,28 +568,25 @@ impl<'a, 'ctx> DesugarCtx<'a, 'ctx> {
                 }
             });
             // we know this can't be empty
-            let head: Result<&'ctx ast::Term<'ctx, VarId>, PatternMatchError> =
-                matches.next().unwrap();
+            let head: Result<Idx<Term<VarId>>, PatternMatchError> = matches.next().unwrap();
             let rest = matches.collect::<Vec<_>>();
             rest.into_iter().fold(head, |a, b| {
                 let a = a?;
                 let b = b?;
-                let span = Span::join(&self.spans[a], &self.spans[b]);
-                Ok(mk_term(&mut self.spans, Branch { left: a, right: b }, span))
+                let span = Span::join(&self.spans[&a], &self.spans[&b]);
+                Ok(self.mk_term(span, Branch { left: a, right: b }))
             })
         }
     }
 }
 
-struct ClauseMatrix<'p, 't> {
+struct ClauseMatrix<'p> {
     pats: Vec<Vec<Pattern<'p>>>,
-    arms: Vec<&'t ast::Term<'t, VarId>>,
+    arms: Vec<Idx<Term<VarId>>>,
 }
 
-impl<'p, 't> FromIterator<(Vec<Pattern<'p>>, &'t ast::Term<'t, VarId>)> for ClauseMatrix<'p, 't> {
-    fn from_iter<T: IntoIterator<Item = (Vec<Pattern<'p>>, &'t ast::Term<'t, VarId>)>>(
-        iter: T,
-    ) -> Self {
+impl<'p> FromIterator<(Vec<Pattern<'p>>, Idx<Term<VarId>>)> for ClauseMatrix<'p> {
+    fn from_iter<T: IntoIterator<Item = (Vec<Pattern<'p>>, Idx<Term<VarId>>)>>(iter: T) -> Self {
         let (mut pats, mut arms) = (vec![], vec![]);
         iter.into_iter().for_each(|(pat, arm)| {
             pats.push(pat);
@@ -612,7 +596,7 @@ impl<'p, 't> FromIterator<(Vec<Pattern<'p>>, &'t ast::Term<'t, VarId>)> for Clau
     }
 }
 
-impl<'p, 't> ClauseMatrix<'p, 't> {
+impl<'p> ClauseMatrix<'p> {
     fn is_empty(&self) -> bool {
         debug_assert!(
             (self.pats.is_empty() && self.arms.is_empty())
@@ -635,7 +619,7 @@ impl<'p, 't> ClauseMatrix<'p, 't> {
             .map(move |col| (Constructor::from(&col[col_index]), &col[col_index]))
     }
 
-    pub(crate) fn specialize(&self, constr: &Constructor) -> ClauseMatrix<'p, 't> {
+    pub(crate) fn specialize(&self, constr: &Constructor) -> ClauseMatrix<'p> {
         self.pats
             .iter()
             .zip(self.arms.iter())
@@ -648,7 +632,7 @@ impl<'p, 't> ClauseMatrix<'p, 't> {
             .collect()
     }
 
-    fn default(&self) -> ClauseMatrix<'p, 't> {
+    fn default(&self) -> ClauseMatrix<'p> {
         self.pats
             .iter()
             .zip(self.arms.iter())
@@ -736,6 +720,7 @@ mod tests {
     use aiahr_test::nst::random_term_item;
     use aiahr_test::{cst::*, span::*};
     use bumpalo::Bump;
+    use expect_test::expect;
 
     #[derive(Default)]
     #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_analysis::Jar, aiahr_parser::Jar)]
@@ -751,11 +736,11 @@ mod tests {
         let mut vars = IdGen::new();
         let var = random_span_of(vars.push(false));
         let nst = random_term_item(arena.alloc(nst::Term::VariableRef(var)));
-        let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut vars, &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
 
-        assert_eq!(ast.tree, &Variable(var.value));
+        assert_eq!(ast.view(ast.tree), &Variable(var.value));
         assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
@@ -780,17 +765,10 @@ mod tests {
             rbar: random_span(),
             body: arena.alloc(nst::Term::VariableRef(span_of_var)),
         }));
-        let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut vars, &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
 
-        assert_eq!(
-            ast.tree,
-            &Abstraction {
-                arg: x,
-                body: &Variable(x)
-            }
-        );
         assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
@@ -798,6 +776,13 @@ mod tests {
                 end: span_of_var.end,
             })
         );
+
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect!["(|var<0>| var<0>)"];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -809,7 +794,6 @@ mod tests {
         let end = random_span();
         let ast = desugar(
             &db,
-            &arena,
             &mut vars,
             &mut IdGen::new(),
             random_term_item(arena.alloc(nst::Term::Application {
@@ -823,19 +807,18 @@ mod tests {
         .unwrap_func();
 
         assert_eq!(
-            ast.tree,
-            &Application {
-                func: &Variable(VarId(0)),
-                arg: &Variable(VarId(1))
-            }
-        );
-        assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
                 start: start.start,
                 end: end.end,
             })
         );
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect!["var<0>(var<1>)"];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -847,7 +830,6 @@ mod tests {
         let end = random_span_of(VarId(123));
         let ast = desugar(
             &db,
-            &arena,
             &mut vars,
             &mut IdGen::new(),
             random_term_item(arena.alloc(nst::Term::Binding {
@@ -863,22 +845,18 @@ mod tests {
         .unwrap_func();
 
         assert_eq!(
-            ast.tree,
-            &Application {
-                func: &Abstraction {
-                    arg: VarId(2),
-                    body: &Variable(VarId(123)),
-                },
-                arg: &Variable(VarId(10)),
-            }
-        );
-        assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
                 start: start.start,
                 end: end.end,
             })
         );
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect!["(|var<2>| var<123>)(var<10>)"];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -889,7 +867,6 @@ mod tests {
         let end = random_span();
         let ast = desugar(
             &db,
-            &arena,
             &mut IdGen::new(),
             &mut IdGen::new(),
             random_term_item(arena.alloc(nst::Term::ProductRow(ProductRow {
@@ -901,7 +878,6 @@ mod tests {
         .unwrap()
         .unwrap_func();
 
-        assert_eq!(ast.tree, &Unit);
         assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
@@ -909,6 +885,7 @@ mod tests {
                 end: end.end,
             })
         );
+        assert_eq!(ast.view(ast.tree), &Unit);
     }
 
     #[test]
@@ -924,7 +901,6 @@ mod tests {
         let end = random_span();
         let ast = desugar(
             &db,
-            &arena,
             &mut IdGen::new(),
             &mut IdGen::new(),
             random_term_item(arena.alloc(nst::Term::ProductRow(ProductRow {
@@ -964,31 +940,18 @@ mod tests {
         .unwrap_func();
 
         assert_eq!(
-            ast.tree,
-            &Concat {
-                left: &Concat {
-                    left: &Label {
-                        label: a,
-                        term: &Variable(VarId(0))
-                    },
-                    right: &Label {
-                        label: b,
-                        term: &Variable(VarId(1))
-                    },
-                },
-                right: &Label {
-                    label: c,
-                    term: &Variable(VarId(2))
-                },
-            }
-        );
-        assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
                 start: start.start,
                 end: end.end,
             })
         );
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect!["((abc = var<0> *** def = var<1>) *** ghi = var<2>)"];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -1006,19 +969,10 @@ mod tests {
             field,
         }));
 
-        let ast = desugar(&db, &arena, &mut IdGen::new(), &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut IdGen::new(), &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
-        assert_eq!(
-            ast.tree,
-            &Unlabel {
-                label: state,
-                term: &Project {
-                    direction: Direction::Right,
-                    term: &Variable(VarId(0))
-                }
-            }
-        );
+
         assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
@@ -1026,6 +980,12 @@ mod tests {
                 end: field.end,
             }),
         );
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect!["prj<R>(var<0>).state"];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -1047,19 +1007,10 @@ mod tests {
             rangle,
         })));
 
-        let ast = desugar(&db, &arena, &mut IdGen::new(), &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut IdGen::new(), &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
-        assert_eq!(
-            ast.tree,
-            &Inject {
-                direction: Direction::Right,
-                term: &Label {
-                    label: tru,
-                    term: &Variable(VarId(0))
-                }
-            }
-        );
+
         assert_eq!(
             ast.span_of(ast.tree),
             Some(&Span {
@@ -1067,6 +1018,12 @@ mod tests {
                 end: rangle.end,
             }),
         );
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect!["inj<R>(true = var<0>)"];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -1135,55 +1092,17 @@ mod tests {
         }));
 
         let mut vars = [false, false, false].into_iter().collect();
-        let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut vars, &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
-        assert_eq!(
-            ast.root(),
-            &Branch {
-                left: &Branch {
-                    left: &Abstraction {
-                        arg: VarId(3),
-                        body: &Application {
-                            func: &Abstraction {
-                                arg: VarId(0),
-                                body: &Variable(VarId(0))
-                            },
-                            arg: &Unlabel {
-                                label: a,
-                                term: &Variable(VarId(3))
-                            }
-                        }
-                    },
-                    right: &Abstraction {
-                        arg: VarId(4),
-                        body: &Application {
-                            func: &Abstraction {
-                                arg: VarId(1),
-                                body: &Variable(VarId(1))
-                            },
-                            arg: &Unlabel {
-                                label: b,
-                                term: &Variable(VarId(4))
-                            }
-                        }
-                    }
-                },
-                right: &Abstraction {
-                    arg: VarId(5),
-                    body: &Application {
-                        func: &Abstraction {
-                            arg: VarId(2),
-                            body: &Variable(VarId(2))
-                        },
-                        arg: &Unlabel {
-                            label: c,
-                            term: &Variable(VarId(5))
-                        }
-                    }
-                }
-            }
-        )
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect![[r#"
+            (((|var<3>| (|var<0>| var<0>)(var<3>.A)) +++ (|var<4>| (|var<1>| var<1>)(var<4>.B))) +++ (|var<5>|
+            (|var<2>| var<2>)(var<5>.C)))"#]];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -1260,61 +1179,17 @@ mod tests {
         }));
 
         let mut vars = [false, false, false, false].into_iter().collect();
-        let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut vars, &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
-        assert_eq!(
-            ast.root(),
-            &Branch {
-                left: &Branch {
-                    left: &Branch {
-                        left: &Abstraction {
-                            arg: VarId(4),
-                            body: &Application {
-                                func: &Abstraction {
-                                    arg: VarId(0),
-                                    body: &Variable(VarId(0))
-                                },
-                                arg: &Unlabel {
-                                    label: a,
-                                    term: &Variable(VarId(4))
-                                }
-                            }
-                        },
-                        right: &Abstraction {
-                            arg: VarId(5),
-                            body: &Application {
-                                func: &Abstraction {
-                                    arg: VarId(1),
-                                    body: &Variable(VarId(1))
-                                },
-                                arg: &Unlabel {
-                                    label: b,
-                                    term: &Variable(VarId(5))
-                                }
-                            }
-                        }
-                    },
-                    right: &Abstraction {
-                        arg: VarId(6),
-                        body: &Application {
-                            func: &Abstraction {
-                                arg: VarId(2),
-                                body: &Variable(VarId(2))
-                            },
-                            arg: &Unlabel {
-                                label: c,
-                                term: &Variable(VarId(6))
-                            }
-                        }
-                    }
-                },
-                right: &Abstraction {
-                    arg: VarId(3),
-                    body: &Variable(VarId(3))
-                }
-            }
-        )
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect![[r#"
+            ((((|var<4>| (|var<0>| var<0>)(var<4>.A)) +++ (|var<5>| (|var<1>| var<1>)(var<5>.B))) +++ (|var<6>|
+            (|var<2>| var<2>)(var<6>.C))) +++ (|var<3>| var<3>))"#]];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -1375,52 +1250,17 @@ mod tests {
         }));
 
         let mut vars = [false, false, false].into_iter().collect();
-        let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut vars, &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
-        assert_eq!(
-            ast.root(),
-            &Abstraction {
-                arg: VarId(3),
-                body: &Application {
-                    func: &Application {
-                        func: &Application {
-                            func: &Abstraction {
-                                arg: VarId(0),
-                                body: &Abstraction {
-                                    arg: VarId(1),
-                                    body: &Abstraction {
-                                        arg: VarId(2),
-                                        body: &Variable(VarId(1))
-                                    }
-                                }
-                            },
-                            arg: &Unlabel {
-                                label: a,
-                                term: &Project {
-                                    direction: Direction::Right,
-                                    term: &Variable(VarId(3))
-                                }
-                            }
-                        },
-                        arg: &Unlabel {
-                            label: b,
-                            term: &Project {
-                                direction: Direction::Right,
-                                term: &Variable(VarId(3))
-                            }
-                        }
-                    },
-                    arg: &Unlabel {
-                        label: c,
-                        term: &Project {
-                            direction: Direction::Right,
-                            term: &Variable(VarId(3))
-                        }
-                    }
-                }
-            }
-        )
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect![[r#"
+            (|var<3>| (|var<0>| (|var<1>| (|var<2>|
+            var<1>)))(prj<R>(var<3>).A)(prj<R>(var<3>).B)(prj<R>(var<3>).C))"#]];
+        expect.assert_eq(&w);
     }
 
     #[test]
@@ -1565,108 +1405,18 @@ mod tests {
         let mut vars = [false, false, false, false, false, false]
             .into_iter()
             .collect();
-        let ast = desugar(&db, &arena, &mut vars, &mut IdGen::new(), nst)
+        let ast = desugar(&db, &mut vars, &mut IdGen::new(), nst)
             .unwrap()
             .unwrap_func();
-        assert_eq!(
-            ast.root(),
-            &Abstraction {
-                arg: VarId(6),
-                body: &Application {
-                    func: &Application {
-                        func: &Application {
-                            func: &Branch {
-                                left: &Abstraction {
-                                    arg: VarId(10),
-                                    body: &Application {
-                                        func: &Abstraction {
-                                            arg: VarId(0),
-                                            body: &Abstraction {
-                                                arg: VarId(11),
-                                                body: &Application {
-                                                    func: &Abstraction {
-                                                        arg: VarId(1),
-                                                        body: &Abstraction {
-                                                            arg: VarId(2),
-                                                            body: &Variable(VarId(0))
-                                                        }
-                                                    },
-                                                    arg: &Unlabel {
-                                                        label: b,
-                                                        term: &Variable(VarId(11))
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        arg: &Unlabel {
-                                            label: a,
-                                            term: &Variable(VarId(10))
-                                        }
-                                    }
-                                },
-                                right: &Abstraction {
-                                    arg: VarId(0),
-                                    body: &Branch {
-                                        left: &Abstraction {
-                                            arg: VarId(12),
-                                            body: &Application {
-                                                func: &Abstraction {
-                                                    arg: VarId(1),
-                                                    body: &Abstraction {
-                                                        arg: VarId(2),
-                                                        body: &Variable(VarId(1))
-                                                    }
-                                                },
-                                                arg: &Unlabel {
-                                                    label: b,
-                                                    term: &Variable(VarId(12))
-                                                }
-                                            }
-                                        },
-                                        right: &Abstraction {
-                                            arg: VarId(1),
-                                            body: &Abstraction {
-                                                arg: VarId(13),
-                                                body: &Application {
-                                                    func: &Abstraction {
-                                                        arg: VarId(2),
-                                                        body: &Variable(VarId(2))
-                                                    },
-                                                    arg: &Unlabel {
-                                                        label: c,
-                                                        term: &Variable(VarId(13))
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            arg: &Unlabel {
-                                label: x,
-                                term: &Project {
-                                    direction: Direction::Right,
-                                    term: &Variable(VarId(6))
-                                }
-                            }
-                        },
-                        arg: &Unlabel {
-                            label: y,
-                            term: &Project {
-                                direction: Direction::Right,
-                                term: &Variable(VarId(6))
-                            }
-                        }
-                    },
-                    arg: &Unlabel {
-                        label: z,
-                        term: &Project {
-                            direction: Direction::Right,
-                            term: &Variable(VarId(6))
-                        }
-                    }
-                }
-            }
-        )
+
+        let mut w = String::new();
+        ast.pretty(&db, &pretty::BoxAllocator)
+            .render_fmt(100, &mut w)
+            .unwrap();
+        let expect = expect![[r#"
+            (|var<6>| ((|var<10>| (|var<0>| (|var<11>| (|var<1>| (|var<2>| var<0>))(var<11>.B)))(var<10>.A)) +++
+            (|var<0>| ((|var<12>| (|var<1>| (|var<2>| var<1>))(var<12>.B)) +++ (|var<1>| (|var<13>| (|var<2>|
+            var<2>)(var<13>.C))))))(prj<R>(var<6>).x)(prj<R>(var<6>).y)(prj<R>(var<6>).z))"#]];
+        expect.assert_eq(&w);
     }
 }

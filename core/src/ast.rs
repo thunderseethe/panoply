@@ -3,6 +3,7 @@ use crate::ident::Ident;
 use crate::modules::Module;
 use crate::span::Span;
 use crate::ty::{Ty, TyScheme};
+use pretty::{DocAllocator, Pretty};
 use rustc_hash::FxHashMap;
 
 pub mod indexed {
@@ -11,6 +12,7 @@ pub mod indexed {
 
     use bumpalo::Bump;
     use la_arena::{Arena, Idx};
+    use pretty::{docs, DocAllocator, Pretty};
     use rustc_hash::FxHashMap;
 
     use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, VarId};
@@ -23,7 +25,7 @@ pub mod indexed {
 
     use super::Direction;
 
-    pub struct AstIndxAlloc<'b, 'a, Var> {
+    struct AstIndxAlloc<'b, 'a, Var> {
         terms: Arena<Term<Var>>,
         ref_spans: &'b FxHashMap<&'a super::Term<'a, Var>, Span>,
         idx_spans: FxHashMap<Idx<Term<Var>>, Span>,
@@ -39,7 +41,7 @@ pub mod indexed {
         }
     }
 
-    pub struct AstRefAlloc<'b, 'a, Var> {
+    struct AstRefAlloc<'b, 'a, Var> {
         arena: &'a Bump,
         terms: &'b Arena<Term<Var>>,
         ref_spans: FxHashMap<&'a super::Term<'a, Var>, Span>,
@@ -117,6 +119,122 @@ pub mod indexed {
             ty: Ty,
             term: Idx<Term<Var>>,
         },
+    }
+
+    struct PrettyTerm<'a, Var> {
+        root: Idx<Term<Var>>,
+        arena: &'a Arena<Term<Var>>,
+        db: &'a dyn crate::Db,
+    }
+
+    impl<'a, Var> PrettyTerm<'a, Var> {
+        fn with_root(&self, root: Idx<Term<Var>>) -> Self {
+            PrettyTerm {
+                root,
+                arena: self.arena,
+                db: self.db,
+            }
+        }
+    }
+
+    impl<'a, Var, D, A: 'a> Pretty<'a, D, A> for PrettyTerm<'_, Var>
+    where
+        D: DocAllocator<'a, A>,
+        Var: Clone + Pretty<'a, D, A>,
+    {
+        fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, A> {
+            match &self.arena[self.root] {
+                Term::Variable(var) => var.clone().pretty(alloc),
+                Term::Item((mod_id, item_id)) => docs![
+                    alloc,
+                    "module",
+                    alloc.as_string(mod_id.0).angles(),
+                    ".item",
+                    alloc.as_string(item_id.0).angles()
+                ],
+                Term::Operation((mod_id, eff_id, op_id)) => docs![
+                    alloc,
+                    "module",
+                    alloc.as_string(mod_id.0).angles(),
+                    ".effect",
+                    alloc.as_string(eff_id.0).angles(),
+                    ".op",
+                    alloc.as_string(op_id.0).angles()
+                ],
+                Term::Int(i) => alloc.as_string(i),
+                Term::Unit => alloc.text("{}"),
+                Term::Abstraction { arg, body } => docs![
+                    alloc,
+                    "|",
+                    arg.clone(),
+                    "|",
+                    alloc.softline(),
+                    self.with_root(*body)
+                ]
+                .group()
+                .parens(),
+                Term::Application { func, arg } => self
+                    .with_root(*func)
+                    .pretty(alloc)
+                    .append(self.with_root(*arg).pretty(alloc).parens()),
+                Term::Label { label, term } => docs![
+                    alloc,
+                    label.text(self.db).clone(),
+                    alloc.softline(),
+                    "=",
+                    alloc.softline(),
+                    self.with_root(*term)
+                ],
+                Term::Unlabel { label, term } => docs![
+                    alloc,
+                    self.with_root(*term),
+                    ".",
+                    label.text(self.db).clone()
+                ],
+                Term::Concat { left, right } => docs![
+                    alloc,
+                    self.with_root(*left),
+                    alloc.softline(),
+                    "***",
+                    alloc.softline(),
+                    self.with_root(*right),
+                ]
+                .parens(),
+                Term::Project { direction, term } => docs![
+                    alloc,
+                    "prj",
+                    direction.pretty(alloc).angles(),
+                    self.with_root(*term).pretty(alloc).parens()
+                ],
+                Term::Branch { left, right } => docs![
+                    alloc,
+                    self.with_root(*left),
+                    alloc.softline(),
+                    "+++",
+                    alloc.softline(),
+                    self.with_root(*right)
+                ]
+                .parens(),
+                Term::Inject { direction, term } => docs![
+                    alloc,
+                    "inj",
+                    direction.pretty(alloc).angles(),
+                    self.with_root(*term).pretty(alloc).parens()
+                ],
+                Term::Handle { handler, body } => docs![
+                    alloc,
+                    "handle",
+                    alloc.softline(),
+                    self.with_root(*body).pretty(alloc).nest(2),
+                    alloc.softline(),
+                    "with",
+                    alloc.softline(),
+                    self.with_root(*handler).pretty(alloc).nest(2)
+                ],
+                // TODO: Pretty print types.
+                Term::Annotated { term, .. } => self.with_root(*term).pretty(alloc),
+            }
+        }
     }
 
     use super::ZeroOneOrTwo;
@@ -416,6 +534,24 @@ pub mod indexed {
             self.spans.get(&node)
         }
     }
+    impl<Var> Ast<Var> {
+        pub fn pretty<'a, 'b, D>(
+            &'a self,
+            db: &'a dyn crate::Db,
+            alloc: &'b D,
+        ) -> pretty::DocBuilder<'b, D>
+        where
+            D: DocAllocator<'b>,
+            Var: Clone + Pretty<'b, D>,
+        {
+            PrettyTerm {
+                root: self.root(),
+                arena: &self.terms,
+                db,
+            }
+            .pretty(alloc)
+        }
+    }
     impl<Var: PartialEq> PartialEq for Ast<Var> {
         fn eq(&self, other: &Self) -> bool {
             self.name == other.name
@@ -437,52 +573,6 @@ pub mod indexed {
         }
     }
 
-    impl<Var: Copy + Eq + Hash> Ast<Var> {
-        pub fn ref_alloc<'a>(
-            &self,
-            arena: &'a Bump,
-        ) -> (
-            super::Ast<'a, Var>,
-            FxHashMap<&'a super::Term<'a, Var>, Idx<Term<Var>>>,
-        ) {
-            let mut alloc = AstRefAlloc {
-                arena,
-                terms: &self.terms,
-                ref_spans: FxHashMap::default(),
-                mapping: FxHashMap::default(),
-                idx_spans: &self.spans,
-            };
-            let tree = self.tree.ref_alloc(&mut alloc);
-            (
-                super::Ast {
-                    name: self.name,
-                    spans: alloc.ref_spans,
-                    annotation: self.annotation.clone(),
-                    tree,
-                },
-                alloc.mapping,
-            )
-        }
-    }
-
-    impl<'a, Var: Copy + Eq + Hash + Debug> From<&super::Ast<'a, Var>> for Ast<Var> {
-        fn from(value: &super::Ast<'a, Var>) -> Self {
-            let mut alloc = AstIndxAlloc {
-                terms: Arena::default(),
-                ref_spans: &value.spans,
-                idx_spans: FxHashMap::default(),
-            };
-            let tree = value.tree.alloc(&mut alloc);
-            Ast {
-                name: value.name,
-                spans: alloc.idx_spans,
-                annotation: value.annotation.clone(),
-                terms: alloc.terms,
-                tree,
-            }
-        }
-    }
-
     #[salsa::tracked]
     pub struct SalsaItem {
         #[id]
@@ -498,11 +588,11 @@ pub mod indexed {
         Function(Ast<Var>),
     }
 
-    impl<'a, Var: Copy + Eq + Hash + Debug> From<&super::Item<'a, Var>> for Item<Var> {
-        fn from(value: &super::Item<'a, Var>) -> Self {
-            match value {
-                super::Item::Effect(eff) => Item::Effect(eff.clone()),
-                super::Item::Function(ast) => Item::Function(Ast::from(ast)),
+    impl<Var> Item<Var> {
+        pub fn unwrap_func(self) -> Ast<Var> {
+            match self {
+                Item::Effect(_) => panic!("Expected Function but got Effect"),
+                Item::Function(ast) => ast,
             }
         }
     }
@@ -523,74 +613,6 @@ pub struct EffectItem {
     pub ops: Vec<Option<(EffectOpId, TyScheme)>>,
 }
 
-/// A top-level item in an Aiahr source file.
-/// This is desugared from an NST item and all of it's spans are moved out of band to make working
-/// with the semantic information of the tree easier.
-#[derive(Clone, Debug)]
-pub enum Item<'a, Var> {
-    Effect(EffectItem),
-    Function(Ast<'a, Var>),
-}
-impl<'a, Var> Item<'a, Var> {
-    pub fn unwrap_func(self) -> Ast<'a, Var> {
-        match self {
-            Item::Effect(_) => panic!("Expected Function but got Effect"),
-            Item::Function(ast) => ast,
-        }
-    }
-}
-
-/// Abstract Syntax Tree (AST)
-#[derive(Clone, Debug)]
-pub struct Ast<'a, Var> {
-    name: ItemId,
-    // We store spans of the Ast out of band because we won't need them for most operations
-    spans: FxHashMap<&'a Term<'a, Var>, Span>,
-    annotation: Option<TyScheme>,
-    pub tree: &'a Term<'a, Var>,
-}
-
-impl<'a, Var> Ast<'a, Var> {
-    pub fn new(
-        name: ItemId,
-        spans: FxHashMap<&'a Term<'a, Var>, Span>,
-        tree: &'a Term<'a, Var>,
-    ) -> Self {
-        Self {
-            name,
-            spans,
-            annotation: None,
-            tree,
-        }
-    }
-
-    pub fn with_ann(
-        name: ItemId,
-        spans: FxHashMap<&'a Term<'a, Var>, Span>,
-        annotation: TyScheme,
-        tree: &'a Term<'a, Var>,
-    ) -> Self {
-        Self {
-            name,
-            spans,
-            annotation: Some(annotation),
-            tree,
-        }
-    }
-
-    /// Get the root node of this Ast
-    pub fn root(&self) -> &'a Term<'a, Var> {
-        self.tree
-    }
-}
-
-impl<'a, Var: Eq + std::hash::Hash> Ast<'a, Var> {
-    /// Lookup the span of a node within this Ast
-    pub fn span_of(&self, node: &'a Term<'a, Var>) -> Option<&Span> {
-        self.spans.get(node)
-    }
-}
-
 /// Direction of a row operation.
 /// When operating on a row we often split the row into a left and right row (concatenation,
 /// branching, injecting, etc.). When row combination is not commutative it matters whether an
@@ -600,10 +622,21 @@ pub enum Direction {
     Left,
     Right,
 }
+impl<'a, D, A: 'a> Pretty<'a, D, A> for Direction
+where
+    D: DocAllocator<'a, A>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        match self {
+            Direction::Left => allocator.text("L"),
+            Direction::Right => allocator.text("R"),
+        }
+    }
+}
 
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Term<'a, Var> {
+enum Term<'a, Var> {
     // Function abstraction, a closure, a lambda etc.
     Abstraction {
         arg: Var,
@@ -698,11 +731,11 @@ impl<'a, Var> Term<'a, Var> {
 
 /// Convenience wrapper around a term to encode that is must be a row term (Concat, Branch, etc.) and not any other kind
 /// of term.
-pub struct RowTermView<'a, Var> {
-    pub parent: &'a Term<'a, Var>,
-    pub view: RowTerm<'a, Var>,
+struct RowTermView<'a, Var> {
+    parent: &'a Term<'a, Var>,
+    view: RowTerm<'a, Var>,
 }
-pub enum RowTerm<'a, Var> {
+enum RowTerm<'a, Var> {
     Concat {
         left: &'a Term<'a, Var>,
         right: &'a Term<'a, Var>,

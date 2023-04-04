@@ -7,10 +7,13 @@ edition.workspace = true
 aiahr-core.workspace = true
 aiahr-analysis.workspace = true
 bumpalo.workspace = true
+la-arena.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
 
 [dev-dependencies]
 aiahr-parser.workspace = true
 aiahr-test.workspace = true
+expect-test.workspace = true
+pretty.workspace = true
 rand.workspace = true

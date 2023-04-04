@@ -6,6 +6,8 @@ use std::{
     slice::Iter,
 };
 
+use pretty::{DocAllocator, Pretty};
+
 /// An ID type that wraps a `usize`. Used to assign unique IDs to objects based on their index in an
 /// array.
 pub trait Id {
@@ -297,3 +299,14 @@ pub IrVarId;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub IrTyVarId;
 );
+
+impl<'a, D, A: 'a> Pretty<'a, D, A> for VarId
+where
+    D: DocAllocator<'a, A>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        allocator
+            .text("var")
+            .append(allocator.as_string(self.0).angles())
+    }
+}
