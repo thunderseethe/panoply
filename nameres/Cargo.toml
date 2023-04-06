@@ -1,5 +1,5 @@
 [package]
-name = "aiahr-analysis"
+name = "aiahr-nameres"
 version = "0.1.0"
 edition.workspace = true
 

@@ -53,14 +53,14 @@ pub trait EffectInfo {
 
 pub struct Jar(SalsaTypedItem, type_scheme_of);
 pub trait Db:
-    salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
+    salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_desugar::Db
 {
     fn as_tc_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
 impl<DB> Db for DB where
-    DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db + aiahr_desugar::Db
+    DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_desugar::Db
 {
 }
 
@@ -69,7 +69,7 @@ where
     DB: ?Sized + crate::Db,
 {
     fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
-        aiahr_analysis::effect_name(
+        aiahr_nameres::effect_name(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             module,
@@ -78,7 +78,7 @@ where
     }
 
     fn effect_members(&self, module: ModuleId, eff: EffectId) -> &[EffectOpId] {
-        aiahr_analysis::effect_members(
+        aiahr_nameres::effect_members(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             module,
@@ -92,7 +92,7 @@ where
         module: ModuleId,
         members: &[Ident],
     ) -> Option<(ModuleId, EffectId)> {
-        aiahr_analysis::lookup_effect_by_member_names(
+        aiahr_nameres::lookup_effect_by_member_names(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             module,
@@ -101,7 +101,7 @@ where
     }
 
     fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
-        aiahr_analysis::lookup_effect_by_name(
+        aiahr_nameres::lookup_effect_by_name(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             module,
@@ -120,7 +120,7 @@ where
     }
 
     fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident {
-        aiahr_analysis::effect_member_name(
+        aiahr_nameres::effect_member_name(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             module,
@@ -435,7 +435,7 @@ mod tests {
         crate::Jar,
         aiahr_core::Jar,
         aiahr_desugar::Jar,
-        aiahr_analysis::Jar,
+        aiahr_nameres::Jar,
         aiahr_parser::Jar
     )]
     pub(crate) struct TestDatabase {

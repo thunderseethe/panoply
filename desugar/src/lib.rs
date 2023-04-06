@@ -23,7 +23,7 @@ pub struct Jar(
     effect_of,
     effect_op_tyscheme_of,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db {
     fn as_desugar_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
@@ -37,12 +37,12 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {
         desugar_module(self.as_desugar_db(), nameres_module)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_analysis::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db {}
 
 /// Desugar an NST Module into an AST module.
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
-pub fn desugar_module(db: &dyn crate::Db, module: aiahr_analysis::NameResModule) -> AstModule {
+pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) -> AstModule {
     let core_db = db.as_core_db();
     let resolution = module.items(db.as_analysis_db());
     let ty_vars = resolution.local_ids.ty_vars.len();
@@ -63,7 +63,7 @@ pub fn desugar_module(db: &dyn crate::Db, module: aiahr_analysis::NameResModule)
 #[salsa::tracked]
 pub fn desugar_item(
     db: &dyn crate::Db,
-    item: aiahr_analysis::SalsaItem,
+    item: aiahr_nameres::SalsaItem,
     vars: usize,
     ty_vars: usize,
 ) -> ast::SalsaItem {
@@ -740,12 +740,12 @@ mod tests {
     use crate::Db as DesugarDb;
 
     use super::*;
-    use aiahr_analysis::Db;
     use aiahr_core::file::{SourceFile, SourceFileSet};
+    use aiahr_nameres::Db;
     use expect_test::expect;
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_analysis::Jar, aiahr_parser::Jar)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_nameres::Jar, aiahr_parser::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
@@ -757,7 +757,7 @@ mod tests {
     fn ds_snippet<'db>(
         db: &'db TestDatabase,
         input: &str,
-    ) -> (aiahr_analysis::SalsaItem, &'db ast::SalsaItem) {
+    ) -> (aiahr_nameres::SalsaItem, &'db ast::SalsaItem) {
         let mut content = "item = ".to_string();
         content.push_str(input);
         let file = SourceFile::new(db, MOD, PathBuf::from("test.aiahr"), content);

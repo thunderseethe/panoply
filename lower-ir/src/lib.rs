@@ -1,4 +1,3 @@
-use aiahr_analysis::name::ModuleName;
 use aiahr_core::ast::AstModule;
 use aiahr_core::id::{EffectId, EffectOpId};
 use aiahr_core::ident::Ident;
@@ -12,6 +11,7 @@ use aiahr_core::{
     id::{IrTyVarId, ItemId, ModuleId, VarId},
     ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
 };
+use aiahr_nameres::name::ModuleName;
 use aiahr_tc::EffectInfo;
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
@@ -179,7 +179,7 @@ where
     DB: ?Sized + crate::Db,
 {
     fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
-        aiahr_analysis::effect_handler_return_index(
+        aiahr_nameres::effect_handler_return_index(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             mod_id,
@@ -193,7 +193,7 @@ where
         eff_id: EffectId,
         op_id: EffectOpId,
     ) -> usize {
-        aiahr_analysis::effect_handler_op_index(
+        aiahr_nameres::effect_handler_op_index(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             mod_id,
@@ -203,7 +203,7 @@ where
     }
 
     fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
-        aiahr_analysis::effect_vector_index(
+        aiahr_nameres::effect_vector_index(
             self.as_analysis_db(),
             Top::new(self.as_core_db()),
             mod_id,
@@ -574,7 +574,7 @@ mod tests {
         aiahr_core::Jar,
         aiahr_tc::Jar,
         aiahr_desugar::Jar,
-        aiahr_analysis::Jar,
+        aiahr_nameres::Jar,
         aiahr_parser::Jar
     )]
     struct TestDatabase {

@@ -10,10 +10,10 @@ name = "aiahr"
 name = "interpreter"
 
 [dependencies]
-aiahr-analysis.workspace = true
 aiahr-core.workspace = true
 aiahr-desugar.workspace = true
 aiahr-interpreter.workspace = true
+aiahr-nameres.workspace = true
 aiahr-lower-ir.workspace = true
 aiahr-parser.workspace = true
 aiahr-tc.workspace = true
@@ -23,12 +23,12 @@ salsa.workspace = true
 
 [workspace]
 members = [
-    "analysis",
     "core",
     "desugar",
     "interpreter",
     "lower-ir",
     "lower-ir/ir-matcher",
+    "nameres",
     "parser",
     "tc",
     "test-utils",
@@ -42,9 +42,9 @@ edition = "2021"
 # Unless necessary, don't specify patch numbers for dependencies whose major version number is
 # non-zero.
 [workspace.dependencies]
-aiahr-analysis = { path = "analysis" }
 aiahr-core = { path = "core" }
 aiahr-desugar = { path = "desugar" }
+aiahr-nameres = { path = "nameres" }
 aiahr-interpreter = { path = "interpreter" }
 aiahr-lower-ir = { path = "lower-ir" }
 aiahr-parser = { path = "parser" }
