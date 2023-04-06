@@ -1,5 +1,4 @@
-use aiahr_core::cst::{Field, Separated};
-use bumpalo::Bump;
+use aiahr_core::cst::{self, Field};
 
 use crate::span::random_span;
 
@@ -11,15 +10,15 @@ pub fn random_field<L, T>(label: L, target: T) -> Field<L, T> {
     }
 }
 
-pub fn random_sep<T, II>(arena: &Bump, elems: impl IntoIterator<IntoIter = II>) -> Separated<'_, T>
+pub fn random_sep<T, II>(elems: impl IntoIterator<IntoIter = II>) -> cst::indexed::Separated<T>
 where
     II: Iterator<Item = T> + ExactSizeIterator,
 {
     let mut iter = elems.into_iter();
     let first = iter.next().unwrap();
-    Separated {
+    cst::indexed::Separated {
         first,
-        elems: arena.alloc_slice_fill_iter(iter.map(|t| (random_span(), t))),
+        elems: iter.map(|t| (random_span(), t)).collect(),
         comma: None,
     }
 }

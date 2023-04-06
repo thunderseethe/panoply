@@ -6,6 +6,8 @@ use crate::{
 };
 
 pub mod indexed {
+    use std::ops::Index;
+
     use bumpalo::Bump;
     use la_arena::{Arena, Idx};
 
@@ -18,7 +20,11 @@ pub mod indexed {
     use crate::indexed::{
         HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
     };
-    use crate::span::{Span, SpanOf};
+    use crate::span::{Span, SpanOf, Spanned};
+
+    pub trait IdxAlloc<T> {
+        fn alloc(&mut self, value: T) -> Idx<T>;
+    }
 
     #[derive(Default, Debug, PartialEq)]
     pub struct NstIndxAlloc {
@@ -27,7 +33,21 @@ pub mod indexed {
         pats: Arena<Pattern>,
     }
     impl Eq for NstIndxAlloc {}
-
+    impl IdxAlloc<Term> for NstIndxAlloc {
+        fn alloc(&mut self, value: Term) -> Idx<Term> {
+            self.terms.alloc(value)
+        }
+    }
+    impl IdxAlloc<Type<TyVarId>> for NstIndxAlloc {
+        fn alloc(&mut self, value: Type<TyVarId>) -> Idx<Type<TyVarId>> {
+            self.types.alloc(value)
+        }
+    }
+    impl IdxAlloc<Pattern> for NstIndxAlloc {
+        fn alloc(&mut self, value: Pattern) -> Idx<Pattern> {
+            self.pats.alloc(value)
+        }
+    }
     impl HasArenaRef<Type<TyVarId>> for NstIndxAlloc {
         fn arena(&self) -> &Arena<Type<TyVarId>> {
             &self.types
@@ -56,6 +76,16 @@ pub mod indexed {
     impl HasArenaMut<Pattern> for NstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Pattern> {
             &mut self.pats
+        }
+    }
+    impl<T> Index<Idx<T>> for NstIndxAlloc
+    where
+        Self: HasArenaRef<T>,
+    {
+        type Output = T;
+
+        fn index(&self, index: Idx<T>) -> &Self::Output {
+            &self.arena()[index]
         }
     }
 
@@ -91,6 +121,15 @@ pub mod indexed {
         ProductRow(ProductRow<Idx<Self>>),
         SumRow(SumRow<Idx<Self>>),
         Whole(SpanOf<VarId>),
+    }
+    impl Spanned for Pattern {
+        fn span(&self) -> Span {
+            match self {
+                Pattern::ProductRow(prod) => prod.span(),
+                Pattern::SumRow(sum) => sum.span(),
+                Pattern::Whole(var) => var.span(),
+            }
+        }
     }
 
     /// An Aiahr term with names resolved.
@@ -144,6 +183,41 @@ pub mod indexed {
             term: Idx<Self>,
             rpar: Span,
         },
+    }
+    impl Term {
+        pub fn spanned<'a>(&'a self, arenas: &'a NstIndxAlloc) -> SpanTerm<'a> {
+            SpanTerm { term: self, arenas }
+        }
+    }
+    pub struct SpanTerm<'a> {
+        term: &'a Term,
+        arenas: &'a NstIndxAlloc,
+    }
+    impl SpanTerm<'_> {
+        fn with_term(&self, term: Idx<Term>) -> Self {
+            Self {
+                term: &self.arenas[term],
+                arenas: self.arenas,
+            }
+        }
+    }
+    impl Spanned for SpanTerm<'_> {
+        fn span(&self) -> Span {
+            match self.term {
+                Term::Binding { var, expr, .. } => Span::join(var, &self.with_term(*expr)),
+                Term::Handle { with, expr, .. } => Span::join(with, &self.with_term(*expr)),
+                Term::Abstraction { lbar, body, .. } => Span::join(lbar, &self.with_term(*body)),
+                Term::Application { func, rpar, .. } => Span::join(&self.with_term(*func), rpar),
+                Term::ProductRow(p) => p.span(),
+                Term::SumRow(s) => s.span(),
+                Term::FieldAccess { base, field, .. } => Span::join(&self.with_term(*base), field),
+                Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
+                Term::EffectOpRef(o) => o.span(),
+                Term::ItemRef(i) => i.span(),
+                Term::VariableRef(v) => v.span(),
+                Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+            }
+        }
     }
 
     /// A top-level item in an Aiahr source file with names resolved.

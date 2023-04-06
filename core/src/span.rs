@@ -195,6 +195,11 @@ impl<T> Spanned for SpanOf<T> {
         }
     }
 }
+impl<T: Spanned> Spanned for &T {
+    fn span(&self) -> Span {
+        T::span(self)
+    }
+}
 
 /// Matches a [`SpanOf`] by value alone.
 #[macro_export]

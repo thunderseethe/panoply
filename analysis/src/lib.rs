@@ -5,6 +5,7 @@ use aiahr_core::ident::Ident;
 use aiahr_core::indexed::{IndexedAllocate, ReferenceAllocate};
 use aiahr_core::modules::{all_modules, Module, ModuleTree};
 use aiahr_core::nst::indexed::NstIndxAlloc;
+use aiahr_core::span::{Span, Spanned};
 use aiahr_core::Top;
 use aiahr_parser::ParseModule;
 use rustc_hash::FxHashMap;
@@ -73,6 +74,20 @@ pub struct SalsaItem {
     pub data: aiahr_core::nst::indexed::Item,
     #[return_ref]
     pub alloc: aiahr_core::nst::indexed::NstIndxAlloc,
+}
+
+impl SalsaItem {
+    pub fn span_of(&self, db: &dyn crate::Db) -> Span {
+        match self.data(db) {
+            aiahr_core::nst::indexed::Item::Effect { effect, rbrace, .. } => {
+                Span::join(effect, rbrace)
+            }
+            aiahr_core::nst::indexed::Item::Term { value, .. } => {
+                let alloc = self.alloc(db);
+                alloc[*value].spanned(alloc).span()
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

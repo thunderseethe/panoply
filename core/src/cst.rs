@@ -10,6 +10,7 @@ pub mod indexed {
     //! reference arenas. This is to ease the transition to Salsa.
 
     use std::fmt::Debug;
+    use std::iter::FusedIterator;
 
     use bumpalo::Bump;
     use la_arena::{Arena, Idx};
@@ -18,7 +19,7 @@ pub mod indexed {
     use crate::indexed::{
         HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
     };
-    use crate::span::{Span, SpanOf};
+    use crate::span::{Span, SpanOf, Spanned};
 
     #[derive(Clone, Debug, Default, Eq, PartialEq)]
     pub struct CstIndxAlloc {
@@ -83,6 +84,65 @@ pub mod indexed {
         pub elems: Vec<(Span, T)>,
         pub comma: Option<Span>,
     }
+    impl<T: Spanned> Spanned for Separated<T> {
+        fn span(&self) -> Span {
+            Span::join(
+                &self.first,
+                &self
+                    .comma
+                    .or_else(|| self.elems.last().map(|e| e.0))
+                    .unwrap_or_else(|| self.first.span()),
+            )
+        }
+    }
+    impl<T> Separated<T> {
+        /// An iterator over the non-separator elements.
+        pub fn elements(&self) -> Elements<'_, T> {
+            self.into_iter()
+        }
+    }
+    /// An iterator over the elements of a `Separated`. Needed because `std::iter::Chain` does not
+    /// implement `ExactSizeIterator`.
+    #[derive(Debug)]
+    pub struct Elements<'a, T> {
+        head: Option<&'a T>,
+        tail: std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>,
+    }
+    impl<'a, T> IntoIterator for &'a Separated<T> {
+        type Item = &'a T;
+
+        type IntoIter = Elements<'a, T>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            Elements {
+                head: Some(&self.first),
+                tail: self.elems.iter().map(|(_, t)| t),
+            }
+        }
+    }
+
+    impl<'a, T> Clone for Elements<'a, T> {
+        fn clone(&self) -> Self {
+            Elements {
+                head: self.head,
+                tail: self.tail.clone(),
+            }
+        }
+    }
+    impl<'a, T> ExactSizeIterator for Elements<'a, T> {}
+    impl<'a, T> FusedIterator for Elements<'a, T> {}
+    impl<'a, T> Iterator for Elements<'a, T> {
+        type Item = &'a T;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.head.take().or_else(|| self.tail.next())
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            let (lower, upper) = self.tail.size_hint();
+            (lower + 1, upper.map(|u| u + 1))
+        }
+    }
 
     pub type IdField<T> = super::Field<SpanOf<Ident>, T>;
 
@@ -93,6 +153,24 @@ pub mod indexed {
         pub fields: Option<Separated<IdField<T>>>,
         pub rbrace: Span,
     }
+    impl<T> Spanned for ProductRow<T> {
+        fn span(&self) -> Span {
+            Span::join(&self.lbrace, &self.rbrace)
+        }
+    }
+    impl<'a, T> IntoIterator for &'a ProductRow<T> {
+        type Item = &'a IdField<T>;
+
+        type IntoIter = std::iter::FlatMap<
+            std::option::Iter<'a, Separated<IdField<T>>>,
+            Elements<'a, IdField<T>>,
+            fn(&'a Separated<IdField<T>>) -> Elements<'a, IdField<T>>,
+        >;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.fields.iter().flat_map(IntoIterator::into_iter)
+        }
+    }
 
     /// A sum row with value in `T`.
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -100,6 +178,11 @@ pub mod indexed {
         pub langle: Span,
         pub field: IdField<T>,
         pub rangle: Span,
+    }
+    impl<T> Spanned for SumRow<T> {
+        fn span(&self) -> Span {
+            Span::join(&self.langle, &self.rangle)
+        }
     }
 
     /// A non-empty row with concrete fields in `C` and variables in `V`.
