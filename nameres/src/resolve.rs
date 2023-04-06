@@ -315,51 +315,55 @@ where
             }
         })
     }
+
+    fn mk_ty(&self, type_: Type<'a, TyVarId>) -> &'a Type<'a, TyVarId> {
+        self.arena.alloc(type_)
+    }
+
     /// Resolves an Aiahr type.
     pub fn resolve_type(&mut self, type_: &Type<'_, Ident>) -> Option<&'a Type<'a, TyVarId>> {
-        Some(
-            self.arena.alloc(match type_ {
-                Type::Named(var) => Type::Named(self.resolve_type_symbol(*var)?),
-                Type::Sum {
-                    langle,
-                    variants,
-                    rangle,
-                } => Type::Sum {
-                    langle: *langle,
-                    variants: self.resolve_type_row(variants)?,
-                    rangle: *rangle,
-                },
-                Type::Product {
-                    lbrace,
-                    fields,
-                    rbrace,
-                } => Type::Product {
-                    lbrace: *lbrace,
-                    fields: fields
-                        .map(|fields| self.resolve_type_row(&fields))
-                        .transpose()?,
-                    rbrace: *rbrace,
-                },
+        let type_ = match type_ {
+            Type::Named(var) => Type::Named(self.resolve_type_symbol(*var)?),
+            Type::Sum {
+                langle,
+                variants,
+                rangle,
+            } => Type::Sum {
+                langle: *langle,
+                variants: self.resolve_type_row(variants)?,
+                rangle: *rangle,
+            },
+            Type::Product {
+                lbrace,
+                fields,
+                rbrace,
+            } => Type::Product {
+                lbrace: *lbrace,
+                fields: fields
+                    .map(|fields| self.resolve_type_row(&fields))
+                    .transpose()?,
+                rbrace: *rbrace,
+            },
+            Type::Function {
+                domain,
+                arrow,
+                codomain,
+            } => {
+                let domain = self.resolve_type(domain);
+                let codomain = self.resolve_type(codomain);
                 Type::Function {
-                    domain,
-                    arrow,
-                    codomain,
-                } => {
-                    let domain = self.resolve_type(domain);
-                    let codomain = self.resolve_type(codomain);
-                    Type::Function {
-                        domain: domain?,
-                        arrow: *arrow,
-                        codomain: codomain?,
-                    }
+                    domain: domain?,
+                    arrow: *arrow,
+                    codomain: codomain?,
                 }
-                Type::Parenthesized { lpar, type_, rpar } => Type::Parenthesized {
-                    lpar: *lpar,
-                    type_: self.resolve_type(type_)?,
-                    rpar: *rpar,
-                },
-            }) as &_,
-        )
+            }
+            Type::Parenthesized { lpar, type_, rpar } => Type::Parenthesized {
+                lpar: *lpar,
+                type_: self.resolve_type(type_)?,
+                rpar: *rpar,
+            },
+        };
+        Some(self.mk_ty(type_))
     }
 
     // Resolves a row of types.
@@ -438,7 +442,7 @@ where
         scheme: &Scheme<'_, Ident>,
     ) -> Option<&'a Scheme<'a, TyVarId>> {
         self.subscope(|scope| {
-            let quantifiers = self.arena.alloc_slice_fill_iter(
+            let quantifiers = scope.arena.alloc_slice_fill_iter(
                 scheme
                     .quantifiers
                     .iter()
@@ -468,11 +472,15 @@ where
         })
     }
 
+    fn mk_pat(&self, pat: nst::Pattern<'a>) -> &'a nst::Pattern<'a> {
+        self.arena.alloc(pat)
+    }
+
     /// Resolves the given pattern, accumulating bindings into `names`.
     ///
     /// Note that this currently cannot return `None`, although it can emit errors.
     pub fn resolve_pattern(&mut self, pattern: &cst::Pattern<'_>) -> Option<&'a nst::Pattern<'a>> {
-        Some(self.arena.alloc(match pattern {
+        let pat = match pattern {
             cst::Pattern::ProductRow(pr) => nst::Pattern::ProductRow(
                 self.resolve_product_row(pr, |me, target| me.resolve_pattern(target))?,
             ),
@@ -480,7 +488,8 @@ where
                 nst::Pattern::SumRow(resolve_sum_row(sr, |target| self.resolve_pattern(target))?)
             }
             cst::Pattern::Whole(var) => nst::Pattern::Whole(self.insert_var(*var)),
-        }))
+        };
+        Some(self.mk_pat(pat))
     }
 
     // Resolves a type annotation.
@@ -535,7 +544,7 @@ where
                     return None;
                 }
                 DotResolution::Item(m, i) => DotResolution::FieldAccess {
-                    base: self.arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
+                    base: self.mk_term(nst::Term::ItemRef(base.span().of((m, i)))),
                     dot,
                     field,
                 },
@@ -545,7 +554,7 @@ where
                     dot: dot2n,
                     field: field2n,
                 } => DotResolution::FieldAccess {
-                    base: self.arena.alloc(nst::Term::FieldAccess {
+                    base: self.mk_term(nst::Term::FieldAccess {
                         base: base2n,
                         dot: dot2n,
                         field: field2n,
@@ -571,7 +580,7 @@ where
                         self.resolve_symbol_in(m, field, |name| Ok(DotResolution::from(name)))?
                     }
                     ModuleOr::Value(value) => DotResolution::FieldAccess {
-                        base: self.arena.alloc(value),
+                        base: self.mk_term(value),
                         dot,
                         field,
                     },
@@ -586,9 +595,13 @@ where
         })
     }
 
+    fn mk_term(&self, term: nst::Term<'a>) -> &'a nst::Term<'a> {
+        self.arena.alloc(term)
+    }
+
     /// Resolves the given term.
     pub fn resolve_term(&mut self, term: &cst::Term<'_>) -> Option<&'a nst::Term<'a>> {
-        Some(self.arena.alloc(match term {
+        let term = match term {
             cst::Term::Binding {
                 var,
                 annotation,
@@ -732,7 +745,8 @@ where
                 term: self.resolve_term(term)?,
                 rpar: *rpar,
             },
-        }))
+        };
+        Some(self.mk_term(term))
     }
 
     /// Resolves an effect operation signature.
@@ -793,7 +807,7 @@ where
                 .map(|annotation| self.resolve_scheme_annotation(&annotation))
                 .transpose()?,
             eq,
-            value: self.arena.alloc(self.resolve_term(value)?),
+            value: self.resolve_term(value)?,
         })
     }
 }
@@ -926,7 +940,6 @@ mod tests {
             names: &mut names,
             errors: &mut errors,
         };
-
         let resolved = nameres_ctx.resolve_term(unresolved);
         (resolved, names.into_local_ids(), errors)
     }
