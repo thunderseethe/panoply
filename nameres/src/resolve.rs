@@ -37,26 +37,50 @@ where
         .map(|v| arena.alloc_slice_fill_iter(v.into_iter()) as &[T])
 }
 
-// Tries to map the given function over the elements of `separated`, returning all errors.
-fn resolve_separated<'a, A, B, F>(
-    arena: &'a Bump,
-    separated: &Separated<'_, A>,
-    f: F,
-) -> Option<Separated<'a, B>>
-where
-    F: FnMut(&A) -> Option<B>,
-{
-    let mut f = f;
-    let first = f(&separated.first);
-    let elems = alloc_all(
-        arena,
-        separated.elems.iter().map(|(c, a)| Some((*c, f(a)?))),
-    );
-    Some(Separated {
-        first: first?,
-        elems: elems?,
-        comma: separated.comma,
-    })
+impl<'a, E> NameResCtx<'a, '_, '_, E> {
+    // Tries to map the given function over the elements of `separated`, returning all errors.
+    fn resolve_separated<A, B, F>(
+        &mut self,
+        separated: &Separated<'_, A>,
+        f: F,
+    ) -> Option<Separated<'a, B>>
+    where
+        F: FnMut(&mut Self, &A) -> Option<B>,
+    {
+        let mut f = f;
+        let first = f(self, &separated.first);
+        let elems = alloc_all(
+            self.arena,
+            separated.elems.iter().map(|(c, a)| Some((*c, f(self, a)?))),
+        );
+        Some(Separated {
+            first: first?,
+            elems: elems.unwrap_or(&[]),
+            comma: separated.comma,
+        })
+    }
+
+    // Tries to map the given function over the targets of `prod`.
+    fn resolve_product_row<A, B, F>(
+        &mut self,
+        prod: &ProductRow<'_, A>,
+        f: F,
+    ) -> Option<ProductRow<'a, B>>
+    where
+        F: FnMut(&mut Self, &A) -> Option<B>,
+    {
+        let mut f = f;
+        let fields = if let Some(cs) = &prod.fields {
+            Some(self.resolve_separated(cs, |me, field| resolve_id_field(field, |a| f(me, a)))?)
+        } else {
+            None
+        };
+        Some(ProductRow {
+            lbrace: prod.lbrace,
+            fields,
+            rbrace: prod.rbrace,
+        })
+    }
 }
 
 // Tries to map the given function over the target.
@@ -68,30 +92,6 @@ where
         label: field.label,
         sep: field.sep,
         target: f(&field.target)?,
-    })
-}
-
-// Tries to map the given function over the targets of `prod`.
-fn resolve_product_row<'a, A, B, F>(
-    arena: &'a Bump,
-    prod: &ProductRow<'_, A>,
-    f: F,
-) -> Option<ProductRow<'a, B>>
-where
-    F: FnMut(&A) -> Option<B>,
-{
-    let mut f = f;
-    let fields = if let Some(cs) = &prod.fields {
-        Some(resolve_separated(arena, cs, |field| {
-            resolve_id_field(field, &mut f)
-        })?)
-    } else {
-        None
-    };
-    Some(ProductRow {
-        lbrace: prod.lbrace,
-        fields,
-        rbrace: prod.rbrace,
     })
 }
 
@@ -107,49 +107,36 @@ where
     })
 }
 
-// Inserts a symbol into the current scope using the given function.
-fn insert_symbol<I, F, E>(kind: NameKind, var: SpanOf<Ident>, f: F, errors: &mut E) -> SpanOf<I>
-where
-    F: FnOnce(SpanOf<Ident>) -> InsertResult<I>,
-    E: DiagnosticSink<NameResolutionError>,
-{
-    let InsertResult { id, existing } = f(var);
-    if let Some(orig) = existing {
-        errors.add(NameResolutionError::Duplicate {
-            name: var.value,
-            kind,
-            original: orig.span(),
-            duplicate: var.span(),
-        });
-    }
-    var.span().of(id)
-}
-
-// Inserts a variable into the current scope.
-fn insert_var<E>(var: SpanOf<Ident>, names: &mut Names<'_, '_>, errors: &mut E) -> SpanOf<VarId>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    insert_symbol(NameKind::Var, var, |v| names.insert_var(v), errors)
-}
-
-// Inserts a variable into the current scope.
-fn insert_ty_var<E>(
-    var: SpanOf<Ident>,
-    names: &mut Names<'_, '_>,
-    errors: &mut E,
-) -> SpanOf<TyVarId>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    insert_symbol(NameKind::TyVar, var, |v| names.insert_ty_var(v), errors)
-}
-
 // A module or some other value.
 #[derive(Clone, Copy, Debug)]
 enum ModuleOr<T> {
     Module(ModuleId),
     Value(T),
+}
+
+// The possible meanings of a `DotAccess` term.
+#[derive(Debug)]
+enum DotResolution<'a> {
+    Module(ModuleId),
+    Effect(ModuleId, EffectId),
+    EffectOp(ModuleId, EffectId, EffectOpId),
+    Item(ModuleId, ItemId),
+    FieldAccess {
+        base: &'a nst::Term<'a>,
+        dot: Span,
+        field: SpanOf<Ident>,
+    },
+}
+
+impl<'a> From<BaseName> for DotResolution<'a> {
+    fn from(base: BaseName) -> Self {
+        match base {
+            BaseName::Module(m) => DotResolution::Module(m),
+            BaseName::Effect(m, e) => DotResolution::Effect(m, e),
+            BaseName::EffectOp(m, e, o) => DotResolution::EffectOp(m, e, o),
+            BaseName::Item(m, i) => DotResolution::Item(m, i),
+        }
+    }
 }
 
 // Resolves a symbol or suggests names that the user might have intended.
@@ -181,738 +168,634 @@ where
     Err(suggestions)
 }
 
-// Resolves a symbol to a value of type `T`, using the given function to decide which names are
-// valid for the symbol.
-fn resolve_symbol<T, F, E>(
-    var: SpanOf<Ident>,
-    names: &Names<'_, '_>,
-    errors: &mut E,
-    f: F,
-) -> Option<T>
-where
-    F: FnMut(Name) -> Result<T, RejectionReason>,
-    E: DiagnosticSink<NameResolutionError>,
-{
-    match resolve_or_suggest(names.find(var.value), names, f) {
-        Ok(x) => Some(x),
-        Err(suggestions) => {
-            errors.add(NameResolutionError::NotFound {
-                name: var,
-                context_module: None,
-                suggestions,
-            });
-            None
-        }
-    }
-}
-
-// Resolves a symbol in a given module to a value of type `T`, using the given function to decide
-// which names are valid for the symbol.
-fn resolve_symbol_in<T, F, E>(
-    module: ModuleId,
-    var: SpanOf<Ident>,
-    names: &Names<'_, '_>,
-    errors: &mut E,
-    f: F,
-) -> Option<T>
-where
-    F: FnMut(BaseName) -> Result<T, RejectionReason>,
-    E: DiagnosticSink<NameResolutionError>,
-{
-    match resolve_or_suggest(names.find_in(module, var.value), names, f) {
-        Ok(x) => Some(x),
-        Err(suggestions) => {
-            errors.add(NameResolutionError::NotFound {
-                name: var,
-                context_module: None,
-                suggestions,
-            });
-            None
-        }
-    }
-}
-
-// Resolves an effect operation symbolto a value of type `T`, using the given function to decide
-// which names are valid for the symbol.
-fn resolve_operation_symbol<T, F, E>(
-    module: ModuleId,
-    effect: EffectId,
-    var: SpanOf<Ident>,
-    names: &Names<'_, '_>,
-    errors: &mut E,
-    mut f: F,
-) -> Option<T>
-where
-    F: FnMut(EffectOpId) -> Result<T, RejectionReason>,
-    E: DiagnosticSink<NameResolutionError>,
-{
-    match resolve_or_suggest(
-        names
-            .get_effect(module, effect)
-            .find(var.value)
-            .map(|sn| sn.map(|o| (module, effect, o))),
-        names,
-        |(_, _, o)| f(o),
-    ) {
-        Ok(x) => Some(x),
-        Err(suggestions) => {
-            errors.add(NameResolutionError::NotFound {
-                name: var,
-                context_module: None,
-                suggestions,
-            });
-            None
-        }
-    }
-}
-
-// Resolves a symbol to a type name.
-fn resolve_type_symbol<E>(
-    var: SpanOf<Ident>,
-    names: &mut Names<'_, '_>,
-    errors: &mut E,
-) -> Option<SpanOf<TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(var.map(|id| {
-        let existing = names.find(id).find_map(|sn| match sn.value {
-            Name::TyVar(t) => Some(t),
-            _ => None,
-        });
-        existing.unwrap_or_else(|| insert_ty_var(var.map(|_| id), names, errors).value)
-    }))
-}
-
-// Resolves a type-level row.
-fn resolve_row<'a, C, D, F, E>(
+pub(crate) struct NameResCtx<'a, 'b, 'c, E> {
     arena: &'a Bump,
-    row: &Row<'_, Ident, C>,
-    mut f: F,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<Row<'a, TyVarId, D>>
+    names: &'b mut Names<'c, 'a>,
+    errors: &'b mut E,
+}
+
+impl<'a, E> NameResCtx<'a, '_, '_, E>
 where
-    F: FnMut(&C, &mut Names<'_, 'a>, &mut E) -> Option<D>,
     E: DiagnosticSink<NameResolutionError>,
 {
-    Some(match row {
-        Row::Concrete(concrete) => {
-            Row::Concrete(resolve_separated(arena, concrete, |c| f(c, names, errors))?)
-        }
-        Row::Variable(variables) => Row::Variable(resolve_separated(arena, variables, |var| {
-            resolve_type_symbol(*var, names, errors)
-        })?),
-        Row::Mixed {
-            concrete,
-            vbar,
-            variables,
-        } => {
-            let concrete = resolve_separated(arena, concrete, |c| f(c, names, errors));
-            let variables = resolve_separated(arena, variables, |var| {
-                resolve_type_symbol(*var, names, errors)
-            });
-            Row::Mixed {
-                concrete: concrete?,
-                vbar: *vbar,
-                variables: variables?,
+    // Resolves a symbol to a value of type `T`, using the given function to decide which names are
+    // valid for the symbol.
+    fn resolve_symbol<T, F>(&mut self, var: SpanOf<Ident>, f: F) -> Option<T>
+    where
+        F: FnMut(Name) -> Result<T, RejectionReason>,
+    {
+        match resolve_or_suggest(self.names.find(var.value), self.names, f) {
+            Ok(x) => Some(x),
+            Err(suggestions) => {
+                self.errors.add(NameResolutionError::NotFound {
+                    name: var,
+                    context_module: None,
+                    suggestions,
+                });
+                None
             }
         }
-    })
-}
+    }
 
-// Resolves a row of types.
-fn resolve_type_row<'a, E>(
-    arena: &'a Bump,
-    row: &TypeRow<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<TypeRow<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    resolve_row(
-        arena,
-        row,
-        |field, names, errors| resolve_id_field(field, |ty| resolve_type(arena, ty, names, errors)),
-        names,
-        errors,
-    )
-}
+    // Resolves a symbol in a given module to a value of type `T`, using the given function to decide
+    // which names are valid for the symbol.
+    fn resolve_symbol_in<T, F>(&mut self, module: ModuleId, var: SpanOf<Ident>, f: F) -> Option<T>
+    where
+        F: FnMut(BaseName) -> Result<T, RejectionReason>,
+    {
+        match resolve_or_suggest(self.names.find_in(module, var.value), self.names, f) {
+            Ok(x) => Some(x),
+            Err(suggestions) => {
+                self.errors.add(NameResolutionError::NotFound {
+                    name: var,
+                    context_module: None,
+                    suggestions,
+                });
+                None
+            }
+        }
+    }
+    // Inserts a symbol into the current scope using the given function.
+    fn insert_symbol<I, F>(&mut self, kind: NameKind, var: SpanOf<Ident>, f: F) -> SpanOf<I>
+    where
+        F: FnOnce(&mut Names<'_, 'a>, SpanOf<Ident>) -> InsertResult<I>,
+    {
+        let InsertResult { id, existing } = f(self.names, var);
+        if let Some(orig) = existing {
+            self.errors.add(NameResolutionError::Duplicate {
+                name: var.value,
+                kind,
+                original: orig.span(),
+                duplicate: var.span(),
+            });
+        }
+        var.span().of(id)
+    }
 
-/// Resolves an Aiahr type.
-pub fn resolve_type<'a, E>(
-    arena: &'a Bump,
-    type_: &Type<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<&'a Type<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(
-        arena.alloc(match type_ {
-            Type::Named(var) => Type::Named(resolve_type_symbol(*var, names, errors)?),
-            Type::Sum {
-                langle,
-                variants,
-                rangle,
-            } => Type::Sum {
-                langle: *langle,
-                variants: resolve_type_row(arena, variants, names, errors)?,
-                rangle: *rangle,
-            },
-            Type::Product {
-                lbrace,
-                fields,
-                rbrace,
-            } => Type::Product {
-                lbrace: *lbrace,
-                fields: fields
-                    .map(|fields| resolve_type_row(arena, &fields, names, errors))
-                    .transpose()?,
-                rbrace: *rbrace,
-            },
-            Type::Function {
-                domain,
-                arrow,
-                codomain,
+    // Inserts a variable into the current scope.
+    fn insert_ty_var(&mut self, var: SpanOf<Ident>) -> SpanOf<TyVarId> {
+        self.insert_symbol(NameKind::TyVar, var, |names, v| names.insert_ty_var(v))
+    }
+    // Inserts a variable into the current scope.
+    fn insert_var(&mut self, var: SpanOf<Ident>) -> SpanOf<VarId> {
+        self.insert_symbol(NameKind::Var, var, |names, v| names.insert_var(v))
+    }
+
+    // Resolves an effect operation symbolto a value of type `T`, using the given function to decide which names are valid for the symbol.
+    fn resolve_operation_symbol<T, F>(
+        &mut self,
+        module: ModuleId,
+        effect: EffectId,
+        var: SpanOf<Ident>,
+        mut f: F,
+    ) -> Option<T>
+    where
+        F: FnMut(EffectOpId) -> Result<T, RejectionReason>,
+    {
+        match resolve_or_suggest(
+            self.names
+                .get_effect(module, effect)
+                .find(var.value)
+                .map(|sn| sn.map(|o| (module, effect, o))),
+            self.names,
+            |(_, _, o)| f(o),
+        ) {
+            Ok(x) => Some(x),
+            Err(suggestions) => {
+                self.errors.add(NameResolutionError::NotFound {
+                    name: var,
+                    context_module: None,
+                    suggestions,
+                });
+                None
+            }
+        }
+    }
+
+    // Resolves a symbol to a type name.
+    fn resolve_type_symbol(&mut self, var: SpanOf<Ident>) -> Option<SpanOf<TyVarId>> {
+        Some(var.map(|id| {
+            let existing = self.names.find(id).find_map(|sn| match sn.value {
+                Name::TyVar(t) => Some(t),
+                _ => None,
+            });
+            existing.unwrap_or_else(|| self.insert_ty_var(var).value)
+        }))
+    }
+
+    // Resolves a type-level row.
+    fn resolve_row<C, D, F>(
+        &mut self,
+        row: &Row<'_, Ident, C>,
+        mut f: F,
+    ) -> Option<Row<'a, TyVarId, D>>
+    where
+        F: FnMut(&mut Self, &C) -> Option<D>,
+    {
+        Some(match row {
+            Row::Concrete(concrete) => {
+                Row::Concrete(self.resolve_separated(concrete, |me, c| f(me, c))?)
+            }
+            Row::Variable(variables) => Row::Variable(
+                self.resolve_separated(variables, |me, var| me.resolve_type_symbol(*var))?,
+            ),
+            Row::Mixed {
+                concrete,
+                vbar,
+                variables,
             } => {
-                let domain = resolve_type(arena, domain, names, errors);
-                let codomain = resolve_type(arena, codomain, names, errors);
-                Type::Function {
-                    domain: domain?,
-                    arrow: *arrow,
-                    codomain: codomain?,
+                let concrete = self.resolve_separated(concrete, |me, c| f(me, c));
+                let variables =
+                    self.resolve_separated(variables, |me, var| me.resolve_type_symbol(*var));
+                Row::Mixed {
+                    concrete: concrete?,
+                    vbar: *vbar,
+                    variables: variables?,
                 }
             }
-            Type::Parenthesized { lpar, type_, rpar } => Type::Parenthesized {
+        })
+    }
+    /// Resolves an Aiahr type.
+    pub fn resolve_type(&mut self, type_: &Type<'_, Ident>) -> Option<&'a Type<'a, TyVarId>> {
+        Some(
+            self.arena.alloc(match type_ {
+                Type::Named(var) => Type::Named(self.resolve_type_symbol(*var)?),
+                Type::Sum {
+                    langle,
+                    variants,
+                    rangle,
+                } => Type::Sum {
+                    langle: *langle,
+                    variants: self.resolve_type_row(variants)?,
+                    rangle: *rangle,
+                },
+                Type::Product {
+                    lbrace,
+                    fields,
+                    rbrace,
+                } => Type::Product {
+                    lbrace: *lbrace,
+                    fields: fields
+                        .map(|fields| self.resolve_type_row(&fields))
+                        .transpose()?,
+                    rbrace: *rbrace,
+                },
+                Type::Function {
+                    domain,
+                    arrow,
+                    codomain,
+                } => {
+                    let domain = self.resolve_type(domain);
+                    let codomain = self.resolve_type(codomain);
+                    Type::Function {
+                        domain: domain?,
+                        arrow: *arrow,
+                        codomain: codomain?,
+                    }
+                }
+                Type::Parenthesized { lpar, type_, rpar } => Type::Parenthesized {
+                    lpar: *lpar,
+                    type_: self.resolve_type(type_)?,
+                    rpar: *rpar,
+                },
+            }) as &_,
+        )
+    }
+
+    // Resolves a row of types.
+    fn resolve_type_row(&mut self, row: &TypeRow<'_, Ident>) -> Option<TypeRow<'a, TyVarId>> {
+        self.resolve_row(row, |me, field| {
+            resolve_id_field(field, |ty| me.resolve_type(ty))
+        })
+    }
+
+    // Resolves a row atom.
+    fn resolve_row_atom(&mut self, atom: &RowAtom<'_, Ident>) -> Option<RowAtom<'a, TyVarId>> {
+        Some(match atom {
+            RowAtom::Concrete { lpar, fields, rpar } => RowAtom::Concrete {
                 lpar: *lpar,
-                type_: resolve_type(arena, type_, names, errors)?,
+                fields: self.resolve_separated(fields, |me, field| {
+                    resolve_id_field(field, |ty| me.resolve_type(ty))
+                })?,
                 rpar: *rpar,
             },
-        }) as &_,
-    )
-}
-
-// Resolves a row atom.
-fn resolve_row_atom<'a, E>(
-    arena: &'a Bump,
-    atom: &RowAtom<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<RowAtom<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(match atom {
-        RowAtom::Concrete { lpar, fields, rpar } => RowAtom::Concrete {
-            lpar: *lpar,
-            fields: resolve_separated(arena, fields, |field| {
-                resolve_id_field(field, |ty| resolve_type(arena, ty, names, errors))
-            })?,
-            rpar: *rpar,
-        },
-        RowAtom::Variable(var) => RowAtom::Variable(resolve_type_symbol(*var, names, errors)?),
-    })
-}
-
-// Resolves a type constraint.
-fn resolve_constraint<'a, E>(
-    arena: &'a Bump,
-    constraint: &Constraint<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<Constraint<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(match constraint {
-        Constraint::RowSum {
-            lhs,
-            plus,
-            rhs,
-            eq,
-            goal,
-        } => {
-            let lhs = resolve_row_atom(arena, lhs, names, errors);
-            let rhs = resolve_row_atom(arena, rhs, names, errors);
-            let goal = resolve_row_atom(arena, goal, names, errors);
-            Constraint::RowSum {
-                lhs: lhs?,
-                plus: *plus,
-                rhs: rhs?,
-                eq: *eq,
-                goal: goal?,
-            }
-        }
-    })
-}
-
-// Resolves a quantifier.
-fn resolve_quantifier<E>(
-    quantifier: &Quantifier<Ident>,
-    names: &mut Names<'_, '_>,
-    errors: &mut E,
-) -> Quantifier<TyVarId>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Quantifier {
-        forall: quantifier.forall,
-        var: insert_ty_var(quantifier.var, names, errors),
-        dot: quantifier.dot,
+            RowAtom::Variable(var) => RowAtom::Variable(self.resolve_type_symbol(*var)?),
+        })
     }
-}
 
-// Resolves a set of quantifiers.
-fn resolve_qualifiers<'a, E>(
-    arena: &'a Bump,
-    qualifiers: &Qualifiers<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<Qualifiers<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(Qualifiers {
-        constraints: resolve_separated(arena, &qualifiers.constraints, |constraint| {
-            resolve_constraint(arena, constraint, names, errors)
-        })?,
-        arrow: qualifiers.arrow,
-    })
-}
+    // Resolves a type constraint.
+    fn resolve_constraint(
+        &mut self,
+        constraint: &Constraint<'_, Ident>,
+    ) -> Option<Constraint<'a, TyVarId>> {
+        Some(match constraint {
+            Constraint::RowSum {
+                lhs,
+                plus,
+                rhs,
+                eq,
+                goal,
+            } => {
+                let lhs = self.resolve_row_atom(lhs);
+                let rhs = self.resolve_row_atom(rhs);
+                let goal = self.resolve_row_atom(goal);
+                Constraint::RowSum {
+                    lhs: lhs?,
+                    plus: *plus,
+                    rhs: rhs?,
+                    eq: *eq,
+                    goal: goal?,
+                }
+            }
+        })
+    }
 
-/// Resolves a polymorphic type.
-pub fn resolve_scheme<'a, E>(
-    arena: &'a Bump,
-    scheme: &Scheme<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<&'a Scheme<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    names.subscope(|scope| {
-        let quantifiers = arena.alloc_slice_fill_iter(
-            scheme
-                .quantifiers
-                .iter()
-                .map(|quant| resolve_quantifier(quant, scope, errors)),
-        ) as &[_];
-        let qualifiers = scheme
-            .qualifiers
-            .map(|quals| resolve_qualifiers(arena, &quals, scope, errors))
-            .transpose();
-        let type_ = resolve_type(arena, scheme.type_, scope, errors);
-        Some(arena.alloc(Scheme {
-            quantifiers,
-            qualifiers: qualifiers?,
-            type_: type_?,
-        }) as &_)
-    })
-}
+    // Resolves a set of quantifiers.
+    fn resolve_qualifiers(
+        &mut self,
+        qualifiers: &Qualifiers<'_, Ident>,
+    ) -> Option<Qualifiers<'a, TyVarId>> {
+        Some(Qualifiers {
+            constraints: self.resolve_separated(&qualifiers.constraints, |me, constraint| {
+                me.resolve_constraint(constraint)
+            })?,
+            arrow: qualifiers.arrow,
+        })
+    }
 
-// The possible meanings of a `DotAccess` term.
-#[derive(Debug)]
-enum DotResolution<'a> {
-    Module(ModuleId),
-    Effect(ModuleId, EffectId),
-    EffectOp(ModuleId, EffectId, EffectOpId),
-    Item(ModuleId, ItemId),
-    FieldAccess {
-        base: &'a nst::Term<'a>,
+    // Resolves a quantifier.
+    fn resolve_quantifier(&mut self, quantifier: &Quantifier<Ident>) -> Quantifier<TyVarId> {
+        Quantifier {
+            forall: quantifier.forall,
+            var: self.insert_ty_var(quantifier.var),
+            dot: quantifier.dot,
+        }
+    }
+
+    /// Resolves a polymorphic type.
+    pub fn resolve_scheme(
+        &mut self,
+        scheme: &Scheme<'_, Ident>,
+    ) -> Option<&'a Scheme<'a, TyVarId>> {
+        self.subscope(|scope| {
+            let quantifiers = self.arena.alloc_slice_fill_iter(
+                scheme
+                    .quantifiers
+                    .iter()
+                    .map(|quant| scope.resolve_quantifier(quant)),
+            ) as &[_];
+            let qualifiers = scheme
+                .qualifiers
+                .map(|quals| scope.resolve_qualifiers(&quals))
+                .transpose();
+            let type_ = scope.resolve_type(scheme.type_);
+            Some(scope.arena.alloc(Scheme {
+                quantifiers,
+                qualifiers: qualifiers?,
+                type_: type_?,
+            }) as &_)
+        })
+    }
+
+    fn subscope<A>(&mut self, body: impl FnOnce(&mut NameResCtx<'a, '_, '_, E>) -> A) -> A {
+        self.names.subscope(|names| {
+            let mut ctx = NameResCtx {
+                arena: self.arena,
+                errors: self.errors,
+                names,
+            };
+            body(&mut ctx)
+        })
+    }
+
+    /// Resolves the given pattern, accumulating bindings into `names`.
+    ///
+    /// Note that this currently cannot return `None`, although it can emit errors.
+    pub fn resolve_pattern(&mut self, pattern: &cst::Pattern<'_>) -> Option<&'a nst::Pattern<'a>> {
+        Some(self.arena.alloc(match pattern {
+            cst::Pattern::ProductRow(pr) => nst::Pattern::ProductRow(
+                self.resolve_product_row(pr, |me, target| me.resolve_pattern(target))?,
+            ),
+            cst::Pattern::SumRow(sr) => {
+                nst::Pattern::SumRow(resolve_sum_row(sr, |target| self.resolve_pattern(target))?)
+            }
+            cst::Pattern::Whole(var) => nst::Pattern::Whole(self.insert_var(*var)),
+        }))
+    }
+
+    // Resolves a type annotation.
+    fn resolve_type_annotation(
+        &mut self,
+        annotation: &TypeAnnotation<'_, Ident>,
+    ) -> Option<TypeAnnotation<'a, TyVarId>> {
+        Some(Annotation {
+            colon: annotation.colon,
+            type_: self.resolve_type(annotation.type_)?,
+        })
+    }
+
+    // Resolves a scheme annotation.
+    fn resolve_scheme_annotation(
+        &mut self,
+        annotation: &SchemeAnnotation<'_, Ident>,
+    ) -> Option<SchemeAnnotation<'a, TyVarId>> {
+        Some(Annotation {
+            colon: annotation.colon,
+            type_: self.resolve_scheme(annotation.type_)?,
+        })
+    }
+
+    // Resolves nested `DotAccess` terms.
+    fn resolve_nested_dots(
+        &mut self,
+        base: &cst::Term<'_>,
         dot: Span,
         field: SpanOf<Ident>,
-    },
-}
-
-impl<'a> From<BaseName> for DotResolution<'a> {
-    fn from(base: BaseName) -> Self {
-        match base {
-            BaseName::Module(m) => DotResolution::Module(m),
-            BaseName::Effect(m, e) => DotResolution::Effect(m, e),
-            BaseName::EffectOp(m, e, o) => DotResolution::EffectOp(m, e, o),
-            BaseName::Item(m, i) => DotResolution::Item(m, i),
-        }
-    }
-}
-
-/// Resolves the given pattern, accumulating bindings into `names`.
-///
-/// Note that this currently cannot return `None`, although it can emit errors.
-pub fn resolve_pattern<'a, E>(
-    arena: &'a Bump,
-    pattern: &cst::Pattern<'_>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<&'a nst::Pattern<'a>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(arena.alloc(match pattern {
-        cst::Pattern::ProductRow(pr) => {
-            nst::Pattern::ProductRow(resolve_product_row(arena, pr, |target| {
-                resolve_pattern(arena, target, names, errors)
-            })?)
-        }
-        cst::Pattern::SumRow(sr) => nst::Pattern::SumRow(resolve_sum_row(sr, |target| {
-            resolve_pattern(arena, target, names, errors)
-        })?),
-        cst::Pattern::Whole(var) => nst::Pattern::Whole(insert_var(*var, names, errors)),
-    }))
-}
-
-// Resolves a type annotation.
-fn resolve_type_annotation<'a, E>(
-    arena: &'a Bump,
-    annotation: &TypeAnnotation<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<TypeAnnotation<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(Annotation {
-        colon: annotation.colon,
-        type_: resolve_type(arena, annotation.type_, names, errors)?,
-    })
-}
-
-// Resolves a scheme annotation.
-fn resolve_scheme_annotation<'a, E>(
-    arena: &'a Bump,
-    annotation: &SchemeAnnotation<'_, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<SchemeAnnotation<'a, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(Annotation {
-        colon: annotation.colon,
-        type_: resolve_scheme(arena, annotation.type_, names, errors)?,
-    })
-}
-
-// Resolves nested `DotAccess` terms.
-fn resolve_nested_dots<'a, E>(
-    arena: &'a Bump,
-    base: &cst::Term<'_>,
-    dot: Span,
-    field: SpanOf<Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<DotResolution<'a>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(match base {
-        // (base2 . field2) . field
-        cst::Term::DotAccess {
-            base: base2,
-            dot: dot2,
-            field: field2,
-        } => match resolve_nested_dots(arena, base2, *dot2, *field2, names, errors)? {
-            // m . field
-            DotResolution::Module(m) => resolve_symbol_in(m, field, names, errors, |name| {
-                Ok(DotResolution::from(name))
-            })?,
-            DotResolution::Effect(m, e) => {
-                resolve_operation_symbol(m, e, field, names, errors, |o| {
+    ) -> Option<DotResolution<'a>> {
+        Some(match base {
+            // (base2 . field2) . field
+            cst::Term::DotAccess {
+                base: base2,
+                dot: dot2,
+                field: field2,
+            } => match self.resolve_nested_dots(base2, *dot2, *field2)? {
+                // m . field
+                DotResolution::Module(m) => {
+                    self.resolve_symbol_in(m, field, |name| Ok(DotResolution::from(name)))?
+                }
+                DotResolution::Effect(m, e) => self.resolve_operation_symbol(m, e, field, |o| {
                     Ok(DotResolution::EffectOp(m, e, o))
-                })?
-            }
-            DotResolution::EffectOp(_, _, _) => {
-                errors.add(NameResolutionError::WrongKind {
-                    expr: base.span(),
-                    actual: NameKind::EffectOp,
-                    expected: !NameKinds::EFFECT_OP,
-                });
-                return None;
-            }
-            DotResolution::Item(m, i) => DotResolution::FieldAccess {
-                base: arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
-                dot,
-                field,
-            },
-            // (base2n . field2n) . field
-            DotResolution::FieldAccess {
-                base: base2n,
-                dot: dot2n,
-                field: field2n,
-            } => DotResolution::FieldAccess {
-                base: arena.alloc(nst::Term::FieldAccess {
-                    base: base2n,
-                    dot: dot2n,
-                    field: field2n,
-                }),
-                dot,
-                field,
-            },
-        },
-        // n . field
-        cst::Term::SymbolRef(n) => {
-            match resolve_symbol(*n, names, errors, |name| match name {
-                Name::Module(m) => Ok(ModuleOr::Module(m)),
-                Name::Item(m, i) => Ok(ModuleOr::Value(nst::Term::ItemRef(base.span().of((m, i))))),
-                Name::Var(v) => Ok(ModuleOr::Value(nst::Term::VariableRef(base.span().of(v)))),
-                _ => Err(RejectionReason::WrongKind {
-                    actual: name.kind(),
-                    expected: NameKinds::MODULE | TERM_KINDS,
-                }),
-            })? {
-                ModuleOr::Module(m) => resolve_symbol_in(m, field, names, errors, |name| {
-                    Ok(DotResolution::from(name))
                 })?,
-                ModuleOr::Value(value) => DotResolution::FieldAccess {
-                    base: arena.alloc(value),
+                DotResolution::EffectOp(_, _, _) => {
+                    self.errors.add(NameResolutionError::WrongKind {
+                        expr: base.span(),
+                        actual: NameKind::EffectOp,
+                        expected: !NameKinds::EFFECT_OP,
+                    });
+                    return None;
+                }
+                DotResolution::Item(m, i) => DotResolution::FieldAccess {
+                    base: self.arena.alloc(nst::Term::ItemRef(base.span().of((m, i)))),
                     dot,
                     field,
                 },
+                // (base2n . field2n) . field
+                DotResolution::FieldAccess {
+                    base: base2n,
+                    dot: dot2n,
+                    field: field2n,
+                } => DotResolution::FieldAccess {
+                    base: self.arena.alloc(nst::Term::FieldAccess {
+                        base: base2n,
+                        dot: dot2n,
+                        field: field2n,
+                    }),
+                    dot,
+                    field,
+                },
+            },
+            // n . field
+            cst::Term::SymbolRef(n) => {
+                match self.resolve_symbol(*n, |name| match name {
+                    Name::Module(m) => Ok(ModuleOr::Module(m)),
+                    Name::Item(m, i) => {
+                        Ok(ModuleOr::Value(nst::Term::ItemRef(base.span().of((m, i)))))
+                    }
+                    Name::Var(v) => Ok(ModuleOr::Value(nst::Term::VariableRef(base.span().of(v)))),
+                    _ => Err(RejectionReason::WrongKind {
+                        actual: name.kind(),
+                        expected: NameKinds::MODULE | TERM_KINDS,
+                    }),
+                })? {
+                    ModuleOr::Module(m) => {
+                        self.resolve_symbol_in(m, field, |name| Ok(DotResolution::from(name)))?
+                    }
+                    ModuleOr::Value(value) => DotResolution::FieldAccess {
+                        base: self.arena.alloc(value),
+                        dot,
+                        field,
+                    },
+                }
             }
-        }
-        // (expr) . field
-        _ => DotResolution::FieldAccess {
-            base: resolve_term(arena, base, names, errors)?,
-            dot,
-            field,
-        },
-    })
-}
+            // (expr) . field
+            _ => DotResolution::FieldAccess {
+                base: self.resolve_term(base)?,
+                dot,
+                field,
+            },
+        })
+    }
 
-/// Resolves the given term.
-pub fn resolve_term<'a, E>(
-    arena: &'a Bump,
-    term: &cst::Term<'_>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<&'a nst::Term<'a>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(arena.alloc(match term {
-        cst::Term::Binding {
-            var,
-            annotation,
-            eq,
-            value,
-            semi,
-            expr,
-        } => {
-            let value = resolve_term(arena, value, names, errors);
-            names.subscope(|scope| {
-                let var = insert_var(*var, scope, errors);
-                let annotation = annotation
-                    .map(|annotation| resolve_type_annotation(arena, &annotation, scope, errors))
-                    .transpose();
-                let expr = resolve_term(arena, expr, scope, errors);
+    /// Resolves the given term.
+    pub fn resolve_term(&mut self, term: &cst::Term<'_>) -> Option<&'a nst::Term<'a>> {
+        Some(self.arena.alloc(match term {
+            cst::Term::Binding {
+                var,
+                annotation,
+                eq,
+                value,
+                semi,
+                expr,
+            } => {
+                let value = self.resolve_term(value);
+                self.subscope(|ctx| {
+                    let var = ctx.insert_var(*var);
+                    let annotation = annotation
+                        .map(|annotation| ctx.resolve_type_annotation(&annotation))
+                        .transpose();
+                    let expr = ctx.resolve_term(expr);
 
-                Some(nst::Term::Binding {
-                    var,
-                    annotation: annotation?,
-                    eq: *eq,
-                    value: value?,
-                    semi: *semi,
-                    expr: expr?,
-                })
-            })?
-        }
-        cst::Term::Handle {
-            with,
-            handler,
-            do_,
-            expr,
-        } => {
-            let handler = resolve_term(arena, handler, names, errors);
-            let expr = resolve_term(arena, expr, names, errors);
-            nst::Term::Handle {
-                with: *with,
-                handler: handler?,
-                do_: *do_,
-                expr: expr?,
-            }
-        }
-        cst::Term::Abstraction {
-            lbar,
-            arg,
-            annotation,
-            rbar,
-            body,
-        } => names.subscope(|scope| {
-            let arg = insert_var(*arg, scope, errors);
-            let annotation = annotation
-                .map(|annotation| resolve_type_annotation(arena, &annotation, scope, errors))
-                .transpose();
-            let body = resolve_term(arena, body, scope, errors);
-            Some(nst::Term::Abstraction {
-                lbar: *lbar,
-                arg,
-                annotation: annotation?,
-                rbar: *rbar,
-                body: body?,
-            })
-        })?,
-        cst::Term::Application {
-            func,
-            lpar,
-            arg,
-            rpar,
-        } => {
-            let func = resolve_term(arena, func, names, errors);
-            let arg = resolve_term(arena, arg, names, errors);
-            nst::Term::Application {
-                func: func?,
-                lpar: *lpar,
-                arg: arg?,
-                rpar: *rpar,
-            }
-        }
-        cst::Term::ProductRow(pr) => {
-            nst::Term::ProductRow(resolve_product_row(arena, pr, |target| {
-                resolve_term(arena, target, names, errors)
-            })?)
-        }
-        cst::Term::SumRow(sr) => nst::Term::SumRow(resolve_sum_row(sr, |target| {
-            resolve_term(arena, target, names, errors)
-        })?),
-        t @ cst::Term::DotAccess { base, dot, field } => {
-            match resolve_nested_dots(arena, base, *dot, *field, names, errors)? {
-                DotResolution::Module(_) => {
-                    errors.add(NameResolutionError::WrongKind {
-                        expr: t.span(),
-                        actual: NameKind::Module,
-                        expected: TERM_KINDS,
-                    });
-                    return None;
-                }
-                DotResolution::Effect(_, _) => {
-                    errors.add(NameResolutionError::WrongKind {
-                        expr: t.span(),
-                        actual: NameKind::Effect,
-                        expected: TERM_KINDS,
-                    });
-                    return None;
-                }
-                DotResolution::EffectOp(m, e, o) => nst::Term::EffectOpRef(t.span().of((m, e, o))),
-                DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
-                DotResolution::FieldAccess { base, dot, field } => {
-                    nst::Term::FieldAccess { base, dot, field }
-                }
-            }
-        }
-        cst::Term::Match {
-            match_,
-            langle,
-            cases,
-            rangle,
-        } => nst::Term::Match {
-            match_: *match_,
-            langle: *langle,
-            cases: resolve_separated(arena, cases, |field| {
-                names.subscope(|scope| {
-                    let pattern = resolve_pattern(arena, field.label, scope, errors);
-                    let target = resolve_term(arena, field.target, scope, errors);
-                    Some(Field {
-                        label: pattern?,
-                        sep: field.sep,
-                        target: target?,
+                    Some(nst::Term::Binding {
+                        var,
+                        annotation: annotation?,
+                        eq: *eq,
+                        value: value?,
+                        semi: *semi,
+                        expr: expr?,
                     })
+                })?
+            }
+            cst::Term::Handle {
+                with,
+                handler,
+                do_,
+                expr,
+            } => {
+                let handler = self.resolve_term(handler);
+                let expr = self.resolve_term(expr);
+                nst::Term::Handle {
+                    with: *with,
+                    handler: handler?,
+                    do_: *do_,
+                    expr: expr?,
+                }
+            }
+            cst::Term::Abstraction {
+                lbar,
+                arg,
+                annotation,
+                rbar,
+                body,
+            } => self.subscope(|scope| {
+                let arg = scope.insert_var(*arg);
+                let annotation = annotation
+                    .map(|annotation| scope.resolve_type_annotation(&annotation))
+                    .transpose();
+                let body = scope.resolve_term(body);
+                Some(nst::Term::Abstraction {
+                    lbar: *lbar,
+                    arg,
+                    annotation: annotation?,
+                    rbar: *rbar,
+                    body: body?,
                 })
             })?,
-            rangle: *rangle,
-        },
-        cst::Term::SymbolRef(var) => resolve_symbol(*var, names, errors, |name| match name {
-            Name::Item(m, i) => Ok(nst::Term::ItemRef(var.span().of((m, i)))),
-            Name::Var(v) => Ok(nst::Term::VariableRef(var.span().of(v))),
-            _ => Err(RejectionReason::WrongKind {
-                actual: name.kind(),
-                expected: TERM_KINDS,
-            }),
-        })?,
-        cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
-            lpar: *lpar,
-            term: resolve_term(arena, term, names, errors)?,
-            rpar: *rpar,
-        },
-    }))
-}
+            cst::Term::Application {
+                func,
+                lpar,
+                arg,
+                rpar,
+            } => {
+                let func = self.resolve_term(func);
+                let arg = self.resolve_term(arg);
+                nst::Term::Application {
+                    func: func?,
+                    lpar: *lpar,
+                    arg: arg?,
+                    rpar: *rpar,
+                }
+            }
+            cst::Term::ProductRow(pr) => nst::Term::ProductRow(
+                self.resolve_product_row(pr, |me, target| me.resolve_term(target))?,
+            ),
+            cst::Term::SumRow(sr) => {
+                nst::Term::SumRow(resolve_sum_row(sr, |target| self.resolve_term(target))?)
+            }
+            t @ cst::Term::DotAccess { base, dot, field } => {
+                match self.resolve_nested_dots(base, *dot, *field)? {
+                    DotResolution::Module(_) => {
+                        self.errors.add(NameResolutionError::WrongKind {
+                            expr: t.span(),
+                            actual: NameKind::Module,
+                            expected: TERM_KINDS,
+                        });
+                        return None;
+                    }
+                    DotResolution::Effect(_, _) => {
+                        self.errors.add(NameResolutionError::WrongKind {
+                            expr: t.span(),
+                            actual: NameKind::Effect,
+                            expected: TERM_KINDS,
+                        });
+                        return None;
+                    }
+                    DotResolution::EffectOp(m, e, o) => {
+                        nst::Term::EffectOpRef(t.span().of((m, e, o)))
+                    }
+                    DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
+                    DotResolution::FieldAccess { base, dot, field } => {
+                        nst::Term::FieldAccess { base, dot, field }
+                    }
+                }
+            }
+            cst::Term::Match {
+                match_,
+                langle,
+                cases,
+                rangle,
+            } => nst::Term::Match {
+                match_: *match_,
+                langle: *langle,
+                cases: self.resolve_separated(cases, |me, field| {
+                    me.subscope(|scope| {
+                        let pattern = scope.resolve_pattern(field.label);
+                        let target = scope.resolve_term(field.target);
+                        Some(Field {
+                            label: pattern?,
+                            sep: field.sep,
+                            target: target?,
+                        })
+                    })
+                })?,
+                rangle: *rangle,
+            },
+            cst::Term::SymbolRef(var) => self.resolve_symbol(*var, |name| match name {
+                Name::Item(m, i) => Ok(nst::Term::ItemRef(var.span().of((m, i)))),
+                Name::Var(v) => Ok(nst::Term::VariableRef(var.span().of(v))),
+                _ => Err(RejectionReason::WrongKind {
+                    actual: name.kind(),
+                    expected: TERM_KINDS,
+                }),
+            })?,
+            cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
+                lpar: *lpar,
+                term: self.resolve_term(term)?,
+                rpar: *rpar,
+            },
+        }))
+    }
 
-/// Resolves an effect operation signature.
-fn resolve_effect_op<'a, E>(
-    arena: &'a Bump,
-    opid: EffectOpId,
-    op: &EffectOp<'_, Ident, Ident>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<EffectOp<'a, EffectOpId, TyVarId>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(EffectOp {
-        name: op.name.span().of(opid),
-        colon: op.colon,
-        type_: resolve_type(arena, op.type_, names, errors)?,
-    })
-}
+    /// Resolves an effect operation signature.
+    fn resolve_effect_op(
+        &mut self,
+        opid: EffectOpId,
+        op: &EffectOp<'_, Ident, Ident>,
+    ) -> Option<EffectOp<'a, EffectOpId, TyVarId>> {
+        Some(EffectOp {
+            name: op.name.span().of(opid),
+            colon: op.colon,
+            type_: self.resolve_type(op.type_)?,
+        })
+    }
 
-/// Resolves the given effect.
-fn resolve_effect<'a, E>(
-    arena: &'a Bump,
-    module: ModuleId,
-    eid: EffectId,
-    effect: Span,
-    name: SpanOf<Ident>,
-    lbrace: Span,
-    ops: &[EffectOp<'_, Ident, Ident>],
-    rbrace: Span,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<nst::Item<'a>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(nst::Item::Effect {
-        effect,
-        name: name.span().of(eid),
-        lbrace,
-        ops: arena.alloc_slice_fill_iter(
-            iter::zip(
-                names
-                    .get_effect(module, eid)
-                    .iter()
-                    .collect::<Vec<_>>()
-                    .into_iter(),
-                ops.iter(),
-            )
-            .map(|(opid, op)| resolve_effect_op(arena, opid, op, names, errors)),
-        ),
-        rbrace,
-    })
-}
+    /// Resolves the given effect.
+    fn resolve_effect(
+        &mut self,
+        module: ModuleId,
+        eid: EffectId,
+        effect: Span,
+        name: SpanOf<Ident>,
+        lbrace: Span,
+        ops: &[EffectOp<'_, Ident, Ident>],
+        rbrace: Span,
+    ) -> Option<nst::Item<'a>> {
+        Some(nst::Item::Effect {
+            effect,
+            name: name.span().of(eid),
+            lbrace,
+            ops: self.arena.alloc_slice_fill_iter(
+                iter::zip(
+                    self.names
+                        .get_effect(module, eid)
+                        .iter()
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                    ops.iter(),
+                )
+                .map(|(opid, op)| self.resolve_effect_op(opid, op)),
+            ),
+            rbrace,
+        })
+    }
 
-/// Resolves the given item.
-pub fn resolve_term_item<'a, E>(
-    arena: &'a Bump,
-    id: ItemId,
-    name: SpanOf<Ident>,
-    annotation: Option<SchemeAnnotation<'a, Ident>>,
-    eq: Span,
-    value: &cst::Term<'_>,
-    names: &mut Names<'_, 'a>,
-    errors: &mut E,
-) -> Option<nst::Item<'a>>
-where
-    E: DiagnosticSink<NameResolutionError>,
-{
-    Some(nst::Item::Term {
-        name: name.span().of(id),
-        annotation: annotation
-            .map(|annotation| resolve_scheme_annotation(arena, &annotation, names, errors))
-            .transpose()?,
-        eq,
-        value: arena.alloc(resolve_term(arena, value, names, errors)?),
-    })
+    /// Resolves the given item.
+    pub fn resolve_term_item<'d>(
+        &mut self,
+        id: ItemId,
+        name: SpanOf<Ident>,
+        annotation: Option<SchemeAnnotation<'d, Ident>>,
+        eq: Span,
+        value: &cst::Term<'_>,
+    ) -> Option<nst::Item<'a>> {
+        Some(nst::Item::Term {
+            name: name.span().of(id),
+            annotation: annotation
+                .map(|annotation| self.resolve_scheme_annotation(&annotation))
+                .transpose()?,
+            eq,
+            value: self.arena.alloc(self.resolve_term(value)?),
+        })
+    }
 }
 
 /// Data generated by resolving a module.
@@ -933,44 +816,40 @@ where
     E: DiagnosticSink<NameResolutionError>,
 {
     let mut names = Names::new(&base);
-    let resolved_items = arena.alloc_slice_fill_iter(base.iter().zip(module.items.iter()).map(
-        |(name, item)| match (name, item) {
-            (
-                ModuleName::Effect(e),
-                &cst::Item::Effect {
-                    effect,
-                    name,
-                    lbrace,
-                    ops,
-                    rbrace,
-                },
-            ) => resolve_effect(
-                arena,
-                base.me(),
-                *e,
-                effect,
-                name,
-                lbrace,
-                ops,
-                rbrace,
-                &mut names,
-                errors,
-            ),
-            (
-                ModuleName::Item(i),
-                &cst::Item::Term {
-                    name,
-                    annotation,
-                    eq,
-                    value,
-                },
-            ) => resolve_term_item(arena, *i, name, annotation, eq, value, &mut names, errors),
-            _ => panic!(
-                "Expected same kinds of names, got {:?} and {:?}",
-                name, item
-            ),
-        },
-    ));
+    let mut ctx = NameResCtx {
+        arena,
+        errors,
+        names: &mut names,
+    };
+    let resolved_items = ctx
+        .arena
+        .alloc_slice_fill_iter(base.iter().zip(module.items.iter()).map(|(name, item)| {
+            match (name, item) {
+                (
+                    ModuleName::Effect(e),
+                    &cst::Item::Effect {
+                        effect,
+                        name,
+                        lbrace,
+                        ops,
+                        rbrace,
+                    },
+                ) => ctx.resolve_effect(base.me(), *e, effect, name, lbrace, ops, rbrace),
+                (
+                    ModuleName::Item(i),
+                    &cst::Item::Term {
+                        name,
+                        annotation,
+                        eq,
+                        value,
+                    },
+                ) => ctx.resolve_term_item(*i, name, annotation, eq, value),
+                _ => panic!(
+                    "Expected same kinds of names, got {:?} and {:?}",
+                    name, item
+                ),
+            }
+        }));
     ModuleResolution {
         locals: names.into_local_ids(),
         resolved_items,
@@ -1006,7 +885,7 @@ mod tests {
         top_level::BaseBuilder,
     };
 
-    use super::{resolve_module, resolve_term, ModuleResolution};
+    use super::{resolve_module, /*resolve_term,*/ ModuleResolution, NameResCtx};
 
     use aiahr_test::assert_ident_text_matches_name;
 
@@ -1042,7 +921,13 @@ mod tests {
         let base = BaseBuilder::new().build(arena, m, &modules, &mut module_names);
         let mut names = Names::new(&base);
 
-        let resolved = resolve_term(arena, unresolved, &mut names, &mut errors);
+        let mut nameres_ctx = NameResCtx {
+            arena,
+            names: &mut names,
+            errors: &mut errors,
+        };
+
+        let resolved = nameres_ctx.resolve_term(unresolved);
         (resolved, names.into_local_ids(), errors)
     }
 

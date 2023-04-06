@@ -101,12 +101,15 @@ pub mod indexed {
             self.into_iter()
         }
     }
+
+    type ElementTail<'a, T> =
+        std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>;
     /// An iterator over the elements of a `Separated`. Needed because `std::iter::Chain` does not
     /// implement `ExactSizeIterator`.
     #[derive(Debug)]
     pub struct Elements<'a, T> {
         head: Option<&'a T>,
-        tail: std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>,
+        tail: ElementTail<'a, T>,
     }
     impl<'a, T> IntoIterator for &'a Separated<T> {
         type Item = &'a T;
@@ -1237,13 +1240,14 @@ impl<'a, T: Spanned> Spanned for Separated<'a, T> {
         }
     }
 }
-
+type ElementTail<'a, T> =
+    std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>;
 /// An iterator over the elements of a `Separated`. Needed because `std::iter::Chain` does not
 /// implement `ExactSizeIterator`.
 #[derive(Debug)]
 pub struct Elements<'a, T> {
     head: Option<&'a T>,
-    tail: std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>,
+    tail: ElementTail<'a, T>,
 }
 
 impl<'a, T> Clone for Elements<'a, T> {
