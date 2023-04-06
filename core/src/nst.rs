@@ -11,8 +11,10 @@ pub mod indexed {
     use bumpalo::Bump;
     use la_arena::{Arena, Idx};
 
-    use crate::cst::indexed::{
-        EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, Type, TypeAnnotation,
+    // We re-export these so it's easier to differntiate reference and indexed during migration
+    pub use crate::cst::indexed::{
+        Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
+        Separated, SumRow, Type, TypeAnnotation, TypeRow,
     };
     use crate::cst::Field;
     use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
@@ -26,13 +28,12 @@ pub mod indexed {
         fn alloc(&mut self, value: T) -> Idx<T>;
     }
 
-    #[derive(Default, Debug, PartialEq)]
+    #[derive(Clone, Default, Debug, PartialEq, Eq)]
     pub struct NstIndxAlloc {
         types: Arena<Type<TyVarId>>,
         terms: Arena<Term>,
         pats: Arena<Pattern>,
     }
-    impl Eq for NstIndxAlloc {}
     impl IdxAlloc<Term> for NstIndxAlloc {
         fn alloc(&mut self, value: Term) -> Idx<Term> {
             self.terms.alloc(value)
@@ -116,7 +117,7 @@ pub mod indexed {
     }
 
     /// A pattern with names resolved.
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Pattern {
         ProductRow(ProductRow<Idx<Self>>),
         SumRow(SumRow<Idx<Self>>),
@@ -133,7 +134,7 @@ pub mod indexed {
     }
 
     /// An Aiahr term with names resolved.
-    #[derive(Clone, Debug, PartialEq)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum Term {
         Binding {
             var: SpanOf<VarId>,
@@ -238,6 +239,12 @@ pub mod indexed {
         },
     }
     impl Eq for Item {}
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct AllocItem {
+        pub alloc: NstIndxAlloc,
+        pub item: Item,
+    }
 
     impl<A> IndexedAllocate<A> for EffectOpId {
         type Out = EffectOpId;

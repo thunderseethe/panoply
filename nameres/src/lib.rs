@@ -2,9 +2,8 @@ use aiahr_core::cst::indexed::CstRefAlloc;
 use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
 use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use aiahr_core::ident::Ident;
-use aiahr_core::indexed::{IndexedAllocate, ReferenceAllocate};
+use aiahr_core::indexed::ReferenceAllocate;
 use aiahr_core::modules::{all_modules, Module, ModuleTree};
-use aiahr_core::nst::indexed::NstIndxAlloc;
 use aiahr_core::span::{Span, Spanned};
 use aiahr_core::Top;
 use aiahr_parser::ParseModule;
@@ -132,12 +131,10 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
         local_ids: mod_resolution.locals,
         resolved_items: mod_resolution
             .resolved_items
-            .iter()
+            .into_iter()
             .map(|oi| {
                 oi.map(|item| {
-                    let mut alloc = NstIndxAlloc::default();
-                    let item = item.alloc(&mut alloc);
-                    let name = match item {
+                    let name = match &item.item {
                         aiahr_core::nst::indexed::Item::Effect { name, .. } => {
                             ModuleName::from(name.value)
                         }
@@ -145,7 +142,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
                             ModuleName::from(name.value)
                         }
                     };
-                    SalsaItem::new(db, name, item, alloc)
+                    SalsaItem::new(db, name, item.item, item.alloc)
                 })
             })
             .collect(),
