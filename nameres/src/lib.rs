@@ -1,5 +1,6 @@
 use aiahr_core::cst::indexed::CstRefAlloc;
 use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
+use aiahr_core::file::SourceFileSet;
 use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use aiahr_core::ident::Ident;
 use aiahr_core::indexed::ReferenceAllocate;
@@ -47,20 +48,36 @@ pub struct Jar(
     nameres_module_of,
 );
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {
-    fn as_analysis_db(&self) -> &dyn crate::Db {
+    fn as_nameres_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
 
     fn nameres_module_of(&self, mod_id: ModuleId) -> NameResModule {
-        nameres_module_of(self.as_analysis_db(), self.top(), mod_id)
+        nameres_module_of(self.as_nameres_db(), self.top(), mod_id)
     }
 
     fn item_name(&self, mod_id: ModuleId, item_id: ItemId) -> Ident {
-        item_name(self.as_analysis_db(), self.top(), mod_id, item_id)
+        item_name(self.as_nameres_db(), self.top(), mod_id, item_id)
     }
 
     fn id_for_name(&self, mod_id: ModuleId, name: Ident) -> Option<ItemId> {
-        id_for_name(self.as_analysis_db(), self.top(), mod_id, name)
+        id_for_name(self.as_nameres_db(), self.top(), mod_id, name)
+    }
+
+    fn nameres_errors(&self) -> Vec<AiahrcError> {
+        let file_set = SourceFileSet::get(self.as_core_db());
+        file_set
+            .files(self.as_core_db())
+            .into_iter()
+            .flat_map(|file| {
+                nameres_module_of::accumulated::<AiahrcErrors>(
+                    self.as_nameres_db(),
+                    self.top(),
+                    file.module(self.as_core_db()),
+                )
+                .into_iter()
+            })
+            .collect()
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {}

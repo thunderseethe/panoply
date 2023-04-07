@@ -180,7 +180,7 @@ where
 {
     fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
         aiahr_nameres::effect_handler_return_index(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             mod_id,
             eff_id,
@@ -194,7 +194,7 @@ where
         op_id: EffectOpId,
     ) -> usize {
         aiahr_nameres::effect_handler_op_index(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             mod_id,
             eff_id,
@@ -204,7 +204,7 @@ where
 
     fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
         aiahr_nameres::effect_vector_index(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             mod_id,
             eff_id,

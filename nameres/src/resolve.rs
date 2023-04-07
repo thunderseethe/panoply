@@ -883,44 +883,30 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use aiahr_core::{
         diagnostic::nameres::{NameKind, NameResolutionError},
         field,
+        file::{SourceFile, SourceFileSet},
         id::ModuleId,
         id_field,
         indexed::ReferenceAllocate,
-        modules::ModuleTree,
         nitem_term, npat_prod, npat_var,
-        nst::{
-            self,
-            indexed::{NstIndxAlloc, NstRefAlloc},
-        },
+        nst::{self, indexed::NstRefAlloc},
         nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match, nterm_prod,
         nterm_sum, nterm_var, nterm_with, quant, scheme,
         span::Span,
-        span_of, type_func, type_named, type_prod, Db,
-    };
-    use aiahr_parser::{
-        lexer::aiahr_lexer,
-        parser::{aiahr_parser, term, to_stream},
+        span_of, type_func, type_named, type_prod,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
-    use chumsky::Parser;
-    use rustc_hash::FxHashMap;
 
-    use crate::{
-        module::ModuleNames,
-        names::{LocalIds, Names},
-        ops::IdOps,
-        top_level::BaseBuilder,
-    };
+    use crate::{module::ModuleNames, names::LocalIds, ops::IdOps, Db as NameResDb};
 
-    use super::{resolve_module, /*resolve_term,*/ ModuleResolution, NameResCtx};
+    use super::ModuleResolution;
 
     use aiahr_test::assert_ident_text_matches_name;
-
-    const MODNAME: &str = "test_module";
 
     #[derive(Default)]
     #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_parser::Jar)]
@@ -930,7 +916,7 @@ mod tests {
     impl salsa::Database for TestDatabase {}
 
     fn parse_resolve_term<'a>(
-        db: &TestDatabase,
+        db: &'a TestDatabase,
         arena: &'a Bump,
         input: &str,
     ) -> (
@@ -938,73 +924,70 @@ mod tests {
         LocalIds,
         Vec<NameResolutionError>,
     ) {
-        let (m, modules) = {
-            let mut modules = ModuleTree::new();
-            let m = modules.add_package(db.ident_str(MODNAME));
-            (m, modules)
-        };
+        // Wrap our term in an item def
+        let mut content = "item = ".to_string();
+        content.push_str(input);
 
-        let (tokens, eoi) = aiahr_lexer(db).lex(m, input).unwrap();
-        let unresolved = term(arena).parse(to_stream(tokens, eoi)).unwrap();
-        let mut errors = Vec::new();
+        let (resolution, _, errors) = parse_resolve_module(db, arena, content);
 
-        let mut module_names = FxHashMap::default();
-        let base = BaseBuilder::new().build(arena, m, &modules, &mut module_names);
-        let mut names = Names::new(&base);
-
-        let mut alloc = NstIndxAlloc::default();
-        let mut nameres_ctx = NameResCtx {
-            arena,
-            alloc: &mut alloc,
-            names: &mut names,
-            errors: &mut errors,
-        };
-        let idx_resolved = nameres_ctx.resolve_term(unresolved);
-        let mut ref_alloc = NstRefAlloc::new(arena, &alloc);
-        let resolved = idx_resolved.map(|term| term.ref_alloc(&mut ref_alloc));
-        (resolved, names.into_local_ids(), errors)
+        (
+            resolution
+                .resolved_items
+                .first()
+                .unwrap()
+                .as_ref()
+                .map(|item| match item {
+                    // We hard code wrap our input in an item def, an effect isn't possible here
+                    nst::Item::Effect { .. } => unreachable!(),
+                    nst::Item::Term { value, .. } => *value,
+                }),
+            resolution.locals.clone(),
+            errors,
+        )
     }
 
-    fn parse_resolve_module<'a>(
-        db: &TestDatabase,
+    fn parse_resolve_module<'a, S: ToString>(
+        db: &'a TestDatabase,
         arena: &'a Bump,
-        input: &str,
+        input: S,
     ) -> (
         ModuleResolution<aiahr_core::nst::Item<'a>>,
         &'a ModuleNames,
         Vec<NameResolutionError>,
     ) {
-        let (m, modules) = {
-            let mut modules = ModuleTree::new();
-            let m = modules.add_package(db.ident_str(MODNAME));
-            (m, modules)
-        };
+        const MOD: ModuleId = ModuleId(0);
 
-        let (tokens, eoi) = aiahr_lexer(db).lex(m, input).unwrap();
-        let unresolved = aiahr_parser(arena).parse(to_stream(tokens, eoi)).unwrap();
-        let mut errors = Vec::new();
+        let file = SourceFile::new(db, MOD, PathBuf::from("test.aiahr"), input.to_string());
+        let _ = SourceFileSet::new(db, vec![file]);
 
-        let mut module_names = FxHashMap::default();
-        let base = BaseBuilder::new()
-            .add_slice(unresolved.items, &mut errors)
-            .build(arena, m, &modules, &mut module_names);
-
-        let resolution = resolve_module(arena, unresolved, base, &mut errors);
-
+        let nameres_module = db.nameres_module_of(MOD);
+        let resolution = nameres_module.items(db);
         let resolution = ModuleResolution {
-            locals: resolution.locals,
+            locals: resolution.local_ids.clone(),
             resolved_items: resolution
                 .resolved_items
-                .into_iter()
+                .iter()
                 .map(|oi| {
                     oi.map(|item| {
-                        let mut ref_alloc = NstRefAlloc::new(arena, &item.alloc);
-                        item.item.ref_alloc(&mut ref_alloc)
+                        let mut ref_alloc = NstRefAlloc::new(arena, item.alloc(db));
+                        item.data(db).ref_alloc(&mut ref_alloc)
                     })
                 })
                 .collect(),
         };
-        (resolution, module_names[&m], errors)
+
+        let errors = db
+            .nameres_errors()
+            .into_iter()
+            .map(|err| match err {
+                aiahr_core::diagnostic::aiahr::AiahrcError::NameResolutionError(name_res) => {
+                    name_res
+                }
+                _ => unreachable!(),
+            })
+            .collect();
+
+        (resolution, &nameres_module.names(db)[&MOD], errors)
     }
 
     #[test]
@@ -1400,7 +1383,7 @@ mod tests {
     }
 
     #[test]
-    fn test_match_errors() {
+    fn test_match_error_name_not_found() {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let (term, _, errs) = parse_resolve_term(&db, &arena, "match <{a = x} => f(x), {} => z>");
@@ -1423,7 +1406,12 @@ mod tests {
                 assert_eq!(z.text(&db), "z");
             }
         );
+    }
 
+    #[test]
+    fn test_match_error_duplicate_name() {
+        let arena = Bump::new();
+        let db = TestDatabase::default();
         let (term, locals, errs) =
             parse_resolve_term(&db, &arena, "match <{a = x, b = x} => x(x)>");
         assert_matches!(

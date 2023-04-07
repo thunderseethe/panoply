@@ -70,7 +70,7 @@ where
 {
     fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
         aiahr_nameres::effect_name(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             module,
             eff,
@@ -79,7 +79,7 @@ where
 
     fn effect_members(&self, module: ModuleId, eff: EffectId) -> &[EffectOpId] {
         aiahr_nameres::effect_members(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             module,
             eff,
@@ -93,7 +93,7 @@ where
         members: &[Ident],
     ) -> Option<(ModuleId, EffectId)> {
         aiahr_nameres::lookup_effect_by_member_names(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             module,
             members.to_vec().into_boxed_slice(),
@@ -102,7 +102,7 @@ where
 
     fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
         aiahr_nameres::lookup_effect_by_name(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             module,
             name,
@@ -121,7 +121,7 @@ where
 
     fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident {
         aiahr_nameres::effect_member_name(
-            self.as_analysis_db(),
+            self.as_nameres_db(),
             Top::new(self.as_core_db()),
             module,
             eff,

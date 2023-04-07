@@ -44,12 +44,12 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_name
 #[salsa::tracked]
 pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) -> AstModule {
     let core_db = db.as_core_db();
-    let resolution = module.items(db.as_analysis_db());
+    let resolution = module.items(db.as_nameres_db());
     let ty_vars = resolution.local_ids.ty_vars.len();
     let vars = resolution.local_ids.vars.len();
     AstModule::new(
         core_db,
-        module.module(db.as_analysis_db()),
+        module.module(db.as_nameres_db()),
         resolution
             .resolved_items
             .iter()
@@ -75,8 +75,8 @@ pub fn desugar_item(
         db,
         &mut vars,
         &mut ty_vars,
-        item.alloc(db.as_analysis_db()),
-        item.data(db.as_analysis_db()),
+        item.alloc(db.as_nameres_db()),
+        item.data(db.as_nameres_db()),
     );
 
     let salsa_ast = match ast_res {
