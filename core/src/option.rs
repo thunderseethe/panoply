@@ -13,6 +13,7 @@ impl<T> IfNone for Option<T> {
 
 /// TODO(rust-lang/rust#93050): Remove in favor of standard library version.
 pub trait IsSomeAnd<T>: Sized {
+    #[allow(clippy::wrong_self_convention)]
     fn is_some_and(self, f: impl FnOnce(T) -> bool) -> bool;
 }
 

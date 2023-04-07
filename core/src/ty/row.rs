@@ -35,6 +35,7 @@ impl<A: TypeAlloc> ClosedRow<A> {
         acc.row_fields(&self.fields).is_empty()
     }
 
+    #[allow(clippy::len_without_is_empty)]
     pub fn len<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
         acc.row_fields(&self.fields).len()

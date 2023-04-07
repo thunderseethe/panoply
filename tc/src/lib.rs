@@ -173,17 +173,19 @@ pub fn type_scheme_of(
     SalsaTypedItem::new(db, item_id, var_to_tys, terms_to_tys, ty_scheme)
 }
 
+type TypeCheckOutput = (
+    FxHashMap<VarId, Ty<InDb>>,
+    FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
+    TyScheme,
+    Vec<TypeCheckDiagnostic>,
+);
+
 pub fn type_check<E>(
     db: &dyn crate::Db,
     eff_info: &E,
     module: ModuleId,
     ast: &Ast<VarId>,
-) -> (
-    FxHashMap<VarId, Ty<InDb>>,
-    FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
-    TyScheme,
-    Vec<TypeCheckDiagnostic>,
-)
+) -> TypeCheckOutput
 where
     E: ?Sized + EffectInfo,
 {
@@ -198,12 +200,7 @@ fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
     eff_info: &E,
     module: ModuleId,
     ast: &Ast<VarId>,
-) -> (
-    FxHashMap<VarId, Ty<InDb>>,
-    FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
-    TyScheme,
-    Vec<TypeCheckDiagnostic>,
-)
+) -> TypeCheckOutput
 where
     II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
     E: ?Sized + EffectInfo,

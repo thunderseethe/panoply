@@ -777,8 +777,7 @@ where
     /// Resolves the given effect.
     fn resolve_effect(
         &mut self,
-        module: ModuleId,
-        eid: EffectId,
+        (module, eid): (ModuleId, EffectId),
         effect: Span,
         name: SpanOf<Ident>,
         lbrace: Span,
@@ -863,8 +862,7 @@ where
                     names: &mut names,
                 };
                 ctx.resolve_effect(
-                    base.me(),
-                    *e,
+                    (base.me(), *e),
                     *effect,
                     *name,
                     *lbrace,

@@ -470,6 +470,12 @@ where
     }
 }
 
+type LowerOutput<'a, 'b, Db> = (
+    LowerCtx<'a, 'b, Db, Evidentfull>,
+    Vec<(IrVar, Ir)>,
+    Vec<IrVar>,
+);
+
 impl<'a, 'b, Db> LowerCtx<'a, 'b, Db, Evidenceless>
 where
     Db: ?Sized + ItemSchemes + VarTys + TermTys + IrEffectInfo + MkTy<InDb> + MkIrTy,
@@ -566,11 +572,7 @@ where
         mut self,
         term_evs: impl IntoIterator<Item = RowTermView<VarId>>,
         scheme_constrs: impl IntoIterator<Item = &'ev Evidence>,
-    ) -> (
-        LowerCtx<'a, 'b, Db, Evidentfull>,
-        Vec<(IrVar, Ir)>,
-        Vec<IrVar>,
-    ) {
+    ) -> LowerOutput<'a, 'b, Db> {
         let locals = self
             .solved_row_ev(term_evs)
             .into_iter()
