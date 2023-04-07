@@ -6,12 +6,12 @@ use aiahr_core::cst::{indexed as cst, Field};
 use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::{module_of, Module};
-use aiahr_core::nst::indexed::NstIndxAlloc;
+use aiahr_core::nst::{self, NstIndxAlloc};
 use aiahr_core::span::{SpanOf, Spanned};
 use aiahr_core::ty::row::Row;
 use aiahr_core::ty::{Evidence, MkTy, Ty, TyScheme, TypeKind};
 use aiahr_core::Top;
-use aiahr_core::{id::VarId, nst::indexed as nst, span::Span};
+use aiahr_core::{id::VarId, span::Span};
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
 

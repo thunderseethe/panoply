@@ -87,18 +87,16 @@ pub struct SalsaItem {
     #[id]
     pub name: ModuleName,
     #[return_ref]
-    pub data: aiahr_core::nst::indexed::Item,
+    pub data: aiahr_core::nst::Item,
     #[return_ref]
-    pub alloc: aiahr_core::nst::indexed::NstIndxAlloc,
+    pub alloc: aiahr_core::nst::NstIndxAlloc,
 }
 
 impl SalsaItem {
     pub fn span_of(&self, db: &dyn crate::Db) -> Span {
         match self.data(db) {
-            aiahr_core::nst::indexed::Item::Effect { effect, rbrace, .. } => {
-                Span::join(effect, rbrace)
-            }
-            aiahr_core::nst::indexed::Item::Term { value, .. } => {
+            aiahr_core::nst::Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
+            aiahr_core::nst::Item::Term { value, .. } => {
                 let alloc = self.alloc(db);
                 alloc[*value].spanned(alloc).span()
             }
@@ -152,12 +150,8 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
             .map(|oi| {
                 oi.map(|item| {
                     let name = match &item.item {
-                        aiahr_core::nst::indexed::Item::Effect { name, .. } => {
-                            ModuleName::from(name.value)
-                        }
-                        aiahr_core::nst::indexed::Item::Term { name, .. } => {
-                            ModuleName::from(name.value)
-                        }
+                        aiahr_core::nst::Item::Effect { name, .. } => ModuleName::from(name.value),
+                        aiahr_core::nst::Item::Term { name, .. } => ModuleName::from(name.value),
                     };
                     SalsaItem::new(db, name, item.item, item.alloc)
                 })
@@ -362,8 +356,8 @@ pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
         .iter()
         .filter_map(|item| item.as_ref())
         .filter_map(|item| match item.data(db) {
-            aiahr_core::nst::indexed::Item::Term { .. } => None,
-            aiahr_core::nst::indexed::Item::Effect { name, .. } => Some(name.value),
+            aiahr_core::nst::Item::Term { .. } => None,
+            aiahr_core::nst::Item::Effect { name, .. } => Some(name.value),
         })
         .collect()
 }

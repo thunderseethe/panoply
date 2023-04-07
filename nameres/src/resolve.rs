@@ -12,10 +12,8 @@ use aiahr_core::{
     },
     id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
-    nst::{
-        indexed as nst,
-        indexed::{AllocItem, IdxAlloc, NstIndxAlloc},
-    },
+    indexed::IdxAlloc,
+    nst::{self, AllocItem, NstIndxAlloc},
     option::Transpose,
     span::{Span, SpanOf, Spanned},
 };
@@ -892,10 +890,7 @@ mod tests {
         id::ModuleId,
         id_field,
         indexed::ReferenceAllocate,
-        nitem_term, npat_prod, npat_var,
-        nst::{self, indexed::NstRefAlloc},
-        nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match, nterm_prod,
-        nterm_sum, nterm_var, nterm_with, quant, scheme,
+        quant, scheme,
         span::Span,
         span_of, type_func, type_named, type_prod,
     };
@@ -906,7 +901,11 @@ mod tests {
 
     use super::ModuleResolution;
 
-    use aiahr_test::assert_ident_text_matches_name;
+    use aiahr_test::{
+        assert_ident_text_matches_name, nitem_term, npat_prod, npat_var, nst::NstRefAlloc,
+        nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match, nterm_prod,
+        nterm_sum, nterm_var, nterm_with,
+    };
 
     #[derive(Default)]
     #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_parser::Jar)]
@@ -920,7 +919,7 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> (
-        Option<&'a nst::Term<'a>>,
+        Option<&'a aiahr_test::nst::Term<'a>>,
         LocalIds,
         Vec<NameResolutionError>,
     ) {
@@ -938,8 +937,8 @@ mod tests {
                 .as_ref()
                 .map(|item| match item {
                     // We hard code wrap our input in an item def, an effect isn't possible here
-                    nst::Item::Effect { .. } => unreachable!(),
-                    nst::Item::Term { value, .. } => *value,
+                    aiahr_test::nst::Item::Effect { .. } => unreachable!(),
+                    aiahr_test::nst::Item::Term { value, .. } => *value,
                 }),
             resolution.locals.clone(),
             errors,
@@ -951,7 +950,7 @@ mod tests {
         arena: &'a Bump,
         input: S,
     ) -> (
-        ModuleResolution<aiahr_core::nst::Item<'a>>,
+        ModuleResolution<aiahr_test::nst::Item<'a>>,
         &'a ModuleNames,
         Vec<NameResolutionError>,
     ) {

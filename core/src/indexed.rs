@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use la_arena::Arena;
+use la_arena::{Arena, Idx};
 
 /// A trait for a type that contains a mutable `Arena<T>` reference.
 ///
@@ -54,4 +54,8 @@ where
     fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
         T::ref_alloc(self, alloc)
     }
+}
+
+pub trait IdxAlloc<T> {
+    fn alloc(&mut self, value: T) -> Idx<T>;
 }

@@ -1,616 +1,138 @@
-use crate::{
-    cst::{EffectOp, Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation},
-    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
-    ident::Ident,
-    span::{Span, SpanOf, Spanned},
+use std::ops::Index;
+
+use la_arena::{Arena, Idx};
+
+// We re-export these so it's easier to differntiate reference and indexed during migration
+pub use crate::cst::indexed::{
+    Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
+    Separated, SumRow, Type, TypeAnnotation, TypeRow,
 };
+use crate::cst::Field;
+use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
+use crate::ident::Ident;
+use crate::indexed::{HasArenaMut, HasArenaRef, IdxAlloc};
+use crate::span::{Span, SpanOf, Spanned};
 
-pub mod indexed {
-    use std::ops::Index;
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct NstIndxAlloc {
+    types: Arena<Type<TyVarId>>,
+    terms: Arena<Term>,
+    pats: Arena<Pattern>,
+}
+impl IdxAlloc<Term> for NstIndxAlloc {
+    fn alloc(&mut self, value: Term) -> Idx<Term> {
+        self.terms.alloc(value)
+    }
+}
+impl IdxAlloc<Type<TyVarId>> for NstIndxAlloc {
+    fn alloc(&mut self, value: Type<TyVarId>) -> Idx<Type<TyVarId>> {
+        self.types.alloc(value)
+    }
+}
+impl IdxAlloc<Pattern> for NstIndxAlloc {
+    fn alloc(&mut self, value: Pattern) -> Idx<Pattern> {
+        self.pats.alloc(value)
+    }
+}
+impl HasArenaRef<Type<TyVarId>> for NstIndxAlloc {
+    fn arena(&self) -> &Arena<Type<TyVarId>> {
+        &self.types
+    }
+}
+impl HasArenaMut<Type<TyVarId>> for NstIndxAlloc {
+    fn arena_mut(&mut self) -> &mut Arena<Type<TyVarId>> {
+        &mut self.types
+    }
+}
+impl HasArenaRef<Term> for NstIndxAlloc {
+    fn arena(&self) -> &Arena<Term> {
+        &self.terms
+    }
+}
+impl HasArenaMut<Term> for NstIndxAlloc {
+    fn arena_mut(&mut self) -> &mut Arena<Term> {
+        &mut self.terms
+    }
+}
+impl HasArenaRef<Pattern> for NstIndxAlloc {
+    fn arena(&self) -> &Arena<Pattern> {
+        &self.pats
+    }
+}
+impl HasArenaMut<Pattern> for NstIndxAlloc {
+    fn arena_mut(&mut self) -> &mut Arena<Pattern> {
+        &mut self.pats
+    }
+}
+impl<T> Index<Idx<T>> for NstIndxAlloc
+where
+    Self: HasArenaRef<T>,
+{
+    type Output = T;
 
-    use bumpalo::Bump;
-    use la_arena::{Arena, Idx};
-
-    // We re-export these so it's easier to differntiate reference and indexed during migration
-    pub use crate::cst::indexed::{
-        Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
-        Separated, SumRow, Type, TypeAnnotation, TypeRow,
-    };
-    use crate::cst::Field;
-    use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
-    use crate::ident::Ident;
-    use crate::indexed::{
-        HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
-    };
-    use crate::span::{Span, SpanOf, Spanned};
-
-    pub trait IdxAlloc<T> {
-        fn alloc(&mut self, value: T) -> Idx<T>;
-    }
-
-    #[derive(Clone, Default, Debug, PartialEq, Eq)]
-    pub struct NstIndxAlloc {
-        types: Arena<Type<TyVarId>>,
-        terms: Arena<Term>,
-        pats: Arena<Pattern>,
-    }
-    impl IdxAlloc<Term> for NstIndxAlloc {
-        fn alloc(&mut self, value: Term) -> Idx<Term> {
-            self.terms.alloc(value)
-        }
-    }
-    impl IdxAlloc<Type<TyVarId>> for NstIndxAlloc {
-        fn alloc(&mut self, value: Type<TyVarId>) -> Idx<Type<TyVarId>> {
-            self.types.alloc(value)
-        }
-    }
-    impl IdxAlloc<Pattern> for NstIndxAlloc {
-        fn alloc(&mut self, value: Pattern) -> Idx<Pattern> {
-            self.pats.alloc(value)
-        }
-    }
-    impl HasArenaRef<Type<TyVarId>> for NstIndxAlloc {
-        fn arena(&self) -> &Arena<Type<TyVarId>> {
-            &self.types
-        }
-    }
-    impl HasArenaMut<Type<TyVarId>> for NstIndxAlloc {
-        fn arena_mut(&mut self) -> &mut Arena<Type<TyVarId>> {
-            &mut self.types
-        }
-    }
-    impl HasArenaRef<Term> for NstIndxAlloc {
-        fn arena(&self) -> &Arena<Term> {
-            &self.terms
-        }
-    }
-    impl HasArenaMut<Term> for NstIndxAlloc {
-        fn arena_mut(&mut self) -> &mut Arena<Term> {
-            &mut self.terms
-        }
-    }
-    impl HasArenaRef<Pattern> for NstIndxAlloc {
-        fn arena(&self) -> &Arena<Pattern> {
-            &self.pats
-        }
-    }
-    impl HasArenaMut<Pattern> for NstIndxAlloc {
-        fn arena_mut(&mut self) -> &mut Arena<Pattern> {
-            &mut self.pats
-        }
-    }
-    impl<T> Index<Idx<T>> for NstIndxAlloc
-    where
-        Self: HasArenaRef<T>,
-    {
-        type Output = T;
-
-        fn index(&self, index: Idx<T>) -> &Self::Output {
-            &self.arena()[index]
-        }
-    }
-
-    pub struct NstRefAlloc<'a, 'b> {
-        /// Allocate the new reference based tree types.
-        arena: &'a Bump,
-        /// Included to expand indices encountered during conversion
-        indices: &'b NstIndxAlloc,
-    }
-
-    impl<'a, 'b> NstRefAlloc<'a, 'b> {
-        pub fn new(arena: &'a Bump, indices: &'b NstIndxAlloc) -> Self {
-            Self { arena, indices }
-        }
-    }
-    impl<'a> HasRefArena<'a> for NstRefAlloc<'a, '_> {
-        fn ref_arena(&self) -> &'a Bump {
-            self.arena
-        }
-    }
-    impl<T> HasArenaRef<T> for NstRefAlloc<'_, '_>
-    where
-        NstIndxAlloc: HasArenaRef<T>,
-    {
-        fn arena(&self) -> &Arena<T> {
-            self.indices.arena()
-        }
-    }
-
-    /// A pattern with names resolved.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub enum Pattern {
-        ProductRow(ProductRow<Idx<Self>>),
-        SumRow(SumRow<Idx<Self>>),
-        Whole(SpanOf<VarId>),
-    }
-    impl Spanned for Pattern {
-        fn span(&self) -> Span {
-            match self {
-                Pattern::ProductRow(prod) => prod.span(),
-                Pattern::SumRow(sum) => sum.span(),
-                Pattern::Whole(var) => var.span(),
-            }
-        }
-    }
-
-    /// An Aiahr term with names resolved.
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub enum Term {
-        Binding {
-            var: SpanOf<VarId>,
-            annotation: Option<TypeAnnotation<TyVarId>>,
-            eq: Span,
-            value: Idx<Self>,
-            semi: Span,
-            expr: Idx<Self>,
-        },
-        Handle {
-            with: Span,
-            handler: Idx<Self>,
-            do_: Span,
-            expr: Idx<Self>,
-        },
-        Abstraction {
-            lbar: Span,
-            arg: SpanOf<VarId>,
-            annotation: Option<TypeAnnotation<TyVarId>>,
-            rbar: Span,
-            body: Idx<Self>,
-        },
-        Application {
-            func: Idx<Self>,
-            lpar: Span,
-            arg: Idx<Self>,
-            rpar: Span,
-        },
-        ProductRow(ProductRow<Idx<Self>>),
-        SumRow(SumRow<Idx<Self>>),
-        FieldAccess {
-            base: Idx<Self>,
-            dot: Span,
-            field: SpanOf<Ident>,
-        },
-        Match {
-            match_: Span,
-            langle: Span,
-            cases: Separated<Field<Idx<Pattern>, Idx<Self>>>,
-            rangle: Span,
-        },
-        EffectOpRef(SpanOf<(ModuleId, EffectId, EffectOpId)>),
-        ItemRef(SpanOf<(ModuleId, ItemId)>),
-        VariableRef(SpanOf<VarId>),
-        Parenthesized {
-            lpar: Span,
-            term: Idx<Self>,
-            rpar: Span,
-        },
-    }
-    impl Term {
-        pub fn spanned<'a>(&'a self, arenas: &'a NstIndxAlloc) -> SpanTerm<'a> {
-            SpanTerm { term: self, arenas }
-        }
-    }
-    pub struct SpanTerm<'a> {
-        term: &'a Term,
-        arenas: &'a NstIndxAlloc,
-    }
-    impl SpanTerm<'_> {
-        fn with_term(&self, term: Idx<Term>) -> Self {
-            Self {
-                term: &self.arenas[term],
-                arenas: self.arenas,
-            }
-        }
-    }
-    impl Spanned for SpanTerm<'_> {
-        fn span(&self) -> Span {
-            match self.term {
-                Term::Binding { var, expr, .. } => Span::join(var, &self.with_term(*expr)),
-                Term::Handle { with, expr, .. } => Span::join(with, &self.with_term(*expr)),
-                Term::Abstraction { lbar, body, .. } => Span::join(lbar, &self.with_term(*body)),
-                Term::Application { func, rpar, .. } => Span::join(&self.with_term(*func), rpar),
-                Term::ProductRow(p) => p.span(),
-                Term::SumRow(s) => s.span(),
-                Term::FieldAccess { base, field, .. } => Span::join(&self.with_term(*base), field),
-                Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
-                Term::EffectOpRef(o) => o.span(),
-                Term::ItemRef(i) => i.span(),
-                Term::VariableRef(v) => v.span(),
-                Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
-            }
-        }
-    }
-
-    /// A top-level item in an Aiahr source file with names resolved.
-    #[derive(Clone, Debug, PartialEq, Hash)]
-    pub enum Item {
-        Effect {
-            effect: Span,
-            name: SpanOf<EffectId>,
-            lbrace: Span,
-            ops: Vec<Option<EffectOp<EffectOpId, TyVarId>>>,
-            rbrace: Span,
-        },
-        Term {
-            name: SpanOf<ItemId>,
-            annotation: Option<SchemeAnnotation<TyVarId>>,
-            eq: Span,
-            value: Idx<Term>,
-        },
-    }
-    impl Eq for Item {}
-
-    #[derive(Clone, Debug, PartialEq, Eq)]
-    pub struct AllocItem {
-        pub alloc: NstIndxAlloc,
-        pub item: Item,
-    }
-
-    impl<A> IndexedAllocate<A> for EffectOpId {
-        type Out = EffectOpId;
-
-        fn alloc(&self, _: &mut A) -> Self::Out {
-            *self
-        }
-    }
-    impl<A> ReferenceAllocate<'_, A> for EffectOpId {
-        type Out = EffectOpId;
-
-        fn ref_alloc(&self, _: &mut A) -> Self::Out {
-            *self
-        }
-    }
-
-    impl<A> IndexedAllocate<A> for TyVarId {
-        type Out = TyVarId;
-
-        fn alloc(&self, _: &mut A) -> Self::Out {
-            *self
-        }
-    }
-    impl<A> ReferenceAllocate<'_, A> for TyVarId {
-        type Out = TyVarId;
-
-        fn ref_alloc(&self, _: &mut A) -> Self::Out {
-            *self
-        }
-    }
-
-    impl<A> IndexedAllocate<A> for super::Pattern<'_>
-    where
-        A: HasArenaMut<Pattern>,
-    {
-        type Out = Idx<Pattern>;
-
-        fn alloc(&self, alloc: &mut A) -> Self::Out {
-            let pat = match self {
-                super::Pattern::ProductRow(prod) => Pattern::ProductRow(prod.alloc(alloc)),
-                super::Pattern::SumRow(sum) => Pattern::SumRow(sum.alloc(alloc)),
-                super::Pattern::Whole(var) => Pattern::Whole(*var),
-            };
-            alloc.arena_mut().alloc(pat)
-        }
-    }
-    impl<'a, A> ReferenceAllocate<'a, A> for Idx<Pattern>
-    where
-        A: HasRefArena<'a> + HasArenaRef<Pattern>,
-    {
-        type Out = &'a super::Pattern<'a>;
-
-        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
-            let pat = match alloc.arena()[*self].clone() {
-                Pattern::ProductRow(prod) => super::Pattern::ProductRow(prod.ref_alloc(alloc)),
-                Pattern::SumRow(sum) => super::Pattern::SumRow(sum.ref_alloc(alloc)),
-                Pattern::Whole(var) => super::Pattern::Whole(var),
-            };
-            alloc.ref_arena().alloc(pat) as &_
-        }
-    }
-
-    impl IndexedAllocate<NstIndxAlloc> for super::Term<'_> {
-        type Out = Idx<Term>;
-
-        fn alloc(&self, alloc: &mut NstIndxAlloc) -> Self::Out {
-            let term = match self {
-                super::Term::Binding {
-                    var,
-                    annotation,
-                    eq,
-                    value,
-                    semi,
-                    expr,
-                } => Term::Binding {
-                    var: *var,
-                    annotation: annotation.alloc(alloc),
-                    eq: *eq,
-                    value: value.alloc(alloc),
-                    semi: *semi,
-                    expr: expr.alloc(alloc),
-                },
-                super::Term::Handle {
-                    with,
-                    handler,
-                    do_,
-                    expr,
-                } => Term::Handle {
-                    with: *with,
-                    handler: handler.alloc(alloc),
-                    do_: *do_,
-                    expr: expr.alloc(alloc),
-                },
-                super::Term::Abstraction {
-                    lbar,
-                    arg,
-                    annotation,
-                    rbar,
-                    body,
-                } => Term::Abstraction {
-                    lbar: *lbar,
-                    arg: *arg,
-                    annotation: annotation.alloc(alloc),
-                    rbar: *rbar,
-                    body: body.alloc(alloc),
-                },
-                super::Term::Application {
-                    func,
-                    lpar,
-                    arg,
-                    rpar,
-                } => Term::Application {
-                    func: func.alloc(alloc),
-                    lpar: *lpar,
-                    arg: arg.alloc(alloc),
-                    rpar: *rpar,
-                },
-                super::Term::ProductRow(prod) => Term::ProductRow(prod.alloc(alloc)),
-                super::Term::SumRow(sum) => Term::SumRow(sum.alloc(alloc)),
-                super::Term::FieldAccess { base, dot, field } => Term::FieldAccess {
-                    base: base.alloc(alloc),
-                    dot: *dot,
-                    field: field.alloc(alloc),
-                },
-                super::Term::Match {
-                    match_,
-                    langle,
-                    cases,
-                    rangle,
-                } => Term::Match {
-                    match_: *match_,
-                    langle: *langle,
-                    cases: cases.alloc(alloc),
-                    rangle: *rangle,
-                },
-                super::Term::Parenthesized { lpar, term, rpar } => Term::Parenthesized {
-                    lpar: *lpar,
-                    term: term.alloc(alloc),
-                    rpar: *rpar,
-                },
-                super::Term::EffectOpRef(ids) => Term::EffectOpRef(*ids),
-                super::Term::ItemRef(id) => Term::ItemRef(*id),
-                super::Term::VariableRef(id) => Term::VariableRef(*id),
-            };
-            alloc.arena_mut().alloc(term)
-        }
-    }
-    impl<'a, A> ReferenceAllocate<'a, A> for Idx<Term>
-    where
-        A: HasRefArena<'a> + HasArenaRef<Term> + HasArenaRef<Type<TyVarId>> + HasArenaRef<Pattern>,
-    {
-        type Out = &'a super::Term<'a>;
-
-        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
-            let term = match alloc.arena()[*self].clone() {
-                Term::Binding {
-                    var,
-                    annotation,
-                    eq,
-                    value,
-                    semi,
-                    expr,
-                } => super::Term::Binding {
-                    var,
-                    annotation: annotation.ref_alloc(alloc),
-                    eq,
-                    value: value.ref_alloc(alloc),
-                    semi,
-                    expr: expr.ref_alloc(alloc),
-                },
-                Term::Handle {
-                    with,
-                    handler,
-                    do_,
-                    expr,
-                } => super::Term::Handle {
-                    with,
-                    handler: handler.ref_alloc(alloc),
-                    do_,
-                    expr: expr.ref_alloc(alloc),
-                },
-                Term::Abstraction {
-                    lbar,
-                    arg,
-                    annotation,
-                    rbar,
-                    body,
-                } => super::Term::Abstraction {
-                    lbar,
-                    arg,
-                    annotation: annotation.ref_alloc(alloc),
-                    rbar,
-                    body: body.ref_alloc(alloc),
-                },
-                Term::Application {
-                    func,
-                    lpar,
-                    arg,
-                    rpar,
-                } => super::Term::Application {
-                    func: func.ref_alloc(alloc),
-                    lpar,
-                    arg: arg.ref_alloc(alloc),
-                    rpar,
-                },
-                Term::ProductRow(prod) => super::Term::ProductRow(prod.ref_alloc(alloc)),
-                Term::SumRow(sum) => super::Term::SumRow(sum.ref_alloc(alloc)),
-                Term::FieldAccess { base, dot, field } => super::Term::FieldAccess {
-                    base: base.ref_alloc(alloc),
-                    dot,
-                    field: field.ref_alloc(alloc),
-                },
-                Term::Match {
-                    match_,
-                    langle,
-                    cases,
-                    rangle,
-                } => super::Term::Match {
-                    match_,
-                    langle,
-                    cases: cases.ref_alloc(alloc),
-                    rangle,
-                },
-                Term::EffectOpRef(ids) => super::Term::EffectOpRef(ids),
-                Term::ItemRef(ids) => super::Term::ItemRef(ids),
-                Term::VariableRef(var) => super::Term::VariableRef(var),
-                Term::Parenthesized { lpar, term, rpar } => super::Term::Parenthesized {
-                    lpar,
-                    term: term.ref_alloc(alloc),
-                    rpar,
-                },
-            };
-            alloc.ref_arena().alloc(term) as &_
-        }
-    }
-
-    impl IndexedAllocate<NstIndxAlloc> for super::Item<'_> {
-        type Out = Item;
-
-        fn alloc(&self, alloc: &mut NstIndxAlloc) -> Self::Out {
-            match self {
-                super::Item::Effect {
-                    effect,
-                    name,
-                    lbrace,
-                    ops,
-                    rbrace,
-                } => Item::Effect {
-                    effect: *effect,
-                    name: *name,
-                    lbrace: *lbrace,
-                    ops: ops.iter().map(|op| op.alloc(alloc)).collect(),
-                    rbrace: *rbrace,
-                },
-                super::Item::Term {
-                    name,
-                    annotation,
-                    eq,
-                    value,
-                } => Item::Term {
-                    name: *name,
-                    annotation: annotation.alloc(alloc),
-                    eq: *eq,
-                    value: value.alloc(alloc),
-                },
-            }
-        }
-    }
-    impl<'a, A> ReferenceAllocate<'a, A> for Item
-    where
-        A: HasRefArena<'a> + HasArenaRef<Type<TyVarId>> + HasArenaRef<Pattern> + HasArenaRef<Term>,
-    {
-        type Out = super::Item<'a>;
-
-        fn ref_alloc(&self, alloc: &mut A) -> Self::Out {
-            match self {
-                Item::Effect {
-                    effect,
-                    name,
-                    lbrace,
-                    ops,
-                    rbrace,
-                } => super::Item::Effect {
-                    effect: *effect,
-                    name: *name,
-                    lbrace: *lbrace,
-                    ops: alloc
-                        .ref_arena()
-                        .alloc_slice_fill_iter(ops.iter().map(|op| op.ref_alloc(alloc))),
-                    rbrace: *rbrace,
-                },
-                Item::Term {
-                    name,
-                    annotation,
-                    eq,
-                    value,
-                } => super::Item::Term {
-                    name: *name,
-                    annotation: annotation.ref_alloc(alloc),
-                    eq: *eq,
-                    value: value.ref_alloc(alloc),
-                },
-            }
-        }
+    fn index(&self, index: Idx<T>) -> &Self::Output {
+        &self.arena()[index]
     }
 }
 
 /// A pattern with names resolved.
-#[derive(Clone, Copy, Debug)]
-pub enum Pattern<'a> {
-    ProductRow(ProductRow<'a, &'a Pattern<'a>>),
-    SumRow(SumRow<&'a Pattern<'a>>),
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pattern {
+    ProductRow(ProductRow<Idx<Self>>),
+    SumRow(SumRow<Idx<Self>>),
     Whole(SpanOf<VarId>),
 }
-
-impl<'a> Spanned for Pattern<'a> {
+impl Spanned for Pattern {
     fn span(&self) -> Span {
         match self {
-            Pattern::ProductRow(p) => p.span(),
-            Pattern::SumRow(s) => s.span(),
-            Pattern::Whole(v) => v.span(),
+            Pattern::ProductRow(prod) => prod.span(),
+            Pattern::SumRow(sum) => sum.span(),
+            Pattern::Whole(var) => var.span(),
         }
     }
 }
 
 /// An Aiahr term with names resolved.
-#[derive(Clone, Copy, Debug)]
-pub enum Term<'a> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Term {
     Binding {
         var: SpanOf<VarId>,
-        annotation: Option<TypeAnnotation<'a, TyVarId>>,
+        annotation: Option<TypeAnnotation<TyVarId>>,
         eq: Span,
-        value: &'a Term<'a>,
+        value: Idx<Self>,
         semi: Span,
-        expr: &'a Term<'a>,
+        expr: Idx<Self>,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a>,
+        handler: Idx<Self>,
         do_: Span,
-        expr: &'a Term<'a>,
+        expr: Idx<Self>,
     },
     Abstraction {
         lbar: Span,
         arg: SpanOf<VarId>,
-        annotation: Option<TypeAnnotation<'a, TyVarId>>,
+        annotation: Option<TypeAnnotation<TyVarId>>,
         rbar: Span,
-        body: &'a Term<'a>,
+        body: Idx<Self>,
     },
     Application {
-        func: &'a Term<'a>,
+        func: Idx<Self>,
         lpar: Span,
-        arg: &'a Term<'a>,
+        arg: Idx<Self>,
         rpar: Span,
     },
-    ProductRow(ProductRow<'a, &'a Term<'a>>),
-    SumRow(SumRow<&'a Term<'a>>),
+    ProductRow(ProductRow<Idx<Self>>),
+    SumRow(SumRow<Idx<Self>>),
     FieldAccess {
-        base: &'a Term<'a>,
+        base: Idx<Self>,
         dot: Span,
         field: SpanOf<Ident>,
     },
     Match {
         match_: Span,
         langle: Span,
-        cases: Separated<'a, Field<&'a Pattern<'a>, &'a Term<'a>>>,
+        cases: Separated<Field<Idx<Pattern>, Idx<Self>>>,
         rangle: Span,
     },
     EffectOpRef(SpanOf<(ModuleId, EffectId, EffectOpId)>),
@@ -618,21 +140,37 @@ pub enum Term<'a> {
     VariableRef(SpanOf<VarId>),
     Parenthesized {
         lpar: Span,
-        term: &'a Term<'a>,
+        term: Idx<Self>,
         rpar: Span,
     },
 }
-
-impl<'a> Spanned for Term<'a> {
+impl Term {
+    pub fn spanned<'a>(&'a self, arenas: &'a NstIndxAlloc) -> SpanTerm<'a> {
+        SpanTerm { term: self, arenas }
+    }
+}
+pub struct SpanTerm<'a> {
+    term: &'a Term,
+    arenas: &'a NstIndxAlloc,
+}
+impl SpanTerm<'_> {
+    fn with_term(&self, term: Idx<Term>) -> Self {
+        Self {
+            term: &self.arenas[term],
+            arenas: self.arenas,
+        }
+    }
+}
+impl Spanned for SpanTerm<'_> {
     fn span(&self) -> Span {
-        match self {
-            Term::Binding { var, expr, .. } => Span::join(var, *expr),
-            Term::Handle { with, expr, .. } => Span::join(with, *expr),
-            Term::Abstraction { lbar, body, .. } => Span::join(lbar, *body),
-            Term::Application { func, rpar, .. } => Span::join(*func, rpar),
+        match self.term {
+            Term::Binding { var, expr, .. } => Span::join(var, &self.with_term(*expr)),
+            Term::Handle { with, expr, .. } => Span::join(with, &self.with_term(*expr)),
+            Term::Abstraction { lbar, body, .. } => Span::join(lbar, &self.with_term(*body)),
+            Term::Application { func, rpar, .. } => Span::join(&self.with_term(*func), rpar),
             Term::ProductRow(p) => p.span(),
             Term::SumRow(s) => s.span(),
-            Term::FieldAccess { base, field, .. } => Span::join(*base, field),
+            Term::FieldAccess { base, field, .. } => Span::join(&self.with_term(*base), field),
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
             Term::EffectOpRef(o) => o.span(),
             Term::ItemRef(i) => i.span(),
@@ -643,204 +181,32 @@ impl<'a> Spanned for Term<'a> {
 }
 
 /// A top-level item in an Aiahr source file with names resolved.
-#[derive(Clone, Copy, Debug)]
-pub enum Item<'a> {
+#[derive(Clone, Debug, PartialEq, Hash)]
+pub enum Item {
     Effect {
         effect: Span,
         name: SpanOf<EffectId>,
         lbrace: Span,
-        ops: &'a [Option<EffectOp<'a, EffectOpId, TyVarId>>],
+        ops: Vec<Option<EffectOp<EffectOpId, TyVarId>>>,
         rbrace: Span,
     },
     Term {
         name: SpanOf<ItemId>,
-        annotation: Option<SchemeAnnotation<'a, TyVarId>>,
+        annotation: Option<SchemeAnnotation<TyVarId>>,
         eq: Span,
-        value: &'a Term<'a>,
+        value: Idx<Term>,
     },
 }
+impl Eq for Item {}
 
-impl<'a> Spanned for Item<'a> {
-    fn span(&self) -> Span {
-        match self {
-            Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
-            Item::Term { name, value, .. } => Span::join(name, *value),
-        }
-    }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AllocItem {
+    pub alloc: NstIndxAlloc,
+    pub item: Item,
 }
 
-#[macro_export]
-macro_rules! npat_prod {
-    ($($fields:pat),* $(,)?) => {
-        &$crate::nst::Pattern::ProductRow($crate::prod!($($fields,)+))
-    };
-}
-
-#[macro_export]
-macro_rules! npat_sum {
-    ($field:pat) => {
-        &$crate::nst::Pattern::SumRow($crate::sum!($field))
-    };
-}
-
-#[macro_export]
-macro_rules! npat_var {
-    ($var:pat) => {
-        &$crate::nst::Pattern::Whole($crate::span_of!($var))
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_local {
-    ($var:pat, $value:pat, $expr:pat) => {
-        &$crate::nst::Term::Binding {
-            var: $crate::span_of!($var),
-            value: $value,
-            expr: $expr,
-            ..
-        }
-    };
-    ($var:pat, $type_:pat, $value:pat, $expr:pat) => {
-        &$crate::nst::Term::Binding {
-            var: $crate::span_of!($var),
-            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
-            value: $value,
-            expr: $expr,
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_with {
-    ($handler:pat, $expr:pat) => {
-        &$crate::nst::Term::Handle {
-            handler: $handler,
-            expr: $expr,
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_abs {
-    ($arg:pat, $body:pat) => {
-        &$crate::nst::Term::Abstraction {
-            arg: $crate::span_of!($arg),
-            body: $body,
-            ..
-        }
-    };
-    ($arg:pat, $type_:pat, $body:pat) => {
-        &$crate::nst::Term::Abstraction {
-            arg: $crate::span_of!($arg),
-            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
-            body: $body,
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_app {
-    ($func:pat, $arg:pat) => {
-        &$crate::nst::Term::Application {
-            func: $func,
-            arg: $arg,
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_prod {
-    ($($fields:pat),* $(,)?) => {
-        &$crate::nst::Term::ProductRow($crate::prod!($($fields,)*))
-    };
-    () => {
-        &$crate::nst::Term::ProductRow($crate::prod!())
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_sum {
-    ($field:pat) => {
-        &$crate::nst::Term::SumRow($crate::sum!($field))
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_dot {
-    ($base:pat, $field:pat) => {
-        &$crate::nst::Term::FieldAccess {
-            base: $base,
-            field: $crate::span_of!($field),
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_match {
-    ($($cases:pat),+ $(,)?) => {
-        &$crate::nst::Term::Match { cases: $crate::separated!($($cases),+), .. }
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_toplvl {
-    ($mod_:pat, $item:pat) => {
-        &$crate::nst::Term::TopLevelRef($crate::span_of!(($mod_, $item)))
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_item {
-    ($mod_:pat, $item:pat) => {
-        &$crate::nst::Term::ItemRef($crate::span_of!(($mod_, $item)))
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_var {
-    ($var:pat) => {
-        &$crate::nst::Term::VariableRef($crate::span_of!($var))
-    };
-}
-
-#[macro_export]
-macro_rules! nterm_paren {
-    ($term:pat) => {
-        &$crate::nst::Term::Parenthesized { term: $term, .. }
-    };
-}
-
-#[macro_export]
-macro_rules! nitem_effect {
-    ($name:pat, $($ops:pat),* $(,)?) => {
-        $crate::nst::Item::Effect {
-            name: $crate::span_of!($name),
-            ops: &[$($ops),*],
-            ..
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! nitem_term {
-    ($name:pat, $value:pat) => {
-        $crate::nst::Item::Term {
-            name: $crate::span_of!($name),
-            value: $value,
-            ..
-        }
-    };
-    ($name:pat, $type_:pat, $value:pat) => {
-        $crate::nst::Item::Term {
-            name: $crate::span_of!($name),
-            annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
-            value: $value,
-            ..
-        }
-    };
-}
+//pub use indexed::{Term, Pattern, Item, NstIndxAlloc, AllocItem  };
+/*pub use indexed::{
+        Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
+        Separated, SumRow, Type, TypeAnnotation, TypeRow,
+};*/
