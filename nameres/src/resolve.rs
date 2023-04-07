@@ -5,14 +5,17 @@ use crate::{
     ops::{IdOps, InsertResult},
 };
 use aiahr_core::{
-    cst::{self, Annotation, Constraint, CstModule, Field, IdField, Quantifier},
+    cst::{
+        indexed::{self as cst, CstIndxAlloc},
+        Annotation, Field, IdField, Quantifier,
+    },
     diagnostic::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
     },
     id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
-    indexed::IdxAlloc,
+    indexed::{HasArenaRef, IdxAlloc},
     nst::{self, AllocItem, NstIndxAlloc},
     option::Transpose,
     span::{Span, SpanOf, Spanned},
@@ -24,11 +27,28 @@ const TERM_KINDS: NameKinds = NameKinds::EFFECT_OP
     .union(NameKinds::ITEM)
     .union(NameKinds::VAR);
 
+pub(crate) struct NameResCtx<'a, 'b, 'c, E> {
+    cst_alloc: &'b CstIndxAlloc,
+    arena: &'a Bump,
+    alloc: &'b mut NstIndxAlloc,
+    names: &'b mut Names<'c, 'a>,
+    errors: &'b mut E,
+}
+
+impl<'b, E> NameResCtx<'_, 'b, '_, E> {
+    fn view<T>(&self, idx: Idx<T>) -> &'b T
+    where
+        CstIndxAlloc: HasArenaRef<T>,
+    {
+        &self.cst_alloc.arena()[idx]
+    }
+}
+
 impl<'a, E> NameResCtx<'a, '_, '_, E> {
     // Tries to map the given function over the elements of `separated`, returning all errors.
     fn resolve_separated<A, B, F>(
         &mut self,
-        separated: &cst::Separated<'_, A>,
+        separated: &cst::Separated<A>,
         f: F,
     ) -> Option<nst::Separated<B>>
     where
@@ -52,7 +72,7 @@ impl<'a, E> NameResCtx<'a, '_, '_, E> {
     // Tries to map the given function over the targets of `prod`.
     fn resolve_product_row<A, B, F>(
         &mut self,
-        prod: &cst::ProductRow<'_, A>,
+        prod: &cst::ProductRow<A>,
         f: F,
     ) -> Option<nst::ProductRow<B>>
     where
@@ -155,13 +175,6 @@ where
         }
     }
     Err(suggestions)
-}
-
-pub(crate) struct NameResCtx<'a, 'b, 'c, E> {
-    arena: &'a Bump,
-    alloc: &'b mut NstIndxAlloc,
-    names: &'b mut Names<'c, 'a>,
-    errors: &'b mut E,
 }
 
 impl<'a, E> NameResCtx<'a, '_, '_, E>
@@ -276,7 +289,7 @@ where
     // Resolves a type-level row.
     fn resolve_row<C, D, F>(
         &mut self,
-        row: &cst::Row<'_, Ident, C>,
+        row: &cst::Row<Ident, C>,
         mut f: F,
     ) -> Option<nst::Row<TyVarId, D>>
     where
@@ -313,9 +326,9 @@ where
     /// Resolves an Aiahr type.
     pub fn resolve_type(
         &mut self,
-        type_: &cst::Type<'_, Ident>,
+        type_: Idx<cst::Type<Ident>>,
     ) -> Option<Idx<nst::Type<TyVarId>>> {
-        let type_ = match type_ {
+        let type_ = match self.view(type_) {
             cst::Type::Named(var) => nst::Type::Named(self.resolve_type_symbol(*var)?),
             cst::Type::Sum {
                 langle,
@@ -333,7 +346,8 @@ where
             } => nst::Type::Product {
                 lbrace: *lbrace,
                 fields: fields
-                    .map(|fields| self.resolve_type_row(&fields))
+                    .as_ref()
+                    .map(|fields| self.resolve_type_row(fields))
                     .transpose()?,
                 rbrace: *rbrace,
             },
@@ -342,8 +356,8 @@ where
                 arrow,
                 codomain,
             } => {
-                let domain = self.resolve_type(domain);
-                let codomain = self.resolve_type(codomain);
+                let domain = self.resolve_type(*domain);
+                let codomain = self.resolve_type(*codomain);
                 nst::Type::Function {
                     domain: domain?,
                     arrow: *arrow,
@@ -352,7 +366,7 @@ where
             }
             cst::Type::Parenthesized { lpar, type_, rpar } => nst::Type::Parenthesized {
                 lpar: *lpar,
-                type_: self.resolve_type(type_)?,
+                type_: self.resolve_type(*type_)?,
                 rpar: *rpar,
             },
         };
@@ -360,22 +374,19 @@ where
     }
 
     // Resolves a row of types.
-    fn resolve_type_row(&mut self, row: &cst::TypeRow<'_, Ident>) -> Option<nst::TypeRow<TyVarId>> {
+    fn resolve_type_row(&mut self, row: &cst::TypeRow<Ident>) -> Option<nst::TypeRow<TyVarId>> {
         self.resolve_row(row, |me, field| {
-            resolve_id_field(field, |ty| me.resolve_type(ty))
+            resolve_id_field(field, |ty| me.resolve_type(*ty))
         })
     }
 
     // Resolves a row atom.
-    fn resolve_row_atom(
-        &mut self,
-        atom: &cst::RowAtom<'_, Ident>,
-    ) -> Option<nst::RowAtom<TyVarId>> {
+    fn resolve_row_atom(&mut self, atom: &cst::RowAtom<Ident>) -> Option<nst::RowAtom<TyVarId>> {
         Some(match atom {
             cst::RowAtom::Concrete { lpar, fields, rpar } => nst::RowAtom::Concrete {
                 lpar: *lpar,
                 fields: self.resolve_separated(fields, |me, field| {
-                    resolve_id_field(field, |ty| me.resolve_type(ty))
+                    resolve_id_field(field, |ty| me.resolve_type(*ty))
                 })?,
                 rpar: *rpar,
             },
@@ -386,10 +397,10 @@ where
     // Resolves a type constraint.
     fn resolve_constraint(
         &mut self,
-        constraint: &cst::Constraint<'_, Ident>,
+        constraint: &cst::Constraint<Ident>,
     ) -> Option<nst::Constraint<TyVarId>> {
         Some(match constraint {
-            Constraint::RowSum {
+            cst::Constraint::RowSum {
                 lhs,
                 plus,
                 rhs,
@@ -413,7 +424,7 @@ where
     // Resolves a set of quantifiers.
     fn resolve_qualifiers(
         &mut self,
-        qualifiers: &cst::Qualifiers<'_, Ident>,
+        qualifiers: &cst::Qualifiers<Ident>,
     ) -> Option<nst::Qualifiers<TyVarId>> {
         Some(nst::Qualifiers {
             constraints: self.resolve_separated(&qualifiers.constraints, |me, constraint| {
@@ -433,10 +444,7 @@ where
     }
 
     /// Resolves a polymorphic type.
-    pub fn resolve_scheme(
-        &mut self,
-        scheme: &cst::Scheme<'_, Ident>,
-    ) -> Option<nst::Scheme<TyVarId>> {
+    pub fn resolve_scheme(&mut self, scheme: &cst::Scheme<Ident>) -> Option<nst::Scheme<TyVarId>> {
         self.subscope(|scope| {
             let quantifiers = scheme
                 .quantifiers
@@ -445,7 +453,8 @@ where
                 .collect();
             let qualifiers = scheme
                 .qualifiers
-                .map(|quals| scope.resolve_qualifiers(&quals))
+                .as_ref()
+                .map(|quals| scope.resolve_qualifiers(quals))
                 .transpose();
             let type_ = scope.resolve_type(scheme.type_);
             Some(nst::Scheme {
@@ -459,6 +468,7 @@ where
     fn subscope<A>(&mut self, body: impl FnOnce(&mut NameResCtx<'a, '_, '_, E>) -> A) -> A {
         self.names.subscope(|names| {
             let mut ctx = NameResCtx {
+                cst_alloc: self.cst_alloc,
                 arena: self.arena,
                 alloc: self.alloc,
                 errors: self.errors,
@@ -475,13 +485,13 @@ where
     /// Resolves the given pattern, accumulating bindings into `names`.
     ///
     /// Note that this currently cannot return `None`, although it can emit errors.
-    pub fn resolve_pattern(&mut self, pattern: &cst::Pattern<'_>) -> Option<Idx<nst::Pattern>> {
-        let pat = match pattern {
+    pub fn resolve_pattern(&mut self, pattern: Idx<cst::Pattern>) -> Option<Idx<nst::Pattern>> {
+        let pat = match self.view(pattern) {
             cst::Pattern::ProductRow(pr) => nst::Pattern::ProductRow(
-                self.resolve_product_row(pr, |me, target| me.resolve_pattern(target))?,
+                self.resolve_product_row(pr, |me, target| me.resolve_pattern(*target))?,
             ),
             cst::Pattern::SumRow(sr) => {
-                nst::Pattern::SumRow(resolve_sum_row(sr, |target| self.resolve_pattern(target))?)
+                nst::Pattern::SumRow(resolve_sum_row(sr, |target| self.resolve_pattern(*target))?)
             }
             cst::Pattern::Whole(var) => nst::Pattern::Whole(self.insert_var(*var)),
         };
@@ -491,7 +501,7 @@ where
     // Resolves a type annotation.
     fn resolve_type_annotation(
         &mut self,
-        annotation: &cst::TypeAnnotation<'_, Ident>,
+        annotation: &cst::TypeAnnotation<Ident>,
     ) -> Option<nst::TypeAnnotation<TyVarId>> {
         Some(Annotation {
             colon: annotation.colon,
@@ -502,28 +512,32 @@ where
     // Resolves a scheme annotation.
     fn resolve_scheme_annotation(
         &mut self,
-        annotation: &cst::SchemeAnnotation<'_, Ident>,
+        annotation: &cst::SchemeAnnotation<Ident>,
     ) -> Option<nst::SchemeAnnotation<TyVarId>> {
         Some(Annotation {
             colon: annotation.colon,
-            type_: self.resolve_scheme(annotation.type_)?,
+            type_: self.resolve_scheme(&annotation.type_)?,
         })
+    }
+
+    fn span_of(&self, term: Idx<cst::Term>) -> Span {
+        self.view(term).spanned(self.cst_alloc).span()
     }
 
     // Resolves nested `DotAccess` terms.
     fn resolve_nested_dots(
         &mut self,
-        base: &cst::Term<'_>,
+        base: Idx<cst::Term>,
         dot: Span,
         field: SpanOf<Ident>,
     ) -> Option<DotResolution> {
-        Some(match base {
+        Some(match self.view(base) {
             // (base2 . field2) . field
             cst::Term::DotAccess {
                 base: base2,
                 dot: dot2,
                 field: field2,
-            } => match self.resolve_nested_dots(base2, *dot2, *field2)? {
+            } => match self.resolve_nested_dots(*base2, *dot2, *field2)? {
                 // m . field
                 DotResolution::Module(m) => {
                     self.resolve_symbol_in(m, field, |name| Ok(DotResolution::from(name)))?
@@ -533,14 +547,14 @@ where
                 })?,
                 DotResolution::EffectOp(_, _, _) => {
                     self.errors.add(NameResolutionError::WrongKind {
-                        expr: base.span(),
+                        expr: self.span_of(base),
                         actual: NameKind::EffectOp,
                         expected: !NameKinds::EFFECT_OP,
                     });
                     return None;
                 }
                 DotResolution::Item(m, i) => DotResolution::FieldAccess {
-                    base: self.mk_term(nst::Term::ItemRef(base.span().of((m, i)))),
+                    base: self.mk_term(nst::Term::ItemRef(self.span_of(base).of((m, i)))),
                     dot,
                     field,
                 },
@@ -561,17 +575,19 @@ where
             },
             // n . field
             cst::Term::SymbolRef(n) => {
-                match self.resolve_symbol(*n, |name| match name {
+                let base_span = self.span_of(base);
+                let module_or_term = self.resolve_symbol(*n, |name| match name {
                     Name::Module(m) => Ok(ModuleOr::Module(m)),
                     Name::Item(m, i) => {
-                        Ok(ModuleOr::Value(nst::Term::ItemRef(base.span().of((m, i)))))
+                        Ok(ModuleOr::Value(nst::Term::ItemRef(base_span.of((m, i)))))
                     }
-                    Name::Var(v) => Ok(ModuleOr::Value(nst::Term::VariableRef(base.span().of(v)))),
+                    Name::Var(v) => Ok(ModuleOr::Value(nst::Term::VariableRef(base_span.of(v)))),
                     _ => Err(RejectionReason::WrongKind {
                         actual: name.kind(),
                         expected: NameKinds::MODULE | TERM_KINDS,
                     }),
-                })? {
+                })?;
+                match module_or_term {
                     ModuleOr::Module(m) => {
                         self.resolve_symbol_in(m, field, |name| Ok(DotResolution::from(name)))?
                     }
@@ -596,8 +612,8 @@ where
     }
 
     /// Resolves the given term.
-    pub fn resolve_term(&mut self, term: &cst::Term<'_>) -> Option<Idx<nst::Term>> {
-        let term = match term {
+    pub fn resolve_term(&mut self, term: Idx<cst::Term>) -> Option<Idx<nst::Term>> {
+        let term = match self.view(term) {
             cst::Term::Binding {
                 var,
                 annotation,
@@ -606,13 +622,13 @@ where
                 semi,
                 expr,
             } => {
-                let value = self.resolve_term(value);
+                let value = self.resolve_term(*value);
                 self.subscope(|ctx| {
                     let var = ctx.insert_var(*var);
                     let annotation = annotation
                         .map(|annotation| ctx.resolve_type_annotation(&annotation))
                         .transpose();
-                    let expr = ctx.resolve_term(expr);
+                    let expr = ctx.resolve_term(*expr);
 
                     Some(nst::Term::Binding {
                         var,
@@ -630,8 +646,8 @@ where
                 do_,
                 expr,
             } => {
-                let handler = self.resolve_term(handler);
-                let expr = self.resolve_term(expr);
+                let handler = self.resolve_term(*handler);
+                let expr = self.resolve_term(*expr);
                 nst::Term::Handle {
                     with: *with,
                     handler: handler?,
@@ -650,7 +666,7 @@ where
                 let annotation = annotation
                     .map(|annotation| scope.resolve_type_annotation(&annotation))
                     .transpose();
-                let body = scope.resolve_term(body);
+                let body = scope.resolve_term(*body);
                 Some(nst::Term::Abstraction {
                     lbar: *lbar,
                     arg,
@@ -665,8 +681,8 @@ where
                 arg,
                 rpar,
             } => {
-                let func = self.resolve_term(func);
-                let arg = self.resolve_term(arg);
+                let func = self.resolve_term(*func);
+                let arg = self.resolve_term(*arg);
                 nst::Term::Application {
                     func: func?,
                     lpar: *lpar,
@@ -675,16 +691,16 @@ where
                 }
             }
             cst::Term::ProductRow(pr) => nst::Term::ProductRow(
-                self.resolve_product_row(pr, |me, target| me.resolve_term(target))?,
+                self.resolve_product_row(pr, |me, target| me.resolve_term(*target))?,
             ),
             cst::Term::SumRow(sr) => {
-                nst::Term::SumRow(resolve_sum_row(sr, |target| self.resolve_term(target))?)
+                nst::Term::SumRow(resolve_sum_row(sr, |target| self.resolve_term(*target))?)
             }
-            t @ cst::Term::DotAccess { base, dot, field } => {
-                match self.resolve_nested_dots(base, *dot, *field)? {
+            cst::Term::DotAccess { base, dot, field } => {
+                match self.resolve_nested_dots(*base, *dot, *field)? {
                     DotResolution::Module(_) => {
                         self.errors.add(NameResolutionError::WrongKind {
-                            expr: t.span(),
+                            expr: self.span_of(term),
                             actual: NameKind::Module,
                             expected: TERM_KINDS,
                         });
@@ -692,16 +708,16 @@ where
                     }
                     DotResolution::Effect(_, _) => {
                         self.errors.add(NameResolutionError::WrongKind {
-                            expr: t.span(),
+                            expr: self.span_of(term),
                             actual: NameKind::Effect,
                             expected: TERM_KINDS,
                         });
                         return None;
                     }
                     DotResolution::EffectOp(m, e, o) => {
-                        nst::Term::EffectOpRef(t.span().of((m, e, o)))
+                        nst::Term::EffectOpRef(self.span_of(term).of((m, e, o)))
                     }
-                    DotResolution::Item(m, i) => nst::Term::ItemRef(t.span().of((m, i))),
+                    DotResolution::Item(m, i) => nst::Term::ItemRef(self.span_of(term).of((m, i))),
                     DotResolution::FieldAccess { base, dot, field } => {
                         nst::Term::FieldAccess { base, dot, field }
                     }
@@ -738,7 +754,7 @@ where
             })?,
             cst::Term::Parenthesized { lpar, term, rpar } => nst::Term::Parenthesized {
                 lpar: *lpar,
-                term: self.resolve_term(term)?,
+                term: self.resolve_term(*term)?,
                 rpar: *rpar,
             },
         };
@@ -749,7 +765,7 @@ where
     fn resolve_effect_op(
         &mut self,
         opid: EffectOpId,
-        op: &cst::EffectOp<'_, Ident, Ident>,
+        op: &cst::EffectOp<Ident, Ident>,
     ) -> Option<nst::EffectOp<EffectOpId, TyVarId>> {
         Some(nst::EffectOp {
             name: op.name.span().of(opid),
@@ -766,7 +782,7 @@ where
         effect: Span,
         name: SpanOf<Ident>,
         lbrace: Span,
-        ops: &[cst::EffectOp<'_, Ident, Ident>],
+        ops: &[cst::EffectOp<Ident, Ident>],
         rbrace: Span,
     ) -> Option<nst::Item> {
         Some(nst::Item::Effect {
@@ -791,14 +807,14 @@ where
         &mut self,
         id: ItemId,
         name: SpanOf<Ident>,
-        annotation: Option<cst::SchemeAnnotation<'_, Ident>>,
+        annotation: Option<&cst::SchemeAnnotation<Ident>>,
         eq: Span,
-        value: &cst::Term<'_>,
+        value: Idx<cst::Term>,
     ) -> Option<nst::Item> {
         Some(nst::Item::Term {
             name: name.span().of(id),
             annotation: annotation
-                .map(|annotation| self.resolve_scheme_annotation(&annotation))
+                .map(|annotation| self.resolve_scheme_annotation(annotation))
                 .transpose()?,
             eq,
             value: self.resolve_term(value)?,
@@ -816,7 +832,7 @@ pub struct ModuleResolution<I = nst::AllocItem> {
 /// Resolves the given module.
 pub fn resolve_module<'a, 'b: 'a, E>(
     arena: &'a Bump,
-    module: CstModule<'b>,
+    module: &cst::CstModule,
     base: BaseNames<'_, 'a>,
     errors: &mut E,
 ) -> ModuleResolution
@@ -827,10 +843,10 @@ where
     let resolved_items = base
         .iter()
         .zip(module.items.iter())
-        .map(|(name, item)| match (name, item) {
+        .map(|(name, item)| match (&name, &item) {
             (
                 ModuleName::Effect(e),
-                &cst::Item::Effect {
+                cst::Item::Effect {
                     effect,
                     name,
                     lbrace,
@@ -840,17 +856,26 @@ where
             ) => {
                 let mut alloc = NstIndxAlloc::default();
                 let mut ctx = NameResCtx {
+                    cst_alloc: &module.indices,
                     arena,
                     errors,
                     alloc: &mut alloc,
                     names: &mut names,
                 };
-                ctx.resolve_effect(base.me(), *e, effect, name, lbrace, ops, rbrace)
-                    .map(|item| AllocItem { alloc, item })
+                ctx.resolve_effect(
+                    base.me(),
+                    *e,
+                    *effect,
+                    *name,
+                    *lbrace,
+                    ops.as_slice(),
+                    *rbrace,
+                )
+                .map(|item| AllocItem { alloc, item })
             }
             (
                 ModuleName::Item(i),
-                &cst::Item::Term {
+                cst::Item::Term {
                     name,
                     annotation,
                     eq,
@@ -859,12 +884,13 @@ where
             ) => {
                 let mut alloc = NstIndxAlloc::default();
                 let mut ctx = NameResCtx {
+                    cst_alloc: &module.indices,
                     arena,
                     errors,
                     alloc: &mut alloc,
                     names: &mut names,
                 };
-                ctx.resolve_term_item(*i, name, annotation, eq, value)
+                ctx.resolve_term_item(*i, *name, annotation.as_ref(), *eq, *value)
                     .map(|item| AllocItem { alloc, item })
             }
             _ => panic!(

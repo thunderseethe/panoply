@@ -140,7 +140,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
     let base = BaseBuilder::new()
         .add_slice(ref_cst_module.items, &mut errors)
         .build(&arena, mod_id, &modules, &mut module_names);
-    let mod_resolution = resolve_module(&arena, ref_cst_module, base, &mut errors);
+    let mod_resolution = resolve_module(&arena, cst_module, base, &mut errors);
 
     let salsa_resolution = SalsaModuleResolution {
         local_ids: mod_resolution.locals,

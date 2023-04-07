@@ -11,6 +11,7 @@ pub mod indexed {
 
     use std::fmt::Debug;
     use std::iter::FusedIterator;
+    use std::ops::Index;
 
     use bumpalo::Bump;
     use la_arena::{Arena, Idx};
@@ -55,6 +56,16 @@ pub mod indexed {
     impl HasArenaMut<Term> for CstIndxAlloc {
         fn arena_mut(&mut self) -> &mut Arena<Term> {
             &mut self.terms
+        }
+    }
+    impl<T> Index<Idx<T>> for CstIndxAlloc
+    where
+        Self: HasArenaRef<T>,
+    {
+        type Output = T;
+
+        fn index(&self, index: Idx<T>) -> &Self::Output {
+            &self.arena()[index]
         }
     }
 
@@ -338,6 +349,39 @@ pub mod indexed {
             term: Idx<Self>,
             rpar: Span,
         },
+    }
+    impl Term {
+        pub fn spanned<'a>(&'a self, arenas: &'a CstIndxAlloc) -> SpanTerm<'a> {
+            SpanTerm { term: self, arenas }
+        }
+    }
+    pub struct SpanTerm<'a> {
+        term: &'a Term,
+        arenas: &'a CstIndxAlloc,
+    }
+    impl SpanTerm<'_> {
+        fn with_term(&self, term: Idx<Term>) -> Self {
+            Self {
+                term: &self.arenas[term],
+                arenas: self.arenas,
+            }
+        }
+    }
+    impl Spanned for SpanTerm<'_> {
+        fn span(&self) -> Span {
+            match self.term {
+                Term::Binding { var, expr, .. } => Span::join(var, &self.with_term(*expr)),
+                Term::Handle { with, expr, .. } => Span::join(with, &self.with_term(*expr)),
+                Term::Abstraction { lbar, body, .. } => Span::join(lbar, &self.with_term(*body)),
+                Term::Application { func, rpar, .. } => Span::join(&self.with_term(*func), rpar),
+                Term::ProductRow(p) => p.span(),
+                Term::SumRow(s) => s.span(),
+                Term::DotAccess { base, field, .. } => Span::join(&self.with_term(*base), field),
+                Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
+                Term::SymbolRef(v) => v.span(),
+                Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+            }
+        }
     }
 
     /// A top-level item in an Aiahr source file.
