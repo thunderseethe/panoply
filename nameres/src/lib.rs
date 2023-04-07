@@ -130,7 +130,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
     let mut ref_alloc = CstRefAlloc {
         arena: &arena,
         // TODO: Take this as a ref not an owned value
-        indices: cst_module.indices.clone(),
+        indices: &cst_module.indices,
     };
     let ref_cst_module = cst_module.ref_alloc(&mut ref_alloc);
 

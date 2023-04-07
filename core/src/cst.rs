@@ -18,7 +18,7 @@ pub mod indexed {
 
     use crate::ident::Ident;
     use crate::indexed::{
-        HasArenaMut, HasArenaRef, HasRefArena, IndexedAllocate, ReferenceAllocate,
+        HasArenaMut, HasArenaRef, HasRefArena, IdxAlloc, IndexedAllocate, ReferenceAllocate,
     };
     use crate::span::{Span, SpanOf, Spanned};
 
@@ -68,17 +68,30 @@ pub mod indexed {
             &self.arena()[index]
         }
     }
-
-    pub struct CstRefAlloc<'a> {
-        pub arena: &'a Bump,
-        pub indices: CstIndxAlloc,
+    impl<T> IdxAlloc<T> for CstIndxAlloc
+    where
+        Self: HasArenaMut<T>,
+    {
+        fn alloc(&mut self, value: T) -> Idx<T> {
+            self.arena_mut().alloc(value)
+        }
     }
-    impl<'a> HasRefArena<'a> for CstRefAlloc<'a> {
+
+    pub struct CstRefAlloc<'a, 'b> {
+        pub arena: &'a Bump,
+        pub indices: &'b CstIndxAlloc,
+    }
+    impl<'a, 'b> CstRefAlloc<'a, 'b> {
+        pub fn new(arena: &'a Bump, indices: &'b CstIndxAlloc) -> Self {
+            Self { arena, indices }
+        }
+    }
+    impl<'a> HasRefArena<'a> for CstRefAlloc<'a, '_> {
         fn ref_arena(&self) -> &'a Bump {
             self.arena
         }
     }
-    impl<T> HasArenaRef<T> for CstRefAlloc<'_>
+    impl<T> HasArenaRef<T> for CstRefAlloc<'_, '_>
     where
         CstIndxAlloc: HasArenaRef<T>,
     {

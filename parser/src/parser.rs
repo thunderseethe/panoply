@@ -1,26 +1,97 @@
 use aiahr_core::{
-    cst::{
-        Annotation, Constraint, CstModule, EffectOp, Field, IdField, Item, Pattern, ProductRow,
-        Qualifiers, Quantifier, Row, RowAtom, Scheme, Separated, SumRow, Term, Type,
-        TypeAnnotation,
-    },
+    cst::indexed as cst,
+    cst::{indexed::CstIndxAlloc, Annotation, Field, IdField, Quantifier, Term},
     diagnostic::parser::ParseErrors,
     ident::Ident,
+    indexed::IdxAlloc,
     loc::Loc,
     span::{Span, SpanOf, Spanned},
     token::Token,
 };
 use bumpalo::Bump;
 use chumsky::{
-    prelude::{choice, empty, end, just, recursive},
+    combinator::Map,
+    prelude::{choice, end, just, recursive},
     select, Parser, Stream,
 };
-
-use crate::expr::{infixr1, postfix, prefix};
+use la_arena::Idx;
 
 /// A trait alias for a cloneable parser for Aiahr syntax.
 pub trait AiahrParser<T>: Clone + Parser<Token, T, Error = ParseErrors> {}
 impl<T, A> AiahrParser<T> for A where A: Clone + Parser<Token, T, Error = ParseErrors> {}
+
+pub trait AiahrIdxParser<T>: AiahrParser<IdxState<T>> {}
+impl<T, A> AiahrIdxParser<T> for A where A: AiahrParser<IdxState<T>> {}
+
+pub enum StateM<S, T> {
+    /// A pure value that does not depend on S.
+    /// We don't need the state so don't allocate a closure
+    Pure(T),
+    /// A statefule operation that produces T
+    State(Box<dyn for<'a> FnOnce(&'a mut S) -> T>),
+}
+
+pub type IdxState<T> = StateM<CstIndxAlloc, T>;
+
+impl<S, T> StateM<S, T> {
+    pub(crate) fn apply(self, state: &mut S) -> T {
+        match self {
+            StateM::Pure(value) => value,
+            StateM::State(f) => f(state),
+        }
+    }
+}
+
+pub(crate) trait PureState<State, T> {
+    #[allow(clippy::type_complexity)]
+    fn pure_state(self) -> Map<Self, fn(T) -> StateM<State, T>, T>
+    where
+        Self: Sized;
+}
+
+impl<P, State, T> PureState<State, T> for P
+where
+    P: Parser<Token, T, Error = ParseErrors>,
+{
+    fn pure_state(self) -> Map<Self, fn(T) -> StateM<State, T>, T>
+    where
+        Self: Sized,
+    {
+        fn pure_st<S, T>(value: T) -> StateM<S, T> {
+            StateM::Pure(value)
+        }
+        self.map(pure_st)
+    }
+}
+
+pub(crate) trait ParserMapState<State, Input: 'static, T> {
+    #[allow(clippy::type_complexity)]
+    fn map_state<F: 'static>(
+        self,
+        f: F,
+    ) -> Map<Self, Box<dyn Fn(Input) -> StateM<State, T>>, Input>
+    where
+        Self: Sized,
+        F: Copy + FnMut(Input, &mut State) -> T + 'static;
+}
+impl<P, State, Input: 'static, T> ParserMapState<State, Input, T> for P
+where
+    P: Parser<Token, Input, Error = ParseErrors>,
+{
+    fn map_state<F: 'static>(
+        self,
+        mut f: F,
+    ) -> chumsky::combinator::Map<Self, Box<dyn Fn(Input) -> StateM<State, T>>, Input>
+    where
+        Self: Sized,
+        F: Copy + FnMut(Input, &mut State) -> T + 'static,
+    {
+        self.map(Box::new(move |inp| {
+            let fun: Box<dyn FnOnce(&mut State) -> T> = Box::new(move |state| f(inp, state));
+            StateM::State(fun)
+        }))
+    }
+}
 
 // Returns a spanned parser that matches just the given token and returns ().
 fn lit(token: Token) -> impl AiahrParser<Span> {
@@ -36,259 +107,298 @@ fn ident() -> impl AiahrParser<SpanOf<Ident>> {
     .map_with_span(|s, span: Span| span.of(s))
 }
 
-// Returns a parser for either `parser` or the empty string.
-fn option<T>(parser: impl AiahrParser<T>) -> impl AiahrParser<Option<T>> {
-    choice((parser.map(Some), empty().map(|_| None)))
-}
-
 // Returns a parser for one or more `T` values separated by `sep`, representing the sequence with
 // `Separated<T>`.
-fn separated<'a, T: 'a>(
-    arena: &'a Bump,
-    elem: impl AiahrParser<T>,
-    sep: impl AiahrParser<Span>,
-) -> impl AiahrParser<Separated<'a, T>> {
+fn separated<'a, T: 'static>(
+    elem: impl AiahrIdxParser<T> + 'a,
+    sep: impl AiahrParser<Span> + 'a,
+) -> impl AiahrIdxParser<cst::Separated<T>> + 'a {
     elem.clone()
         .then(sep.clone().then(elem).repeated())
-        .then(choice((sep.map(Some), empty().map(|_| None))))
-        .map(|((first, elems), comma)| Separated {
-            first,
-            elems: arena.alloc_slice_fill_iter(elems.into_iter()),
+        .then(sep.or_not())
+        .map_state(|((first, elems), comma), alloc| cst::Separated {
+            first: first.apply(alloc),
+            elems: elems
+                .into_iter()
+                .map(|(span, f)| (span, f.apply(alloc)))
+                .collect::<Vec<(Span, T)>>(),
             comma,
         })
+        .boxed()
 }
 
 // Returns a parser for a field with a label, separator, and target.
-fn field<L, T>(
-    label: impl AiahrParser<L>,
+fn field<'a, L: 'static, T: 'static>(
+    label: impl AiahrIdxParser<L> + 'a,
     sep: Token,
-    target: impl AiahrParser<T>,
-) -> impl AiahrParser<Field<L, T>> {
+    target: impl AiahrIdxParser<T> + 'a,
+) -> impl AiahrIdxParser<Field<L, T>> + 'a {
     label
         .then(lit(sep))
         .then(target)
-        .map(|((label, sep), target)| Field { label, sep, target })
+        .map_state(|((label, sep), target), alloc| Field {
+            label: label.apply(alloc),
+            sep,
+            target: target.apply(alloc),
+        })
+        .boxed()
 }
 
 // Returns a parser for a field with an identifier label, separator, and target.
-fn id_field<T>(sep: Token, target: impl AiahrParser<T>) -> impl AiahrParser<IdField<T>> {
-    field(ident(), sep, target)
+fn id_field<'a, T: 'static>(
+    sep: Token,
+    target: impl AiahrIdxParser<T> + 'a,
+) -> impl AiahrIdxParser<IdField<T>> + 'a {
+    field(ident().pure_state(), sep, target)
 }
 
 // Returns a parser for a product row with terms in `term`.
-fn product_row<'a, T: 'a>(
-    arena: &'a Bump,
-    term: impl AiahrParser<T>,
-) -> impl AiahrParser<ProductRow<'a, T>> {
+fn product_row<'a, T: 'static>(
+    term: impl AiahrIdxParser<T> + 'a,
+) -> impl AiahrIdxParser<cst::ProductRow<T>> + 'a {
     lit(Token::LBrace)
-        .then(option(separated(
-            arena,
-            id_field(Token::Equal, term),
-            lit(Token::Comma),
-        )))
+        .then(separated(id_field(Token::Equal, term), lit(Token::Comma)).or_not())
         .then(lit(Token::RBrace))
-        .map(|((lbrace, fields), rbrace)| ProductRow {
+        .map_state(|((lbrace, fields), rbrace), alloc| cst::ProductRow {
             lbrace,
-            fields,
+            fields: fields.map(|fields| fields.apply(alloc)),
             rbrace,
         })
+        .boxed()
 }
 
 // Returns a parser for a sum row with terms in `term`.
-fn sum_row<T>(term: impl AiahrParser<T>) -> impl AiahrParser<SumRow<T>> {
+fn sum_row<'a, T: 'static>(
+    term: impl AiahrIdxParser<T> + 'a,
+) -> impl AiahrIdxParser<cst::SumRow<T>> + 'a {
     lit(Token::LAngle)
         .then(id_field(Token::Equal, term))
         .then(lit(Token::RAngle))
-        .map(|((langle, field), rangle)| SumRow {
+        .map_state(|((langle, field), rangle), state| cst::SumRow {
             langle,
-            field,
+            field: field.apply(state),
             rangle,
         })
+        .boxed()
 }
 
 // Returns a parser for a non-empty row of `C` in an explicit type.
-fn row<'a, C: 'a>(
-    arena: &'a Bump,
-    field: impl AiahrParser<C>,
-) -> impl AiahrParser<Row<'a, Ident, C>> {
-    let concrete = separated(arena, field, lit(Token::Comma));
-    let variables = separated(arena, ident(), lit(Token::Plus));
+fn row<'a, C: 'static>(
+    field: impl AiahrIdxParser<C> + 'a,
+) -> impl AiahrIdxParser<cst::Row<Ident, C>> + 'a {
+    let concrete = separated(field, lit(Token::Comma));
+    let variables = separated(ident().pure_state(), lit(Token::Plus));
     choice((
         concrete
-            .clone()
-            .then(option(lit(Token::VerticalBar).then(variables.clone())))
-            .map(|(concrete, maybe_vars)| match maybe_vars {
-                Some((vbar, variables)) => Row::Mixed {
-                    concrete,
+            .then(lit(Token::VerticalBar).then(variables.clone()).or_not())
+            .map_state(|(concrete, maybe_vars), alloc| match maybe_vars {
+                Some((vbar, variables)) => cst::Row::Mixed {
+                    concrete: concrete.apply(alloc),
                     vbar,
-                    variables,
+                    variables: variables.apply(alloc),
                 },
-                None => Row::Concrete(concrete),
+                None => cst::Row::Concrete(concrete.apply(alloc)),
             }),
-        variables.map(Row::Variable),
+        variables.map_state(|vars, alloc| cst::Row::Variable(vars.apply(alloc))),
     ))
+    .boxed()
 }
 
 /// Returns a parser for an Aiahr (mono-)type.
-pub fn type_(arena: &Bump) -> impl AiahrParser<&Type<'_, Ident>> {
+pub fn type_() -> impl AiahrIdxParser<Idx<cst::Type<Ident>>> {
     recursive(|type_| {
-        let type_row = row(arena, id_field(Token::Colon, type_.clone()));
+        let type_row = row(id_field(Token::Colon, type_.clone())).boxed();
 
         // Named type.
-        let named = ident().map(|n| arena.alloc(Type::Named(n)) as &_);
+        let named =
+            ident().map_state(|n, alloc: &mut CstIndxAlloc| alloc.alloc(cst::Type::Named(n)));
 
         // Sum type.
         let sum = lit(Token::LAngle)
             .then(type_row.clone())
             .then(lit(Token::RAngle))
-            .map(|((langle, variants), rangle)| {
-                arena.alloc(Type::Sum {
+            .map_state(|((langle, variants), rangle), alloc: &mut CstIndxAlloc| {
+                let variants = variants.apply(alloc);
+                alloc.alloc(cst::Type::Sum {
                     langle,
                     variants,
                     rangle,
-                }) as &_
+                })
             });
 
         // Product type.
         let prod = lit(Token::LBrace)
-            .then(option(type_row))
+            .then(type_row.or_not())
             .then(lit(Token::RBrace))
-            .map(|((lbrace, fields), rbrace)| {
-                arena.alloc(Type::Product {
+            .map_state(|((lbrace, fields), rbrace), alloc: &mut CstIndxAlloc| {
+                let fields = fields.map(|fields| fields.apply(alloc));
+                alloc.alloc(cst::Type::Product {
                     lbrace,
                     fields,
                     rbrace,
-                }) as &_
+                })
             });
 
         // Parenthesized type.
-        let paren =
-            lit(Token::LParen)
-                .then(type_)
-                .then(lit(Token::RParen))
-                .map(|((lpar, type_), rpar)| {
-                    arena.alloc(Type::Parenthesized { lpar, type_, rpar }) as &_
-                });
+        let paren = lit(Token::LParen)
+            .then(type_)
+            .then(lit(Token::RParen))
+            .map_state(|((lpar, type_), rpar), alloc: &mut CstIndxAlloc| {
+                let type_ = type_.apply(alloc);
+                alloc.alloc(cst::Type::Parenthesized { lpar, type_, rpar })
+            });
 
         // Function type.
-        infixr1(
-            choice((named, sum, prod, paren)),
-            lit(Token::SmallArrow),
-            |domain, arrow, codomain| {
-                arena.alloc(Type::Function {
-                    domain,
-                    arrow,
-                    codomain,
-                }) as &_
-            },
-        )
+        let atom = choice((named, sum, prod, paren)).boxed();
+        atom.clone()
+            .then(lit(Token::SmallArrow))
+            .repeated()
+            .then(atom)
+            .map_state(move |(los, r), alloc: &mut CstIndxAlloc| {
+                los.into_iter()
+                    .rfold(r.apply(alloc), |codomain, (domain, arrow)| {
+                        let domain = domain.apply(alloc);
+                        alloc.alloc(cst::Type::Function {
+                            domain,
+                            arrow,
+                            codomain,
+                        })
+                    })
+            })
+            .boxed()
     })
 }
 
 // Returns a parser for a row type expression.
-fn row_atom(arena: &Bump) -> impl AiahrParser<RowAtom<'_, Ident>> {
+fn row_atom() -> impl AiahrIdxParser<cst::RowAtom<Ident>> {
     choice((
         lit(Token::LParen)
             .then(separated(
-                arena,
-                id_field(Token::Colon, type_(arena)),
+                id_field(Token::Colon, type_()),
                 lit(Token::Comma),
             ))
             .then(lit(Token::RParen))
-            .map(|((lpar, fields), rpar)| RowAtom::Concrete { lpar, fields, rpar }),
-        ident().map(RowAtom::Variable),
+            .map_state(|((lpar, fields), rpar), alloc| cst::RowAtom::Concrete {
+                lpar,
+                fields: fields.apply(alloc),
+                rpar,
+            }),
+        ident().map(cst::RowAtom::Variable).pure_state(),
     ))
+    .boxed()
 }
 
 // Returns a parser for a type constraint.
-fn constraint(arena: &Bump) -> impl AiahrParser<Constraint<'_, Ident>> {
-    let row = row_atom(arena);
-    row.clone()
+fn constraint() -> impl AiahrIdxParser<cst::Constraint<Ident>> {
+    row_atom()
         .then(lit(Token::Plus))
-        .then(row.clone())
+        .then(row_atom())
         .then(lit(Token::Equal))
-        .then(row)
-        .map(|((((lhs, plus), rhs), eq), goal)| Constraint::RowSum {
-            lhs,
-            plus,
-            rhs,
-            eq,
-            goal,
-        })
+        .then(row_atom())
+        .map_state(
+            |((((lhs, plus), rhs), eq), goal), alloc| cst::Constraint::RowSum {
+                lhs: lhs.apply(alloc),
+                plus,
+                rhs: rhs.apply(alloc),
+                eq,
+                goal: goal.apply(alloc),
+            },
+        )
+        .boxed()
 }
 
 /// Returns a parser for a scheme (polymorphic type).
-pub fn scheme(arena: &Bump) -> impl AiahrParser<&Scheme<'_, Ident>> {
+pub fn scheme() -> impl AiahrIdxParser<cst::Scheme<Ident>> {
     lit(Token::KwForall)
         .then(ident())
         .then(lit(Token::Dot))
         .map(|((forall, var), dot)| Quantifier { forall, var, dot })
         .repeated()
-        .map(|qs| arena.alloc_slice_fill_iter(qs.into_iter()) as &[_])
-        .then(option(
-            separated(arena, constraint(arena), lit(Token::Comma))
+        .then(
+            separated(constraint(), lit(Token::Comma))
                 .then(lit(Token::BigArrow))
-                .map(|(constraints, arrow)| Qualifiers { constraints, arrow }),
-        ))
-        .then(type_(arena))
-        .map(|((quantifiers, qualifiers), type_)| {
-            arena.alloc(Scheme {
-                quantifiers,
-                qualifiers,
-                type_,
-            }) as &_
+                .map_state(|(constraints, arrow), alloc| cst::Qualifiers {
+                    constraints: constraints.apply(alloc),
+                    arrow,
+                })
+                .or_not(),
+        )
+        .then(type_())
+        .map_state(|((quantifiers, qualifiers), type_), alloc| cst::Scheme {
+            quantifiers,
+            qualifiers: qualifiers.map(|qual| qual.apply(alloc)),
+            type_: type_.apply(alloc),
         })
+        .boxed()
 }
 
 // Returns a parser for an effect operation.
-fn effect_op(arena: &Bump) -> impl AiahrParser<EffectOp<'_, Ident, Ident>> {
+fn effect_op() -> impl AiahrIdxParser<cst::EffectOp<Ident, Ident>> {
     ident()
         .then(lit(Token::Colon))
-        .then(type_(arena))
-        .map(|((name, colon), type_)| EffectOp { name, colon, type_ })
+        .then(type_())
+        .map_state(|((name, colon), type_), alloc| cst::EffectOp {
+            name,
+            colon,
+            type_: type_.apply(alloc),
+        })
+        .boxed()
 }
 
 /// Returns a parser for an annotation with a given type syntax.
-pub fn annotation<T>(ty: impl AiahrParser<T>) -> impl AiahrParser<Annotation<T>> {
+pub fn annotation<'a, T: 'static>(
+    ty: impl AiahrIdxParser<T> + 'a,
+) -> impl AiahrIdxParser<Annotation<T>> + 'a {
     lit(Token::Colon)
         .then(ty)
-        .map(|(colon, type_)| Annotation { colon, type_ })
+        .map_state(|(colon, type_), alloc| {
+            let type_ = type_.apply(alloc);
+            Annotation { colon, type_ }
+        })
+        .boxed()
 }
 
 /// Returns a parser for a pattern.
-pub fn pattern(arena: &Bump) -> impl AiahrParser<&Pattern<'_>> {
+pub fn pattern() -> impl AiahrIdxParser<Idx<cst::Pattern>> {
     recursive(|pattern| {
         choice((
-            product_row(arena, pattern.clone()).map(|p| arena.alloc(Pattern::ProductRow(p)) as &_),
-            sum_row(pattern.clone()).map(|s| arena.alloc(Pattern::SumRow(s)) as &_),
-            ident().map(|v| arena.alloc(Pattern::Whole(v)) as &_),
+            product_row(pattern.clone()).map_state(|p, alloc: &mut CstIndxAlloc| {
+                let p = p.apply(alloc);
+                alloc.alloc(cst::Pattern::ProductRow(p))
+            }),
+            sum_row(pattern.clone()).map_state(|s, alloc: &mut CstIndxAlloc| {
+                let s = s.apply(alloc);
+                alloc.alloc(cst::Pattern::SumRow(s))
+            }),
+            ident().map_state(|v, alloc: &mut CstIndxAlloc| alloc.alloc(cst::Pattern::Whole(v))),
         ))
+        .boxed()
     })
 }
 
-enum TermPrefix<'a> {
+enum TermPrefix {
     Binding {
         var: SpanOf<Ident>,
-        annotation: Option<TypeAnnotation<'a, Ident>>,
+        annotation: Option<cst::TypeAnnotation<Ident>>,
         eq: Span,
-        value: &'a Term<'a>,
+        value: Idx<cst::Term>,
         semi: Span,
     },
     Handle {
         with: Span,
-        handler: &'a Term<'a>,
+        handler: Idx<cst::Term>,
         do_: Span,
     },
     Abstraction {
         lbar: Span,
         arg: SpanOf<Ident>,
-        annotation: Option<TypeAnnotation<'a, Ident>>,
+        annotation: Option<cst::TypeAnnotation<Ident>>,
         rbar: Span,
     },
 }
 
-impl<'a> TermPrefix<'a> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a>) -> &'a Term<'a> {
+impl TermPrefix {
+    fn apply(self, arena: &mut CstIndxAlloc, t: Idx<cst::Term>) -> Idx<cst::Term> {
         match self {
             TermPrefix::Binding {
                 var,
@@ -296,7 +406,7 @@ impl<'a> TermPrefix<'a> {
                 eq,
                 value,
                 semi,
-            } => arena.alloc(Term::Binding {
+            } => arena.alloc(cst::Term::Binding {
                 var,
                 annotation,
                 eq,
@@ -304,7 +414,7 @@ impl<'a> TermPrefix<'a> {
                 semi,
                 expr: t,
             }),
-            TermPrefix::Handle { with, handler, do_ } => arena.alloc(Term::Handle {
+            TermPrefix::Handle { with, handler, do_ } => arena.alloc(cst::Term::Handle {
                 with,
                 handler,
                 do_,
@@ -315,7 +425,7 @@ impl<'a> TermPrefix<'a> {
                 arg,
                 annotation,
                 rbar,
-            } => arena.alloc(Term::Abstraction {
+            } => arena.alloc(cst::Term::Abstraction {
                 lbar,
                 arg,
                 annotation,
@@ -326,10 +436,10 @@ impl<'a> TermPrefix<'a> {
     }
 }
 
-enum TermPostfix<'a> {
+enum TermPostfix {
     Application {
         lpar: Span,
-        arg: &'a Term<'a>,
+        arg: Idx<cst::Term>,
         rpar: Span,
     },
     DotAccess {
@@ -338,16 +448,16 @@ enum TermPostfix<'a> {
     },
 }
 
-impl<'a> TermPostfix<'a> {
-    fn apply(self, arena: &'a Bump, t: &'a Term<'a>) -> &'a Term<'a> {
+impl TermPostfix {
+    fn apply(self, arena: &mut CstIndxAlloc, t: Idx<cst::Term>) -> Idx<cst::Term> {
         match self {
-            TermPostfix::Application { lpar, arg, rpar } => arena.alloc(Term::Application {
+            TermPostfix::Application { lpar, arg, rpar } => arena.alloc(cst::Term::Application {
                 func: t,
                 lpar,
                 arg,
                 rpar,
             }),
-            TermPostfix::DotAccess { dot, field } => arena.alloc(Term::DotAccess {
+            TermPostfix::DotAccess { dot, field } => arena.alloc(cst::Term::DotAccess {
                 base: t,
                 dot,
                 field,
@@ -357,7 +467,7 @@ impl<'a> TermPostfix<'a> {
 }
 
 /// Returns a parser for terms.
-pub fn term(arena: &Bump) -> impl Parser<Token, &Term<'_>, Error = ParseErrors> {
+pub fn term() -> impl AiahrIdxParser<Idx<cst::Term>> {
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -365,135 +475,163 @@ pub fn term(arena: &Bump) -> impl Parser<Token, &Term<'_>, Error = ParseErrors> 
             .then(lit(Token::RParen));
 
         // Product row
-        let prod = product_row(arena, term.clone()).map(|p| arena.alloc(Term::ProductRow(p)) as &_);
+        let prod = product_row(term.clone()).map_state(|p, alloc: &mut CstIndxAlloc| {
+            let p = p.apply(alloc);
+            alloc.alloc(cst::Term::ProductRow(p))
+        });
 
-        let sum = sum_row(term.clone()).map(|s| arena.alloc(Term::SumRow(s)) as &_);
+        let sum = sum_row(term.clone()).map_state(|s, alloc: &mut CstIndxAlloc| {
+            let s = s.apply(alloc);
+            alloc.alloc(cst::Term::SumRow(s))
+        });
 
         let match_ = lit(Token::KwMatch)
             .then(lit(Token::LAngle))
             .then(separated(
-                arena,
-                field(pattern(arena), Token::BigArrow, term.clone()),
+                field(pattern(), Token::BigArrow, term.clone()),
                 lit(Token::Comma),
             ))
             .then(lit(Token::RAngle))
-            .map(|(((match_, langle), cases), rangle)| {
-                arena.alloc(Term::Match {
-                    match_,
-                    langle,
-                    cases,
-                    rangle,
-                }) as &_
-            });
+            .map_state(
+                |(((match_, langle), cases), rangle), alloc: &mut CstIndxAlloc| {
+                    let cases = cases.apply(alloc);
+                    alloc.alloc(cst::Term::Match {
+                        match_,
+                        langle,
+                        cases,
+                        rangle,
+                    })
+                },
+            );
 
         let atom = choice((
             // variable
-            ident().map(|s| arena.alloc(Term::SymbolRef(s)) as &_),
+            ident().map_state(|s, alloc: &mut CstIndxAlloc| alloc.alloc(cst::Term::SymbolRef(s))),
             // explicit term precedence
-            paren_term.clone().map(|((lpar, t), rpar)| {
-                arena.alloc(Term::Parenthesized {
-                    lpar,
-                    term: t,
-                    rpar,
-                }) as &_
+            paren_term.clone().map_state(|((lpar, t), rpar), alloc| {
+                let term = t.apply(alloc);
+                alloc.alloc(cst::Term::Parenthesized { lpar, term, rpar })
             }),
             prod,
             sum,
             match_,
-        ));
+        ))
+        .boxed();
 
         // Function application
-        let app =
-            paren_term.map(|((lpar, arg), rpar)| TermPostfix::Application { lpar, arg, rpar });
+        let app = paren_term.map_state(|((lpar, arg), rpar), alloc| {
+            let arg = arg.apply(alloc);
+            TermPostfix::Application { lpar, arg, rpar }
+        });
 
         // Field access
         let access = lit(Token::Dot)
             .then(ident())
-            .map(|(dot, field)| TermPostfix::DotAccess { dot, field });
+            .map(|(dot, field)| TermPostfix::DotAccess { dot, field })
+            .pure_state();
 
-        let app_access = postfix(atom.clone(), choice((app, access)), |t, p| {
-            p.apply(arena, t)
-        });
+        let app_access = atom
+            .clone()
+            .then(choice((app, access)).repeated())
+            .map_state(|(l, rs), alloc| {
+                rs.into_iter()
+                    .fold(l.apply(alloc), |l, r| r.apply(alloc).apply(alloc, l))
+            });
 
         // Local variable binding
         let local_bind = ident()
-            .then(option(annotation(type_(arena))))
+            .then(annotation(type_()).or_not())
             .then(lit(Token::Equal))
             .then(term.clone())
             .then(lit(Token::Semicolon))
-            .map(
-                |((((var, annotation), eq), val), semi)| TermPrefix::Binding {
+            .map_state(|((((var, annotation), eq), val), semi), alloc| {
+                let annotation = annotation.map(|ann| ann.apply(alloc));
+                let value = val.apply(alloc);
+                TermPrefix::Binding {
                     var,
                     annotation,
                     eq,
-                    value: val,
+                    value,
                     semi,
-                },
-            );
+                }
+            });
 
         let handle = lit(Token::KwWith)
             .then(term)
             .then(lit(Token::KwDo))
-            .map(|((with, handler), do_)| TermPrefix::Handle { with, handler, do_ });
+            .map_state(|((with, handler), do_), alloc| {
+                let handler = handler.apply(alloc);
+                TermPrefix::Handle { with, handler, do_ }
+            });
 
         // Lambda abstraction
         let closure = lit(Token::VerticalBar)
             .then(ident())
-            .then(option(annotation(type_(arena))))
+            .then(annotation(type_()).or_not())
             .then(lit(Token::VerticalBar))
-            .map(
-                |(((lbar, var), annotation), rbar)| TermPrefix::Abstraction {
+            .map_state(|(((lbar, var), annotation), rbar), alloc| {
+                let annotation = annotation.map(|ann| ann.apply(alloc));
+                TermPrefix::Abstraction {
                     lbar,
                     arg: var,
                     annotation,
                     rbar,
-                },
-            );
+                }
+            });
 
         // Term parser
         // We need to construct our parse tree here bottom to get associativity of bindings and
         // closures correct. However we're recursive descent, so we only go top-down. To remedy
         // this we construct a series of prefixes top-down that are applied to the final expression
         // in right associative order.
-
-        prefix(choice((local_bind, handle, closure)), app_access, |p, t| {
-            p.apply(arena, t)
-        })
+        choice((local_bind, handle, closure))
+            .repeated()
+            .then(app_access)
+            .map_state(|(ls, r), alloc| {
+                ls.into_iter()
+                    .rfold(r.apply(alloc), |r, l| l.apply(alloc).apply(alloc, r))
+            })
+            .boxed()
     })
 }
 
 /// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
-pub fn aiahr_parser(arena: &Bump) -> impl Parser<Token, CstModule<'_>, Error = ParseErrors> {
+pub fn aiahr_parser() -> impl Parser<Token, IdxState<Vec<cst::Item>>, Error = ParseErrors> {
     let effect = lit(Token::KwEffect)
         .then(ident())
         .then(lit(Token::LBrace))
-        .then(effect_op(arena).repeated())
+        .then(effect_op().repeated())
         .then(lit(Token::RBrace))
-        .map(|((((effect, name), lbrace), ops), rbrace)| Item::Effect {
-            effect,
-            name,
-            lbrace,
-            ops: arena.alloc_slice_fill_iter(ops),
-            rbrace,
-        });
+        .map_state(
+            |((((effect, name), lbrace), ops), rbrace), alloc| cst::Item::Effect {
+                effect,
+                name,
+                lbrace,
+                ops: ops.into_iter().map(|op| op.apply(alloc)).collect(),
+                rbrace,
+            },
+        );
 
     let term = ident()
-        .then(option(annotation(scheme(arena))))
+        .then(annotation(scheme()).or_not())
         .then(lit(Token::Equal))
-        .then(term(arena))
-        .map(|(((name, annotation), eq), value)| Item::Term {
-            name,
-            annotation,
-            eq,
-            value,
+        .then(term())
+        .map_state(|(((name, annotation), eq), value), alloc| {
+            let annotation = annotation.map(|ann| ann.apply(alloc));
+            let value = value.apply(alloc);
+            cst::Item::Term {
+                name,
+                annotation,
+                eq,
+                value,
+            }
         });
 
     choice((effect, term))
         .repeated()
-        .map(|items| CstModule {
-            items: arena.alloc_slice_fill_iter(items.into_iter()) as &[_],
-        })
+        .map_state(|items, alloc| items.into_iter().map(|item| item.apply(alloc)).collect())
         .then_ignore(end())
+        .boxed()
 }
 
 /// Converts lexer output to a stream readable by a Chumsky parser.
@@ -515,17 +653,27 @@ where
 pub mod test_utils {
     use super::*;
     use crate::lexer::aiahr_lexer;
+    use aiahr_core::cst::indexed::CstRefAlloc;
     use aiahr_core::id::ModuleId;
+    use aiahr_core::indexed::ReferenceAllocate;
 
     const MOD: ModuleId = ModuleId(0);
 
-    pub fn parse_term<'a>(db: &'a dyn crate::Db, arena: &'a Bump, input: &str) -> &'a Term<'a> {
+    pub fn parse_term<'a>(
+        db: &'a dyn crate::Db,
+        arena: &'a Bump,
+        input: &str,
+    ) -> Result<&'a Term<'a>, Vec<ParseErrors>> {
         let (tokens, eoi) = aiahr_lexer(db)
             .lex(MOD, input)
             .expect("Lexing input failed");
-        term(arena)
-            .parse(to_stream(tokens, eoi))
-            .expect("Parsing input failed")
+
+        term().parse(to_stream(tokens, eoi)).map(|idx_term| {
+            let mut idx_alloc = CstIndxAlloc::default();
+            let idx_term = idx_term.apply(&mut idx_alloc);
+            let mut ref_alloc = CstRefAlloc::new(arena, &idx_alloc);
+            idx_term.ref_alloc(&mut ref_alloc)
+        })
     }
 }
 
@@ -534,12 +682,16 @@ mod tests {
     use std::path::PathBuf;
 
     use aiahr_core::{
-        cst::{Scheme, Term, Type},
+        cst::{
+            indexed::{CstIndxAlloc, CstRefAlloc},
+            Scheme, Term, Type,
+        },
         ct_rowsum, field,
         file::SourceFile,
         id::ModuleId,
         id_field,
         ident::Ident,
+        indexed::ReferenceAllocate,
         pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed, row_variable, rwx_concrete,
         rwx_variable, scheme, term_abs, term_app, term_dot, term_local, term_match, term_paren,
         term_prod, term_sum, term_sym, term_with, type_func, type_named, type_par, type_prod,
@@ -554,7 +706,7 @@ mod tests {
 
     use crate::{lexer::aiahr_lexer, Db};
 
-    use super::{scheme, term, to_stream, type_};
+    use super::{scheme, to_stream, type_};
 
     #[derive(Default)]
     #[salsa::db(crate::Jar, aiahr_core::Jar)]
@@ -571,10 +723,14 @@ mod tests {
         input: &str,
     ) -> &'a Type<'a, Ident> {
         let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
-        type_(arena)
+        let mut alloc = CstIndxAlloc::default();
+        let ty = type_()
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
+            .apply(&mut alloc);
+        let mut ref_alloc = CstRefAlloc::new(arena, &alloc);
+        ty.ref_alloc(&mut ref_alloc)
     }
 
     fn parse_scheme_unwrap<'a>(
@@ -583,18 +739,18 @@ mod tests {
         input: &str,
     ) -> &'a Scheme<'a, Ident> {
         let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
-        scheme(arena)
+        let mut alloc = CstIndxAlloc::default();
+        let scheme = scheme()
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
+            .apply(&mut alloc);
+        let mut ref_alloc = CstRefAlloc::new(arena, &alloc);
+        scheme.ref_alloc(&mut ref_alloc)
     }
 
     fn parse_term_unwrap<'a>(db: &'a dyn crate::Db, arena: &'a Bump, input: &str) -> &'a Term<'a> {
-        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
-        term(arena)
-            .then_ignore(end())
-            .parse(to_stream(tokens, eoi))
-            .unwrap()
+        super::test_utils::parse_term(db, arena, input).unwrap()
     }
 
     #[test]
@@ -746,8 +902,12 @@ mod tests {
     fn test_undelimted_closure_fails() {
         let db = TestDatabase::default();
         let arena = Bump::new();
-        let (tokens, eoi) = aiahr_lexer(&db).lex(MOD, "|x whoops(x)").unwrap();
-        assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
+        //let (tokens, eoi) = aiahr_lexer(&db).lex(MOD, "|x whoops(x)").unwrap();
+        assert_matches!(
+            super::test_utils::parse_term(&db, &arena, "|x whoops(x)"),
+            Err(..)
+        );
+        //assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 
     #[test]
@@ -978,152 +1138,152 @@ mod tests {
             "effect foo { foo: a -> a }".to_string(),
         );
         let module = db.parse_module(file);
-        let expect = expect![["
-CstModule {
-    indices: CstIndxAlloc {
-        types: Arena {
-            len: 3,
-            data: [
-                Named(
-                    SpanOf {
-                        start: Loc {
-                            byte: 18,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 2,
+        let expect = expect![[r#"
+            CstModule {
+                indices: CstIndxAlloc {
+                    types: Arena {
+                        len: 3,
+                        data: [
+                            Named(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 23,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 2,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 24,
+                                        ..
+                                    },
+                                },
+                            ),
+                            Named(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 18,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 2,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 19,
+                                        ..
+                                    },
+                                },
+                            ),
+                            Function {
+                                domain: Idx::<Ident>>(1),
+                                arrow: Span {
+                                    start: Loc {
+                                        byte: 20,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 22,
+                                        ..
+                                    },
+                                },
+                                codomain: Idx::<Ident>>(0),
                             },
-                        ),
-                        end: Loc {
-                            byte: 19,
-                            ..
-                        },
+                        ],
                     },
-                ),
-                Named(
-                    SpanOf {
-                        start: Loc {
-                            byte: 23,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 2,
+                    terms: Arena {
+                        len: 0,
+                        data: [],
+                    },
+                    pats: Arena {
+                        len: 0,
+                        data: [],
+                    },
+                },
+                items: [
+                    Effect {
+                        effect: Span {
+                            start: Loc {
+                                byte: 0,
+                                ..
                             },
-                        ),
-                        end: Loc {
-                            byte: 24,
-                            ..
-                        },
-                    },
-                ),
-                Function {
-                    domain: Idx::<Ident>>(0),
-                    arrow: Span {
-                        start: Loc {
-                            byte: 20,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 22,
-                            ..
-                        },
-                    },
-                    codomain: Idx::<Ident>>(1),
-                },
-            ],
-        },
-        terms: Arena {
-            len: 0,
-            data: [],
-        },
-        pats: Arena {
-            len: 0,
-            data: [],
-        },
-    },
-    items: [
-        Effect {
-            effect: Span {
-                start: Loc {
-                    byte: 0,
-                    ..
-                },
-                end: Loc {
-                    byte: 6,
-                    ..
-                },
-            },
-            name: SpanOf {
-                start: Loc {
-                    byte: 7,
-                    ..
-                },
-                value: Ident(
-                    Id {
-                        value: 1,
-                    },
-                ),
-                end: Loc {
-                    byte: 10,
-                    ..
-                },
-            },
-            lbrace: Span {
-                start: Loc {
-                    byte: 11,
-                    ..
-                },
-                end: Loc {
-                    byte: 12,
-                    ..
-                },
-            },
-            ops: [
-                EffectOp {
-                    name: SpanOf {
-                        start: Loc {
-                            byte: 13,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 1,
+                            end: Loc {
+                                byte: 6,
+                                ..
                             },
-                        ),
-                        end: Loc {
-                            byte: 16,
-                            ..
+                        },
+                        name: SpanOf {
+                            start: Loc {
+                                byte: 7,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 1,
+                                },
+                            ),
+                            end: Loc {
+                                byte: 10,
+                                ..
+                            },
+                        },
+                        lbrace: Span {
+                            start: Loc {
+                                byte: 11,
+                                ..
+                            },
+                            end: Loc {
+                                byte: 12,
+                                ..
+                            },
+                        },
+                        ops: [
+                            EffectOp {
+                                name: SpanOf {
+                                    start: Loc {
+                                        byte: 13,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 1,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 16,
+                                        ..
+                                    },
+                                },
+                                colon: Span {
+                                    start: Loc {
+                                        byte: 16,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 17,
+                                        ..
+                                    },
+                                },
+                                type_: Idx::<Ident>>(2),
+                            },
+                        ],
+                        rbrace: Span {
+                            start: Loc {
+                                byte: 25,
+                                ..
+                            },
+                            end: Loc {
+                                byte: 26,
+                                ..
+                            },
                         },
                     },
-                    colon: Span {
-                        start: Loc {
-                            byte: 16,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 17,
-                            ..
-                        },
-                    },
-                    type_: Idx::<Ident>>(2),
-                },
-            ],
-            rbrace: Span {
-                start: Loc {
-                    byte: 25,
-                    ..
-                },
-                end: Loc {
-                    byte: 26,
-                    ..
-                },
-            },
-        },
-    ],
-}
-"]];
+                ],
+            }
+        "#]];
         expect.assert_debug_eq(module.data(&db));
     }
 
@@ -1137,261 +1297,261 @@ CstModule {
             "x = a\ny = |b| b\nz = t = x; t".to_string(),
         );
         let module = db.parse_module(file);
-        let expect = expect![["
-CstModule {
-    indices: CstIndxAlloc {
-        types: Arena {
-            len: 0,
-            data: [],
-        },
-        terms: Arena {
-            len: 6,
-            data: [
-                SymbolRef(
-                    SpanOf {
-                        start: Loc {
-                            byte: 4,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 2,
+        let expect = expect![[r#"
+            CstModule {
+                indices: CstIndxAlloc {
+                    types: Arena {
+                        len: 0,
+                        data: [],
+                    },
+                    terms: Arena {
+                        len: 6,
+                        data: [
+                            SymbolRef(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 4,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 2,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 5,
+                                        ..
+                                    },
+                                },
+                            ),
+                            SymbolRef(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 14,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 4,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 15,
+                                        ..
+                                    },
+                                },
+                            ),
+                            Abstraction {
+                                lbar: Span {
+                                    start: Loc {
+                                        byte: 10,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 11,
+                                        ..
+                                    },
+                                },
+                                arg: SpanOf {
+                                    start: Loc {
+                                        byte: 11,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 4,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 12,
+                                        ..
+                                    },
+                                },
+                                annotation: None,
+                                rbar: Span {
+                                    start: Loc {
+                                        byte: 12,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 13,
+                                        ..
+                                    },
+                                },
+                                body: Idx::<Term>(1),
                             },
-                        ),
-                        end: Loc {
-                            byte: 5,
-                            ..
-                        },
-                    },
-                ),
-                SymbolRef(
-                    SpanOf {
-                        start: Loc {
-                            byte: 14,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 4,
+                            SymbolRef(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 27,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 6,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 28,
+                                        ..
+                                    },
+                                },
+                            ),
+                            SymbolRef(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 24,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 1,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 25,
+                                        ..
+                                    },
+                                },
+                            ),
+                            Binding {
+                                var: SpanOf {
+                                    start: Loc {
+                                        byte: 20,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 6,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 21,
+                                        ..
+                                    },
+                                },
+                                annotation: None,
+                                eq: Span {
+                                    start: Loc {
+                                        byte: 22,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 23,
+                                        ..
+                                    },
+                                },
+                                value: Idx::<Term>(4),
+                                semi: Span {
+                                    start: Loc {
+                                        byte: 25,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 26,
+                                        ..
+                                    },
+                                },
+                                expr: Idx::<Term>(3),
                             },
-                        ),
-                        end: Loc {
-                            byte: 15,
-                            ..
-                        },
+                        ],
                     },
-                ),
-                Abstraction {
-                    lbar: Span {
-                        start: Loc {
-                            byte: 10,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 11,
-                            ..
-                        },
+                    pats: Arena {
+                        len: 0,
+                        data: [],
                     },
-                    arg: SpanOf {
-                        start: Loc {
-                            byte: 11,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 4,
+                },
+                items: [
+                    Term {
+                        name: SpanOf {
+                            start: Loc {
+                                byte: 0,
+                                ..
                             },
-                        ),
-                        end: Loc {
-                            byte: 12,
-                            ..
-                        },
-                    },
-                    annotation: None,
-                    rbar: Span {
-                        start: Loc {
-                            byte: 12,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 13,
-                            ..
-                        },
-                    },
-                    body: Idx::<Term>(1),
-                },
-                SymbolRef(
-                    SpanOf {
-                        start: Loc {
-                            byte: 24,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 1,
+                            value: Ident(
+                                Id {
+                                    value: 1,
+                                },
+                            ),
+                            end: Loc {
+                                byte: 1,
+                                ..
                             },
-                        ),
-                        end: Loc {
-                            byte: 25,
-                            ..
                         },
-                    },
-                ),
-                SymbolRef(
-                    SpanOf {
-                        start: Loc {
-                            byte: 27,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 6,
+                        annotation: None,
+                        eq: Span {
+                            start: Loc {
+                                byte: 2,
+                                ..
                             },
-                        ),
-                        end: Loc {
-                            byte: 28,
-                            ..
-                        },
-                    },
-                ),
-                Binding {
-                    var: SpanOf {
-                        start: Loc {
-                            byte: 20,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 6,
+                            end: Loc {
+                                byte: 3,
+                                ..
                             },
-                        ),
-                        end: Loc {
-                            byte: 21,
-                            ..
                         },
+                        value: Idx::<Term>(0),
                     },
-                    annotation: None,
-                    eq: Span {
-                        start: Loc {
-                            byte: 22,
-                            ..
+                    Term {
+                        name: SpanOf {
+                            start: Loc {
+                                byte: 6,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 3,
+                                },
+                            ),
+                            end: Loc {
+                                byte: 7,
+                                ..
+                            },
                         },
-                        end: Loc {
-                            byte: 23,
-                            ..
+                        annotation: None,
+                        eq: Span {
+                            start: Loc {
+                                byte: 8,
+                                ..
+                            },
+                            end: Loc {
+                                byte: 9,
+                                ..
+                            },
                         },
+                        value: Idx::<Term>(2),
                     },
-                    value: Idx::<Term>(3),
-                    semi: Span {
-                        start: Loc {
-                            byte: 25,
-                            ..
+                    Term {
+                        name: SpanOf {
+                            start: Loc {
+                                byte: 16,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 5,
+                                },
+                            ),
+                            end: Loc {
+                                byte: 17,
+                                ..
+                            },
                         },
-                        end: Loc {
-                            byte: 26,
-                            ..
+                        annotation: None,
+                        eq: Span {
+                            start: Loc {
+                                byte: 18,
+                                ..
+                            },
+                            end: Loc {
+                                byte: 19,
+                                ..
+                            },
                         },
+                        value: Idx::<Term>(5),
                     },
-                    expr: Idx::<Term>(4),
-                },
-            ],
-        },
-        pats: Arena {
-            len: 0,
-            data: [],
-        },
-    },
-    items: [
-        Term {
-            name: SpanOf {
-                start: Loc {
-                    byte: 0,
-                    ..
-                },
-                value: Ident(
-                    Id {
-                        value: 1,
-                    },
-                ),
-                end: Loc {
-                    byte: 1,
-                    ..
-                },
-            },
-            annotation: None,
-            eq: Span {
-                start: Loc {
-                    byte: 2,
-                    ..
-                },
-                end: Loc {
-                    byte: 3,
-                    ..
-                },
-            },
-            value: Idx::<Term>(0),
-        },
-        Term {
-            name: SpanOf {
-                start: Loc {
-                    byte: 6,
-                    ..
-                },
-                value: Ident(
-                    Id {
-                        value: 3,
-                    },
-                ),
-                end: Loc {
-                    byte: 7,
-                    ..
-                },
-            },
-            annotation: None,
-            eq: Span {
-                start: Loc {
-                    byte: 8,
-                    ..
-                },
-                end: Loc {
-                    byte: 9,
-                    ..
-                },
-            },
-            value: Idx::<Term>(2),
-        },
-        Term {
-            name: SpanOf {
-                start: Loc {
-                    byte: 16,
-                    ..
-                },
-                value: Ident(
-                    Id {
-                        value: 5,
-                    },
-                ),
-                end: Loc {
-                    byte: 17,
-                    ..
-                },
-            },
-            annotation: None,
-            eq: Span {
-                start: Loc {
-                    byte: 18,
-                    ..
-                },
-                end: Loc {
-                    byte: 19,
-                    ..
-                },
-            },
-            value: Idx::<Term>(5),
-        },
-    ],
-}
-"]];
+                ],
+            }
+        "#]];
         expect.assert_debug_eq(module.data(&db));
     }
 
@@ -1405,254 +1565,33 @@ CstModule {
             "x: a = a\ny: forall b. b -> b = |b| b".to_string(),
         );
         let module = db.parse_module(file);
-        let expect = expect![["
-CstModule {
-    indices: CstIndxAlloc {
-        types: Arena {
-            len: 4,
-            data: [
-                Named(
-                    SpanOf {
-                        start: Loc {
-                            byte: 3,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 2,
-                            },
-                        ),
-                        end: Loc {
-                            byte: 4,
-                            ..
-                        },
-                    },
-                ),
-                Named(
-                    SpanOf {
-                        start: Loc {
-                            byte: 22,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 4,
-                            },
-                        ),
-                        end: Loc {
-                            byte: 23,
-                            ..
-                        },
-                    },
-                ),
-                Named(
-                    SpanOf {
-                        start: Loc {
-                            byte: 27,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 4,
-                            },
-                        ),
-                        end: Loc {
-                            byte: 28,
-                            ..
-                        },
-                    },
-                ),
-                Function {
-                    domain: Idx::<Ident>>(1),
-                    arrow: Span {
-                        start: Loc {
-                            byte: 24,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 26,
-                            ..
-                        },
-                    },
-                    codomain: Idx::<Ident>>(2),
-                },
-            ],
-        },
-        terms: Arena {
-            len: 3,
-            data: [
-                SymbolRef(
-                    SpanOf {
-                        start: Loc {
-                            byte: 7,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 2,
-                            },
-                        ),
-                        end: Loc {
-                            byte: 8,
-                            ..
-                        },
-                    },
-                ),
-                SymbolRef(
-                    SpanOf {
-                        start: Loc {
-                            byte: 35,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 4,
-                            },
-                        ),
-                        end: Loc {
-                            byte: 36,
-                            ..
-                        },
-                    },
-                ),
-                Abstraction {
-                    lbar: Span {
-                        start: Loc {
-                            byte: 31,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 32,
-                            ..
-                        },
-                    },
-                    arg: SpanOf {
-                        start: Loc {
-                            byte: 32,
-                            ..
-                        },
-                        value: Ident(
-                            Id {
-                                value: 4,
-                            },
-                        ),
-                        end: Loc {
-                            byte: 33,
-                            ..
-                        },
-                    },
-                    annotation: None,
-                    rbar: Span {
-                        start: Loc {
-                            byte: 33,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 34,
-                            ..
-                        },
-                    },
-                    body: Idx::<Term>(1),
-                },
-            ],
-        },
-        pats: Arena {
-            len: 0,
-            data: [],
-        },
-    },
-    items: [
-        Term {
-            name: SpanOf {
-                start: Loc {
-                    byte: 0,
-                    ..
-                },
-                value: Ident(
-                    Id {
-                        value: 1,
-                    },
-                ),
-                end: Loc {
-                    byte: 1,
-                    ..
-                },
-            },
-            annotation: Some(
-                Annotation {
-                    colon: Span {
-                        start: Loc {
-                            byte: 1,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 2,
-                            ..
-                        },
-                    },
-                    type_: Scheme {
-                        quantifiers: [],
-                        qualifiers: None,
-                        type_: Idx::<Ident>>(0),
-                    },
-                },
-            ),
-            eq: Span {
-                start: Loc {
-                    byte: 5,
-                    ..
-                },
-                end: Loc {
-                    byte: 6,
-                    ..
-                },
-            },
-            value: Idx::<Term>(0),
-        },
-        Term {
-            name: SpanOf {
-                start: Loc {
-                    byte: 9,
-                    ..
-                },
-                value: Ident(
-                    Id {
-                        value: 3,
-                    },
-                ),
-                end: Loc {
-                    byte: 10,
-                    ..
-                },
-            },
-            annotation: Some(
-                Annotation {
-                    colon: Span {
-                        start: Loc {
-                            byte: 10,
-                            ..
-                        },
-                        end: Loc {
-                            byte: 11,
-                            ..
-                        },
-                    },
-                    type_: Scheme {
-                        quantifiers: [
-                            Quantifier {
-                                forall: Span {
+        let expect = expect![[r#"
+            CstModule {
+                indices: CstIndxAlloc {
+                    types: Arena {
+                        len: 4,
+                        data: [
+                            Named(
+                                SpanOf {
                                     start: Loc {
-                                        byte: 12,
+                                        byte: 3,
                                         ..
                                     },
+                                    value: Ident(
+                                        Id {
+                                            value: 2,
+                                        },
+                                    ),
                                     end: Loc {
-                                        byte: 18,
+                                        byte: 4,
                                         ..
                                     },
                                 },
-                                var: SpanOf {
+                            ),
+                            Named(
+                                SpanOf {
                                     start: Loc {
-                                        byte: 19,
+                                        byte: 27,
                                         ..
                                     },
                                     value: Ident(
@@ -1661,42 +1600,263 @@ CstModule {
                                         },
                                     ),
                                     end: Loc {
-                                        byte: 20,
+                                        byte: 28,
                                         ..
                                     },
                                 },
-                                dot: Span {
+                            ),
+                            Named(
+                                SpanOf {
                                     start: Loc {
-                                        byte: 20,
+                                        byte: 22,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 4,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 23,
+                                        ..
+                                    },
+                                },
+                            ),
+                            Function {
+                                domain: Idx::<Ident>>(2),
+                                arrow: Span {
+                                    start: Loc {
+                                        byte: 24,
                                         ..
                                     },
                                     end: Loc {
-                                        byte: 21,
+                                        byte: 26,
                                         ..
                                     },
                                 },
+                                codomain: Idx::<Ident>>(1),
                             },
                         ],
-                        qualifiers: None,
-                        type_: Idx::<Ident>>(3),
+                    },
+                    terms: Arena {
+                        len: 3,
+                        data: [
+                            SymbolRef(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 7,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 2,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 8,
+                                        ..
+                                    },
+                                },
+                            ),
+                            SymbolRef(
+                                SpanOf {
+                                    start: Loc {
+                                        byte: 35,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 4,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 36,
+                                        ..
+                                    },
+                                },
+                            ),
+                            Abstraction {
+                                lbar: Span {
+                                    start: Loc {
+                                        byte: 31,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 32,
+                                        ..
+                                    },
+                                },
+                                arg: SpanOf {
+                                    start: Loc {
+                                        byte: 32,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 4,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        byte: 33,
+                                        ..
+                                    },
+                                },
+                                annotation: None,
+                                rbar: Span {
+                                    start: Loc {
+                                        byte: 33,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 34,
+                                        ..
+                                    },
+                                },
+                                body: Idx::<Term>(1),
+                            },
+                        ],
+                    },
+                    pats: Arena {
+                        len: 0,
+                        data: [],
                     },
                 },
-            ),
-            eq: Span {
-                start: Loc {
-                    byte: 29,
-                    ..
-                },
-                end: Loc {
-                    byte: 30,
-                    ..
-                },
-            },
-            value: Idx::<Term>(2),
-        },
-    ],
-}
-"]];
+                items: [
+                    Term {
+                        name: SpanOf {
+                            start: Loc {
+                                byte: 0,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 1,
+                                },
+                            ),
+                            end: Loc {
+                                byte: 1,
+                                ..
+                            },
+                        },
+                        annotation: Some(
+                            Annotation {
+                                colon: Span {
+                                    start: Loc {
+                                        byte: 1,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 2,
+                                        ..
+                                    },
+                                },
+                                type_: Scheme {
+                                    quantifiers: [],
+                                    qualifiers: None,
+                                    type_: Idx::<Ident>>(0),
+                                },
+                            },
+                        ),
+                        eq: Span {
+                            start: Loc {
+                                byte: 5,
+                                ..
+                            },
+                            end: Loc {
+                                byte: 6,
+                                ..
+                            },
+                        },
+                        value: Idx::<Term>(0),
+                    },
+                    Term {
+                        name: SpanOf {
+                            start: Loc {
+                                byte: 9,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 3,
+                                },
+                            ),
+                            end: Loc {
+                                byte: 10,
+                                ..
+                            },
+                        },
+                        annotation: Some(
+                            Annotation {
+                                colon: Span {
+                                    start: Loc {
+                                        byte: 10,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        byte: 11,
+                                        ..
+                                    },
+                                },
+                                type_: Scheme {
+                                    quantifiers: [
+                                        Quantifier {
+                                            forall: Span {
+                                                start: Loc {
+                                                    byte: 12,
+                                                    ..
+                                                },
+                                                end: Loc {
+                                                    byte: 18,
+                                                    ..
+                                                },
+                                            },
+                                            var: SpanOf {
+                                                start: Loc {
+                                                    byte: 19,
+                                                    ..
+                                                },
+                                                value: Ident(
+                                                    Id {
+                                                        value: 4,
+                                                    },
+                                                ),
+                                                end: Loc {
+                                                    byte: 20,
+                                                    ..
+                                                },
+                                            },
+                                            dot: Span {
+                                                start: Loc {
+                                                    byte: 20,
+                                                    ..
+                                                },
+                                                end: Loc {
+                                                    byte: 21,
+                                                    ..
+                                                },
+                                            },
+                                        },
+                                    ],
+                                    qualifiers: None,
+                                    type_: Idx::<Ident>>(3),
+                                },
+                            },
+                        ),
+                        eq: Span {
+                            start: Loc {
+                                byte: 29,
+                                ..
+                            },
+                            end: Loc {
+                                byte: 30,
+                                ..
+                            },
+                        },
+                        value: Idx::<Term>(2),
+                    },
+                ],
+            }
+        "#]];
         expect.assert_debug_eq(module.data(&db));
     }
 }

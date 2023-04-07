@@ -1,23 +1,5 @@
+#![allow(dead_code)]
 use chumsky::{Error, Parser};
-
-// Folds the prefixes `lefts` into the base expression `right` using `f`.
-fn prefold<L, R, I, C, F>(lefts: C, right: R, f: F) -> R
-where
-    I: DoubleEndedIterator<Item = L>,
-    C: IntoIterator<Item = L, IntoIter = I>,
-    F: Fn(L, R) -> R,
-{
-    lefts.into_iter().rfold(right, |r, l| f(l, r))
-}
-
-// Folds the postfixes `rights` into the base expression `left` using `f`.
-fn postfold<L, R, C, F>(left: L, rights: C, f: F) -> L
-where
-    C: IntoIterator<Item = R>,
-    F: Fn(L, R) -> L,
-{
-    rights.into_iter().fold(left, f)
-}
 
 // Folds the op-expression pairs `oprights` into the base expression `left` using `f`.
 fn inlfold<L, O, R, C, F>(left: L, oprights: C, f: F) -> L
@@ -52,9 +34,7 @@ where
     PR: Clone + Parser<I, R, Error = E>,
     F: Clone + Fn(L, R) -> R,
 {
-    left.repeated()
-        .then(right)
-        .map(move |(ls, r)| prefold(ls, r, f.clone()))
+    left.repeated().then(right).foldr(f)
 }
 
 // Returns a parser for the production `left ::= left right`, using `f` to fold each pair into a
@@ -71,8 +51,7 @@ where
     PR: Clone + Parser<I, R, Error = E>,
     F: Clone + Fn(L, R) -> L,
 {
-    left.then(right.repeated())
-        .map(move |(l, rs)| postfold(l, rs, f.clone()))
+    left.then(right.repeated()).foldl(f)
 }
 
 // Returns a parser for the production `left ::= left op right`, using `f` to fold each triple into
@@ -119,7 +98,6 @@ where
 
 // Returns a parser for the production `term ::= term op term`, using `f` to fold each triple into a
 // new expression left-associatively.
-#[allow(dead_code)]
 pub(crate) fn infixl1<I, T, O, E, PT, PO, F>(
     term: PT,
     op: PO,
@@ -149,7 +127,13 @@ where
     PO: Clone + Parser<I, O, Error = E>,
     F: Clone + Fn(T, O, T) -> T,
 {
-    infixr(term.clone(), op, term, f)
+    {
+        let left = term.clone();
+        left.then(op)
+            .repeated()
+            .then(term)
+            .map(move |(los, r)| inrfold(los, r, f.clone()))
+    }
 }
 
 #[cfg(test)]

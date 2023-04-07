@@ -1,12 +1,11 @@
 use aiahr_core::{
-    cst::indexed::CstModule,
+    cst::indexed::{CstIndxAlloc, CstModule},
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
     file::{SourceFile, SourceFileSet},
     id::ModuleId,
     modules::Module,
     Top,
 };
-use bumpalo::Bump;
 use chumsky::Parser;
 
 use crate::{
@@ -75,16 +74,18 @@ fn parse_module(db: &dyn Db, file: SourceFile) -> ParseModule {
         }
     };
 
-    let arena = Bump::new();
-    let parser = aiahr_parser(&arena);
-    let cst_module = parser
+    let cst_module = aiahr_parser()
         .parse(to_stream(tokens, eoi))
         .map_err(|errs| {
             for err in errs.into_iter().flat_map(|list| list.0.into_iter()) {
                 AiahrcErrors::push(db, AiahrcError::from(err))
             }
         })
-        .map(CstModule::from)
+        .map(|items| {
+            let mut indices = CstIndxAlloc::default();
+            let items = items.apply(&mut indices);
+            CstModule { items, indices }
+        })
         .unwrap_or_default();
 
     ParseModule::new(db, module, cst_module)
