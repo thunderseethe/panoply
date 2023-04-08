@@ -5,10 +5,7 @@ use crate::{
     ops::{IdOps, InsertResult},
 };
 use aiahr_core::{
-    cst::{
-        indexed::{self as cst, CstIndxAlloc},
-        Annotation, Field, IdField, Quantifier,
-    },
+    cst::{self, Annotation, CstIndxAlloc, Field, IdField},
     diagnostic::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
@@ -435,8 +432,11 @@ where
     }
 
     // Resolves a quantifier.
-    fn resolve_quantifier(&mut self, quantifier: &Quantifier<Ident>) -> Quantifier<TyVarId> {
-        Quantifier {
+    fn resolve_quantifier(
+        &mut self,
+        quantifier: &cst::Quantifier<Ident>,
+    ) -> cst::Quantifier<TyVarId> {
+        cst::Quantifier {
             forall: quantifier.forall,
             var: self.insert_ty_var(quantifier.var),
             dot: quantifier.dot,
@@ -909,14 +909,11 @@ mod tests {
 
     use aiahr_core::{
         diagnostic::nameres::{NameKind, NameResolutionError},
-        field,
         file::{SourceFile, SourceFileSet},
         id::ModuleId,
-        id_field,
         indexed::ReferenceAllocate,
-        quant, scheme,
         span::Span,
-        span_of, type_func, type_named, type_prod,
+        span_of,
     };
     use assert_matches::assert_matches;
     use bumpalo::Bump;
@@ -926,9 +923,10 @@ mod tests {
     use super::ModuleResolution;
 
     use aiahr_test::{
-        assert_ident_text_matches_name, nitem_term, npat_prod, npat_var, nst::NstRefAlloc,
-        nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match, nterm_prod,
-        nterm_sum, nterm_var, nterm_with,
+        assert_ident_text_matches_name, field, id_field, nitem_term, npat_prod, npat_var,
+        nst::NstRefAlloc, nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match,
+        nterm_prod, nterm_sum, nterm_var, nterm_with, quant, scheme, type_func, type_named,
+        type_prod,
     };
 
     #[derive(Default)]

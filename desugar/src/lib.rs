@@ -2,7 +2,7 @@ use std::ops::Not;
 
 use aiahr_core::ast::{self, AstModule, Direction};
 use aiahr_core::ast::{Ast, Item, SalsaItem, Term, Term::*};
-use aiahr_core::cst::{indexed as cst, Field};
+use aiahr_core::cst::{self, Field};
 use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::{module_of, Module};

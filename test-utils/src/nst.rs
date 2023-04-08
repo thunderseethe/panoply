@@ -1,9 +1,8 @@
+use aiahr_core::cst::Field;
 use bumpalo::Bump;
 use la_arena::{Arena, Idx};
 
-use aiahr_core::cst::{
-    EffectOp, Field, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation,
-};
+use crate::cst::{EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation};
 use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
 use aiahr_core::ident::Ident;
 use aiahr_core::indexed::{HasArenaRef, HasRefArena, ReferenceAllocate};
@@ -169,6 +168,80 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for TyVarId {
     }
 }
 
+impl<'a, 'b, T> ReferenceAllocate<'a, NstRefAlloc<'a, 'b>> for nst::Separated<T>
+where
+    T: ReferenceAllocate<'a, NstRefAlloc<'a, 'b>>,
+{
+    type Out = Separated<'a, T::Out>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, 'b>) -> Self::Out {
+        Separated {
+            first: self.first.ref_alloc(alloc),
+            elems: alloc.ref_arena().alloc_slice_fill_iter(
+                self.elems
+                    .iter()
+                    .map(|(span, t)| (*span, t.ref_alloc(alloc))),
+            ),
+            comma: self.comma,
+        }
+    }
+}
+
+use crate::cst::Row;
+
+impl<'a, 'b, V, C> ReferenceAllocate<'a, NstRefAlloc<'a, 'b>> for nst::Row<V, C>
+where
+    V: ReferenceAllocate<'a, NstRefAlloc<'a, 'b>>,
+    C: ReferenceAllocate<'a, NstRefAlloc<'a, 'b>>,
+{
+    type Out = Row<'a, V::Out, C::Out>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, 'b>) -> Self::Out {
+        match self {
+            nst::Row::Concrete(concrete) => Row::Concrete(concrete.ref_alloc(alloc)),
+            nst::Row::Variable(vars) => Row::Variable(vars.ref_alloc(alloc)),
+            nst::Row::Mixed {
+                concrete,
+                vbar,
+                variables,
+            } => Row::Mixed {
+                concrete: concrete.ref_alloc(alloc),
+                vbar: *vbar,
+                variables: variables.ref_alloc(alloc),
+            },
+        }
+    }
+}
+
+impl<'a, 'b, T> ReferenceAllocate<'a, NstRefAlloc<'a, 'b>> for nst::ProductRow<T>
+where
+    T: ReferenceAllocate<'a, NstRefAlloc<'a, 'b>>,
+{
+    type Out = ProductRow<'a, T::Out>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, 'b>) -> Self::Out {
+        ProductRow {
+            lbrace: self.lbrace,
+            fields: self.fields.ref_alloc(alloc),
+            rbrace: self.rbrace,
+        }
+    }
+}
+
+impl<'a, 'b, T: ReferenceAllocate<'a, NstRefAlloc<'a, 'b>>>
+    ReferenceAllocate<'a, NstRefAlloc<'a, 'b>> for nst::SumRow<T>
+{
+    type Out = SumRow<T::Out>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, 'b>) -> Self::Out {
+        SumRow {
+            langle: self.langle,
+            field: self.field.ref_alloc(alloc),
+            rangle: self.rangle,
+        }
+    }
+}
+
 impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for Idx<nst::Pattern> {
     type Out = &'a Pattern<'a>;
 
@@ -268,6 +341,126 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for Idx<nst::Term> {
     }
 }
 
+use crate::cst::Type;
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for Idx<nst::Type<TyVarId>> {
+    type Out = &'a Type<'a, TyVarId>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        let type_ = match alloc.arena()[*self].clone() {
+            nst::Type::Named(var) => Type::Named(var.ref_alloc(alloc)),
+            nst::Type::Sum {
+                langle,
+                variants,
+                rangle,
+            } => Type::Sum {
+                langle,
+                variants: variants.ref_alloc(alloc),
+                rangle,
+            },
+            nst::Type::Product {
+                lbrace,
+                fields,
+                rbrace,
+            } => Type::Product {
+                lbrace,
+                fields: fields.ref_alloc(alloc),
+                rbrace,
+            },
+            nst::Type::Function {
+                domain,
+                arrow,
+                codomain,
+            } => Type::Function {
+                domain: domain.ref_alloc(alloc),
+                arrow,
+                codomain: codomain.ref_alloc(alloc),
+            },
+            nst::Type::Parenthesized { lpar, type_, rpar } => Type::Parenthesized {
+                lpar,
+                type_: type_.ref_alloc(alloc),
+                rpar,
+            },
+        };
+        alloc.ref_arena().alloc(type_) as &_
+    }
+}
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::EffectOp<EffectOpId, TyVarId> {
+    type Out = EffectOp<'a, EffectOpId, TyVarId>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        EffectOp {
+            name: self.name.ref_alloc(alloc),
+            colon: self.colon,
+            type_: self.type_.ref_alloc(alloc),
+        }
+    }
+}
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::RowAtom<TyVarId> {
+    type Out = crate::cst::RowAtom<'a, TyVarId>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        match self {
+            nst::RowAtom::Concrete { lpar, fields, rpar } => crate::cst::RowAtom::Concrete {
+                lpar: *lpar,
+                fields: fields.ref_alloc(alloc),
+                rpar: *rpar,
+            },
+            nst::RowAtom::Variable(var) => crate::cst::RowAtom::Variable(var.ref_alloc(alloc)),
+        }
+    }
+}
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Constraint<TyVarId> {
+    type Out = crate::cst::Constraint<'a, TyVarId>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        match self {
+            nst::Constraint::RowSum {
+                lhs,
+                plus,
+                rhs,
+                eq,
+                goal,
+            } => crate::cst::Constraint::RowSum {
+                lhs: lhs.ref_alloc(alloc),
+                plus: *plus,
+                rhs: rhs.ref_alloc(alloc),
+                eq: *eq,
+                goal: goal.ref_alloc(alloc),
+            },
+        }
+    }
+}
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for aiahr_core::cst::Qualifiers<TyVarId> {
+    type Out = crate::cst::Qualifiers<'a, TyVarId>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        crate::cst::Qualifiers {
+            constraints: self.constraints.ref_alloc(alloc),
+            arrow: self.arrow,
+        }
+    }
+}
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Scheme<TyVarId> {
+    type Out = &'a crate::cst::Scheme<'a, TyVarId>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        let scheme = crate::cst::Scheme {
+            quantifiers: alloc
+                .ref_arena()
+                .alloc_slice_fill_iter(self.quantifiers.iter().map(|quant| quant.ref_alloc(alloc))),
+            qualifiers: self.qualifiers.as_ref().map(|qual| qual.ref_alloc(alloc)),
+            type_: self.type_.ref_alloc(alloc),
+        };
+        alloc.ref_arena().alloc(scheme)
+    }
+}
+
 impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Item {
     type Out = Item<'a>;
 
@@ -306,7 +499,7 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Item {
 #[macro_export]
 macro_rules! npat_prod {
     ($($fields:pat),* $(,)?) => {
-        &$crate::nst::Pattern::ProductRow(aiahr_core::prod!($($fields,)+))
+        &$crate::nst::Pattern::ProductRow($crate::prod!($($fields,)+))
     };
 }
 
@@ -337,7 +530,7 @@ macro_rules! nterm_local {
     ($var:pat, $type_:pat, $value:pat, $expr:pat) => {
         &$crate::nst::Term::Binding {
             var: aiahr_core::span_of!($var),
-            annotation: Some(aiahr_core::cst::TypeAnnotation { type_: $type_, .. }),
+            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             value: $value,
             expr: $expr,
             ..
@@ -368,7 +561,7 @@ macro_rules! nterm_abs {
     ($arg:pat, $type_:pat, $body:pat) => {
         &$crate::nst::Term::Abstraction {
             arg: aiahr_core::span_of!($arg),
-            annotation: Some(aiahr_core::cst::TypeAnnotation { type_: $type_, .. }),
+            annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             body: $body,
             ..
         }
@@ -389,17 +582,17 @@ macro_rules! nterm_app {
 #[macro_export]
 macro_rules! nterm_prod {
     ($($fields:pat),* $(,)?) => {
-        &$crate::nst::Term::ProductRow(aiahr_core::prod!($($fields,)*))
+        &$crate::nst::Term::ProductRow($crate::prod!($($fields,)*))
     };
     () => {
-        &$crate::nst::Term::ProductRow(aiahr_core::prod!())
+        &$crate::nst::Term::ProductRow($crate::prod!())
     };
 }
 
 #[macro_export]
 macro_rules! nterm_sum {
     ($field:pat) => {
-        &$crate::nst::Term::SumRow(aiahr_core::sum!($field))
+        &$crate::nst::Term::SumRow($crate::sum!($field))
     };
 }
 
@@ -417,7 +610,7 @@ macro_rules! nterm_dot {
 #[macro_export]
 macro_rules! nterm_match {
     ($($cases:pat),+ $(,)?) => {
-        &$crate::nst::Term::Match { cases: aiahr_core::separated!($($cases),+), .. }
+        &$crate::nst::Term::Match { cases: $crate::separated!($($cases),+), .. }
     };
 }
 
@@ -472,7 +665,7 @@ macro_rules! nitem_term {
     ($name:pat, $type_:pat, $value:pat) => {
         $crate::nst::Item::Term {
             name: aiahr_core::span_of!($name),
-            annotation: Some(aiahr_core::cst::SchemeAnnotation { type_: $type_, .. }),
+            annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
             ..
         }

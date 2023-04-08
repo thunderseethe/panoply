@@ -1,6 +1,5 @@
 use aiahr_core::{
-    cst::indexed as cst,
-    cst::{indexed::CstIndxAlloc, Annotation, Field, IdField, Quantifier, Term},
+    cst::{self, Annotation, CstIndxAlloc, Field, IdField},
     diagnostic::parser::ParseErrors,
     ident::Ident,
     indexed::IdxAlloc,
@@ -8,7 +7,6 @@ use aiahr_core::{
     span::{Span, SpanOf, Spanned},
     token::Token,
 };
-use bumpalo::Bump;
 use chumsky::{
     combinator::Map,
     prelude::{choice, end, just, recursive},
@@ -312,7 +310,7 @@ pub fn scheme() -> impl AiahrIdxParser<cst::Scheme<Ident>> {
     lit(Token::KwForall)
         .then(ident())
         .then(lit(Token::Dot))
-        .map(|((forall, var), dot)| Quantifier { forall, var, dot })
+        .map(|((forall, var), dot)| cst::Quantifier { forall, var, dot })
         .repeated()
         .then(
             separated(constraint(), lit(Token::Comma))
@@ -650,12 +648,39 @@ where
     )
 }
 
-pub mod test_utils {
-    use super::*;
-    use crate::lexer::aiahr_lexer;
-    use aiahr_core::cst::indexed::CstRefAlloc;
-    use aiahr_core::id::ModuleId;
-    use aiahr_core::indexed::ReferenceAllocate;
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use aiahr_core::cst::CstIndxAlloc;
+    use aiahr_core::{
+        diagnostic::parser::ParseErrors, file::SourceFile, id::ModuleId, ident::Ident,
+        indexed::ReferenceAllocate,
+    };
+    use aiahr_test::{
+        ct_rowsum, field, id_field, pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed,
+        row_variable, rwx_concrete, rwx_variable, scheme, term_abs, term_app, term_dot, term_local,
+        term_match, term_paren, term_prod, term_sum, term_sym, term_with, type_func, type_named,
+        type_par, type_prod, type_sum,
+    };
+    use assert_matches::assert_matches;
+    use bumpalo::Bump;
+    use chumsky::{prelude::end, Parser};
+
+    use aiahr_test::cst::{Scheme, Term, Type};
+    use aiahr_test::{assert_ident_text_matches_name, cst::CstRefAlloc};
+    use expect_test::expect;
+
+    use crate::{lexer::aiahr_lexer, Db};
+
+    use super::{term, to_stream, type_};
+
+    #[derive(Default)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    struct TestDatabase {
+        storage: salsa::Storage<Self>,
+    }
+    impl salsa::Database for TestDatabase {}
 
     const MOD: ModuleId = ModuleId(0);
 
@@ -675,47 +700,6 @@ pub mod test_utils {
             idx_term.ref_alloc(&mut ref_alloc)
         })
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use aiahr_core::{
-        cst::{
-            indexed::{CstIndxAlloc, CstRefAlloc},
-            Scheme, Term, Type,
-        },
-        ct_rowsum, field,
-        file::SourceFile,
-        id::ModuleId,
-        id_field,
-        ident::Ident,
-        indexed::ReferenceAllocate,
-        pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed, row_variable, rwx_concrete,
-        rwx_variable, scheme, term_abs, term_app, term_dot, term_local, term_match, term_paren,
-        term_prod, term_sum, term_sym, term_with, type_func, type_named, type_par, type_prod,
-        type_sum,
-    };
-    use assert_matches::assert_matches;
-    use bumpalo::Bump;
-    use chumsky::{prelude::end, Parser};
-
-    use aiahr_test::assert_ident_text_matches_name;
-    use expect_test::expect;
-
-    use crate::{lexer::aiahr_lexer, Db};
-
-    use super::{scheme, to_stream, type_};
-
-    #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar)]
-    struct TestDatabase {
-        storage: salsa::Storage<Self>,
-    }
-    impl salsa::Database for TestDatabase {}
-
-    const MOD: ModuleId = ModuleId(0);
 
     fn parse_type_unwrap<'a>(
         db: &'a dyn crate::Db,
@@ -740,7 +724,7 @@ mod tests {
     ) -> &'a Scheme<'a, Ident> {
         let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
         let mut alloc = CstIndxAlloc::default();
-        let scheme = scheme()
+        let scheme = super::scheme()
             .then_ignore(end())
             .parse(to_stream(tokens, eoi))
             .unwrap()
@@ -750,7 +734,7 @@ mod tests {
     }
 
     fn parse_term_unwrap<'a>(db: &'a dyn crate::Db, arena: &'a Bump, input: &str) -> &'a Term<'a> {
-        super::test_utils::parse_term(db, arena, input).unwrap()
+        parse_term(db, arena, input).unwrap()
     }
 
     #[test]
@@ -903,10 +887,7 @@ mod tests {
         let db = TestDatabase::default();
         let arena = Bump::new();
         //let (tokens, eoi) = aiahr_lexer(&db).lex(MOD, "|x whoops(x)").unwrap();
-        assert_matches!(
-            super::test_utils::parse_term(&db, &arena, "|x whoops(x)"),
-            Err(..)
-        );
+        assert_matches!(parse_term(&db, &arena, "|x whoops(x)"), Err(..));
         //assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 

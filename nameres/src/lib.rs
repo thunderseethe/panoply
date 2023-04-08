@@ -1,9 +1,7 @@
-use aiahr_core::cst::indexed::CstRefAlloc;
 use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
 use aiahr_core::file::SourceFileSet;
 use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId};
 use aiahr_core::ident::Ident;
-use aiahr_core::indexed::ReferenceAllocate;
 use aiahr_core::modules::{all_modules, Module, ModuleTree};
 use aiahr_core::span::{Span, Spanned};
 use aiahr_core::Top;
@@ -127,18 +125,12 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
 
     let cst_module = parse_module.data(db.as_parser_db());
     let mod_id = parse_module.module(db.as_parser_db()).name(db.as_core_db());
-    let mut ref_alloc = CstRefAlloc {
-        arena: &arena,
-        // TODO: Take this as a ref not an owned value
-        indices: &cst_module.indices,
-    };
-    let ref_cst_module = cst_module.ref_alloc(&mut ref_alloc);
 
     let modules = ModuleTree::default();
     let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = vec![];
     let mut module_names = FxHashMap::default();
     let base = BaseBuilder::new()
-        .add_slice(ref_cst_module.items, &mut errors)
+        .add_slice(&cst_module.items, &mut errors)
         .build(&arena, mod_id, &modules, &mut module_names);
     let mod_resolution = resolve_module(&arena, cst_module, base, &mut errors);
 

@@ -30,7 +30,7 @@ impl BaseBuilder {
     }
 
     /// Accumulates names from the given top-level items.
-    pub fn add_slice<E>(mut self, items: &[Item<'_>], errors: &mut E) -> Self
+    pub fn add_slice<E>(mut self, items: &[Item], errors: &mut E) -> Self
     where
         E: DiagnosticSink<NameResolutionError>,
     {

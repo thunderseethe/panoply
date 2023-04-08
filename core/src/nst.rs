@@ -3,11 +3,11 @@ use std::ops::Index;
 use la_arena::{Arena, Idx};
 
 // We re-export these so it's easier to differntiate reference and indexed during migration
-pub use crate::cst::indexed::{
+use crate::cst::Field;
+pub use crate::cst::{
     Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
     Separated, SumRow, Type, TypeAnnotation, TypeRow,
 };
-use crate::cst::Field;
 use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
 use crate::ident::Ident;
 use crate::indexed::{HasArenaMut, HasArenaRef, IdxAlloc};

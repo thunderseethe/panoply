@@ -1,5 +1,5 @@
 use aiahr_core::{
-    cst::indexed::{CstIndxAlloc, CstModule},
+    cst::{CstIndxAlloc, CstModule},
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
     file::{SourceFile, SourceFileSet},
     id::ModuleId,
