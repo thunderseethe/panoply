@@ -1,4 +1,5 @@
 #[salsa::db(
+    aiahr_ast::Jar,
     aiahr_core::Jar,
     aiahr_desugar::Jar,
     aiahr_ir::Jar,

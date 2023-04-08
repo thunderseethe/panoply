@@ -1,7 +1,9 @@
 use std::ops::Not;
 
-use aiahr_core::ast::{self, AstModule, Direction};
-use aiahr_core::ast::{Ast, Item, SalsaItem, Term, Term::*};
+use aiahr_ast::{
+    self as ast, Ast, AstModule, Direction, Item, SalsaItem,
+    Term::{self, *},
+};
 use aiahr_core::cst::{self, Field};
 use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId};
 use aiahr_core::ident::Ident;
@@ -23,7 +25,7 @@ pub struct Jar(
     effect_of,
     effect_op_tyscheme_of,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db {
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_ast::Db {
     fn as_desugar_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
@@ -37,18 +39,20 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db {
         desugar_module(self.as_desugar_db(), nameres_module)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db {}
+impl<DB> Db for DB where
+    DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_ast::Db
+{
+}
 
 /// Desugar an NST Module into an AST module.
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
 pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) -> AstModule {
-    let core_db = db.as_core_db();
     let resolution = module.items(db.as_nameres_db());
     let ty_vars = resolution.local_ids.ty_vars.len();
     let vars = resolution.local_ids.vars.len();
     AstModule::new(
-        core_db,
+        db.as_ast_db(),
         module.module(db.as_nameres_db()),
         resolution
             .resolved_items
@@ -86,7 +90,7 @@ pub fn desugar_item(
         }
     };
 
-    SalsaItem::new(db.as_core_db(), salsa_ast)
+    SalsaItem::new(db.as_ast_db(), salsa_ast)
 }
 
 #[salsa::tracked]
@@ -99,9 +103,9 @@ pub fn desugar_item_of_id(
     let nameres_module = db.nameres_module_of(module_id);
     let ast_module = desugar_module(db, nameres_module);
     ast_module
-        .items(db.as_core_db())
+        .items(db.as_ast_db())
         .iter()
-        .find(|item| match item.item(db.as_core_db()) {
+        .find(|item| match item.item(db.as_ast_db()) {
             Item::Effect(_) => false,
             Item::Function(ast) => ast.name == item_id,
         })
@@ -118,9 +122,9 @@ pub fn desugar_item_of_id(
 pub fn effect_of(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> ast::EffectItem {
     let ast_mod = db.desugar_module_of(module);
     ast_mod
-        .items(db.as_core_db())
+        .items(db.as_ast_db())
         .iter()
-        .find_map(|item| match item.item(db.as_core_db()) {
+        .find_map(|item| match item.item(db.as_ast_db()) {
             Item::Effect(eff_item) => (eff_item.name == effect_id).then_some(eff_item),
             Item::Function(_) => None,
         })
@@ -740,12 +744,19 @@ mod tests {
     use crate::Db as DesugarDb;
 
     use super::*;
+    use aiahr_ast as ast;
     use aiahr_core::file::{SourceFile, SourceFileSet};
     use aiahr_nameres::Db;
     use expect_test::expect;
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_nameres::Jar, aiahr_parser::Jar)]
+    #[salsa::db(
+        crate::Jar,
+        aiahr_ast::Jar,
+        aiahr_core::Jar,
+        aiahr_nameres::Jar,
+        aiahr_parser::Jar
+    )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }

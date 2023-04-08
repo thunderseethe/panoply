@@ -12,6 +12,7 @@ aiahr-test.workspace = true
 expect-test.workspace = true
 
 [dependencies]
+aiahr-ast.workspace = true
 aiahr-core.workspace = true
 aiahr-ir.workspace = true
 aiahr-tc.workspace = true

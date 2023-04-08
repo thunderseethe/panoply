@@ -1,5 +1,5 @@
+use aiahr_ast::{Ast, Direction, Term, Term::*};
 use aiahr_core::{
-    ast::{Ast, Direction, Term, Term::*},
     id::{Id, ItemId},
     span::Span,
 };

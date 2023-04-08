@@ -1,10 +1,15 @@
+use aiahr_ast::{Ast, Direction, Term, Term::*};
 use aiahr_core::{
-    ast::{Ast, Direction, Term, Term::*},
     id::{ModuleId, VarId},
     ident::Ident,
     memory::handle::Handle,
     span::Span,
-    ty::{row::*, TypeKind::*, *},
+    ty::{
+        infer::{InArena, InferRow, InferTy, TcUnifierVar},
+        row::*,
+        TypeKind::*,
+        *,
+    },
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
@@ -18,7 +23,6 @@ use crate::{
     unsolved_row::{ClosedGoal, OpenGoal, OrderedRowXorRow, UnsolvedRowEquation},
     Db, EffectInfo, Evidence, TyScheme,
 };
-use aiahr_core::ty::infer::{InArena, InferRow, InferTy, TcUnifierVar};
 
 struct RowCombination<'infer> {
     left: InferRow<'infer>,

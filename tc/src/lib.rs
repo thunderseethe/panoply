@@ -1,6 +1,5 @@
+use aiahr_ast::{self as ast, Ast, Term};
 use aiahr_core::{
-    ast,
-    ast::{Ast, Term},
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
     modules::module_of,
@@ -53,14 +52,19 @@ pub trait EffectInfo {
 
 pub struct Jar(SalsaTypedItem, type_scheme_of);
 pub trait Db:
-    salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_desugar::Db
+    salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_desugar::Db + aiahr_ast::Db
 {
     fn as_tc_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
 impl<DB> Db for DB where
-    DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_desugar::Db
+    DB: ?Sized
+        + salsa::DbWithJar<Jar>
+        + aiahr_core::Db
+        + aiahr_nameres::Db
+        + aiahr_desugar::Db
+        + aiahr_ast::Db
 {
 }
 
@@ -149,17 +153,18 @@ pub fn type_scheme_of(
     item_id: ItemId,
 ) -> SalsaTypedItem {
     let core_db = db.as_core_db();
+    let ast_db = db.as_ast_db();
     let module = module_of(core_db, top, module_id);
     let ast_module = db.desugar_module_of(module);
     let ast = ast_module
-        .items(core_db)
+        .items(ast_db)
         .iter()
-        .find_map(|item| match item.item(core_db) {
+        .find_map(|item| match item.item(ast_db) {
             ast::Item::Effect(_) => None,
             ast::Item::Function(ast) => (ast.name == item_id).then_some(ast),
         })
         .unwrap_or_else(|| {
-            dbg!(ast_module.items(db.as_core_db()));
+            dbg!(ast_module.items(ast_db));
             panic!(
                 "ICE: Constructed ItemId {:?} without associated item",
                 item_id
@@ -390,8 +395,8 @@ pub mod test_utils {
 #[cfg(test)]
 mod tests {
 
+    use aiahr_ast::{Direction, Term::*};
     use aiahr_core::{
-        ast::{Direction, Term::*},
         id::{EffectId, EffectOpId, ModuleId, TyVarId, VarId},
         ty::{
             row::{ClosedRow, Row},
@@ -430,6 +435,7 @@ mod tests {
     #[derive(Default)]
     #[salsa::db(
         crate::Jar,
+        aiahr_ast::Jar,
         aiahr_core::Jar,
         aiahr_desugar::Jar,
         aiahr_nameres::Jar,

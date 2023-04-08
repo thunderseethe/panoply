@@ -10,6 +10,7 @@ name = "aiahr"
 name = "interpreter"
 
 [dependencies]
+aiahr-ast.workspace = true
 aiahr-core.workspace = true
 aiahr-desugar.workspace = true
 aiahr-interpreter.workspace = true
@@ -24,6 +25,7 @@ salsa.workspace = true
 
 [workspace]
 members = [
+    "ast",
     "core",
     "desugar",
     "interpreter",
@@ -44,6 +46,7 @@ edition = "2021"
 # Unless necessary, don't specify patch numbers for dependencies whose major version number is
 # non-zero.
 [workspace.dependencies]
+aiahr-ast = { path = "ast" }
 aiahr-core = { path = "core" }
 aiahr-desugar = { path = "desugar" }
 aiahr-nameres = { path = "nameres" }

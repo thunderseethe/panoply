@@ -1,4 +1,4 @@
-pub mod ast;
+//pub mod ast;
 pub mod cst;
 pub mod diagnostic;
 mod display_iter;
@@ -29,8 +29,8 @@ pub mod ident {
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
-    ast::AstModule,
-    ast::SalsaItem,
+    //ast::AstModule,
+    //ast::SalsaItem,
     diagnostic::aiahr::AiahrcErrors,
     file::SourceFile,
     file::SourceFileSet,

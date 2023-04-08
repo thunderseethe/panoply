@@ -1,5 +1,5 @@
+use aiahr_ast::{Ast, Direction, RowTerm, RowTermView, Term};
 use aiahr_core::{
-    ast::{Ast, Direction, RowTerm, RowTermView, Term},
     id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
     ty::{
         row::{ClosedRow, Row},

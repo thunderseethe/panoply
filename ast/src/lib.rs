@@ -5,12 +5,22 @@ use la_arena::{Arena, Idx};
 use pretty::{docs, DocAllocator, Pretty};
 use rustc_hash::FxHashMap;
 
-use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, VarId};
-use crate::ident::Ident;
-use crate::modules::Module;
-use crate::span::Span;
-use crate::ty::{Ty, TyScheme};
+use aiahr_core::{
+    id::{EffectId, EffectOpId, ItemId, ModuleId, VarId},
+    ident::Ident,
+    modules::Module,
+    span::Span,
+    ty::{Ty, TyScheme},
+};
 
+#[salsa::jar(db = Db)]
+pub struct Jar(AstModule, SalsaItem);
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
+    fn as_ast_db(&self) -> &dyn crate::Db {
+        <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
+    }
+}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Term<Var> {
@@ -131,7 +141,7 @@ where
                 .append(self.with_root(*arg).pretty(alloc).parens()),
             Term::Label { label, term } => docs![
                 alloc,
-                label.text(self.db).clone(),
+                label.text(self.db.as_core_db()).clone(),
                 alloc.softline(),
                 "=",
                 alloc.softline(),
@@ -141,7 +151,7 @@ where
                 alloc,
                 self.with_root(*term),
                 ".",
-                label.text(self.db).clone()
+                label.text(self.db.as_core_db()).clone()
             ],
             Term::Concat { left, right } => docs![
                 alloc,

@@ -1,5 +1,5 @@
+use aiahr_ast::{self as ast, Ast, AstModule, Term};
 use aiahr_core::{
-    ast::{Ast, AstModule, Term},
     id::{EffectId, EffectOpId, IrTyVarId, ItemId, ModuleId, VarId},
     ident::Ident,
     modules::Module,
@@ -95,16 +95,16 @@ pub struct IrItem {
 
 #[salsa::tracked]
 fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
-    let core_db = db.as_core_db();
+    let ast_db = db.as_ast_db();
     let items = module
-        .items(core_db)
+        .items(ast_db)
         .iter()
         .map(|salsa_item| {
-            let ast_item = salsa_item.item(core_db);
+            let ast_item = salsa_item.item(ast_db);
             match ast_item {
-                aiahr_core::ast::Item::Effect(_) => todo!(),
-                aiahr_core::ast::Item::Function(ast) => {
-                    let mod_id = module.module(core_db).name(core_db);
+                ast::Item::Effect(_) => todo!(),
+                ast::Item::Function(ast) => {
+                    let mod_id = module.module(ast_db).name(db.as_core_db());
                     let scheme = db.lookup_scheme(mod_id, ast.name);
                     let ir = lower(db, mod_id, &scheme, &ast);
                     IrItem::new(db, ModuleName::from(ast.name), ir)
@@ -112,7 +112,7 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
             }
         })
         .collect();
-    IrModule::new(db, module.module(core_db), items)
+    IrModule::new(db, module.module(ast_db), items)
 }
 
 #[salsa::tracked]
@@ -550,12 +550,12 @@ mod tests {
     use crate::lower;
 
     use super::test_utils::LowerDb;
-    use aiahr_core::Top;
+    use aiahr_ast::{self as ast, Ast, Direction, Term};
     use aiahr_core::{
-        ast::{Ast, Direction, Term},
         file::{SourceFile, SourceFileSet},
         id::{ItemId, ModuleId, VarId},
         ty::TyScheme,
+        Top,
     };
     use aiahr_ir::{
         IrKind::{self, *},
@@ -571,6 +571,7 @@ mod tests {
     #[derive(Default)]
     #[salsa::db(
         crate::Jar,
+        aiahr_ast::Jar,
         aiahr_core::Jar,
         aiahr_desugar::Jar,
         aiahr_ir::Jar,
@@ -600,8 +601,8 @@ mod tests {
         let salsa_typed_item = type_scheme_of(db, top, MOD, ItemId(0));
         let item = aiahr_desugar::desugar_item_of_id(db, top, MOD, ItemId(0));
         let ast = match item.item(db) {
-            aiahr_core::ast::Item::Effect(_) => unreachable!(),
-            aiahr_core::ast::Item::Function(ast) => ast,
+            ast::Item::Effect(_) => unreachable!(),
+            ast::Item::Function(ast) => ast,
         };
         (
             LowerDb::new(
