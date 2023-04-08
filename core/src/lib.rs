@@ -1,4 +1,3 @@
-//pub mod ast;
 pub mod cst;
 pub mod diagnostic;
 mod display_iter;
@@ -29,8 +28,6 @@ pub mod ident {
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
-    //ast::AstModule,
-    //ast::SalsaItem,
     diagnostic::aiahr::AiahrcErrors,
     file::SourceFile,
     file::SourceFileSet,
@@ -73,12 +70,3 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
 /// shouldn't need this anymore.
 #[salsa::input]
 pub struct Top {}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
