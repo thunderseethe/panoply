@@ -13,6 +13,7 @@ name = "interpreter"
 aiahr-core.workspace = true
 aiahr-desugar.workspace = true
 aiahr-interpreter.workspace = true
+aiahr-ir.workspace = true
 aiahr-nameres.workspace = true
 aiahr-lower-ir.workspace = true
 aiahr-parser.workspace = true
@@ -26,6 +27,7 @@ members = [
     "core",
     "desugar",
     "interpreter",
+    "ir",
     "lower-ir",
     "lower-ir/ir-matcher",
     "nameres",
@@ -46,6 +48,7 @@ aiahr-core = { path = "core" }
 aiahr-desugar = { path = "desugar" }
 aiahr-nameres = { path = "nameres" }
 aiahr-interpreter = { path = "interpreter" }
+aiahr-ir = { path = "ir" }
 aiahr-lower-ir = { path = "lower-ir" }
 aiahr-parser = { path = "parser" }
 aiahr-tc = { path = "tc" }

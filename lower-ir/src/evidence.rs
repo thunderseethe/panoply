@@ -1,10 +1,10 @@
 use std::ops::Index;
 
-use aiahr_core::ir::indexed::IrVar;
 use aiahr_core::ty::{
     row::{ClosedRow, Row},
     Evidence, InDb,
 };
+use aiahr_ir::IrVar;
 
 use rustc_hash::FxHashMap;
 

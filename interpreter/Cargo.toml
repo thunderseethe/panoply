@@ -13,6 +13,7 @@ aiahr-lower-ir.workspace = true
 
 [dependencies]
 aiahr-core.workspace = true
+aiahr-ir.workspace = true
 im.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true

@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use aiahr_core::id::IrVarId;
-use aiahr_core::ir::{indexed::IrVar, Ir, IrKind, P};
+use aiahr_ir::{Ir, IrKind, IrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -334,16 +334,17 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::ir::indexed::{IrTyKind, MkIrTy};
+    use aiahr_ir::{IrTyKind, MkIrTy};
 
     use super::*;
 
     #[derive(Default)]
     #[salsa::db(
-        aiahr_nameres::Jar,
         aiahr_core::Jar,
         aiahr_desugar::Jar,
+        aiahr_ir::Jar,
         aiahr_lower_ir::Jar,
+        aiahr_nameres::Jar,
         aiahr_parser::Jar,
         aiahr_tc::Jar
     )]

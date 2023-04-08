@@ -13,6 +13,7 @@ expect-test.workspace = true
 
 [dependencies]
 aiahr-core.workspace = true
+aiahr-ir.workspace = true
 aiahr-tc.workspace = true
 aiahr-nameres.workspace = true
 bumpalo.workspace = true

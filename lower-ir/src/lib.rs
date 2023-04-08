@@ -1,16 +1,12 @@
-use aiahr_core::ast::AstModule;
-use aiahr_core::id::{EffectId, EffectOpId};
-use aiahr_core::ident::Ident;
-use aiahr_core::ir::indexed::{IrTy, IrTyKind, MkIrTy};
-use aiahr_core::ir::{Ir, IrKind::*, IrVarTy, Kind, P};
-use aiahr_core::modules::Module;
-use aiahr_core::ty::TyScheme;
-use aiahr_core::Top;
 use aiahr_core::{
-    ast::{Ast, Term},
-    id::{IrTyVarId, ItemId, ModuleId, VarId},
-    ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TypeKind},
+    ast::{Ast, AstModule, Term},
+    id::{EffectId, EffectOpId, IrTyVarId, ItemId, ModuleId, VarId},
+    ident::Ident,
+    modules::Module,
+    ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TyScheme, TypeKind},
+    Top,
 };
+use aiahr_ir::{Ir, IrKind::*, IrTy, IrTyKind, IrVarTy, Kind, MkIrTy, P};
 use aiahr_nameres::name::ModuleName;
 use aiahr_tc::EffectInfo;
 use la_arena::Idx;
@@ -49,7 +45,7 @@ pub struct Jar(
     lower_item,
     effect_handler_ir_ty,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_ir::Db {
     fn as_lower_ir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -79,7 +75,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db {
         Some(self.lower_item(module_id, item_id))
     }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_ir::Db {}
 
 #[salsa::tracked]
 pub struct IrModule {
@@ -436,7 +432,7 @@ pub mod test_utils {
         }
 
         fn effect_handler_ir_ty(&self, _mod_id: ModuleId, eff_id: EffectId) -> IrTy {
-            use aiahr_core::ir::indexed::IrTyKind::*;
+            use aiahr_ir::IrTyKind::*;
             // Find a better solution for this
             // Guessing a big enough irvartyid that we won't hit it in tests is flaky.
             static R: IrVarTy = IrVarTy {
@@ -519,7 +515,7 @@ pub mod test_utils {
         }
     }
     impl MkIrTy for LowerDb<'_> {
-        fn mk_ir_ty(&self, kind: aiahr_core::ir::indexed::IrTyKind) -> IrTy {
+        fn mk_ir_ty(&self, kind: aiahr_ir::IrTyKind) -> IrTy {
             self.db.mk_ir_ty(kind)
         }
 
@@ -554,13 +550,17 @@ mod tests {
     use crate::lower;
 
     use super::test_utils::LowerDb;
-    use aiahr_core::ast::{Ast, Direction, Term};
-    use aiahr_core::file::{SourceFile, SourceFileSet};
-    use aiahr_core::id::{ItemId, ModuleId, VarId};
-    use aiahr_core::ir::indexed::IrTyKind::*;
-    use aiahr_core::ir::IrKind::{self, *};
-    use aiahr_core::ty::TyScheme;
     use aiahr_core::Top;
+    use aiahr_core::{
+        ast::{Ast, Direction, Term},
+        file::{SourceFile, SourceFileSet},
+        id::{ItemId, ModuleId, VarId},
+        ty::TyScheme,
+    };
+    use aiahr_ir::{
+        IrKind::{self, *},
+        IrTyKind::*,
+    };
     use aiahr_tc::type_scheme_of;
     use aiahr_test::ast::{AstBuilder, MkTerm};
     use assert_matches::assert_matches;
@@ -572,10 +572,11 @@ mod tests {
     #[salsa::db(
         crate::Jar,
         aiahr_core::Jar,
-        aiahr_tc::Jar,
         aiahr_desugar::Jar,
+        aiahr_ir::Jar,
         aiahr_nameres::Jar,
-        aiahr_parser::Jar
+        aiahr_parser::Jar,
+        aiahr_tc::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
@@ -621,7 +622,7 @@ mod tests {
         let ir = lower(&db, MOD, &scheme, &ast);
 
         ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(var))) => {
-            assert_eq!(var.ty.kind(db.db.as_core_db()), VarTy(*ty_var));
+            assert_eq!(var.ty.kind(db.db.as_ir_db()), VarTy(*ty_var));
         })
     }
 

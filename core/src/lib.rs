@@ -7,7 +7,6 @@ pub mod file;
 pub mod graph;
 pub mod id;
 pub mod indexed;
-pub mod ir;
 pub mod loc;
 pub mod memory;
 pub mod modules;
@@ -38,7 +37,6 @@ pub struct Jar(
     file::module_source_file,
     file::module_id_for_path,
     ident::Ident,
-    ir::indexed::IrTy,
     modules::Module,
     modules::SalsaModuleTree,
     modules::all_modules,

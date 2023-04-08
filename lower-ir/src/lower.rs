@@ -1,19 +1,13 @@
 use aiahr_core::{
     ast::{Ast, Direction, RowTerm, RowTermView, Term},
     id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
-    ir::{
-        indexed::{IrTy, IrTyKind, IrTyKind::*, IrVar},
-        Ir, IrKind,
-        IrKind::*,
-        IrVarTy, Kind, P,
-    },
-};
-use aiahr_core::{
-    ir::indexed::MkIrTy,
     ty::{
         row::{ClosedRow, Row},
         AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
     },
+};
+use aiahr_ir::{
+    Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, MkIrTy, P,
 };
 use aiahr_tc::TyChkRes;
 use la_arena::Idx;
