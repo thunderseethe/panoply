@@ -1,21 +1,16 @@
-/*use std::{fmt::Debug, iter::FusedIterator};
-
-use crate::{
-    ident::Ident,
-    indexed::{HasArenaRef, HasRefArena, ReferenceAllocate},
-    span::{Span, SpanOf, Spanned},
-};
-use la_arena::Idx;*/
-
 use std::fmt::Debug;
 use std::iter::FusedIterator;
 use std::ops::Index;
 
 use la_arena::{Arena, Idx};
 
-use crate::ident::Ident;
-use crate::indexed::{HasArenaMut, HasArenaRef, IdxAlloc, IndexedAllocate, ReferenceAllocate};
-use crate::span::{Span, SpanOf, Spanned};
+use aiahr_core::{
+    ident::Ident,
+    indexed::{HasArenaMut, HasArenaRef, IdxAlloc, IndexedAllocate, ReferenceAllocate},
+    span::{Span, SpanOf, Spanned},
+};
+
+pub mod nameres;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CstIndxAlloc {
@@ -125,6 +120,7 @@ impl<T> Separated<T> {
 
 type ElementTail<'a, T> =
     std::iter::Map<std::slice::Iter<'a, (Span, T)>, fn(&'a (Span, T)) -> &'a T>;
+
 /// An iterator over the elements of a `Separated`. Needed because `std::iter::Chain` does not
 /// implement `ExactSizeIterator`.
 #[derive(Debug)]

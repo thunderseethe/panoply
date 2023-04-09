@@ -1,5 +1,4 @@
 use aiahr_core::{
-    cst::{self, Annotation, CstIndxAlloc, Field, IdField},
     diagnostic::parser::ParseErrors,
     ident::Ident,
     indexed::IdxAlloc,
@@ -7,6 +6,7 @@ use aiahr_core::{
     span::{Span, SpanOf, Spanned},
     token::Token,
 };
+use aiahr_cst::{self as cst, Annotation, CstIndxAlloc, Field, IdField};
 use chumsky::{
     combinator::Map,
     prelude::{choice, end, just, recursive},
@@ -652,11 +652,11 @@ where
 mod tests {
     use std::path::PathBuf;
 
-    use aiahr_core::cst::CstIndxAlloc;
     use aiahr_core::{
         diagnostic::parser::ParseErrors, file::SourceFile, id::ModuleId, ident::Ident,
         indexed::ReferenceAllocate,
     };
+    use aiahr_cst::CstIndxAlloc;
     use aiahr_test::{
         ct_rowsum, field, id_field, pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed,
         row_variable, rwx_concrete, rwx_variable, scheme, term_abs, term_app, term_dot, term_local,

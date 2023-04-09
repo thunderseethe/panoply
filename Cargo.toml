@@ -27,6 +27,7 @@ salsa.workspace = true
 members = [
     "ast",
     "core",
+    "cst",
     "desugar",
     "interpreter",
     "ir",
@@ -48,6 +49,7 @@ edition = "2021"
 [workspace.dependencies]
 aiahr-ast = { path = "ast" }
 aiahr-core = { path = "core" }
+aiahr-cst = { path = "cst" }
 aiahr-desugar = { path = "desugar" }
 aiahr-nameres = { path = "nameres" }
 aiahr-interpreter = { path = "interpreter" }

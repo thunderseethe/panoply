@@ -1,9 +1,9 @@
 use std::iter::FusedIterator;
 
-use aiahr_core::cst::{self, CstIndxAlloc, Field, IdField};
 use aiahr_core::ident::Ident;
 use aiahr_core::indexed::{HasArenaRef, HasRefArena, ReferenceAllocate};
 use aiahr_core::span::{Span, SpanOf, Spanned};
+use aiahr_cst::{self as cst, CstIndxAlloc, Field, IdField};
 use bumpalo::Bump;
 use la_arena::{Arena, Idx};
 
@@ -726,7 +726,7 @@ impl<'a> ReferenceAllocate<'a, CstRefAlloc<'a, '_>> for Idx<cst::Term> {
     }
 }
 
-impl<'a> ReferenceAllocate<'a, CstRefAlloc<'a, '_>> for aiahr_core::cst::Qualifiers<Ident> {
+impl<'a> ReferenceAllocate<'a, CstRefAlloc<'a, '_>> for cst::Qualifiers<Ident> {
     type Out = Qualifiers<'a, Ident>;
 
     fn ref_alloc(&self, alloc: &mut CstRefAlloc<'a, '_>) -> Self::Out {
@@ -790,7 +790,7 @@ macro_rules! separated {
 #[macro_export]
 macro_rules! field {
     ($label:pat, $target:pat) => {
-        aiahr_core::cst::Field {
+        aiahr_cst::Field {
             label: $label,
             target: $target,
             ..
@@ -936,10 +936,10 @@ macro_rules! ct_rowsum {
 #[macro_export]
 macro_rules! quant {
     ($($vars:literal),* $(,)?) => { &[$(
-        aiahr_core::cst::Quantifier { var: aiahr_core::span_of!($crate::h!($vars)), .. }
+        aiahr_cst::Quantifier { var: aiahr_core::span_of!($crate::h!($vars)), .. }
     ),*] };
     ($($vars:pat),* $(,)?) => { &[$(
-        aiahr_core::cst::Quantifier { var: aiahr_core::span_of!($vars), .. }
+        aiahr_cst::Quantifier { var: aiahr_core::span_of!($vars), .. }
     ),*] };
 }
 

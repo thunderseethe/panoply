@@ -5,7 +5,6 @@ use crate::{
     ops::InsertResult,
 };
 use aiahr_core::{
-    cst::Item,
     diagnostic::{
         nameres::{NameKind, NameResolutionError},
         DiagnosticSink,
@@ -14,6 +13,7 @@ use aiahr_core::{
     modules::ModuleTree,
     span::Spanned,
 };
+use aiahr_cst::Item;
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 

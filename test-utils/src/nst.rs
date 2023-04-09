@@ -1,13 +1,18 @@
-use aiahr_core::cst::Field;
 use bumpalo::Bump;
 use la_arena::{Arena, Idx};
 
 use crate::cst::{EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation};
-use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
-use aiahr_core::ident::Ident;
-use aiahr_core::indexed::{HasArenaRef, HasRefArena, ReferenceAllocate};
-use aiahr_core::nst::{self, NstIndxAlloc};
 use aiahr_core::span::{Span, SpanOf, Spanned};
+use aiahr_core::{
+    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
+    ident::Ident,
+    indexed::{HasArenaRef, HasRefArena, ReferenceAllocate},
+};
+use aiahr_cst::{
+    self as cst,
+    nameres::{self as nst, NstIndxAlloc},
+    Field,
+};
 
 /// A pattern with names resolved.
 #[derive(Clone, Copy, Debug)]
@@ -435,7 +440,7 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Constraint<TyVarId>
     }
 }
 
-impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for aiahr_core::cst::Qualifiers<TyVarId> {
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for cst::Qualifiers<TyVarId> {
     type Out = crate::cst::Qualifiers<'a, TyVarId>;
 
     fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {

@@ -5,7 +5,6 @@ use crate::{
     ops::{IdOps, InsertResult},
 };
 use aiahr_core::{
-    cst::{self, Annotation, CstIndxAlloc, Field, IdField},
     diagnostic::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
@@ -13,9 +12,13 @@ use aiahr_core::{
     id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaRef, IdxAlloc},
-    nst::{self, AllocItem, NstIndxAlloc},
     option::Transpose,
     span::{Span, SpanOf, Spanned},
+};
+use aiahr_cst::{
+    self as cst,
+    nameres::{self as nst, AllocItem, NstIndxAlloc},
+    Annotation, CstIndxAlloc, Field, IdField,
 };
 use bumpalo::Bump;
 use la_arena::Idx;

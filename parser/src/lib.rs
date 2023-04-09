@@ -1,11 +1,11 @@
 use aiahr_core::{
-    cst::{CstIndxAlloc, CstModule},
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
     file::{SourceFile, SourceFileSet},
     id::ModuleId,
     modules::Module,
     Top,
 };
+use aiahr_cst::{CstIndxAlloc, CstModule};
 use chumsky::Parser;
 
 use crate::{

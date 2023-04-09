@@ -1,17 +1,18 @@
+use la_arena::{Arena, Idx};
 use std::ops::Index;
 
-use la_arena::{Arena, Idx};
-
 // We re-export these so it's easier to differntiate reference and indexed during migration
-use crate::cst::Field;
-pub use crate::cst::{
+use super::Field;
+pub use super::{
     Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
     Separated, SumRow, Type, TypeAnnotation, TypeRow,
 };
-use crate::id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId};
-use crate::ident::Ident;
-use crate::indexed::{HasArenaMut, HasArenaRef, IdxAlloc};
-use crate::span::{Span, SpanOf, Spanned};
+use aiahr_core::{
+    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
+    ident::Ident,
+    indexed::{HasArenaMut, HasArenaRef, IdxAlloc},
+    span::{Span, SpanOf, Spanned},
+};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct NstIndxAlloc {
@@ -181,7 +182,7 @@ impl Spanned for SpanTerm<'_> {
 }
 
 /// A top-level item in an Aiahr source file with names resolved.
-#[derive(Clone, Debug, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Item {
     Effect {
         effect: Span,
@@ -197,16 +198,9 @@ pub enum Item {
         value: Idx<Term>,
     },
 }
-impl Eq for Item {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AllocItem {
     pub alloc: NstIndxAlloc,
     pub item: Item,
 }
-
-//pub use indexed::{Term, Pattern, Item, NstIndxAlloc, AllocItem  };
-/*pub use indexed::{
-        Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
-        Separated, SumRow, Type, TypeAnnotation, TypeRow,
-};*/

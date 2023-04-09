@@ -4,16 +4,19 @@ use aiahr_ast::{
     self as ast, Ast, AstModule, Direction, Item, SalsaItem,
     Term::{self, *},
 };
-use aiahr_core::cst::{self, Field};
-use aiahr_core::id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId};
-use aiahr_core::ident::Ident;
-use aiahr_core::modules::{module_of, Module};
-use aiahr_core::nst::{self, NstIndxAlloc};
-use aiahr_core::span::{SpanOf, Spanned};
-use aiahr_core::ty::row::Row;
-use aiahr_core::ty::{Evidence, MkTy, Ty, TyScheme, TypeKind};
-use aiahr_core::Top;
-use aiahr_core::{id::VarId, span::Span};
+use aiahr_core::{
+    id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId, VarId},
+    ident::Ident,
+    modules::{module_of, Module},
+    span::{Span, SpanOf, Spanned},
+    ty::{row::Row, Evidence, MkTy, Ty, TyScheme, TypeKind},
+    Top,
+};
+use aiahr_cst::{
+    self as cst,
+    nameres::{self as nst, NstIndxAlloc},
+    Field,
+};
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
 
