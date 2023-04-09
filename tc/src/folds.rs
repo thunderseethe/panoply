@@ -1,14 +1,8 @@
 pub(crate) mod occurs_check {
-    use aiahr_core::ty::infer::{InArena, TcUnifierVar};
-    use aiahr_core::ty::{FallibleEndoTypeFold, TypeVarOf};
+    use aiahr_ty::infer::{InArena, TcUnifierVar};
+    use aiahr_ty::{FallibleEndoTypeFold, TypeVarOf};
 
-    use crate::{
-        //ty::{alloc::TypeVarOf, fold::FallibleEndoTypeFold},
-        AccessTy,
-        MkTy,
-        Ty,
-        TypeKind,
-    };
+    use crate::{AccessTy, MkTy, Ty, TypeKind};
 
     /// Check that a unification variable does not appear within the type the unification variable is
     /// mapped to. This prevents unification from solving to a substitution with a cycle.
@@ -45,9 +39,11 @@ pub(crate) mod occurs_check {
 pub(crate) mod normalize {
     use std::convert::Infallible;
 
-    use aiahr_core::ty::infer::{InArena, TcUnifierVar};
-    use aiahr_core::ty::TypeFoldable;
-    use aiahr_core::ty::{row::Row, FallibleEndoTypeFold, TypeVarOf};
+    use aiahr_ty::{
+        infer::{InArena, TcUnifierVar},
+        row::Row,
+        FallibleEndoTypeFold, TypeFoldable, TypeVarOf,
+    };
     use ena::unify::InPlaceUnificationTable;
 
     use crate::{AccessTy, MkTy, Ty, TypeKind};
@@ -103,8 +99,11 @@ pub(crate) mod normalize {
 }
 
 pub(crate) mod instantiate {
-    use aiahr_core::ty::infer::{InArena, TcUnifierVar, TcVarToUnifierError};
-    use aiahr_core::ty::{row::Row, FallibleTypeFold, TypeVarOf};
+    use aiahr_ty::{
+        infer::{InArena, TcUnifierVar, TcVarToUnifierError},
+        row::Row,
+        FallibleTypeFold, TypeVarOf,
+    };
 
     use crate::{InDb, MkTy, Ty, TypeKind};
 
@@ -155,11 +154,11 @@ pub(crate) mod zonker {
     use aiahr_core::{
         id::{Id, TyVarId},
         memory::handle::Handle,
-        ty::{
-            infer::{InArena, TcUnifierVar, UnifierToTcVarError},
-            row::Row,
-            FallibleTypeFold, TypeFoldable, TypeVarOf,
-        },
+    };
+    use aiahr_ty::{
+        infer::{InArena, TcUnifierVar, UnifierToTcVarError},
+        row::Row,
+        FallibleTypeFold, TypeFoldable, TypeVarOf,
     };
     use ena::unify::InPlaceUnificationTable;
 
@@ -201,14 +200,14 @@ pub(crate) mod zonker {
         type Error = UnifierToTcVarError;
 
         type AccessTy = ();
-        type MkTy = dyn aiahr_core::Db + 'a;
+        type MkTy = dyn aiahr_ty::Db + 'a;
 
         fn access(&self) -> &Self::AccessTy {
             &()
         }
 
         fn ctx(&self) -> &Self::MkTy {
-            self.ctx.as_core_db()
+            self.ctx.as_ty_db()
         }
 
         fn try_fold_var(

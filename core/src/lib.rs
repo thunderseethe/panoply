@@ -12,7 +12,6 @@ pub mod option;
 pub mod span;
 pub mod spanner;
 pub mod token;
-pub mod ty;
 
 pub mod ident {
     /// An interned identifier.
@@ -37,9 +36,6 @@ pub struct Jar(
     modules::all_modules,
     modules::module_of,
     modules::module_id_of,
-    ty::TyData,
-    ty::SalsaRowFields,
-    ty::SalsaRowValues,
     Top,
 );
 pub trait Db: salsa::DbWithJar<Jar> {

@@ -11,9 +11,10 @@ assert_matches.workspace = true
 
 [dependencies]
 aiahr-ast.workspace = true
-aiahr-core = { workspace = true, features = ["type_infer"] }
-aiahr-desugar = { workspace = true }
-aiahr-nameres = { workspace = true }
+aiahr-core.workspace = true
+aiahr-desugar.workspace = true
+aiahr-nameres.workspace = true
+aiahr-ty = { workspace = true, features = ["type_infer"] }
 bumpalo.workspace = true
 ena.workspace = true
 la-arena.workspace = true

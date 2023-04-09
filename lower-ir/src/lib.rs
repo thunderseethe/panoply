@@ -3,12 +3,12 @@ use aiahr_core::{
     id::{EffectId, EffectOpId, IrTyVarId, ItemId, ModuleId, VarId},
     ident::Ident,
     modules::Module,
-    ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TyScheme, TypeKind},
     Top,
 };
 use aiahr_ir::{Ir, IrKind::*, IrTy, IrTyKind, IrVarTy, Kind, MkIrTy, P};
 use aiahr_nameres::name::ModuleName;
 use aiahr_tc::EffectInfo;
+use aiahr_ty::{row::ClosedRow, AccessTy, InDb, MkTy, Ty, TyScheme, TypeKind};
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use rustc_hash::FxHashMap;
@@ -305,9 +305,8 @@ where
 }
 
 pub mod test_utils {
-    use aiahr_core::ty::{TyData, TypeAlloc};
-    use aiahr_tc::test_utils::DummyEff;
-    use aiahr_tc::TyChkRes;
+    use aiahr_tc::{test_utils::DummyEff, TyChkRes};
+    use aiahr_ty::{TyData, TypeAlloc};
     use la_arena::Idx;
 
     use super::*;
@@ -329,7 +328,7 @@ pub mod test_utils {
                 db,
                 var_tys,
                 term_tys,
-                eff_info: DummyEff(db.as_core_db()),
+                eff_info: DummyEff(db.as_ty_db()),
             }
         }
     }
@@ -530,7 +529,7 @@ pub mod test_utils {
 
     impl MkTy<InDb> for LowerDb<'_> {
         fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
-            Ty(TyData::new(self.db.as_core_db(), kind))
+            Ty(TyData::new(self.db.as_ty_db(), kind))
         }
 
         fn mk_label(&self, label: &str) -> Ident {
@@ -538,7 +537,7 @@ pub mod test_utils {
         }
 
         fn mk_row(&self, fields: &[Ident], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
-            self.db.as_core_db().mk_row(fields, values)
+            self.db.as_ty_db().mk_row(fields, values)
         }
     }
 }
@@ -554,7 +553,6 @@ mod tests {
     use aiahr_core::{
         file::{SourceFile, SourceFileSet},
         id::{ItemId, ModuleId, VarId},
-        ty::TyScheme,
         Top,
     };
     use aiahr_ir::{
@@ -563,6 +561,7 @@ mod tests {
     };
     use aiahr_tc::type_scheme_of;
     use aiahr_test::ast::{AstBuilder, MkTerm};
+    use aiahr_ty::TyScheme;
     use assert_matches::assert_matches;
     use ir_matcher::ir_matcher;
 
@@ -577,7 +576,8 @@ mod tests {
         aiahr_ir::Jar,
         aiahr_nameres::Jar,
         aiahr_parser::Jar,
-        aiahr_tc::Jar
+        aiahr_tc::Jar,
+        aiahr_ty::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,

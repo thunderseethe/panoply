@@ -1,9 +1,11 @@
 //! Contains structs and functions for working with unsolved rows during type inference.
 use std::cmp::Ordering;
 
-use aiahr_core::ty::infer::InArena;
-use aiahr_core::ty::row::{ClosedRow, Row};
-use aiahr_core::ty::{Evidence, FallibleTypeFold, TypeAlloc, TypeFoldable};
+use aiahr_ty::{
+    infer::InArena,
+    row::{ClosedRow, Row},
+    Evidence, FallibleTypeFold, TypeAlloc, TypeFoldable,
+};
 
 impl<'ctx> From<OrderedRowXorRow<InArena<'ctx>>> for (Row<InArena<'ctx>>, Row<InArena<'ctx>>) {
     fn from(val: OrderedRowXorRow<InArena<'ctx>>) -> Self {

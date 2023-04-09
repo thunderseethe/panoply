@@ -9,7 +9,6 @@ use aiahr_core::{
     ident::Ident,
     modules::{module_of, Module},
     span::{Span, SpanOf, Spanned},
-    ty::{row::Row, Evidence, MkTy, Ty, TyScheme, TypeKind},
     Top,
 };
 use aiahr_cst::{
@@ -17,6 +16,7 @@ use aiahr_cst::{
     nameres::{self as nst, NstIndxAlloc},
     Field,
 };
+use aiahr_ty::{row::Row, Evidence, MkTy, Ty, TyScheme, TypeKind};
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
 
@@ -28,7 +28,9 @@ pub struct Jar(
     effect_of,
     effect_op_tyscheme_of,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_ast::Db {
+pub trait Db:
+    salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_ast::Db + aiahr_ty::Db
+{
     fn as_desugar_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
@@ -43,7 +45,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr
     }
 }
 impl<DB> Db for DB where
-    DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_ast::Db
+    DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_ast::Db + aiahr_ty::Db
 {
 }
 
@@ -303,9 +305,9 @@ impl<'a> DesugarCtx<'a> {
                     let arg_ty = self.ds_type(ann.type_);
                     let ret_ty = self
                         .db
-                        .as_core_db()
+                        .as_ty_db()
                         .mk_ty(TypeKind::VarTy(self.ty_vars.push(true)));
-                    let ty = self.db.as_core_db().mk_ty(TypeKind::FunTy(arg_ty, ret_ty));
+                    let ty = self.db.as_ty_db().mk_ty(TypeKind::FunTy(arg_ty, ret_ty));
                     term = self.terms.alloc(Annotated { ty, term });
                 }
                 term
@@ -406,7 +408,7 @@ impl<'a> DesugarCtx<'a> {
     ) -> Row {
         match row {
             cst::Row::Concrete(closed) => Row::Closed(
-                self.db.as_core_db().construct_row(
+                self.db.as_ty_db().construct_row(
                     closed
                         .elements()
                         .map(|field| (field.label.value, self.ds_type(field.target)))
@@ -427,20 +429,20 @@ impl<'a> DesugarCtx<'a> {
 
     fn ds_type(&mut self, nst: Idx<cst::Type<TyVarId>>) -> Ty {
         match &self.arenas[nst] {
-            cst::Type::Named(ty_var) => self.db.as_core_db().mk_ty(TypeKind::VarTy(ty_var.value)),
+            cst::Type::Named(ty_var) => self.db.as_ty_db().mk_ty(TypeKind::VarTy(ty_var.value)),
             cst::Type::Sum { variants, .. } => self
                 .db
-                .as_core_db()
+                .as_ty_db()
                 .mk_ty(TypeKind::SumTy(self.ds_row(variants))),
-            cst::Type::Product { fields, .. } => self.db.as_core_db().mk_ty(TypeKind::ProdTy(
+            cst::Type::Product { fields, .. } => self.db.as_ty_db().mk_ty(TypeKind::ProdTy(
                 fields
                     .as_ref()
                     .map(|row| self.ds_row(row))
-                    .unwrap_or(Row::Closed(self.db.as_core_db().empty_row())),
+                    .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
             )),
             cst::Type::Function {
                 domain, codomain, ..
-            } => self.db.as_core_db().mk_ty(TypeKind::FunTy(
+            } => self.db.as_ty_db().mk_ty(TypeKind::FunTy(
                 self.ds_type(*domain),
                 self.ds_type(*codomain),
             )),
@@ -451,7 +453,7 @@ impl<'a> DesugarCtx<'a> {
     fn ds_row_atom(&mut self, row_atom: &cst::RowAtom<TyVarId>) -> Row {
         match row_atom {
             cst::RowAtom::Concrete { fields, .. } => Row::Closed(
-                self.db.as_core_db().construct_row(
+                self.db.as_ty_db().construct_row(
                     fields
                         .elements()
                         .map(|field| (field.label.value, self.ds_type(field.target)))
@@ -758,7 +760,8 @@ mod tests {
         aiahr_ast::Jar,
         aiahr_core::Jar,
         aiahr_nameres::Jar,
-        aiahr_parser::Jar
+        aiahr_parser::Jar,
+        aiahr_ty::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,

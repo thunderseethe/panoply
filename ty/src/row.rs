@@ -1,4 +1,4 @@
-use crate::ident::Ident;
+use aiahr_core::ident::Ident;
 use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 use salsa::DebugWithDb;
 
@@ -181,34 +181,16 @@ impl ClosedRow<InDb> {
 }
 impl<Db> DebugWithDb<Db> for ClosedRow<InDb>
 where
-    Db: crate::Db,
+    Db: ?Sized + crate::Db,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
         f.debug_map()
             .entries(
                 self.fields
-                    .fields(db)
+                    .fields(db.as_ty_db())
                     .iter()
                     .map(|handle| handle.text(db.as_core_db()))
-                    .zip(self.values.values(db).iter()),
-            )
-            .finish()
-    }
-}
-impl DebugWithDb<dyn crate::Db + '_> for ClosedRow<InDb> {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        db: &dyn crate::Db,
-        _include_all_fields: bool,
-    ) -> fmt::Result {
-        f.debug_map()
-            .entries(
-                self.fields
-                    .fields(db)
-                    .iter()
-                    .map(|handle| handle.text(db.as_core_db()))
-                    .zip(self.values.values(db).iter()),
+                    .zip(self.values.values(db.as_ty_db()).iter()),
             )
             .finish()
     }
@@ -252,7 +234,7 @@ where
 }
 impl<Db> DebugWithDb<Db> for Row<InDb>
 where
-    Db: crate::Db,
+    Db: ?Sized + crate::Db,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
         match self {
@@ -261,19 +243,7 @@ where
         }
     }
 }
-impl DebugWithDb<dyn crate::Db + '_> for Row<InDb> {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        db: &dyn crate::Db,
-        _include_all_fields: bool,
-    ) -> fmt::Result {
-        match self {
-            Row::Open(var) => f.debug_tuple("Open").field(var).finish(),
-            Row::Closed(row) => f.debug_tuple("Closed").field(&row.debug(db)).finish(),
-        }
-    }
-}
+
 impl<A: TypeAlloc> Row<A> {
     pub fn pretty<'a, 'b, D>(
         &self,

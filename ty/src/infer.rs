@@ -5,7 +5,7 @@ use std::{convert::Infallible, fmt, ops::Deref};
 use ena::unify::{EqUnifyValue, UnifyKey, UnifyValue};
 use pretty::DocAllocator;
 
-use crate::ty::{
+use crate::{
     row::{ClosedRow, Row, RowInternals, RowLabel},
     Ty, TypeKind,
 };
@@ -77,16 +77,14 @@ pub type InferTy<'ctx> = Ty<InArena<'ctx>>;
 impl<'ctx> EqUnifyValue for Ty<InArena<'ctx>> {}
 
 pub(crate) mod arena {
-    use crate::ty::{
+    use crate::{
+        alloc::IteratorSorted,
         row::{ClosedRow, RowLabel},
         AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
     };
-    use crate::{
-        memory::{
-            handle::RefHandle,
-            intern::{Interner, InternerByRef, SyncInterner},
-        },
-        ty::alloc::IteratorSorted,
+    use aiahr_core::memory::{
+        handle::RefHandle,
+        intern::{Interner, InternerByRef, SyncInterner},
     };
     use bumpalo::Bump;
 
@@ -313,30 +311,16 @@ impl<'ctx> ClosedRow<InArena<'ctx>> {
 
 #[cfg(test)]
 mod tests {
-    use pretty::{DocAllocator, Pretty};
+    use aiahr_core::id::TyVarId;
 
-    use crate::id::TyVarId;
-
-    use crate::ty::TypeKind::*;
-    use crate::ty::{row::Row, MkTy};
+    use crate::{row::Row, MkTy, TypeKind::*};
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
     impl salsa::Database for TestDatabase {}
-
-    impl<'a, D> Pretty<'a, D> for TyVarId
-    where
-        D: DocAllocator<'a>,
-    {
-        fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, ()> {
-            alloc
-                .text("ty_var")
-                .append(alloc.as_string(self.0).angles())
-        }
-    }
 
     #[test]
     fn test_ty_pretty_printing() {

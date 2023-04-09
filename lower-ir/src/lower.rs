@@ -1,15 +1,13 @@
 use aiahr_ast::{Ast, Direction, RowTerm, RowTermView, Term};
-use aiahr_core::{
-    id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId},
-    ty::{
-        row::{ClosedRow, Row},
-        AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
-    },
-};
+use aiahr_core::id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId};
 use aiahr_ir::{
     Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, MkIrTy, P,
 };
 use aiahr_tc::TyChkRes;
+use aiahr_ty::{
+    row::{ClosedRow, Row},
+    AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
+};
 use la_arena::Idx;
 use rustc_hash::FxHashSet;
 

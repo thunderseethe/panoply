@@ -1,6 +1,6 @@
-use crate::ident::Ident;
+use aiahr_core::ident::Ident;
 
-use crate::ty::{
+use crate::{
     row::{ClosedRow, RowLabel},
     Ty, TypeKind,
 };
@@ -108,10 +108,10 @@ impl<I: Iterator> IteratorSorted for I {
 }
 
 pub mod db {
-    use crate::ty::alloc::IteratorSorted;
-    use crate::{id::TyVarId, ident::Ident};
+    use crate::alloc::IteratorSorted;
+    use aiahr_core::{id::TyVarId, ident::Ident};
 
-    use crate::ty::{
+    use crate::{
         row::{ClosedRow, RowLabel},
         MkTy, Ty, TypeKind,
     };
@@ -163,7 +163,7 @@ pub mod db {
         DB: ?Sized + crate::Db,
     {
         fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
-            Ty(TyData::new(self.as_core_db(), kind))
+            Ty(TyData::new(self.as_ty_db(), kind))
         }
 
         fn mk_label(&self, label: &str) -> RowLabel {
@@ -175,8 +175,8 @@ pub mod db {
             debug_assert!(fields.iter().considered_sorted());
 
             ClosedRow {
-                fields: SalsaRowFields::new(self.as_core_db(), fields.to_vec()),
-                values: SalsaRowValues::new(self.as_core_db(), values.to_vec()),
+                fields: SalsaRowFields::new(self.as_ty_db(), fields.to_vec()),
+                values: SalsaRowValues::new(self.as_ty_db(), values.to_vec()),
             }
         }
     }
@@ -186,15 +186,15 @@ pub mod db {
         DB: ?Sized + crate::Db,
     {
         fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
-            ty.0.kind(self.as_core_db())
+            ty.0.kind(self.as_ty_db())
         }
 
         fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
-            row.fields(self.as_core_db()).as_slice()
+            row.fields(self.as_ty_db()).as_slice()
         }
 
         fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
-            row.values(self.as_core_db()).as_slice()
+            row.values(self.as_ty_db()).as_slice()
         }
     }
 }

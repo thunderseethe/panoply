@@ -19,6 +19,7 @@ aiahr-nameres.workspace = true
 aiahr-lower-ir.workspace = true
 aiahr-parser.workspace = true
 aiahr-tc.workspace = true
+aiahr-ty.workspace = true
 clap = { workspace = true, features = ["derive"] }
 eyre.workspace = true
 salsa.workspace = true
@@ -37,6 +38,7 @@ members = [
     "parser",
     "tc",
     "test-utils",
+    "ty",
 ]
 
 [workspace.package]
@@ -58,6 +60,7 @@ aiahr-lower-ir = { path = "lower-ir" }
 aiahr-parser = { path = "parser" }
 aiahr-tc = { path = "tc" }
 aiahr-test = { path = "test-utils" }
+aiahr-ty = { path = "ty" }
 assert_matches = "1.5" # TODO: use `std` version when stabilized.
 bitflags = "1.3"
 bumpalo = "3.10"

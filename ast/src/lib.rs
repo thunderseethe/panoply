@@ -10,8 +10,8 @@ use aiahr_core::{
     ident::Ident,
     modules::Module,
     span::Span,
-    ty::{Ty, TyScheme},
 };
+use aiahr_ty::{Ty, TyScheme};
 
 #[salsa::jar(db = Db)]
 pub struct Jar(AstModule, SalsaItem);

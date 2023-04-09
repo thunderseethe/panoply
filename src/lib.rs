@@ -6,7 +6,8 @@
     aiahr_lower_ir::Jar,
     aiahr_nameres::Jar,
     aiahr_parser::Jar,
-    aiahr_tc::Jar
+    aiahr_tc::Jar,
+    aiahr_ty::Jar
 )]
 #[derive(Default)]
 pub struct AiahrDatabase {

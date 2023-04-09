@@ -4,12 +4,12 @@ use aiahr_core::{
     ident::Ident,
     memory::handle::Handle,
     span::Span,
-    ty::{
-        infer::{InArena, InferRow, InferTy, TcUnifierVar},
-        row::*,
-        TypeKind::*,
-        *,
-    },
+};
+use aiahr_ty::{
+    infer::{InArena, InferRow, InferTy, TcUnifierVar},
+    row::*,
+    TypeKind::*,
+    *,
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
@@ -124,25 +124,12 @@ where
 }
 impl<Db> DebugWithDb<Db> for TyChkRes<InDb>
 where
-    Db: crate::Db,
+    Db: ?Sized + aiahr_ty::Db,
 {
     fn fmt(
         &self,
         f: &mut std::fmt::Formatter<'_>,
         db: &Db,
-        _include_all_fields: bool,
-    ) -> std::fmt::Result {
-        f.debug_struct("TyChkRes")
-            .field("ty", &self.ty.debug(db))
-            .field("eff", &self.eff.debug(db))
-            .finish()
-    }
-}
-impl DebugWithDb<dyn aiahr_core::Db + '_> for TyChkRes<InDb> {
-    fn fmt(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        db: &dyn aiahr_core::Db,
         _include_all_fields: bool,
     ) -> std::fmt::Result {
         f.debug_struct("TyChkRes")

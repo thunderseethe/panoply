@@ -23,6 +23,15 @@ use row::{ClosedRow, Row};
 #[cfg(feature = "type_infer")]
 pub mod infer;
 
+#[salsa::jar(db = Db)]
+pub struct Jar(TyData, SalsaRowFields, SalsaRowValues);
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
+    fn as_ty_db(&self) -> &dyn crate::Db {
+        <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
+    }
+}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+
 /// A monomorphic type.
 ///
 /// This is just a wrapper around an interned reference to the `TypeKind` which contains the actual
@@ -44,20 +53,10 @@ impl<A: TypeAlloc> Debug for Ty<A> {
 }
 impl<Db> DebugWithDb<Db> for Ty<InDb>
 where
-    Db: crate::Db,
+    Db: ?Sized + crate::Db,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
-        self.0.kind(db).debug(db).fmt(f)
-    }
-}
-impl DebugWithDb<dyn crate::Db + '_> for Ty<InDb> {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        db: &dyn crate::Db,
-        _include_all_fields: bool,
-    ) -> fmt::Result {
-        self.0.kind(db).debug(db).fmt(f)
+        self.0.kind(db.as_ty_db()).debug(db).fmt(f)
     }
 }
 
@@ -143,31 +142,9 @@ impl Debug for TypeKind<InDb> {
 }
 impl<Db> DebugWithDb<Db> for TypeKind<InDb>
 where
-    Db: crate::Db,
+    Db: ?Sized + crate::Db,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
-        match self {
-            TypeKind::ErrorTy => f.debug_tuple("ErrorTy").finish(),
-            TypeKind::IntTy => f.debug_tuple("IntTy").finish(),
-            TypeKind::VarTy(var) => f.debug_tuple("VarTy").field(var).finish(),
-            TypeKind::RowTy(row) => f.debug_tuple("RowTy").field(&row.debug(db)).finish(),
-            TypeKind::FunTy(arg, ret) => f
-                .debug_tuple("FunTy")
-                .field(&arg.debug(db))
-                .field(&ret.debug(db))
-                .finish(),
-            TypeKind::ProdTy(row) => f.debug_tuple("ProdTy").field(&row.debug(db)).finish(),
-            TypeKind::SumTy(row) => f.debug_tuple("SumTy").field(&row.debug(db)).finish(),
-        }
-    }
-}
-impl DebugWithDb<dyn crate::Db + '_> for TypeKind<InDb> {
-    fn fmt(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        db: &dyn crate::Db,
-        _include_all_fields: bool,
-    ) -> fmt::Result {
         match self {
             TypeKind::ErrorTy => f.debug_tuple("ErrorTy").finish(),
             TypeKind::IntTy => f.debug_tuple("IntTy").finish(),

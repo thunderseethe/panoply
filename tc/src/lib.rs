@@ -3,17 +3,19 @@ use aiahr_core::{
     id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
     modules::module_of,
-    ty::row::Row,
     Top,
 };
+use aiahr_ty::row::Row;
 use bumpalo::Bump;
 use diagnostic::TypeCheckDiagnostic;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use la_arena::Idx;
 use rustc_hash::FxHashMap;
 
-use aiahr_core::ty::infer::{InArena, TcUnifierVar, TyCtx};
-use aiahr_core::ty::*;
+use aiahr_ty::{
+    infer::{InArena, TcUnifierVar, TyCtx},
+    *,
+};
 
 mod unsolved_row;
 
@@ -195,7 +197,7 @@ where
     E: ?Sized + EffectInfo,
 {
     let arena = Bump::new();
-    let infer_ctx = TyCtx::new(db.as_core_db(), &arena);
+    let infer_ctx = TyCtx::new(db.as_ty_db(), &arena);
     tc_term(db, &infer_ctx, eff_info, module, ast)
 }
 
@@ -283,7 +285,7 @@ pub mod test_utils {
     // Utility trait to remove a lot of the intermediate allocation when creating ASTs
     // Helps make tests a little more readable
 
-    pub struct DummyEff<'a>(pub &'a dyn aiahr_core::Db);
+    pub struct DummyEff<'a>(pub &'a dyn aiahr_ty::Db);
     impl<'a> DummyEff<'a> {
         pub const STATE_ID: EffectId = EffectId(0);
         pub const READER_ID: EffectId = EffectId(1);
@@ -396,15 +398,13 @@ pub mod test_utils {
 mod tests {
 
     use aiahr_ast::{Direction, Term::*};
-    use aiahr_core::{
-        id::{EffectId, EffectOpId, ModuleId, TyVarId, VarId},
-        ty::{
-            row::{ClosedRow, Row},
-            AccessTy, TypeKind,
-            TypeKind::*,
-        },
-    };
+    use aiahr_core::id::{EffectId, EffectOpId, ModuleId, TyVarId, VarId};
     use aiahr_test::ast::{AstBuilder, MkTerm};
+    use aiahr_ty::{
+        row::{ClosedRow, Row},
+        AccessTy, TypeKind,
+        TypeKind::*,
+    };
     use assert_matches::assert_matches;
 
     use crate::type_check;
@@ -439,7 +439,8 @@ mod tests {
         aiahr_core::Jar,
         aiahr_desugar::Jar,
         aiahr_nameres::Jar,
-        aiahr_parser::Jar
+        aiahr_parser::Jar,
+        aiahr_ty::Jar
     )]
     pub(crate) struct TestDatabase {
         storage: salsa::Storage<Self>,
