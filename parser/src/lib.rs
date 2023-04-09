@@ -17,6 +17,60 @@ mod expr;
 pub mod lexer;
 pub mod parser;
 
+pub mod error {
+    use std::collections::LinkedList;
+    use std::fmt::Display;
+
+    use crate::lexer::Token;
+    use aiahr_core::diagnostic::parser::ParseError;
+    use aiahr_core::span::Span;
+
+    #[derive(Debug)]
+    pub struct ParseErrors(pub LinkedList<ParseError>);
+
+    struct TokenOrEOFByName(Option<Token>);
+
+    impl Display for TokenOrEOFByName {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            if let Some(t) = self.0 {
+                write!(f, "'{}'", t.name())
+            } else {
+                write!(f, "EOF")
+            }
+        }
+    }
+
+    impl chumsky::Error<Token> for ParseErrors {
+        type Span = Span;
+        type Label = ();
+
+        fn expected_input_found<Iter: IntoIterator<Item = Option<Token>>>(
+            span: Self::Span,
+            expected: Iter,
+            found: Option<Token>,
+        ) -> Self {
+            ParseErrors(LinkedList::from([ParseError::WrongToken {
+                span,
+                got: TokenOrEOFByName(found).to_string(),
+                want_any: expected
+                    .into_iter()
+                    .map(|token| TokenOrEOFByName(token).to_string())
+                    .collect(),
+            }]))
+        }
+
+        fn with_label(self, _: Self::Label) -> Self {
+            self
+        }
+
+        fn merge(mut self, other: Self) -> Self {
+            let mut other = other;
+            self.0.append(&mut other.0);
+            self
+        }
+    }
+}
+
 #[salsa::jar(db = Db)]
 pub struct Jar(parse_module, parse_module_of, ParseModule);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {

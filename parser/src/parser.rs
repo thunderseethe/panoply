@@ -1,10 +1,8 @@
 use aiahr_core::{
-    diagnostic::parser::ParseErrors,
     ident::Ident,
     indexed::IdxAlloc,
     loc::Loc,
     span::{Span, SpanOf, Spanned},
-    token::Token,
 };
 use aiahr_cst::{self as cst, Annotation, CstIndxAlloc, Field, IdField};
 use chumsky::{
@@ -13,6 +11,9 @@ use chumsky::{
     select, Parser, Stream,
 };
 use la_arena::Idx;
+
+use super::lexer::Token;
+use crate::error::ParseErrors;
 
 /// A trait alias for a cloneable parser for Aiahr syntax.
 pub trait AiahrParser<T>: Clone + Parser<Token, T, Error = ParseErrors> {}
@@ -652,10 +653,7 @@ where
 mod tests {
     use std::path::PathBuf;
 
-    use aiahr_core::{
-        diagnostic::parser::ParseErrors, file::SourceFile, id::ModuleId, ident::Ident,
-        indexed::ReferenceAllocate,
-    };
+    use aiahr_core::{file::SourceFile, id::ModuleId, ident::Ident, indexed::ReferenceAllocate};
     use aiahr_cst::CstIndxAlloc;
     use aiahr_test::{
         ct_rowsum, field, id_field, pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed,
@@ -671,6 +669,7 @@ mod tests {
     use aiahr_test::{assert_ident_text_matches_name, cst::CstRefAlloc};
     use expect_test::expect;
 
+    use crate::error::ParseErrors;
     use crate::{lexer::aiahr_lexer, Db};
 
     use super::{term, to_stream, type_};

@@ -11,7 +11,6 @@ pub mod modules;
 pub mod option;
 pub mod span;
 pub mod spanner;
-pub mod token;
 
 pub mod ident {
     /// An interned identifier.
