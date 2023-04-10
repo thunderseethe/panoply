@@ -118,7 +118,7 @@ fn parse_module_of(db: &dyn Db, top: Top, mod_id: ModuleId) -> ParseModule {
 fn parse_module(db: &dyn Db, file: SourceFile) -> ParseModule {
     let core_db = db.as_core_db();
     let mod_id = file.module(core_db);
-    let module = Module::new(core_db, mod_id, file.path(core_db).clone());
+    let module = Module::new(core_db, mod_id, file.path(core_db));
     let lexer = aiahr_lexer(db);
     let (tokens, eoi) = match lexer.lex(mod_id, file.contents(core_db)) {
         Ok(tokens) => tokens,

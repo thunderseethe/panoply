@@ -3,7 +3,7 @@ use salsa::DebugWithDb;
 
 use crate::{
     displayer::Displayer,
-    file::SourceFileSet,
+    file::{FileId, SourceFileSet},
     id::{IdGen, Ids, ModuleId},
     ident::Ident,
 };
@@ -93,8 +93,7 @@ impl Displayer<ModuleId> for ModuleTree {
 pub struct Module {
     pub name: ModuleId,
 
-    #[return_ref]
-    pub uri: std::path::PathBuf,
+    pub uri: FileId,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -117,7 +116,7 @@ pub fn all_modules(db: &dyn crate::Db) -> SalsaModuleTree {
     files.sort_by_key(|module| module.module(db));
     let modules = files
         .into_iter()
-        .map(|file| Module::new(db, file.module(db), file.path(db).clone()))
+        .map(|file| Module::new(db, file.module(db), file.path(db)))
         .collect::<IdGen<ModuleId, Module>>();
 
     SalsaModuleTree::new(db, modules.into_boxed_ids())

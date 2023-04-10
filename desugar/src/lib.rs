@@ -746,7 +746,7 @@ mod tests {
 
     use super::*;
     use aiahr_ast as ast;
-    use aiahr_core::file::{SourceFile, SourceFileSet};
+    use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
     use aiahr_nameres::Db;
     use expect_test::expect;
 
@@ -773,7 +773,12 @@ mod tests {
     ) -> (aiahr_nameres::SalsaItem, &'db ast::SalsaItem) {
         let mut content = "item = ".to_string();
         content.push_str(input);
-        let file = SourceFile::new(db, MOD, PathBuf::from("test.aiahr"), content);
+        let file = SourceFile::new(
+            db,
+            MOD,
+            FileId::new(db, PathBuf::from("test.aiahr")),
+            content,
+        );
         SourceFileSet::new(db, vec![file]);
         let namesres_module = db.nameres_module_of(MOD);
         (

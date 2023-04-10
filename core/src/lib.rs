@@ -25,6 +25,7 @@ pub mod ident {
 #[salsa::jar(db = Db)]
 pub struct Jar(
     diagnostic::aiahr::AiahrcErrors,
+    file::FileId,
     file::SourceFile,
     file::SourceFileSet,
     file::module_source_file,

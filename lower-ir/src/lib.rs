@@ -551,7 +551,7 @@ mod tests {
     use super::test_utils::LowerDb;
     use aiahr_ast::{self as ast, Ast, Direction, Term};
     use aiahr_core::{
-        file::{SourceFile, SourceFileSet},
+        file::{FileId, SourceFile, SourceFileSet},
         id::{ItemId, ModuleId, VarId},
         Top,
     };
@@ -592,7 +592,7 @@ mod tests {
         let file = SourceFile::new(
             db,
             ModuleId(0),
-            std::path::PathBuf::from("test.aiahr"),
+            FileId::new(db, std::path::PathBuf::from("test.aiahr")),
             input.to_string(),
         );
         SourceFileSet::new(db, vec![file]);

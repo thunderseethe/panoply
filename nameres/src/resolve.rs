@@ -912,7 +912,7 @@ mod tests {
 
     use aiahr_core::{
         diagnostic::nameres::{NameKind, NameResolutionError},
-        file::{SourceFile, SourceFileSet},
+        file::{FileId, SourceFile, SourceFileSet},
         id::ModuleId,
         indexed::ReferenceAllocate,
         span::Span,
@@ -981,7 +981,8 @@ mod tests {
     ) {
         const MOD: ModuleId = ModuleId(0);
 
-        let file = SourceFile::new(db, MOD, PathBuf::from("test.aiahr"), input.to_string());
+        let file_id = FileId::new(db, PathBuf::from("test.aiahr"));
+        let file = SourceFile::new(db, MOD, file_id, input.to_string());
         let _ = SourceFileSet::new(db, vec![file]);
 
         let nameres_module = db.nameres_module_of(MOD);

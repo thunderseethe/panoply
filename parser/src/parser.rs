@@ -653,6 +653,7 @@ where
 mod tests {
     use std::path::PathBuf;
 
+    use aiahr_core::file::FileId;
     use aiahr_core::{file::SourceFile, id::ModuleId, ident::Ident, indexed::ReferenceAllocate};
     use aiahr_cst::CstIndxAlloc;
     use aiahr_test::{
@@ -885,9 +886,7 @@ mod tests {
     fn test_undelimted_closure_fails() {
         let db = TestDatabase::default();
         let arena = Bump::new();
-        //let (tokens, eoi) = aiahr_lexer(&db).lex(MOD, "|x whoops(x)").unwrap();
         assert_matches!(parse_term(&db, &arena, "|x whoops(x)"), Err(..));
-        //assert_matches!(term(&arena).parse(to_stream(tokens, eoi)), Err(..));
     }
 
     #[test]
@@ -1114,7 +1113,7 @@ mod tests {
         let file = SourceFile::new(
             &db,
             ModuleId(0),
-            PathBuf::from("/eff_foo.aiahr"),
+            FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
             "effect foo { foo: a -> a }".to_string(),
         );
         let module = db.parse_module(file);
@@ -1273,7 +1272,7 @@ mod tests {
         let file = SourceFile::new(
             &db,
             ModuleId(0),
-            PathBuf::from("./bar.aiahr"),
+            FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
             "x = a\ny = |b| b\nz = t = x; t".to_string(),
         );
         let module = db.parse_module(file);
@@ -1541,7 +1540,7 @@ mod tests {
         let file = SourceFile::new(
             &db,
             ModuleId(0),
-            PathBuf::from("./annotated_bar.aiahr"),
+            FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
             "x: a = a\ny: forall b. b -> b = |b| b".to_string(),
         );
         let module = db.parse_module(file);

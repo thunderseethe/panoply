@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use aiahr::AiahrDatabase;
-use aiahr_core::file::{SourceFile, SourceFileSet};
+use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
 use aiahr_core::id::ModuleId;
 use aiahr_core::Db as CoreDb;
 use aiahr_interpreter::Machine;
@@ -36,7 +36,8 @@ fn main() -> eyre::Result<()> {
         .into_iter()
         .map(|path| {
             let contents = std::fs::read_to_string(&path)?;
-            let file: SourceFile = SourceFile::new(&db, ModuleId(next_mod_id), path, contents);
+            let file: SourceFile =
+                SourceFile::new(&db, ModuleId(next_mod_id), FileId::new(&db, path), contents);
             next_mod_id += 1;
             Ok(file)
         })
