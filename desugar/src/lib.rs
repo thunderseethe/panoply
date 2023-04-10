@@ -5,8 +5,10 @@ use aiahr_ast::{
     Term::{self, *},
 };
 use aiahr_core::{
+    file::FileId,
     id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId, VarId},
     ident::Ident,
+    loc::Loc,
     modules::{module_of, Module},
     span::{Span, SpanOf, Spanned},
     Top,
@@ -19,6 +21,7 @@ use aiahr_cst::{
 use aiahr_ty::{row::Row, Evidence, MkTy, Ty, TyScheme, TypeKind};
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
+use salsa::AsId;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
@@ -679,20 +682,11 @@ enum Constructor {
 }
 impl Constructor {
     fn matches(&self, pat: &nst::Pattern, alloc: &NstIndxAlloc) -> Option<Vec<nst::Pattern>> {
+        let file = FileId::from_id(salsa::Id::from_u32(0));
         let bogus_var_id = aiahr_core::span::SpanOf {
-            start: aiahr_core::loc::Loc {
-                byte: 0,
-                line: 0,
-                col: 0,
-                module: aiahr_core::id::ModuleId::from_raw(0),
-            },
+            start: Loc::start(file),
             value: VarId::from_raw(0),
-            end: aiahr_core::loc::Loc {
-                byte: 0,
-                line: 0,
-                col: 0,
-                module: aiahr_core::id::ModuleId::from_raw(0),
-            },
+            end: Loc::start(file),
         };
         match (self, pat) {
             (Constructor::ProductRow(lbls), nst::Pattern::ProductRow(rows)) => rows

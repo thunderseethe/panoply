@@ -1,14 +1,13 @@
 use aiahr_core::{
-    id::ModuleId,
+    file::FileId,
     loc::Loc,
     span::{Span, SpanOf},
 };
-
-pub const MOD: ModuleId = ModuleId(0);
+use salsa::AsId;
 
 pub fn random_loc() -> Loc {
     Loc {
-        module: MOD,
+        file: FileId::from_id(salsa::Id::from_u32(0)),
         byte: rand::random(),
         line: rand::random(),
         col: rand::random(),

@@ -17,6 +17,8 @@ mod expr;
 pub mod lexer;
 pub mod parser;
 
+pub(crate) mod locator;
+
 pub mod error {
     use std::collections::LinkedList;
     use std::fmt::Display;
@@ -120,7 +122,7 @@ fn parse_module(db: &dyn Db, file: SourceFile) -> ParseModule {
     let mod_id = file.module(core_db);
     let module = Module::new(core_db, mod_id, file.path(core_db));
     let lexer = aiahr_lexer(db);
-    let (tokens, eoi) = match lexer.lex(mod_id, file.contents(core_db)) {
+    let (tokens, eoi) = match lexer.lex(file.path(core_db), file.contents(core_db)) {
         Ok(tokens) => tokens,
         Err(err) => {
             AiahrcErrors::push(db, AiahrcError::from(err));

@@ -1,6 +1,7 @@
 use std::slice::Iter;
 
 use aiahr_core::{
+    file::FileId,
     id::{EffectId, ModuleId},
     ident::Ident,
     loc::Loc,
@@ -17,8 +18,8 @@ use crate::{
 };
 
 // Wraps a module ID in its canonical span.
-fn canonical_span(m: ModuleId) -> Span {
-    Span::zero(Loc::start(m))
+fn canonical_span(file: FileId) -> Span {
+    Span::zero(Loc::start(file))
 }
 
 /// A collection of names visible throughout a module. Also accumulates the local variable IDs of
@@ -82,7 +83,9 @@ where
 {
     fn get(&self, id: I) -> SpanOf<Ident> {
         match BaseName::from(id) {
-            BaseName::Module(m) => canonical_span(m).of(self.modules.get_name(m)),
+            BaseName::Module(_m) => {
+                canonical_span(todo!("Map ModuleId m back to FileId")).of(self.modules.get_name(_m))
+            }
             BaseName::Effect(m, e) => self.module_names[&m].get(e),
             BaseName::EffectOp(m, e, o) => self.module_names[&m].get_effect(e).get(o),
             BaseName::Item(m, i) => self.module_names[&m].get(i),

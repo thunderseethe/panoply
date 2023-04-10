@@ -13,3 +13,4 @@ bumpalo.workspace = true
 la-arena.workspace = true
 rand.workspace = true
 rustc-hash.workspace = true
+salsa.workspace = true

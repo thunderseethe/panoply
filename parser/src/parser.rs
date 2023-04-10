@@ -682,15 +682,16 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    const MOD: ModuleId = ModuleId(0);
-
     pub fn parse_term<'a>(
         db: &'a dyn crate::Db,
         arena: &'a Bump,
         input: &str,
     ) -> Result<&'a Term<'a>, Vec<ParseErrors>> {
         let (tokens, eoi) = aiahr_lexer(db)
-            .lex(MOD, input)
+            .lex(
+                FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
+                input,
+            )
             .expect("Lexing input failed");
 
         term().parse(to_stream(tokens, eoi)).map(|idx_term| {
@@ -706,7 +707,12 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> &'a Type<'a, Ident> {
-        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
+        let (tokens, eoi) = aiahr_lexer(db)
+            .lex(
+                FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
+                input,
+            )
+            .unwrap();
         let mut alloc = CstIndxAlloc::default();
         let ty = type_()
             .then_ignore(end())
@@ -722,7 +728,12 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> &'a Scheme<'a, Ident> {
-        let (tokens, eoi) = aiahr_lexer(db).lex(MOD, input).unwrap();
+        let (tokens, eoi) = aiahr_lexer(db)
+            .lex(
+                FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
+                input,
+            )
+            .unwrap();
         let mut alloc = CstIndxAlloc::default();
         let scheme = super::scheme()
             .then_ignore(end())

@@ -1,12 +1,13 @@
 use std::cmp::Reverse;
 
+use crate::locator::Locator;
 use aiahr_core::{
     diagnostic::lexer::LexError,
-    id::ModuleId,
-    ident::Ident,
-    loc::{Loc, Locator},
-    span::SpanOf,
+    file::FileId,
     //token::Token,
+    ident::Ident,
+    loc::Loc,
+    span::SpanOf,
 };
 use regex::{Captures, Regex, RegexSet};
 
@@ -109,7 +110,7 @@ impl<'s> Lexer<'s> {
     }
 
     /// Splits `text` into a sequence of tokens.
-    pub fn lex(&self, module: ModuleId, text: &str) -> Result<(Vec<SpanOf<Token>>, Loc), LexError> {
+    pub fn lex(&self, module: FileId, text: &str) -> Result<(Vec<SpanOf<Token>>, Loc), LexError> {
         let locator = Locator::new(module, text);
         let mut idx = 0;
         let mut tokens = Vec::new();
