@@ -46,7 +46,7 @@ pub struct Jar(
     nameres_module,
     nameres_module_of,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
     fn as_nameres_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
@@ -79,7 +79,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {
             .collect()
     }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_parser::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_parser::Db {}
 
 #[salsa::tracked]
 pub struct SalsaItem {

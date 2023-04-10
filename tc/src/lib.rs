@@ -53,22 +53,12 @@ pub trait EffectInfo {
 #[salsa::jar(db = Db)]
 
 pub struct Jar(SalsaTypedItem, type_scheme_of);
-pub trait Db:
-    salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_nameres::Db + aiahr_desugar::Db + aiahr_ast::Db
-{
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_desugar::Db {
     fn as_tc_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
-impl<DB> Db for DB where
-    DB: ?Sized
-        + salsa::DbWithJar<Jar>
-        + aiahr_core::Db
-        + aiahr_nameres::Db
-        + aiahr_desugar::Db
-        + aiahr_ast::Db
-{
-}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_desugar::Db {}
 
 impl<DB> EffectInfo for DB
 where
