@@ -6,12 +6,11 @@ use aiahr_ast::{
 };
 use aiahr_core::{
     file::FileId,
-    id::{EffectId, EffectOpId, Id, IdGen, ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, Id, IdGen, ItemId, TyVarId, VarId},
     ident::Ident,
     loc::Loc,
-    modules::{module_of, Module},
+    modules::Module,
     span::{Span, SpanOf, Spanned},
-    Top,
 };
 use aiahr_cst::{
     self as cst,
@@ -37,11 +36,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_
     }
 
     fn desugar_module_of(&self, module: Module) -> AstModule {
-        self.desugar_module_id_of(module.name(self.as_core_db()))
-    }
-
-    fn desugar_module_id_of(&self, module_id: ModuleId) -> AstModule {
-        let nameres_module = self.nameres_module_of(module_id);
+        let nameres_module = self.nameres_module_of(module);
         desugar_module(self.as_desugar_db(), nameres_module)
     }
 }
@@ -98,13 +93,8 @@ pub fn desugar_item(
 }
 
 #[salsa::tracked]
-pub fn desugar_item_of_id(
-    db: &dyn crate::Db,
-    _top: Top,
-    module_id: ModuleId,
-    item_id: ItemId,
-) -> SalsaItem {
-    let nameres_module = db.nameres_module_of(module_id);
+pub fn desugar_item_of_id(db: &dyn crate::Db, module: Module, item_id: ItemId) -> SalsaItem {
+    let nameres_module = db.nameres_module_of(module);
     let ast_module = desugar_module(db, nameres_module);
     ast_module
         .items(db.as_ast_db())
@@ -143,12 +133,10 @@ pub fn effect_of(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> ast
 #[salsa::tracked]
 pub fn effect_op_tyscheme_of(
     db: &dyn crate::Db,
-    top: aiahr_core::Top,
-    module_id: ModuleId,
+    module: Module,
     eff_id: EffectId,
     op_id: EffectOpId,
 ) -> TyScheme {
-    let module = module_of(db.as_core_db(), top, module_id);
     let eff = effect_of(db, module, eff_id);
     eff.ops
         .iter()
@@ -758,7 +746,6 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    const MOD: ModuleId = ModuleId(0);
     const WIDTH: usize = 100;
 
     fn ds_snippet<'db>(
@@ -767,14 +754,9 @@ mod tests {
     ) -> (aiahr_nameres::SalsaItem, &'db ast::SalsaItem) {
         let mut content = "item = ".to_string();
         content.push_str(input);
-        let file = SourceFile::new(
-            db,
-            MOD,
-            FileId::new(db, PathBuf::from("test.aiahr")),
-            content,
-        );
+        let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test.aiahr")), content);
         SourceFileSet::new(db, vec![file]);
-        let namesres_module = db.nameres_module_of(MOD);
+        let namesres_module = db.nameres_module_for_file(file);
         (
             namesres_module
                 .items(db)
@@ -782,7 +764,10 @@ mod tests {
                 .first()
                 .unwrap()
                 .unwrap(),
-            db.desugar_module_id_of(MOD).items(db).first().unwrap(),
+            db.desugar_module_of(namesres_module.module(db))
+                .items(db)
+                .first()
+                .unwrap(),
         )
     }
 

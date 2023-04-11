@@ -6,7 +6,7 @@ use pretty::{docs, DocAllocator, Pretty};
 use rustc_hash::FxHashMap;
 
 use aiahr_core::{
-    id::{EffectId, EffectOpId, ItemId, ModuleId, VarId},
+    id::{EffectId, EffectOpId, ItemId, VarId},
     ident::Ident,
     modules::Module,
     span::Span,
@@ -38,7 +38,7 @@ pub enum Term<Var> {
     Variable(Var),
     Int(usize),
     // A global variable binding
-    Item((ModuleId, ItemId)),
+    Item((Module, ItemId)),
     // A unit value
     // Because all products are represented in terms of concat, we don't actually have a way to
     // represent unit at this level
@@ -72,7 +72,7 @@ pub enum Term<Var> {
         term: Idx<Self>,
     },
     // An effect operation
-    Operation((ModuleId, EffectId, EffectOpId)),
+    Operation((Module, EffectId, EffectOpId)),
     Handle {
         handler: Idx<Self>,
         body: Idx<Self>,
@@ -107,17 +107,17 @@ where
     fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, A> {
         match &self.arena[self.root] {
             Term::Variable(var) => var.clone().pretty(alloc),
-            Term::Item((mod_id, item_id)) => docs![
+            Term::Item((module, item_id)) => docs![
                 alloc,
                 "module",
-                alloc.as_string(mod_id.0).angles(),
+                alloc.text(format!("{:?}", module)).angles(),
                 ".item",
                 alloc.as_string(item_id.0).angles()
             ],
-            Term::Operation((mod_id, eff_id, op_id)) => docs![
+            Term::Operation((module, eff_id, op_id)) => docs![
                 alloc,
                 "module",
-                alloc.as_string(mod_id.0).angles(),
+                alloc.text(format!("{:?}", module)).angles(),
                 ".effect",
                 alloc.as_string(eff_id.0).angles(),
                 ".op",

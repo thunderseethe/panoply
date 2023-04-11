@@ -270,10 +270,6 @@ macro_rules! define_ids {
 }
 
 define_ids!(
-/// An ID for a module. Unique within a compilation session.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub ModuleId;
-
 /// An ID for a top-level item in a module. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub ItemId;

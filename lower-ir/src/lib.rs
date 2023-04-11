@@ -1,9 +1,8 @@
 use aiahr_ast::{self as ast, Ast, AstModule, Term};
 use aiahr_core::{
-    id::{EffectId, EffectOpId, IrTyVarId, ItemId, ModuleId, VarId},
+    id::{EffectId, EffectOpId, IrTyVarId, ItemId, VarId},
     ident::Ident,
     modules::Module,
-    Top,
 };
 use aiahr_ir::{Ir, IrKind::*, IrTy, IrTyKind, IrVarTy, Kind, MkIrTy, P};
 use aiahr_nameres::name::ModuleName;
@@ -25,16 +24,12 @@ mod lower;
 /// Slightly lower level of information than required by EffectInfo.
 /// However this is all calculatable off of the effect definition
 pub trait IrEffectInfo: EffectInfo {
-    fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
-    fn effect_handler_op_index(
-        &self,
-        mod_id: ModuleId,
-        eff_id: EffectId,
-        op_id: EffectOpId,
-    ) -> usize;
-    fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize;
+    fn effect_handler_return_index(&self, mod_id: Module, eff_id: EffectId) -> usize;
+    fn effect_handler_op_index(&self, mod_id: Module, eff_id: EffectId, op_id: EffectOpId)
+        -> usize;
+    fn effect_vector_index(&self, mod_id: Module, eff_id: EffectId) -> usize;
 
-    fn effect_handler_ir_ty(&self, mod_id: ModuleId, eff_id: EffectId) -> IrTy;
+    fn effect_handler_ir_ty(&self, mod_id: Module, eff_id: EffectId) -> IrTy;
 }
 
 #[salsa::jar(db = Db)]
@@ -54,25 +49,25 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_ir::Db {
         lower_module(self.as_lower_ir_db(), module)
     }
 
-    fn lower_item(&self, module_id: ModuleId, item_id: ItemId) -> IrItem {
-        lower_item(self.as_lower_ir_db(), self.top(), module_id, item_id)
+    fn lower_item(&self, module: Module, item_id: ItemId) -> IrItem {
+        lower_item(self.as_lower_ir_db(), module, item_id)
     }
 
-    fn lower_module_of(&self, module_id: ModuleId) -> IrModule {
-        let module = aiahr_core::modules::module_of(self.as_core_db(), self.top(), module_id);
+    fn lower_module_of(&self, module: Module) -> IrModule {
         let ast_module = self.desugar_module_of(module);
         self.lower_module(ast_module)
     }
 
     fn lower_module_for_path(&self, path: std::path::PathBuf) -> IrModule {
-        let module_id = aiahr_core::file::module_id_for_path(self.as_core_db(), self.top(), path);
-        self.lower_module_of(module_id)
+        let module = self.root_module_for_path(path);
+        let ast_module = self.desugar_module_of(module);
+        self.lower_module(ast_module)
     }
 
     fn lower_item_for_file_name(&self, path: std::path::PathBuf, item: Ident) -> Option<IrItem> {
-        let module_id = aiahr_core::file::module_id_for_path(self.as_core_db(), self.top(), path);
-        let item_id = self.id_for_name(module_id, item)?;
-        Some(self.lower_item(module_id, item_id))
+        let module = self.root_module_for_path(path);
+        let item_id = self.id_for_name(module, item)?;
+        Some(self.lower_item(module, item_id))
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_ir::Db {}
@@ -104,9 +99,9 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
             match ast_item {
                 ast::Item::Effect(_) => todo!(),
                 ast::Item::Function(ast) => {
-                    let mod_id = module.module(ast_db).name(db.as_core_db());
-                    let scheme = db.lookup_scheme(mod_id, ast.name);
-                    let ir = lower(db, mod_id, &scheme, &ast);
+                    let module = module.module(ast_db);
+                    let scheme = db.lookup_scheme(module, ast.name);
+                    let ir = lower(db, module, &scheme, &ast);
                     IrItem::new(db, ModuleName::from(ast.name), ir)
                 }
             }
@@ -116,8 +111,8 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
 }
 
 #[salsa::tracked]
-fn lower_item(db: &dyn crate::Db, _top: Top, module_id: ModuleId, item_id: ItemId) -> IrItem {
-    let ir_module = db.lower_module_of(module_id);
+fn lower_item(db: &dyn crate::Db, module: Module, item_id: ItemId) -> IrItem {
+    let ir_module = db.lower_module_of(module);
     *ir_module
         .items(db)
         .iter()
@@ -126,12 +121,7 @@ fn lower_item(db: &dyn crate::Db, _top: Top, module_id: ModuleId, item_id: ItemI
 }
 
 #[salsa::tracked]
-fn effect_handler_ir_ty(
-    db: &dyn crate::Db,
-    _top: Top,
-    module_id: ModuleId,
-    effect_id: EffectId,
-) -> IrTy {
+fn effect_handler_ir_ty(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> IrTy {
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
     let bogus_item = ItemId(usize::MAX);
@@ -142,19 +132,19 @@ fn effect_handler_ir_ty(
         &mut var_conv,
         &mut tyvar_conv,
         ItemSelector {
-            module: module_id,
+            module,
             item: bogus_item,
         },
     );
 
     // TODO: Produce members in order so we don't have to sort or get names here.
     let mut members = db
-        .effect_members(module_id, effect_id)
+        .effect_members(module, effect_id)
         .iter()
         .map(|op_id| {
-            let scheme = db.effect_member_sig(module_id, effect_id, *op_id);
+            let scheme = db.effect_member_sig(module, effect_id, *op_id);
             (
-                db.effect_member_name(module_id, effect_id, *op_id),
+                db.effect_member_name(module, effect_id, *op_id),
                 lower_ctx.lower_scheme(&scheme),
             )
         })
@@ -174,54 +164,33 @@ impl<DB> IrEffectInfo for DB
 where
     DB: ?Sized + crate::Db,
 {
-    fn effect_handler_return_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
-        aiahr_nameres::effect_handler_return_index(
-            self.as_nameres_db(),
-            Top::new(self.as_core_db()),
-            mod_id,
-            eff_id,
-        )
+    fn effect_handler_return_index(&self, module: Module, eff_id: EffectId) -> usize {
+        aiahr_nameres::effect_handler_return_index(self.as_nameres_db(), module, eff_id)
     }
 
     fn effect_handler_op_index(
         &self,
-        mod_id: ModuleId,
+        module: Module,
         eff_id: EffectId,
         op_id: EffectOpId,
     ) -> usize {
-        aiahr_nameres::effect_handler_op_index(
-            self.as_nameres_db(),
-            Top::new(self.as_core_db()),
-            mod_id,
-            eff_id,
-            op_id,
-        )
+        aiahr_nameres::effect_handler_op_index(self.as_nameres_db(), module, eff_id, op_id)
     }
 
-    fn effect_vector_index(&self, mod_id: ModuleId, eff_id: EffectId) -> usize {
-        aiahr_nameres::effect_vector_index(
-            self.as_nameres_db(),
-            Top::new(self.as_core_db()),
-            mod_id,
-            eff_id,
-        )
+    fn effect_vector_index(&self, module: Module, eff_id: EffectId) -> usize {
+        aiahr_nameres::effect_vector_index(self.as_nameres_db(), module, eff_id)
     }
 
-    fn effect_handler_ir_ty(&self, mod_id: ModuleId, eff_id: EffectId) -> IrTy {
-        effect_handler_ir_ty(self.as_lower_ir_db(), self.top(), mod_id, eff_id)
+    fn effect_handler_ir_ty(&self, module: Module, eff_id: EffectId) -> IrTy {
+        effect_handler_ir_ty(self.as_lower_ir_db(), module, eff_id)
     }
 }
 impl<DB> ItemSchemes for DB
 where
     DB: ?Sized + crate::Db,
 {
-    fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme {
-        let typed_item = aiahr_tc::type_scheme_of(
-            self.as_tc_db(),
-            Top::new(self.as_core_db()),
-            module_id,
-            item_id,
-        );
+    fn lookup_scheme(&self, module: Module, item_id: ItemId) -> TyScheme {
+        let typed_item = aiahr_tc::type_scheme_of(self.as_tc_db(), module, item_id);
         typed_item.ty_scheme(self.as_tc_db())
     }
 }
@@ -229,13 +198,8 @@ impl<DB> VarTys for DB
 where
     DB: ?Sized + crate::Db,
 {
-    fn lookup_var(&self, module_id: ModuleId, item_id: ItemId, var_id: VarId) -> Ty {
-        let typed_item = aiahr_tc::type_scheme_of(
-            self.as_tc_db(),
-            Top::new(self.as_core_db()),
-            module_id,
-            item_id,
-        );
+    fn lookup_var(&self, module: Module, item_id: ItemId, var_id: VarId) -> Ty {
+        let typed_item = aiahr_tc::type_scheme_of(self.as_tc_db(), module, item_id);
         typed_item.var_to_tys(self.as_tc_db())[&var_id]
     }
 }
@@ -245,23 +209,18 @@ where
 {
     fn lookup_term(
         &self,
-        module_id: ModuleId,
+        module: Module,
         item_id: ItemId,
         term: Idx<Term<VarId>>,
     ) -> aiahr_tc::TyChkRes<InDb> {
-        let typed_item = aiahr_tc::type_scheme_of(
-            self.as_tc_db(),
-            Top::new(self.as_core_db()),
-            module_id,
-            item_id,
-        );
+        let typed_item = aiahr_tc::type_scheme_of(self.as_tc_db(), module, item_id);
         typed_item.term_to_tys(self.as_tc_db())[&term]
     }
 }
 
 /// Lower an `Ast` into an `Ir`.
 /// TODO: Real documentation.
-pub fn lower<'a, 'ctx, Db>(db: &'a Db, module: ModuleId, scheme: &TyScheme, ast: &Ast<VarId>) -> Ir
+pub fn lower<'a, 'ctx, Db>(db: &'a Db, module: Module, scheme: &TyScheme, ast: &Ast<VarId>) -> Ir
 where
     Db: ?Sized + ItemSchemes + VarTys + TermTys + MkTy<InDb> + MkIrTy + IrEffectInfo + 'a,
     &'a Db: AccessTy<'a, InDb>,
@@ -333,14 +292,14 @@ pub mod test_utils {
         }
     }
     impl VarTys for LowerDb<'_> {
-        fn lookup_var(&self, _module_id: ModuleId, _item_id: ItemId, var_id: VarId) -> Ty {
+        fn lookup_var(&self, _module: Module, _item_id: ItemId, var_id: VarId) -> Ty {
             self.var_tys[&var_id]
         }
     }
     impl TermTys for LowerDb<'_> {
         fn lookup_term(
             &self,
-            _module_id: ModuleId,
+            _module: Module,
             _item_id: ItemId,
             term: Idx<Term<VarId>>,
         ) -> TyChkRes<InDb> {
@@ -348,18 +307,18 @@ pub mod test_utils {
         }
     }
     impl ItemSchemes for LowerDb<'_> {
-        fn lookup_scheme(&self, _module_id: ModuleId, _item_id: ItemId) -> TyScheme {
+        fn lookup_scheme(&self, _module_id: Module, _item_id: ItemId) -> TyScheme {
             todo!()
         }
     }
     impl EffectInfo for LowerDb<'_> {
-        fn effect_name(&self, mod_id: ModuleId, eff: aiahr_core::id::EffectId) -> Ident {
+        fn effect_name(&self, mod_id: Module, eff: aiahr_core::id::EffectId) -> Ident {
             self.eff_info.effect_name(mod_id, eff)
         }
 
         fn effect_members(
             &self,
-            mod_id: ModuleId,
+            mod_id: Module,
             eff: aiahr_core::id::EffectId,
         ) -> &[aiahr_core::id::EffectOpId] {
             self.eff_info.effect_members(mod_id, eff)
@@ -367,7 +326,7 @@ pub mod test_utils {
 
         fn effect_member_sig(
             &self,
-            module: ModuleId,
+            module: Module,
             eff: aiahr_core::id::EffectId,
             member: aiahr_core::id::EffectOpId,
         ) -> TyScheme {
@@ -376,7 +335,7 @@ pub mod test_utils {
 
         fn effect_member_name(
             &self,
-            module: ModuleId,
+            module: Module,
             eff: aiahr_core::id::EffectId,
             member: aiahr_core::id::EffectOpId,
         ) -> Ident {
@@ -385,23 +344,19 @@ pub mod test_utils {
 
         fn lookup_effect_by_member_names<'a>(
             &self,
-            module: ModuleId,
+            module: Module,
             members: &[Ident],
-        ) -> Option<(ModuleId, EffectId)> {
+        ) -> Option<(Module, EffectId)> {
             self.eff_info.lookup_effect_by_member_names(module, members)
         }
 
-        fn lookup_effect_by_name(
-            &self,
-            module: ModuleId,
-            name: Ident,
-        ) -> Option<(ModuleId, EffectId)> {
+        fn lookup_effect_by_name(&self, module: Module, name: Ident) -> Option<(Module, EffectId)> {
             self.eff_info.lookup_effect_by_name(module, name)
         }
     }
 
     impl IrEffectInfo for LowerDb<'_> {
-        fn effect_handler_return_index(&self, _: ModuleId, eff_id: EffectId) -> usize {
+        fn effect_handler_return_index(&self, _: Module, eff_id: EffectId) -> usize {
             match eff_id {
                 DummyEff::STATE_ID => 2,
                 DummyEff::READER_ID => 1,
@@ -411,7 +366,7 @@ pub mod test_utils {
 
         fn effect_handler_op_index(
             &self,
-            _mod_id: ModuleId,
+            _mod_id: Module,
             _eff_id: EffectId,
             op_id: EffectOpId,
         ) -> usize {
@@ -422,7 +377,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_vector_index(&self, _: ModuleId, eff_id: EffectId) -> usize {
+        fn effect_vector_index(&self, _: Module, eff_id: EffectId) -> usize {
             match eff_id {
                 DummyEff::STATE_ID => 0,
                 DummyEff::READER_ID => 1,
@@ -430,7 +385,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_handler_ir_ty(&self, _mod_id: ModuleId, eff_id: EffectId) -> IrTy {
+        fn effect_handler_ir_ty(&self, _mod_id: Module, eff_id: EffectId) -> IrTy {
             use aiahr_ir::IrTyKind::*;
             // Find a better solution for this
             // Guessing a big enough irvartyid that we won't hit it in tests is flaky.
@@ -546,26 +501,24 @@ pub mod test_utils {
 mod tests {
     use std::ops::Deref;
 
-    use crate::lower;
+    use crate::{lower, test_utils::LowerDb, Db as LowerIrDb};
 
-    use super::test_utils::LowerDb;
-    use aiahr_ast::{self as ast, Ast, Direction, Term};
+    use aiahr_ast::{Direction, Term};
     use aiahr_core::{
         file::{FileId, SourceFile, SourceFileSet},
-        id::{ItemId, ModuleId, VarId},
-        Top,
+        id::VarId,
+        modules::Module,
+        Db,
     };
     use aiahr_ir::{
+        Db as IrDb, Ir,
         IrKind::{self, *},
         IrTyKind::*,
     };
-    use aiahr_tc::type_scheme_of;
     use aiahr_test::ast::{AstBuilder, MkTerm};
-    use aiahr_ty::TyScheme;
     use assert_matches::assert_matches;
     use ir_matcher::ir_matcher;
-
-    const MOD: ModuleId = ModuleId(0);
+    use salsa::AsId;
 
     #[derive(Default)]
     #[salsa::db(
@@ -584,55 +537,35 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    /// Compile an input string up to (but not including) the lower stage.
-    fn compile_upto_lower<'a: 'ctx, 'ctx>(
-        db: &'a TestDatabase,
-        input: &str,
-    ) -> (LowerDb<'a>, TyScheme, Ast<VarId>) {
-        let file = SourceFile::new(
-            db,
-            ModuleId(0),
-            FileId::new(db, std::path::PathBuf::from("test.aiahr")),
-            input.to_string(),
-        );
+    /// Lower a snippet and return the produced IR
+    fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db Ir {
+        let path = std::path::PathBuf::from("test.aiahr");
+        let mut contents = "main = ".to_string();
+        contents.push_str(input);
+        let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
         SourceFileSet::new(db, vec![file]);
 
-        let top = Top::new(db);
-        let salsa_typed_item = type_scheme_of(db, top, MOD, ItemId(0));
-        let item = aiahr_desugar::desugar_item_of_id(db, top, MOD, ItemId(0));
-        let ast = match item.item(db) {
-            ast::Item::Effect(_) => unreachable!(),
-            ast::Item::Function(ast) => ast,
-        };
-        (
-            LowerDb::new(
-                db,
-                salsa_typed_item.var_to_tys(db).clone(),
-                salsa_typed_item.term_to_tys(db).clone(),
-            ),
-            salsa_typed_item.ty_scheme(db),
-            ast,
-        )
+        db.lower_item_for_file_name(path, db.ident_str("main"))
+            .unwrap()
+            .item(db)
     }
 
     #[test]
     fn lower_id() {
         let db = TestDatabase::default();
-        let (db, scheme, ast) = compile_upto_lower(&db, "id = |x| x");
 
-        let ir = lower(&db, MOD, &scheme, &ast);
+        let ir = lower_snippet(&db, "|x| x");
 
         ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(var))) => {
-            assert_eq!(var.ty.kind(db.db.as_ir_db()), VarTy(*ty_var));
+            assert_eq!(var.ty.kind(db.as_ir_db()), VarTy(*ty_var));
         })
     }
 
     #[test]
     fn lower_product_literal() {
         let db = TestDatabase::default();
-        let (db, scheme, ast) = compile_upto_lower(&db, "f = |a| { x = a, y = a }");
 
-        let ir = lower(&db, MOD, &scheme, &ast);
+        let ir = lower_snippet(&db, "|a| { x = a, y = a }");
         ir_matcher!(ir,
             TyAbs([_ty_var],
                   App([
@@ -663,10 +596,11 @@ mod tests {
                 ),
             )
         });
+        let module = Module::from_id(salsa::Id::from_u32(0));
         let (var_tys, term_tys, scheme, _) =
-            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), MOD, &ast);
+            aiahr_tc::type_check(&db, &aiahr_tc::test_utils::DummyEff(&db), module, &ast);
 
-        let ir = lower(&LowerDb::new(&db, var_tys, term_tys), MOD, &scheme, &ast);
+        let ir = lower(&LowerDb::new(&db, var_tys, term_tys), module, &scheme, &ast);
         ir_matcher!(
             ir,
             TyAbs(

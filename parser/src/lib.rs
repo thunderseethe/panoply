@@ -1,9 +1,7 @@
 use aiahr_core::{
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
-    file::{SourceFile, SourceFileSet},
-    id::ModuleId,
+    file::{FileId, SourceFile, SourceFileSet},
     modules::Module,
-    Top,
 };
 use aiahr_cst::{CstIndxAlloc, CstModule};
 use chumsky::Parser;
@@ -74,18 +72,33 @@ pub mod error {
 }
 
 #[salsa::jar(db = Db)]
-pub struct Jar(parse_module, parse_module_of, ParseModule);
+pub struct Jar(all_modules, parse_module, ParseFile);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     fn as_parser_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 
-    fn parse_module(&self, file: SourceFile) -> ParseModule {
+    fn all_modules(&self) -> &[Module] {
+        all_modules(self.as_parser_db())
+    }
+
+    fn root_module_for_path(&self, path: std::path::PathBuf) -> Module {
+        let file_id = FileId::new(self.as_core_db(), path);
+        let file = aiahr_core::file::file_for_id(self.as_core_db(), file_id);
+        self.root_module_for_file(file)
+    }
+
+    fn root_module_for_file(&self, file: SourceFile) -> Module {
+        self.parse_module(file).module(self.as_parser_db())
+    }
+
+    fn parse_module(&self, file: SourceFile) -> ParseFile {
         parse_module(self.as_parser_db(), file)
     }
 
-    fn parse_module_of(&self, mod_id: ModuleId) -> ParseModule {
-        parse_module_of(self.as_parser_db(), self.top(), mod_id)
+    fn parse_module_of(&self, module: Module) -> ParseFile {
+        let file = aiahr_core::file::module_source_file(self.as_core_db(), module);
+        self.parse_module(file)
     }
 
     fn parse_errors(&self) -> Vec<AiahrcError> {
@@ -103,30 +116,45 @@ impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db {}
 
 #[salsa::tracked]
 #[derive(DebugWithDb)]
-pub struct ParseModule {
+pub struct ParseFile {
     #[id]
+    pub file: FileId,
+    /// Root module of file
     pub module: Module,
     #[return_ref]
     pub data: CstModule,
 }
 
-#[salsa::tracked]
-fn parse_module_of(db: &dyn Db, top: Top, mod_id: ModuleId) -> ParseModule {
-    let file = aiahr_core::file::module_source_file(db.as_core_db(), top, mod_id);
-    db.parse_module(file)
+#[salsa::tracked(return_ref)]
+fn all_modules(db: &dyn Db) -> Vec<Module> {
+    let source_file_set = SourceFileSet::get(db.as_core_db());
+    source_file_set
+        .files(db.as_core_db())
+        .iter()
+        .map(|file| {
+            let parse_file = db.parse_module(*file);
+            parse_file.module(db)
+        })
+        .collect::<Vec<_>>()
 }
 
 #[salsa::tracked]
-fn parse_module(db: &dyn Db, file: SourceFile) -> ParseModule {
+fn parse_module(db: &dyn Db, file: SourceFile) -> ParseFile {
     let core_db = db.as_core_db();
-    let mod_id = file.module(core_db);
-    let module = Module::new(core_db, mod_id, file.path(core_db));
+    let file_id = file.path(core_db);
+    let path = file_id.path(core_db);
+    let file_name = path
+        .file_name()
+        .and_then(|os_str| os_str.to_str())
+        .expect("Expected file name to exist and be valid UTF8");
+    let mod_name = db.ident_str(file_name);
+    let module = Module::new(core_db, mod_name, file_id);
     let lexer = aiahr_lexer(db);
-    let (tokens, eoi) = match lexer.lex(file.path(core_db), file.contents(core_db)) {
+    let (tokens, eoi) = match lexer.lex(file_id, file.contents(core_db)) {
         Ok(tokens) => tokens,
         Err(err) => {
             AiahrcErrors::push(db, AiahrcError::from(err));
-            return ParseModule::new(db, module, CstModule::default());
+            return ParseFile::new(db, file_id, module, CstModule::default());
         }
     };
 
@@ -144,7 +172,7 @@ fn parse_module(db: &dyn Db, file: SourceFile) -> ParseModule {
         })
         .unwrap_or_default();
 
-    ParseModule::new(db, module, cst_module)
+    ParseFile::new(db, file_id, module, cst_module)
 }
 
 #[cfg(test)]

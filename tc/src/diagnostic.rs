@@ -2,9 +2,9 @@ use std::convert::Infallible;
 
 use aiahr_core::{
     diagnostic::{Citation, Diagnostic},
-    displayer::Displayer,
-    id::{ItemId, ModuleId, VarId},
+    id::{ItemId, VarId},
     ident::Ident,
+    modules::Module,
     span::Span,
 };
 use aiahr_ty::{
@@ -20,7 +20,7 @@ use pretty::{docs, DocAllocator};
 pub(crate) enum TypeCheckError<'ctx> {
     /// A variable we expected to exist with a type, did not
     VarNotDefined(VarId),
-    ItemNotDefined((ModuleId, ItemId)),
+    ItemNotDefined((Module, ItemId)),
     TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
     OccursCheckFailed(TypeVarOf<InArena<'ctx>>, InferTy<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),
@@ -181,11 +181,11 @@ impl Diagnostic for TypeCheckDiagnostic {
         self.name
     }
 
-    fn principal<M: Displayer<ModuleId>>(&self, _: &M) -> Citation {
+    fn principal<M>(&self, _: &M) -> Citation {
         self.principal.clone()
     }
 
-    fn additional<M: Displayer<ModuleId>>(&self, _: &M) -> Vec<Citation> {
+    fn additional<M>(&self, _: &M) -> Vec<Citation> {
         // TODO: allow for additional citations
         vec![]
     }

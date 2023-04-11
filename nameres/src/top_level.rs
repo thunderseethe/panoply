@@ -9,8 +9,7 @@ use aiahr_core::{
         nameres::{NameKind, NameResolutionError},
         DiagnosticSink,
     },
-    id::ModuleId,
-    modules::ModuleTree,
+    modules::Module,
     span::Spanned,
 };
 use aiahr_cst::Item;
@@ -89,11 +88,11 @@ impl BaseBuilder {
     pub fn build<'a, 'b>(
         self,
         arena: &'a Bump,
-        me: ModuleId,
-        modules: &'b ModuleTree,
-        module_names: &'b mut FxHashMap<ModuleId, &'a ModuleNames>,
+        me: Module,
+        db: &'b dyn crate::Db,
+        module_names: &'b mut FxHashMap<Module, &'a ModuleNames>,
     ) -> BaseNames<'b, 'a> {
         module_names.insert(me, arena.alloc(self.builder.build()));
-        BaseNames::new(me, modules, module_names)
+        BaseNames::new(me, db, module_names)
     }
 }

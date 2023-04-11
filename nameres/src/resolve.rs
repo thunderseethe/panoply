@@ -9,9 +9,10 @@ use aiahr_core::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
     },
-    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, ItemId, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaRef, IdxAlloc},
+    modules::Module,
     option::Transpose,
     span::{Span, SpanOf, Spanned},
 };
@@ -119,17 +120,17 @@ where
 // A module or some other value.
 #[derive(Clone, Copy, Debug)]
 enum ModuleOr<T> {
-    Module(ModuleId),
+    Module(Module),
     Value(T),
 }
 
 // The possible meanings of a `DotAccess` term.
 #[derive(Debug)]
 enum DotResolution {
-    Module(ModuleId),
-    Effect(ModuleId, EffectId),
-    EffectOp(ModuleId, EffectId, EffectOpId),
-    Item(ModuleId, ItemId),
+    Module(Module),
+    Effect(Module, EffectId),
+    EffectOp(Module, EffectId, EffectOpId),
+    Item(Module, ItemId),
     FieldAccess {
         base: Idx<nst::Term>,
         dot: Span,
@@ -202,7 +203,7 @@ where
 
     // Resolves a symbol in a given module to a value of type `T`, using the given function to decide
     // which names are valid for the symbol.
-    fn resolve_symbol_in<T, F>(&mut self, module: ModuleId, var: SpanOf<Ident>, f: F) -> Option<T>
+    fn resolve_symbol_in<T, F>(&mut self, module: Module, var: SpanOf<Ident>, f: F) -> Option<T>
     where
         F: FnMut(BaseName) -> Result<T, RejectionReason>,
     {
@@ -247,7 +248,7 @@ where
     // Resolves an effect operation symbolto a value of type `T`, using the given function to decide which names are valid for the symbol.
     fn resolve_operation_symbol<T, F>(
         &mut self,
-        module: ModuleId,
+        module: Module,
         effect: EffectId,
         var: SpanOf<Ident>,
         mut f: F,
@@ -780,7 +781,7 @@ where
     /// Resolves the given effect.
     fn resolve_effect(
         &mut self,
-        (module, eid): (ModuleId, EffectId),
+        (module, eid): (Module, EffectId),
         effect: Span,
         name: SpanOf<Ident>,
         lbrace: Span,
@@ -913,7 +914,6 @@ mod tests {
     use aiahr_core::{
         diagnostic::nameres::{NameKind, NameResolutionError},
         file::{FileId, SourceFile, SourceFileSet},
-        id::ModuleId,
         indexed::ReferenceAllocate,
         span::Span,
         span_of,
@@ -979,13 +979,11 @@ mod tests {
         &'a ModuleNames,
         Vec<NameResolutionError>,
     ) {
-        const MOD: ModuleId = ModuleId(0);
-
         let file_id = FileId::new(db, PathBuf::from("test.aiahr"));
-        let file = SourceFile::new(db, MOD, file_id, input.to_string());
+        let file = SourceFile::new(db, file_id, input.to_string());
         let _ = SourceFileSet::new(db, vec![file]);
 
-        let nameres_module = db.nameres_module_of(MOD);
+        let nameres_module = db.nameres_module_for_file(file);
         let resolution = nameres_module.items(db);
         let resolution = ModuleResolution {
             locals: resolution.local_ids.clone(),
@@ -1012,7 +1010,11 @@ mod tests {
             })
             .collect();
 
-        (resolution, &nameres_module.names(db)[&MOD], errors)
+        (
+            resolution,
+            &nameres_module.names(db)[&nameres_module.module(db)],
+            errors,
+        )
     }
 
     #[test]
@@ -1521,8 +1523,7 @@ mod tests {
             ] => {
                 assert_eq!(ids.get(foo).value.text(&db), "foo");
                 assert_eq!(ids.get(bar).value.text(&db), "bar");
-                assert_eq!(mbar, ModuleId(0));
-                assert_eq!(mfoo, ModuleId(0));
+                assert_eq!(mbar, mfoo);
                 assert_eq!(bar1, bar);
                 assert_eq!(foo1, foo);
             }

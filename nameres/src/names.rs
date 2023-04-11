@@ -1,8 +1,9 @@
 use std::fmt::Debug;
 
 use aiahr_core::{
-    id::{EffectId, IdGen, Ids, ModuleId, TyVarId, VarId},
+    id::{EffectId, IdGen, Ids, TyVarId, VarId},
     ident::Ident,
+    modules::Module,
     span::{SpanOf, Spanned},
 };
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -143,7 +144,7 @@ impl<'b, 'a> Names<'b, 'a> {
     }
 
     /// Gets the effect corresponding to the given ID.
-    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames {
+    pub fn get_effect(&self, module: Module, effect: EffectId) -> &EffectNames {
         self.base.get_effect(module, effect)
     }
 
@@ -202,7 +203,7 @@ impl<'b, 'a> Names<'b, 'a> {
     /// Finds the correct ID associated with the given string in the given module.
     pub fn find_in(
         &self,
-        module: ModuleId,
+        module: Module,
         name: Ident,
     ) -> impl '_ + Iterator<Item = SpanOf<BaseName>> {
         self.base.find_in(module, name)

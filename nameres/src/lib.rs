@@ -1,12 +1,11 @@
 use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
-use aiahr_core::file::SourceFileSet;
-use aiahr_core::id::{EffectId, EffectOpId, ItemId, ModuleId};
+use aiahr_core::file::{FileId, SourceFile};
+use aiahr_core::id::{EffectId, EffectOpId, ItemId};
 use aiahr_core::ident::Ident;
-use aiahr_core::modules::{all_modules, Module, ModuleTree};
+use aiahr_core::modules::Module;
 use aiahr_core::span::{Span, Spanned};
-use aiahr_core::Top;
 use aiahr_cst::nameres as nst;
-use aiahr_parser::ParseModule;
+use aiahr_parser::ParseFile;
 use rustc_hash::FxHashMap;
 
 use crate::name::ModuleName;
@@ -51,30 +50,34 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
 
-    fn nameres_module_of(&self, mod_id: ModuleId) -> NameResModule {
-        nameres_module_of(self.as_nameres_db(), self.top(), mod_id)
+    fn nameres_module_of(&self, module: Module) -> NameResModule {
+        nameres_module_of(self.as_nameres_db(), module)
     }
 
-    fn item_name(&self, mod_id: ModuleId, item_id: ItemId) -> Ident {
-        item_name(self.as_nameres_db(), self.top(), mod_id, item_id)
+    fn nameres_module_for_file(&self, file: SourceFile) -> NameResModule {
+        let parse_file = self.parse_module(file);
+        nameres_module(self.as_nameres_db(), parse_file)
     }
 
-    fn id_for_name(&self, mod_id: ModuleId, name: Ident) -> Option<ItemId> {
-        id_for_name(self.as_nameres_db(), self.top(), mod_id, name)
+    fn nameres_module_for_file_id(&self, file_id: FileId) -> NameResModule {
+        let file = aiahr_core::file::file_for_id(self.as_core_db(), file_id);
+        self.nameres_module_for_file(file)
+    }
+
+    fn item_name(&self, module: Module, item_id: ItemId) -> Ident {
+        item_name(self.as_nameres_db(), module, item_id)
+    }
+
+    fn id_for_name(&self, module: Module, name: Ident) -> Option<ItemId> {
+        id_for_name(self.as_nameres_db(), module, name)
     }
 
     fn nameres_errors(&self) -> Vec<AiahrcError> {
-        let file_set = SourceFileSet::get(self.as_core_db());
-        file_set
-            .files(self.as_core_db())
-            .into_iter()
-            .flat_map(|file| {
-                nameres_module_of::accumulated::<AiahrcErrors>(
-                    self.as_nameres_db(),
-                    self.top(),
-                    file.module(self.as_core_db()),
-                )
-                .into_iter()
+        self.all_modules()
+            .iter()
+            .flat_map(|module| {
+                nameres_module_of::accumulated::<AiahrcErrors>(self.as_nameres_db(), *module)
+                    .into_iter()
             })
             .collect()
     }
@@ -115,24 +118,23 @@ pub struct NameResModule {
     pub module: Module,
     // This is a map of all in scope names, from BaseNames
     #[return_ref]
-    pub names: FxHashMap<ModuleId, ModuleNames>,
+    pub names: FxHashMap<Module, ModuleNames>,
     #[return_ref]
     pub items: SalsaModuleResolution,
 }
 
 #[salsa::tracked]
-pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResModule {
+pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResModule {
     let arena = bumpalo::Bump::new();
 
     let cst_module = parse_module.data(db.as_parser_db());
-    let mod_id = parse_module.module(db.as_parser_db()).name(db.as_core_db());
+    let module = parse_module.module(db.as_parser_db());
 
-    let modules = ModuleTree::default();
     let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = vec![];
     let mut module_names = FxHashMap::default();
     let base = BaseBuilder::new()
         .add_slice(&cst_module.items, &mut errors)
-        .build(&arena, mod_id, &modules, &mut module_names);
+        .build(&arena, module, db, &mut module_names);
     let mod_resolution = resolve_module(&arena, cst_module, base, &mut errors);
 
     let salsa_resolution = SalsaModuleResolution {
@@ -167,21 +169,21 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseModule) -> NameResM
 }
 
 #[salsa::tracked]
-fn nameres_module_of(db: &dyn crate::Db, _top: Top, mod_id: ModuleId) -> NameResModule {
-    let parse_module = db.parse_module_of(mod_id);
+fn nameres_module_of(db: &dyn crate::Db, module: Module) -> NameResModule {
+    let parse_module = db.parse_module_of(module);
     nameres_module(db, parse_module)
 }
 
 #[salsa::tracked]
-fn item_name(db: &dyn crate::Db, _top: Top, mod_id: ModuleId, item_id: ItemId) -> Ident {
-    let module = db.nameres_module_of(mod_id);
-    module.names(db)[&mod_id].get(item_id).value
+fn item_name(db: &dyn crate::Db, module: Module, item_id: ItemId) -> Ident {
+    let nr_module = db.nameres_module_of(module);
+    nr_module.names(db)[&module].get(item_id).value
 }
 
 #[salsa::tracked]
-fn id_for_name(db: &dyn crate::Db, _top: Top, mod_id: ModuleId, name: Ident) -> Option<ItemId> {
-    let module = db.nameres_module_of(mod_id);
-    module.names(db)[&mod_id]
+fn id_for_name(db: &dyn crate::Db, module: Module, name: Ident) -> Option<ItemId> {
+    let nr_module = db.nameres_module_of(module);
+    nr_module.names(db)[&module]
         .find(name)
         .find_map(|module_name| match module_name.value {
             ModuleName::Effect(_) => None,
@@ -190,28 +192,22 @@ fn id_for_name(db: &dyn crate::Db, _top: Top, mod_id: ModuleId, name: Ident) -> 
 }
 
 #[salsa::tracked]
-pub fn effect_name(
-    db: &dyn crate::Db,
-    _top: aiahr_core::Top,
-    module_id: ModuleId,
-    effect_id: EffectId,
-) -> Ident {
-    let name_res = db.nameres_module_of(module_id);
+pub fn effect_name(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> Ident {
+    let name_res = db.nameres_module_of(module);
 
-    name_res.names(db)[&module_id].get(effect_id).value
+    name_res.names(db)[&module].get(effect_id).value
 }
 
 #[salsa::tracked]
 pub fn effect_member_name(
     db: &dyn crate::Db,
-    _top: aiahr_core::Top,
-    module_id: ModuleId,
+    module: Module,
     eff_id: EffectId,
     op_id: EffectOpId,
 ) -> Ident {
-    let name_res = db.nameres_module_of(module_id);
+    let name_res = db.nameres_module_of(module);
 
-    name_res.names(db)[&module_id]
+    name_res.names(db)[&module]
         .get_effect(eff_id)
         .ops
         .get(op_id)
@@ -219,15 +215,10 @@ pub fn effect_member_name(
 }
 
 #[salsa::tracked(return_ref)]
-pub fn effect_members(
-    db: &dyn crate::Db,
-    _top: aiahr_core::Top,
-    module_id: ModuleId,
-    effect_id: EffectId,
-) -> Vec<EffectOpId> {
-    let name_res = db.nameres_module_of(module_id);
+pub fn effect_members(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> Vec<EffectOpId> {
+    let name_res = db.nameres_module_of(module);
 
-    name_res.names(db)[&module_id]
+    name_res.names(db)[&module]
         .get_effect(effect_id)
         .iter()
         .collect()
@@ -236,15 +227,14 @@ pub fn effect_members(
 #[salsa::tracked]
 pub fn lookup_effect_by_member_names(
     db: &dyn crate::Db,
-    top: aiahr_core::Top,
-    module_id: ModuleId,
+    module: Module,
     members: Box<[Ident]>,
-) -> Option<(ModuleId, EffectId)> {
+) -> Option<(Module, EffectId)> {
     let mut members: Vec<Ident> = members.as_ref().to_vec();
     // TODO: Consider making it invariant that members must be sorted to avoid this allocation.
     members.sort();
 
-    lookup_effect_by(db, top, module_id, |(_, eff_names)|
+    lookup_effect_by(db, module, |(_, eff_names)|
             // if length's don't match up we don't need to iterate
             members.len() == eff_names.ops.len()
                 && eff_names
@@ -257,20 +247,18 @@ pub fn lookup_effect_by_member_names(
 #[salsa::tracked]
 pub fn lookup_effect_by_name(
     db: &dyn crate::Db,
-    top: aiahr_core::Top,
-    module_id: ModuleId,
+    module: Module,
     effect_name: Ident,
-) -> Option<(ModuleId, EffectId)> {
-    lookup_effect_by(db, top, module_id, |(name, _)| name.value == effect_name)
+) -> Option<(Module, EffectId)> {
+    lookup_effect_by(db, module, |(name, _)| name.value == effect_name)
 }
 
 fn lookup_effect_by(
     db: &dyn crate::Db,
-    _top: aiahr_core::Top,
-    module_id: ModuleId,
+    module: Module,
     mut find_by: impl FnMut(&(aiahr_core::span::SpanOf<Ident>, effect::EffectNames)) -> bool,
-) -> Option<(ModuleId, EffectId)> {
-    let name_res = db.nameres_module_of(module_id);
+) -> Option<(Module, EffectId)> {
+    let name_res = db.nameres_module_of(module);
 
     let names = name_res.names(db);
     names
@@ -286,15 +274,10 @@ fn lookup_effect_by(
 }
 
 #[salsa::tracked(return_ref)]
-fn effect_handler_order(
-    db: &dyn crate::Db,
-    top: Top,
-    mod_id: ModuleId,
-    eff_id: EffectId,
-) -> Vec<Ident> {
-    let mut members = effect_members(db, top, mod_id, eff_id)
+fn effect_handler_order(db: &dyn crate::Db, module: Module, eff_id: EffectId) -> Vec<Ident> {
+    let mut members = effect_members(db, module, eff_id)
         .iter()
-        .map(|op_id| effect_member_name(db, top, mod_id, eff_id, *op_id))
+        .map(|op_id| effect_member_name(db, module, eff_id, *op_id))
         .collect::<Vec<_>>();
 
     // Insert `return` so it get's ordered as well.
@@ -306,12 +289,11 @@ fn effect_handler_order(
 #[salsa::tracked]
 pub fn effect_handler_return_index(
     db: &dyn crate::Db,
-    top: Top,
-    module_id: ModuleId,
+    module: Module,
     effect_id: EffectId,
 ) -> usize {
     let return_id = db.ident_str("return");
-    effect_handler_order(db, top, module_id, effect_id)
+    effect_handler_order(db, module, effect_id)
         .binary_search(&return_id)
         .unwrap_or_else(|_| {
             panic!(
@@ -324,13 +306,12 @@ pub fn effect_handler_return_index(
 #[salsa::tracked]
 pub fn effect_handler_op_index(
     db: &dyn crate::Db,
-    top: Top,
-    module_id: ModuleId,
+    module: Module,
     effect_id: EffectId,
     op_id: EffectOpId,
 ) -> usize {
-    let member_id = effect_member_name(db, top, module_id, effect_id, op_id);
-    effect_handler_order(db, top, module_id, effect_id)
+    let member_id = effect_member_name(db, module, effect_id, op_id);
+    effect_handler_order(db, module, effect_id)
         .binary_search(&member_id)
         .unwrap_or_else(|_| {
             panic!(
@@ -342,7 +323,7 @@ pub fn effect_handler_op_index(
 
 #[salsa::tracked(return_ref)]
 pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
-    let nameres_module = db.nameres_module_of(module.name(db.as_core_db()));
+    let nameres_module = db.nameres_module_of(module);
     nameres_module
         .items(db)
         .resolved_items
@@ -356,37 +337,30 @@ pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
 }
 
 #[salsa::tracked(return_ref)]
-pub fn all_effects(db: &dyn crate::Db) -> Vec<(ModuleId, EffectId)> {
-    let core_db = db.as_core_db();
-    let module_tree = all_modules(core_db);
-    let mut effects: Vec<(ModuleId, EffectId)> = module_tree
-        .modules(core_db)
-        .iter_enumerate()
-        .flat_map(|(mod_id, module)| {
+pub fn all_effects(db: &dyn crate::Db) -> Vec<(Module, EffectId)> {
+    let module_tree = db.all_modules();
+    let mut effects = module_tree
+        .iter()
+        .flat_map(|module| {
             module_effects(db, *module)
                 .iter()
-                .map(move |eff_id| (mod_id, *eff_id))
+                .map(move |eff_id| (*module, *eff_id))
         })
-        .collect();
+        .collect::<Vec<_>>();
 
     effects.sort();
     effects
 }
 
 #[salsa::tracked]
-pub fn effect_vector_index(
-    db: &dyn crate::Db,
-    _top: Top,
-    module_id: ModuleId,
-    effect_id: EffectId,
-) -> usize {
+pub fn effect_vector_index(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> usize {
     let effects = all_effects(db);
     effects
-        .binary_search(&(module_id, effect_id))
+        .binary_search(&(module, effect_id))
         .unwrap_or_else(|_| {
             panic!(
                 "ICE: {:?} expected effect to exist but it was not found",
-                (module_id, effect_id)
+                (module, effect_id)
             )
         })
 }

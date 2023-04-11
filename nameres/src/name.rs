@@ -5,7 +5,8 @@
 
 use aiahr_core::{
     diagnostic::nameres::NameKind,
-    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, ItemId, TyVarId, VarId},
+    modules::Module,
 };
 
 /// Names whose kind can be determined.
@@ -22,7 +23,7 @@ pub enum ModuleName {
 
 impl ModuleName {
     /// Converts the name to one scoped to the given module.
-    pub fn based_in(&self, m: ModuleId) -> BaseName {
+    pub fn based_in(&self, m: Module) -> BaseName {
         match self {
             ModuleName::Effect(e) => BaseName::Effect(m, *e),
             ModuleName::Item(i) => BaseName::Item(m, *i),
@@ -54,32 +55,32 @@ impl NameKinded for ModuleName {
 /// A name visible at any scope in a module.
 #[derive(Clone, Copy, Debug)]
 pub enum BaseName {
-    Module(ModuleId),
-    Effect(ModuleId, EffectId),
-    EffectOp(ModuleId, EffectId, EffectOpId),
-    Item(ModuleId, ItemId),
+    Module(Module),
+    Effect(Module, EffectId),
+    EffectOp(Module, EffectId, EffectOpId),
+    Item(Module, ItemId),
 }
 
-impl From<ModuleId> for BaseName {
-    fn from(m: ModuleId) -> Self {
+impl From<Module> for BaseName {
+    fn from(m: Module) -> Self {
         BaseName::Module(m)
     }
 }
 
-impl From<(ModuleId, EffectId)> for BaseName {
-    fn from((m, e): (ModuleId, EffectId)) -> Self {
+impl From<(Module, EffectId)> for BaseName {
+    fn from((m, e): (Module, EffectId)) -> Self {
         BaseName::Effect(m, e)
     }
 }
 
-impl From<(ModuleId, EffectId, EffectOpId)> for BaseName {
-    fn from((m, e, o): (ModuleId, EffectId, EffectOpId)) -> Self {
+impl From<(Module, EffectId, EffectOpId)> for BaseName {
+    fn from((m, e, o): (Module, EffectId, EffectOpId)) -> Self {
         BaseName::EffectOp(m, e, o)
     }
 }
 
-impl From<(ModuleId, ItemId)> for BaseName {
-    fn from((m, i): (ModuleId, ItemId)) -> Self {
+impl From<(Module, ItemId)> for BaseName {
+    fn from((m, i): (Module, ItemId)) -> Self {
         BaseName::Item(m, i)
     }
 }
@@ -126,34 +127,34 @@ impl NameKinded for LocalName {
 /// Any kind of name in Aiahr.
 #[derive(Clone, Copy, Debug)]
 pub enum Name {
-    Module(ModuleId),
-    Effect(ModuleId, EffectId),
-    EffectOp(ModuleId, EffectId, EffectOpId),
-    Item(ModuleId, ItemId),
+    Module(Module),
+    Effect(Module, EffectId),
+    EffectOp(Module, EffectId, EffectOpId),
+    Item(Module, ItemId),
     TyVar(TyVarId),
     Var(VarId),
 }
 
-impl From<ModuleId> for Name {
-    fn from(m: ModuleId) -> Self {
+impl From<Module> for Name {
+    fn from(m: Module) -> Self {
         Name::Module(m)
     }
 }
 
-impl From<(ModuleId, EffectId)> for Name {
-    fn from((m, e): (ModuleId, EffectId)) -> Self {
+impl From<(Module, EffectId)> for Name {
+    fn from((m, e): (Module, EffectId)) -> Self {
         Name::Effect(m, e)
     }
 }
 
-impl From<(ModuleId, EffectId, EffectOpId)> for Name {
-    fn from((m, e, o): (ModuleId, EffectId, EffectOpId)) -> Self {
+impl From<(Module, EffectId, EffectOpId)> for Name {
+    fn from((m, e, o): (Module, EffectId, EffectOpId)) -> Self {
         Name::EffectOp(m, e, o)
     }
 }
 
-impl From<(ModuleId, ItemId)> for Name {
-    fn from((m, i): (ModuleId, ItemId)) -> Self {
+impl From<(Module, ItemId)> for Name {
+    fn from((m, i): (Module, ItemId)) -> Self {
         Name::Item(m, i)
     }
 }

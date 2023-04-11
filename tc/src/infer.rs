@@ -1,10 +1,5 @@
 use aiahr_ast::{Ast, Direction, Term, Term::*};
-use aiahr_core::{
-    id::{ModuleId, VarId},
-    ident::Ident,
-    memory::handle::Handle,
-    span::Span,
-};
+use aiahr_core::{id::VarId, ident::Ident, memory::handle::Handle, modules::Module, span::Span};
 use aiahr_ty::{
     infer::{InArena, InferRow, InferTy, TcUnifierVar},
     row::*,
@@ -201,7 +196,7 @@ pub(crate) struct InferCtx<'a, 'infer, I, State: InferState = Generation> {
     ctx: &'a I,
     db: &'a dyn Db,
     /// Id of the module we're currently performing type checking within.
-    module: ModuleId,
+    module: Module,
     ast: &'a Ast<VarId>,
     state: State::Storage<'infer>,
     _marker: std::marker::PhantomData<State>,
@@ -244,7 +239,7 @@ where
     pub(crate) fn new(
         db: &'a dyn crate::Db,
         ctx: &'a I,
-        module: ModuleId,
+        module: Module,
         ast: &'a Ast<VarId>,
     ) -> Self {
         Self {

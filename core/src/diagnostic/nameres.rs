@@ -5,8 +5,8 @@ use std::{array, iter::Flatten, option};
 
 use crate::{
     displayer::Displayer,
-    id::ModuleId,
     ident::Ident,
+    modules::Module,
     span::{Span, SpanOf, Spanned},
 };
 
@@ -138,7 +138,7 @@ pub enum NameResolutionError {
         /// The name that isn't defined.
         name: SpanOf<Ident>,
         /// The module that was expected to contain the given name as a member.
-        context_module: Option<ModuleId>,
+        context_module: Option<Module>,
         /// Possible names that the user could have intended.
         suggestions: Vec<Suggestion>,
     },
@@ -162,7 +162,7 @@ impl Diagnostic for NameResolutionError {
         }
     }
 
-    fn principal<M: Displayer<ModuleId> + Displayer<Ident>>(&self, modules: &M) -> Citation {
+    fn principal<M: Displayer<Module> + Displayer<Ident>>(&self, modules: &M) -> Citation {
         match self {
             NameResolutionError::Duplicate {
                 name, duplicate, ..
@@ -203,7 +203,7 @@ impl Diagnostic for NameResolutionError {
         }
     }
 
-    fn additional<M: Displayer<ModuleId> + Displayer<Ident>>(&self, modules: &M) -> Vec<Citation> {
+    fn additional<M: Displayer<Module> + Displayer<Ident>>(&self, modules: &M) -> Vec<Citation> {
         match self {
             NameResolutionError::Duplicate { original, .. } => vec![Citation {
                 span: *original,

@@ -1,6 +1,4 @@
-use std::path::PathBuf;
-
-use crate::id::ModuleId;
+use crate::modules::Module;
 
 #[salsa::interned]
 pub struct FileId {
@@ -11,7 +9,6 @@ pub struct FileId {
 #[salsa::input]
 pub struct SourceFile {
     #[id]
-    pub module: ModuleId,
     pub path: FileId,
     #[return_ref]
     pub contents: String,
@@ -23,28 +20,16 @@ pub struct SourceFileSet {
 }
 
 #[salsa::tracked]
-pub fn module_source_file(db: &dyn crate::Db, _top: crate::Top, mod_id: ModuleId) -> SourceFile {
+pub fn file_for_id(db: &dyn crate::Db, file_id: FileId) -> SourceFile {
     let source_file_set = SourceFileSet::get(db);
     *source_file_set
         .files(db)
         .iter()
-        .find(|file| file.module(db) == mod_id)
-        .unwrap_or_else(|| {
-            panic!(
-                "ICE: Module {:?} constructed with no accompanying source file",
-                mod_id
-            )
-        })
+        .find(|file| file.path(db) == file_id)
+        .unwrap_or_else(|| panic!("Did not find file for {}", file_id.path(db).display()))
 }
 
-#[salsa::tracked]
-pub fn module_id_for_path(db: &dyn crate::Db, _top: crate::Top, path: PathBuf) -> ModuleId {
-    let file_id = FileId::new(db, path);
-    let source_file_set = SourceFileSet::get(db);
-    source_file_set
-        .files(db)
-        .iter()
-        .find(|file| file.path(db) == file_id)
-        .map(|file| file.module(db))
-        .unwrap_or_else(|| panic!("ICE: No source file for path {:?}", file_id.path(db)))
+pub fn module_source_file(db: &dyn crate::Db, module: Module) -> SourceFile {
+    let file_id = module.uri(db);
+    file_for_id(db, file_id)
 }

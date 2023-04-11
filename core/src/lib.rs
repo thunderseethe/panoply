@@ -28,15 +28,9 @@ pub struct Jar(
     file::FileId,
     file::SourceFile,
     file::SourceFileSet,
-    file::module_source_file,
-    file::module_id_for_path,
+    file::file_for_id,
     ident::Ident,
     modules::Module,
-    modules::SalsaModuleTree,
-    modules::all_modules,
-    modules::module_of,
-    modules::module_id_of,
-    Top,
 );
 pub trait Db: salsa::DbWithJar<Jar> {
     fn as_core_db(&self) -> &dyn crate::Db {
@@ -52,15 +46,5 @@ pub trait Db: salsa::DbWithJar<Jar> {
     fn ident_str(&self, text: &str) -> ident::Ident {
         self.ident(text.to_string())
     }
-
-    fn top(&self) -> Top {
-        Top::new(self.as_core_db())
-    }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
-
-/// Trivial type to satisfy salsa's requirements
-/// Eventually all salsa tracked functions should be in terms of salsa tracked structs and we
-/// shouldn't need this anymore.
-#[salsa::input]
-pub struct Top {}

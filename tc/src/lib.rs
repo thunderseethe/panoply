@@ -1,9 +1,8 @@
 use aiahr_ast::{self as ast, Ast, Term};
 use aiahr_core::{
-    id::{EffectId, EffectOpId, Id, ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, Id, ItemId, TyVarId, VarId},
     ident::Ident,
-    modules::module_of,
-    Top,
+    modules::Module,
 };
 use aiahr_ty::row::Row;
 use bumpalo::Bump;
@@ -32,22 +31,22 @@ pub use infer::TyChkRes;
 /// Information we need about effects during type checking
 pub trait EffectInfo {
     /// Lookup the name of an effect from it's ID
-    fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident;
+    fn effect_name(&self, module: Module, eff: EffectId) -> Ident;
     /// Lookup effect members from it's ID
-    fn effect_members(&self, module: ModuleId, eff: EffectId) -> &[EffectOpId];
+    fn effect_members(&self, module: Module, eff: EffectId) -> &[EffectOpId];
 
     /// Look up an effect by the name of it's members, this may fail if an invalid list of member
     /// names is passed.
     fn lookup_effect_by_member_names(
         &self,
-        module: ModuleId,
+        module: Module,
         members: &[Ident],
-    ) -> Option<(ModuleId, EffectId)>;
-    fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)>;
+    ) -> Option<(Module, EffectId)>;
+    fn lookup_effect_by_name(&self, module: Module, name: Ident) -> Option<(Module, EffectId)>;
     /// Lookup the type signature of an effect's member
-    fn effect_member_sig(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> TyScheme;
+    fn effect_member_sig(&self, module: Module, eff: EffectId, member: EffectOpId) -> TyScheme;
     /// Lookup the name of an effect's member
-    fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident;
+    fn effect_member_name(&self, module: Module, eff: EffectId, member: EffectOpId) -> Ident;
 }
 
 #[salsa::jar(db = Db)]
@@ -64,65 +63,36 @@ impl<DB> EffectInfo for DB
 where
     DB: ?Sized + crate::Db,
 {
-    fn effect_name(&self, module: ModuleId, eff: EffectId) -> Ident {
-        aiahr_nameres::effect_name(
-            self.as_nameres_db(),
-            Top::new(self.as_core_db()),
-            module,
-            eff,
-        )
+    fn effect_name(&self, module: Module, eff: EffectId) -> Ident {
+        aiahr_nameres::effect_name(self.as_nameres_db(), module, eff)
     }
 
-    fn effect_members(&self, module: ModuleId, eff: EffectId) -> &[EffectOpId] {
-        aiahr_nameres::effect_members(
-            self.as_nameres_db(),
-            Top::new(self.as_core_db()),
-            module,
-            eff,
-        )
-        .as_slice()
+    fn effect_members(&self, module: Module, eff: EffectId) -> &[EffectOpId] {
+        aiahr_nameres::effect_members(self.as_nameres_db(), module, eff).as_slice()
     }
 
     fn lookup_effect_by_member_names(
         &self,
-        module: ModuleId,
+        module: Module,
         members: &[Ident],
-    ) -> Option<(ModuleId, EffectId)> {
+    ) -> Option<(Module, EffectId)> {
         aiahr_nameres::lookup_effect_by_member_names(
             self.as_nameres_db(),
-            Top::new(self.as_core_db()),
             module,
             members.to_vec().into_boxed_slice(),
         )
     }
 
-    fn lookup_effect_by_name(&self, module: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
-        aiahr_nameres::lookup_effect_by_name(
-            self.as_nameres_db(),
-            Top::new(self.as_core_db()),
-            module,
-            name,
-        )
+    fn lookup_effect_by_name(&self, module: Module, name: Ident) -> Option<(Module, EffectId)> {
+        aiahr_nameres::lookup_effect_by_name(self.as_nameres_db(), module, name)
     }
 
-    fn effect_member_sig(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> TyScheme {
-        aiahr_desugar::effect_op_tyscheme_of(
-            self.as_desugar_db(),
-            Top::new(self.as_core_db()),
-            module,
-            eff,
-            member,
-        )
+    fn effect_member_sig(&self, module: Module, eff: EffectId, member: EffectOpId) -> TyScheme {
+        aiahr_desugar::effect_op_tyscheme_of(self.as_desugar_db(), module, eff, member)
     }
 
-    fn effect_member_name(&self, module: ModuleId, eff: EffectId, member: EffectOpId) -> Ident {
-        aiahr_nameres::effect_member_name(
-            self.as_nameres_db(),
-            Top::new(self.as_core_db()),
-            module,
-            eff,
-            member,
-        )
+    fn effect_member_name(&self, module: Module, eff: EffectId, member: EffectOpId) -> Ident {
+        aiahr_nameres::effect_member_name(self.as_nameres_db(), module, eff, member)
     }
 }
 
@@ -138,15 +108,8 @@ pub struct SalsaTypedItem {
 }
 
 #[salsa::tracked]
-pub fn type_scheme_of(
-    db: &dyn crate::Db,
-    top: Top,
-    module_id: ModuleId,
-    item_id: ItemId,
-) -> SalsaTypedItem {
-    let core_db = db.as_core_db();
+pub fn type_scheme_of(db: &dyn crate::Db, module: Module, item_id: ItemId) -> SalsaTypedItem {
     let ast_db = db.as_ast_db();
-    let module = module_of(core_db, top, module_id);
     let ast_module = db.desugar_module_of(module);
     let ast = ast_module
         .items(ast_db)
@@ -163,7 +126,7 @@ pub fn type_scheme_of(
             )
         });
 
-    let (var_to_tys, terms_to_tys, ty_scheme, diags) = type_check(db, db, module_id, &ast);
+    let (var_to_tys, terms_to_tys, ty_scheme, diags) = type_check(db, db, module, &ast);
 
     //TODO: Push errors to diagnostic
     drop(diags);
@@ -180,7 +143,7 @@ type TypeCheckOutput = (
 pub fn type_check<E>(
     db: &dyn crate::Db,
     eff_info: &E,
-    module: ModuleId,
+    module: Module,
     ast: &Ast<VarId>,
 ) -> TypeCheckOutput
 where
@@ -195,7 +158,7 @@ fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
     db: &dyn crate::Db,
     infer_ctx: &II,
     eff_info: &E,
-    module: ModuleId,
+    module: Module,
     ast: &Ast<VarId>,
 ) -> TypeCheckOutput
 where
@@ -267,8 +230,9 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
 }
 
 pub mod test_utils {
-    use aiahr_core::id::{EffectId, EffectOpId, ModuleId, TyVarId};
+    use aiahr_core::id::{EffectId, EffectOpId, TyVarId};
     use aiahr_core::ident::Ident;
+    use aiahr_core::modules::Module;
 
     use crate::{EffectInfo, MkTy, Row, TyScheme};
 
@@ -285,7 +249,7 @@ pub mod test_utils {
         pub const ASK_ID: EffectOpId = EffectOpId(2);
     }
     impl EffectInfo for DummyEff<'_> {
-        fn effect_name(&self, _: ModuleId, eff: EffectId) -> Ident {
+        fn effect_name(&self, _: Module, eff: EffectId) -> Ident {
             match eff {
                 DummyEff::STATE_ID => self.0.ident_str("State"),
                 DummyEff::READER_ID => self.0.ident_str("Reader"),
@@ -293,7 +257,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_members(&self, _: ModuleId, eff: EffectId) -> &[EffectOpId] {
+        fn effect_members(&self, _: Module, eff: EffectId) -> &[EffectOpId] {
             match eff {
                 DummyEff::STATE_ID => &[DummyEff::GET_ID, DummyEff::PUT_ID],
                 DummyEff::READER_ID => &[DummyEff::ASK_ID],
@@ -303,18 +267,18 @@ pub mod test_utils {
 
         fn lookup_effect_by_member_names<'a>(
             &self,
-            _: ModuleId,
+            module: Module,
             members: &[Ident],
-        ) -> Option<(ModuleId, EffectId)> {
+        ) -> Option<(Module, EffectId)> {
             members
                 .get(0)
                 .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-                    "ask" => Some((ModuleId(0), DummyEff::READER_ID)),
+                    "ask" => Some((module, DummyEff::READER_ID)),
                     "get" => {
                         members
                             .get(1)
                             .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-                                "put" => Some((ModuleId(0), DummyEff::STATE_ID)),
+                                "put" => Some((module, DummyEff::STATE_ID)),
                                 _ => None,
                             })
                     }
@@ -322,7 +286,7 @@ pub mod test_utils {
                         members
                             .get(1)
                             .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-                                "get" => Some((ModuleId(0), DummyEff::STATE_ID)),
+                                "get" => Some((module, DummyEff::STATE_ID)),
                                 _ => None,
                             })
                     }
@@ -330,15 +294,15 @@ pub mod test_utils {
                 })
         }
 
-        fn lookup_effect_by_name(&self, _: ModuleId, name: Ident) -> Option<(ModuleId, EffectId)> {
+        fn lookup_effect_by_name(&self, module: Module, name: Ident) -> Option<(Module, EffectId)> {
             match name.text(self.0.as_core_db()).as_str() {
-                "State" => Some((ModuleId(0), DummyEff::STATE_ID)),
-                "Reader" => Some((ModuleId(0), DummyEff::READER_ID)),
+                "State" => Some((module, DummyEff::STATE_ID)),
+                "Reader" => Some((module, DummyEff::READER_ID)),
                 _ => None,
             }
         }
 
-        fn effect_member_sig(&self, _: ModuleId, _eff: EffectId, member: EffectOpId) -> TyScheme {
+        fn effect_member_sig(&self, _: Module, _eff: EffectId, member: EffectOpId) -> TyScheme {
             use crate::TypeKind::*;
             match member {
                 // get: forall 0 . {} -{0}-> Int
@@ -373,7 +337,7 @@ pub mod test_utils {
             }
         }
 
-        fn effect_member_name(&self, _: ModuleId, _eff: EffectId, member: EffectOpId) -> Ident {
+        fn effect_member_name(&self, _: Module, _eff: EffectId, member: EffectOpId) -> Ident {
             match member {
                 DummyEff::GET_ID => self.0.ident_str("get"),
                 DummyEff::PUT_ID => self.0.ident_str("put"),
@@ -388,7 +352,10 @@ pub mod test_utils {
 mod tests {
 
     use aiahr_ast::{Direction, Term::*};
-    use aiahr_core::id::{EffectId, EffectOpId, ModuleId, TyVarId, VarId};
+    use aiahr_core::{
+        id::{EffectId, EffectOpId, TyVarId, VarId},
+        modules::Module,
+    };
     use aiahr_test::ast::{AstBuilder, MkTerm};
     use aiahr_ty::{
         row::{ClosedRow, Row},
@@ -396,6 +363,7 @@ mod tests {
         TypeKind::*,
     };
     use assert_matches::assert_matches;
+    use salsa::AsId;
 
     use crate::type_check;
     use crate::{diagnostic::TypeCheckDiagnostic, test_utils::DummyEff, Evidence};
@@ -437,7 +405,9 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    const MOD: ModuleId = ModuleId(0);
+    fn dummy_mod() -> Module {
+        Module::from_id(salsa::Id::from_u32(0))
+    }
 
     #[test]
     fn test_tc_unlabel() {
@@ -450,7 +420,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -474,7 +444,7 @@ mod tests {
             )
         });
 
-        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         assert_matches!(
             errors[0],
@@ -494,7 +464,7 @@ mod tests {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -519,7 +489,7 @@ mod tests {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
 
-        let (var_to_tys, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (var_to_tys, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -554,7 +524,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -598,7 +568,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -640,7 +610,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         let ty = assert_vec_matches!(
             scheme.constrs,
@@ -697,7 +667,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
@@ -727,9 +697,9 @@ mod tests {
         let db = TestDatabase::default();
 
         let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_app(Operation((ModuleId(0), EffectId(0), EffectOpId(0))), Unit)
+            builder.mk_app(Operation((dummy_mod(), EffectId(0), EffectOpId(0))), Unit)
         });
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         assert_matches!(scheme.eff, Row::Closed(ClosedRow { fields, values }) => {
             assert_matches!(fields.fields(&db).as_slice(), [state] => {
@@ -769,16 +739,16 @@ mod tests {
                     builder.mk_label("return", builder.mk_abs(VarId(2), Variable(VarId(2)))),
                 ),
                 builder.mk_app(
-                    Operation((ModuleId(0), DummyEff::STATE_ID, DummyEff::PUT_ID)),
+                    Operation((dummy_mod(), DummyEff::STATE_ID, DummyEff::PUT_ID)),
                     builder.mk_app(
-                        Operation((ModuleId(0), DummyEff::READER_ID, DummyEff::ASK_ID)),
+                        Operation((dummy_mod(), DummyEff::READER_ID, DummyEff::ASK_ID)),
                         Unit,
                     ),
                 ),
             )
         });
 
-        let (_, _, scheme, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, scheme, errors) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         assert_eq!(errors, vec![]);
         assert_matches!(
@@ -804,7 +774,7 @@ mod tests {
         let db = TestDatabase::default();
         let untyped_ast = AstBuilder::with_builder(&db, |_| Variable(VarId(0)));
 
-        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), MOD, &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
 
         assert_matches!(
             &errors[0],

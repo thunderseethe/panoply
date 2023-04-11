@@ -1,6 +1,7 @@
 //! This module defines errors from the parsing pass.
 
-use crate::{display_iter::DisplayIterSeparated, displayer::Displayer, id::ModuleId, span::Span};
+use crate::modules::Module;
+use crate::{display_iter::DisplayIterSeparated, displayer::Displayer, span::Span};
 
 use super::{Citation, Diagnostic};
 
@@ -25,7 +26,7 @@ impl Diagnostic for ParseError {
         }
     }
 
-    fn principal<M: Displayer<ModuleId>>(&self, _: &M) -> Citation {
+    fn principal<M: Displayer<Module>>(&self, _: &M) -> Citation {
         match self {
             ParseError::WrongToken {
                 span,
@@ -42,7 +43,7 @@ impl Diagnostic for ParseError {
         }
     }
 
-    fn additional<M: Displayer<ModuleId>>(&self, _: &M) -> Vec<Citation> {
+    fn additional<M: Displayer<Module>>(&self, _: &M) -> Vec<Citation> {
         Vec::new()
     }
 }

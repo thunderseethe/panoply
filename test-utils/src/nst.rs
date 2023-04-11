@@ -1,10 +1,11 @@
+use aiahr_core::modules::Module;
 use bumpalo::Bump;
 use la_arena::{Arena, Idx};
 
 use crate::cst::{EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation};
 use aiahr_core::span::{Span, SpanOf, Spanned};
 use aiahr_core::{
-    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, ItemId, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaRef, HasRefArena, ReferenceAllocate},
 };
@@ -75,8 +76,8 @@ pub enum Term<'a> {
         cases: Separated<'a, Field<&'a Pattern<'a>, &'a Term<'a>>>,
         rangle: Span,
     },
-    EffectOpRef(SpanOf<(ModuleId, EffectId, EffectOpId)>),
-    ItemRef(SpanOf<(ModuleId, ItemId)>),
+    EffectOpRef(SpanOf<(Module, EffectId, EffectOpId)>),
+    ItemRef(SpanOf<(Module, ItemId)>),
     VariableRef(SpanOf<VarId>),
     Parenthesized {
         lpar: Span,

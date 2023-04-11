@@ -8,9 +8,10 @@ pub use super::{
     Separated, SumRow, Type, TypeAnnotation, TypeRow,
 };
 use aiahr_core::{
-    id::{EffectId, EffectOpId, ItemId, ModuleId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, ItemId, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaMut, HasArenaRef, IdxAlloc},
+    modules::Module,
     span::{Span, SpanOf, Spanned},
 };
 
@@ -136,8 +137,8 @@ pub enum Term {
         cases: Separated<Field<Idx<Pattern>, Idx<Self>>>,
         rangle: Span,
     },
-    EffectOpRef(SpanOf<(ModuleId, EffectId, EffectOpId)>),
-    ItemRef(SpanOf<(ModuleId, ItemId)>),
+    EffectOpRef(SpanOf<(Module, EffectId, EffectOpId)>),
+    ItemRef(SpanOf<(Module, ItemId)>),
     VariableRef(SpanOf<VarId>),
     Parenthesized {
         lpar: Span,

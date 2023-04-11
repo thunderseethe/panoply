@@ -2,6 +2,7 @@
 
 use crate::displayer::Displayer;
 use crate::ident::Ident;
+use crate::modules::Module;
 
 use super::{
     lexer::LexError, nameres::NameResolutionError, parser::ParseError, Citation, Diagnostic,
@@ -44,7 +45,7 @@ impl Diagnostic for AiahrcError {
 
     fn principal<M>(&self, modules: &M) -> Citation
     where
-        M: Displayer<crate::id::ModuleId> + Displayer<Ident>,
+        M: Displayer<Module> + Displayer<Ident>,
     {
         match self {
             AiahrcError::LexError(err) => err.principal(modules),
@@ -55,7 +56,7 @@ impl Diagnostic for AiahrcError {
 
     fn additional<M>(&self, modules: &M) -> Vec<Citation>
     where
-        M: Displayer<crate::id::ModuleId> + Displayer<Ident>,
+        M: Displayer<Module> + Displayer<Ident>,
     {
         match self {
             AiahrcError::LexError(err) => err.additional(modules),

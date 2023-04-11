@@ -654,7 +654,7 @@ mod tests {
     use std::path::PathBuf;
 
     use aiahr_core::file::FileId;
-    use aiahr_core::{file::SourceFile, id::ModuleId, ident::Ident, indexed::ReferenceAllocate};
+    use aiahr_core::{file::SourceFile, ident::Ident, indexed::ReferenceAllocate};
     use aiahr_cst::CstIndxAlloc;
     use aiahr_test::{
         ct_rowsum, field, id_field, pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed,
@@ -1123,7 +1123,6 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
-            ModuleId(0),
             FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
             "effect foo { foo: a -> a }".to_string(),
         );
@@ -1142,7 +1141,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 2,
+                                            value: 3,
                                         },
                                     ),
                                     end: Loc {
@@ -1159,7 +1158,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 2,
+                                            value: 3,
                                         },
                                     ),
                                     end: Loc {
@@ -1212,7 +1211,7 @@ mod tests {
                             },
                             value: Ident(
                                 Id {
-                                    value: 1,
+                                    value: 2,
                                 },
                             ),
                             end: Loc {
@@ -1239,7 +1238,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 1,
+                                            value: 2,
                                         },
                                     ),
                                     end: Loc {
@@ -1282,7 +1281,6 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
-            ModuleId(0),
             FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
             "x = a\ny = |b| b\nz = t = x; t".to_string(),
         );
@@ -1305,7 +1303,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 2,
+                                            value: 3,
                                         },
                                     ),
                                     end: Loc {
@@ -1322,7 +1320,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 4,
+                                            value: 5,
                                         },
                                     ),
                                     end: Loc {
@@ -1349,7 +1347,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 4,
+                                            value: 5,
                                         },
                                     ),
                                     end: Loc {
@@ -1378,7 +1376,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 6,
+                                            value: 7,
                                         },
                                     ),
                                     end: Loc {
@@ -1395,7 +1393,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 1,
+                                            value: 2,
                                         },
                                     ),
                                     end: Loc {
@@ -1412,7 +1410,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 6,
+                                            value: 7,
                                         },
                                     ),
                                     end: Loc {
@@ -1460,7 +1458,7 @@ mod tests {
                             },
                             value: Ident(
                                 Id {
-                                    value: 1,
+                                    value: 2,
                                 },
                             ),
                             end: Loc {
@@ -1489,7 +1487,7 @@ mod tests {
                             },
                             value: Ident(
                                 Id {
-                                    value: 3,
+                                    value: 4,
                                 },
                             ),
                             end: Loc {
@@ -1518,7 +1516,7 @@ mod tests {
                             },
                             value: Ident(
                                 Id {
-                                    value: 5,
+                                    value: 6,
                                 },
                             ),
                             end: Loc {
@@ -1550,7 +1548,6 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
-            ModuleId(0),
             FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
             "x: a = a\ny: forall b. b -> b = |b| b".to_string(),
         );
@@ -1569,7 +1566,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 2,
+                                            value: 3,
                                         },
                                     ),
                                     end: Loc {
@@ -1586,7 +1583,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 4,
+                                            value: 5,
                                         },
                                     ),
                                     end: Loc {
@@ -1603,7 +1600,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 4,
+                                            value: 5,
                                         },
                                     ),
                                     end: Loc {
@@ -1639,7 +1636,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 2,
+                                            value: 3,
                                         },
                                     ),
                                     end: Loc {
@@ -1656,7 +1653,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 4,
+                                            value: 5,
                                         },
                                     ),
                                     end: Loc {
@@ -1683,7 +1680,7 @@ mod tests {
                                     },
                                     value: Ident(
                                         Id {
-                                            value: 4,
+                                            value: 5,
                                         },
                                     ),
                                     end: Loc {
@@ -1720,7 +1717,7 @@ mod tests {
                             },
                             value: Ident(
                                 Id {
-                                    value: 1,
+                                    value: 2,
                                 },
                             ),
                             end: Loc {
@@ -1767,7 +1764,7 @@ mod tests {
                             },
                             value: Ident(
                                 Id {
-                                    value: 3,
+                                    value: 4,
                                 },
                             ),
                             end: Loc {
@@ -1807,7 +1804,7 @@ mod tests {
                                                 },
                                                 value: Ident(
                                                     Id {
-                                                        value: 4,
+                                                        value: 5,
                                                     },
                                                 ),
                                                 end: Loc {

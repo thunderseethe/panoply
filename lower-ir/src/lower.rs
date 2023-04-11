@@ -1,5 +1,8 @@
 use aiahr_ast::{Ast, Direction, RowTerm, RowTermView, Term};
-use aiahr_core::id::{IrTyVarId, IrVarId, ItemId, ModuleId, TyVarId, VarId};
+use aiahr_core::{
+    id::{IrTyVarId, IrVarId, ItemId, TyVarId, VarId},
+    modules::Module,
+};
 use aiahr_ir::{
     Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, MkIrTy, P,
 };
@@ -46,15 +49,15 @@ fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row 
 }
 
 pub trait ItemSchemes {
-    fn lookup_scheme(&self, module_id: ModuleId, item_id: ItemId) -> TyScheme;
+    fn lookup_scheme(&self, module: Module, item_id: ItemId) -> TyScheme;
 }
 pub trait VarTys {
-    fn lookup_var(&self, module_id: ModuleId, item_id: ItemId, var_id: VarId) -> Ty;
+    fn lookup_var(&self, module: Module, item_id: ItemId, var_id: VarId) -> Ty;
 }
 pub trait TermTys {
     fn lookup_term(
         &self,
-        module_id: ModuleId,
+        module: Module,
         item_id: ItemId,
         term: Idx<Term<VarId>>,
     ) -> TyChkRes<InDb>;
@@ -62,7 +65,7 @@ pub trait TermTys {
 
 /// Selects an item based on it's module id and item id.
 pub(crate) struct ItemSelector {
-    pub(crate) module: ModuleId,
+    pub(crate) module: Module,
     pub(crate) item: ItemId,
 }
 

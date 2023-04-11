@@ -2,10 +2,10 @@ use std::slice::Iter;
 
 use aiahr_core::{
     file::FileId,
-    id::{EffectId, ModuleId},
+    id::EffectId,
     ident::Ident,
     loc::Loc,
-    modules::ModuleTree,
+    modules::Module,
     span::{Span, SpanOf},
 };
 use rustc_hash::FxHashMap;
@@ -24,34 +24,41 @@ fn canonical_span(file: FileId) -> Span {
 
 /// A collection of names visible throughout a module. Also accumulates the local variable IDs of
 /// the module.
-#[derive(Debug)]
 pub struct BaseNames<'b, 'a> {
-    me: ModuleId,
-    modules: &'b ModuleTree,
-    module_names: &'b FxHashMap<ModuleId, &'a ModuleNames>,
+    me: Module,
+    db: &'b dyn crate::Db,
+    module_names: &'b FxHashMap<Module, &'a ModuleNames>,
+}
+impl std::fmt::Debug for BaseNames<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BaseNames")
+            .field("me", &self.me)
+            .field("module_names", &self.module_names)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'b, 'a> BaseNames<'b, 'a> {
     /// Creates a new `BaseNames`.
     pub fn new(
-        me: ModuleId,
-        modules: &'b ModuleTree,
-        module_names: &'b FxHashMap<ModuleId, &'a ModuleNames>,
+        me: Module,
+        db: &'b dyn crate::Db,
+        module_names: &'b FxHashMap<Module, &'a ModuleNames>,
     ) -> Self {
         Self {
             me,
-            modules,
+            db,
             module_names,
         }
     }
 
     /// The source module.
-    pub fn me(&self) -> ModuleId {
+    pub fn me(&self) -> Module {
         self.me
     }
 
     /// Gets the effect corresponding to the given ID.
-    pub fn get_effect(&self, module: ModuleId, effect: EffectId) -> &EffectNames {
+    pub fn get_effect(&self, module: Module, effect: EffectId) -> &EffectNames {
         self.module_names[&module].get_effect(effect)
     }
 
@@ -63,7 +70,7 @@ impl<'b, 'a> BaseNames<'b, 'a> {
     /// Finds the correct ID associated with the given string in the given module.
     pub fn find_in(
         &self,
-        module: ModuleId,
+        module: Module,
         name: Ident,
     ) -> impl '_ + Iterator<Item = SpanOf<BaseName>> {
         self.module_names[&module]
@@ -83,8 +90,8 @@ where
 {
     fn get(&self, id: I) -> SpanOf<Ident> {
         match BaseName::from(id) {
-            BaseName::Module(_m) => {
-                canonical_span(todo!("Map ModuleId m back to FileId")).of(self.modules.get_name(_m))
+            BaseName::Module(m) => {
+                canonical_span(m.uri(self.db.as_core_db())).of(m.name(self.db.as_core_db()))
             }
             BaseName::Effect(m, e) => self.module_names[&m].get(e),
             BaseName::EffectOp(m, e, o) => self.module_names[&m].get_effect(e).get(o),

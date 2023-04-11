@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use aiahr::AiahrDatabase;
 use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
-use aiahr_core::id::ModuleId;
 use aiahr_core::Db as CoreDb;
 use aiahr_interpreter::Machine;
 use aiahr_lower_ir::Db as LowerIrDb;
@@ -22,7 +21,6 @@ fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
     let db = AiahrDatabase::default();
-    let mut next_mod_id = 0;
 
     let mut uniq_files = args
         .files
@@ -36,9 +34,7 @@ fn main() -> eyre::Result<()> {
         .into_iter()
         .map(|path| {
             let contents = std::fs::read_to_string(&path)?;
-            let file: SourceFile =
-                SourceFile::new(&db, ModuleId(next_mod_id), FileId::new(&db, path), contents);
-            next_mod_id += 1;
+            let file: SourceFile = SourceFile::new(&db, FileId::new(&db, path), contents);
             Ok(file)
         })
         .collect::<eyre::Result<Vec<_>>>()?;
