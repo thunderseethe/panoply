@@ -35,9 +35,9 @@ impl BaseBuilder {
     {
         for item in items.iter() {
             match item {
-                Item::Effect { name, ops, .. } => {
+                Item::Effect(ref eff) => {
                     let mut effect = EffectBuilder::default();
-                    for op in ops.iter() {
+                    for op in eff.ops.iter() {
                         if let InsertResult {
                             existing: Some(old),
                             ..
@@ -55,27 +55,27 @@ impl BaseBuilder {
                     if let InsertResult {
                         existing: Some(old),
                         ..
-                    } = self.builder.insert_effect(*name, effect.build())
+                    } = self.builder.insert_effect(eff.name, effect.build())
                     {
                         errors.add(NameResolutionError::Duplicate {
-                            name: name.value,
+                            name: eff.name.value,
                             kind: NameKind::Effect,
                             original: old.span(),
-                            duplicate: name.span(),
+                            duplicate: eff.name.span(),
                         })
                     }
                 }
-                Item::Term { name, .. } => {
+                Item::Term(term) => {
                     if let InsertResult {
                         existing: Some(old),
                         ..
-                    } = self.builder.insert_item(*name)
+                    } = self.builder.insert_item(term.name)
                     {
                         errors.add(NameResolutionError::Duplicate {
-                            name: name.value,
+                            name: term.name.value,
                             kind: NameKind::Item,
                             original: old.span(),
-                            duplicate: name.span(),
+                            duplicate: term.name.span(),
                         })
                     }
                 }

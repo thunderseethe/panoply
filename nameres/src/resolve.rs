@@ -781,46 +781,38 @@ where
     /// Resolves the given effect.
     fn resolve_effect(
         &mut self,
-        (module, eid): (Module, EffectId),
-        effect: Span,
-        name: SpanOf<Ident>,
-        lbrace: Span,
-        ops: &[cst::EffectOp<Ident, Ident>],
-        rbrace: Span,
+        module: Module,
+        eid: EffectId,
+        eff: &cst::EffectDefn,
     ) -> Option<nst::Item> {
         Some(nst::Item::Effect(nst::EffectDefn {
-            effect,
-            name: name.span().of(eid),
-            lbrace,
+            effect: eff.effect,
+            name: eff.name.span().of(eid),
+            lbrace: eff.lbrace,
             ops: self
                 .names
                 .get_effect(module, eid)
                 .iter()
                 .collect::<Vec<_>>()
                 .into_iter()
-                .zip(ops.iter())
+                .zip(eff.ops.iter())
                 .map(|(opid, op)| self.resolve_effect_op(opid, op))
                 .collect(),
-            rbrace,
+            rbrace: eff.rbrace,
         }))
     }
 
     /// Resolves the given item.
-    pub fn resolve_term_item(
-        &mut self,
-        id: ItemId,
-        name: SpanOf<Ident>,
-        annotation: Option<&cst::SchemeAnnotation<Ident>>,
-        eq: Span,
-        value: Idx<cst::Term>,
-    ) -> Option<nst::Item> {
+    pub fn resolve_term_item(&mut self, id: ItemId, term: &cst::TermDefn) -> Option<nst::Item> {
         Some(nst::Item::Term(nst::TermDefn {
-            name: name.span().of(id),
-            annotation: annotation
+            name: term.name.span().of(id),
+            annotation: term
+                .annotation
+                .as_ref()
                 .map(|annotation| self.resolve_scheme_annotation(annotation))
                 .transpose()?,
-            eq,
-            value: self.resolve_term(value)?,
+            eq: term.eq,
+            value: self.resolve_term(term.value)?,
         }))
     }
 }
@@ -847,16 +839,7 @@ where
         .iter()
         .zip(module.items.iter())
         .map(|(name, item)| match (&name, &item) {
-            (
-                ModuleName::Effect(e),
-                cst::Item::Effect {
-                    effect,
-                    name,
-                    lbrace,
-                    ops,
-                    rbrace,
-                },
-            ) => {
+            (ModuleName::Effect(e), cst::Item::Effect(ref eff)) => {
                 let mut alloc = NstIndxAlloc::default();
                 let mut ctx = NameResCtx {
                     cst_alloc: &module.indices,
@@ -865,25 +848,10 @@ where
                     alloc: &mut alloc,
                     names: &mut names,
                 };
-                ctx.resolve_effect(
-                    (base.me(), *e),
-                    *effect,
-                    *name,
-                    *lbrace,
-                    ops.as_slice(),
-                    *rbrace,
-                )
-                .map(|item| AllocItem { alloc, item })
+                ctx.resolve_effect(base.me(), *e, eff)
+                    .map(|item| AllocItem { alloc, item })
             }
-            (
-                ModuleName::Item(i),
-                cst::Item::Term {
-                    name,
-                    annotation,
-                    eq,
-                    value,
-                },
-            ) => {
+            (ModuleName::Item(i), cst::Item::Term(ref term)) => {
                 let mut alloc = NstIndxAlloc::default();
                 let mut ctx = NameResCtx {
                     cst_alloc: &module.indices,
@@ -892,7 +860,7 @@ where
                     alloc: &mut alloc,
                     names: &mut names,
                 };
-                ctx.resolve_term_item(*i, *name, annotation.as_ref(), *eq, *value)
+                ctx.resolve_term_item(*i, term)
                     .map(|item| AllocItem { alloc, item })
             }
             _ => panic!(

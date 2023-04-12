@@ -384,22 +384,29 @@ impl Spanned for SpanTerm<'_> {
     }
 }
 
+/// An effect definition in the CST
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EffectDefn {
+    pub effect: Span,
+    pub name: SpanOf<Ident>,
+    pub lbrace: Span,
+    pub ops: Vec<EffectOp<Ident, Ident>>,
+    pub rbrace: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TermDefn {
+    pub name: SpanOf<Ident>,
+    pub annotation: Option<SchemeAnnotation<Ident>>,
+    pub eq: Span,
+    pub value: Idx<Term>,
+}
+
 /// A top-level item in an Aiahr source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Item {
-    Effect {
-        effect: Span,
-        name: SpanOf<Ident>,
-        lbrace: Span,
-        ops: Vec<EffectOp<Ident, Ident>>,
-        rbrace: Span,
-    },
-    Term {
-        name: SpanOf<Ident>,
-        annotation: Option<SchemeAnnotation<Ident>>,
-        eq: Span,
-        value: Idx<Term>,
-    },
+    Effect(EffectDefn),
+    Term(TermDefn),
 }
 
 /// A parsed module.

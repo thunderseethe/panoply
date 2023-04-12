@@ -601,15 +601,15 @@ pub fn aiahr_parser() -> impl Parser<Token, IdxState<Vec<cst::Item>>, Error = Pa
         .then(lit(Token::LBrace))
         .then(effect_op().repeated())
         .then(lit(Token::RBrace))
-        .map_state(
-            |((((effect, name), lbrace), ops), rbrace), alloc| cst::Item::Effect {
+        .map_state(|((((effect, name), lbrace), ops), rbrace), alloc| {
+            cst::Item::Effect(cst::EffectDefn {
                 effect,
                 name,
                 lbrace,
                 ops: ops.into_iter().map(|op| op.apply(alloc)).collect(),
                 rbrace,
-            },
-        );
+            })
+        });
 
     let term = ident()
         .then(annotation(scheme()).or_not())
@@ -618,12 +618,12 @@ pub fn aiahr_parser() -> impl Parser<Token, IdxState<Vec<cst::Item>>, Error = Pa
         .map_state(|(((name, annotation), eq), value), alloc| {
             let annotation = annotation.map(|ann| ann.apply(alloc));
             let value = value.apply(alloc);
-            cst::Item::Term {
+            cst::Item::Term(cst::TermDefn {
                 name,
                 annotation,
                 eq,
                 value,
-            }
+            })
         });
 
     choice((effect, term))
@@ -1193,83 +1193,85 @@ mod tests {
                     },
                 },
                 items: [
-                    Effect {
-                        effect: Span {
-                            start: Loc {
-                                byte: 0,
-                                ..
-                            },
-                            end: Loc {
-                                byte: 6,
-                                ..
-                            },
-                        },
-                        name: SpanOf {
-                            start: Loc {
-                                byte: 7,
-                                ..
-                            },
-                            value: Ident(
-                                Id {
-                                    value: 2,
+                    Effect(
+                        EffectDefn {
+                            effect: Span {
+                                start: Loc {
+                                    byte: 0,
+                                    ..
                                 },
-                            ),
-                            end: Loc {
-                                byte: 10,
-                                ..
+                                end: Loc {
+                                    byte: 6,
+                                    ..
+                                },
                             },
-                        },
-                        lbrace: Span {
-                            start: Loc {
-                                byte: 11,
-                                ..
-                            },
-                            end: Loc {
-                                byte: 12,
-                                ..
-                            },
-                        },
-                        ops: [
-                            EffectOp {
-                                name: SpanOf {
-                                    start: Loc {
-                                        byte: 13,
-                                        ..
+                            name: SpanOf {
+                                start: Loc {
+                                    byte: 7,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 2,
                                     },
-                                    value: Ident(
-                                        Id {
-                                            value: 2,
+                                ),
+                                end: Loc {
+                                    byte: 10,
+                                    ..
+                                },
+                            },
+                            lbrace: Span {
+                                start: Loc {
+                                    byte: 11,
+                                    ..
+                                },
+                                end: Loc {
+                                    byte: 12,
+                                    ..
+                                },
+                            },
+                            ops: [
+                                EffectOp {
+                                    name: SpanOf {
+                                        start: Loc {
+                                            byte: 13,
+                                            ..
                                         },
-                                    ),
-                                    end: Loc {
-                                        byte: 16,
-                                        ..
+                                        value: Ident(
+                                            Id {
+                                                value: 2,
+                                            },
+                                        ),
+                                        end: Loc {
+                                            byte: 16,
+                                            ..
+                                        },
                                     },
+                                    colon: Span {
+                                        start: Loc {
+                                            byte: 16,
+                                            ..
+                                        },
+                                        end: Loc {
+                                            byte: 17,
+                                            ..
+                                        },
+                                    },
+                                    type_: Idx::<Ident>>(2),
                                 },
-                                colon: Span {
-                                    start: Loc {
-                                        byte: 16,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 17,
-                                        ..
-                                    },
+                            ],
+                            rbrace: Span {
+                                start: Loc {
+                                    byte: 25,
+                                    ..
                                 },
-                                type_: Idx::<Ident>>(2),
-                            },
-                        ],
-                        rbrace: Span {
-                            start: Loc {
-                                byte: 25,
-                                ..
-                            },
-                            end: Loc {
-                                byte: 26,
-                                ..
+                                end: Loc {
+                                    byte: 26,
+                                    ..
+                                },
                             },
                         },
-                    },
+                    ),
                 ],
             }
         "#]];
@@ -1450,93 +1452,99 @@ mod tests {
                     },
                 },
                 items: [
-                    Term {
-                        name: SpanOf {
-                            start: Loc {
-                                byte: 0,
-                                ..
-                            },
-                            value: Ident(
-                                Id {
-                                    value: 2,
+                    Term(
+                        TermDefn {
+                            name: SpanOf {
+                                start: Loc {
+                                    byte: 0,
+                                    ..
                                 },
-                            ),
-                            end: Loc {
-                                byte: 1,
-                                ..
-                            },
-                        },
-                        annotation: None,
-                        eq: Span {
-                            start: Loc {
-                                byte: 2,
-                                ..
-                            },
-                            end: Loc {
-                                byte: 3,
-                                ..
-                            },
-                        },
-                        value: Idx::<Term>(0),
-                    },
-                    Term {
-                        name: SpanOf {
-                            start: Loc {
-                                byte: 6,
-                                ..
-                            },
-                            value: Ident(
-                                Id {
-                                    value: 4,
+                                value: Ident(
+                                    Id {
+                                        value: 2,
+                                    },
+                                ),
+                                end: Loc {
+                                    byte: 1,
+                                    ..
                                 },
-                            ),
-                            end: Loc {
-                                byte: 7,
-                                ..
                             },
-                        },
-                        annotation: None,
-                        eq: Span {
-                            start: Loc {
-                                byte: 8,
-                                ..
-                            },
-                            end: Loc {
-                                byte: 9,
-                                ..
-                            },
-                        },
-                        value: Idx::<Term>(2),
-                    },
-                    Term {
-                        name: SpanOf {
-                            start: Loc {
-                                byte: 16,
-                                ..
-                            },
-                            value: Ident(
-                                Id {
-                                    value: 6,
+                            annotation: None,
+                            eq: Span {
+                                start: Loc {
+                                    byte: 2,
+                                    ..
                                 },
-                            ),
-                            end: Loc {
-                                byte: 17,
-                                ..
+                                end: Loc {
+                                    byte: 3,
+                                    ..
+                                },
                             },
+                            value: Idx::<Term>(0),
                         },
-                        annotation: None,
-                        eq: Span {
-                            start: Loc {
-                                byte: 18,
-                                ..
+                    ),
+                    Term(
+                        TermDefn {
+                            name: SpanOf {
+                                start: Loc {
+                                    byte: 6,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 4,
+                                    },
+                                ),
+                                end: Loc {
+                                    byte: 7,
+                                    ..
+                                },
                             },
-                            end: Loc {
-                                byte: 19,
-                                ..
+                            annotation: None,
+                            eq: Span {
+                                start: Loc {
+                                    byte: 8,
+                                    ..
+                                },
+                                end: Loc {
+                                    byte: 9,
+                                    ..
+                                },
                             },
+                            value: Idx::<Term>(2),
                         },
-                        value: Idx::<Term>(5),
-                    },
+                    ),
+                    Term(
+                        TermDefn {
+                            name: SpanOf {
+                                start: Loc {
+                                    byte: 16,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 6,
+                                    },
+                                ),
+                                end: Loc {
+                                    byte: 17,
+                                    ..
+                                },
+                            },
+                            annotation: None,
+                            eq: Span {
+                                start: Loc {
+                                    byte: 18,
+                                    ..
+                                },
+                                end: Loc {
+                                    byte: 19,
+                                    ..
+                                },
+                            },
+                            value: Idx::<Term>(5),
+                        },
+                    ),
                 ],
             }
         "#]];
@@ -1709,138 +1717,142 @@ mod tests {
                     },
                 },
                 items: [
-                    Term {
-                        name: SpanOf {
-                            start: Loc {
-                                byte: 0,
-                                ..
-                            },
-                            value: Ident(
-                                Id {
-                                    value: 2,
+                    Term(
+                        TermDefn {
+                            name: SpanOf {
+                                start: Loc {
+                                    byte: 0,
+                                    ..
                                 },
-                            ),
-                            end: Loc {
-                                byte: 1,
-                                ..
-                            },
-                        },
-                        annotation: Some(
-                            Annotation {
-                                colon: Span {
-                                    start: Loc {
-                                        byte: 1,
-                                        ..
+                                value: Ident(
+                                    Id {
+                                        value: 2,
                                     },
-                                    end: Loc {
-                                        byte: 2,
-                                        ..
-                                    },
-                                },
-                                type_: Scheme {
-                                    quantifiers: [],
-                                    qualifiers: None,
-                                    type_: Idx::<Ident>>(0),
+                                ),
+                                end: Loc {
+                                    byte: 1,
+                                    ..
                                 },
                             },
-                        ),
-                        eq: Span {
-                            start: Loc {
-                                byte: 5,
-                                ..
-                            },
-                            end: Loc {
-                                byte: 6,
-                                ..
-                            },
-                        },
-                        value: Idx::<Term>(0),
-                    },
-                    Term {
-                        name: SpanOf {
-                            start: Loc {
-                                byte: 9,
-                                ..
-                            },
-                            value: Ident(
-                                Id {
-                                    value: 4,
-                                },
-                            ),
-                            end: Loc {
-                                byte: 10,
-                                ..
-                            },
-                        },
-                        annotation: Some(
-                            Annotation {
-                                colon: Span {
-                                    start: Loc {
-                                        byte: 10,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 11,
-                                        ..
-                                    },
-                                },
-                                type_: Scheme {
-                                    quantifiers: [
-                                        Quantifier {
-                                            forall: Span {
-                                                start: Loc {
-                                                    byte: 12,
-                                                    ..
-                                                },
-                                                end: Loc {
-                                                    byte: 18,
-                                                    ..
-                                                },
-                                            },
-                                            var: SpanOf {
-                                                start: Loc {
-                                                    byte: 19,
-                                                    ..
-                                                },
-                                                value: Ident(
-                                                    Id {
-                                                        value: 5,
-                                                    },
-                                                ),
-                                                end: Loc {
-                                                    byte: 20,
-                                                    ..
-                                                },
-                                            },
-                                            dot: Span {
-                                                start: Loc {
-                                                    byte: 20,
-                                                    ..
-                                                },
-                                                end: Loc {
-                                                    byte: 21,
-                                                    ..
-                                                },
-                                            },
+                            annotation: Some(
+                                Annotation {
+                                    colon: Span {
+                                        start: Loc {
+                                            byte: 1,
+                                            ..
                                         },
-                                    ],
-                                    qualifiers: None,
-                                    type_: Idx::<Ident>>(3),
+                                        end: Loc {
+                                            byte: 2,
+                                            ..
+                                        },
+                                    },
+                                    type_: Scheme {
+                                        quantifiers: [],
+                                        qualifiers: None,
+                                        type_: Idx::<Ident>>(0),
+                                    },
+                                },
+                            ),
+                            eq: Span {
+                                start: Loc {
+                                    byte: 5,
+                                    ..
+                                },
+                                end: Loc {
+                                    byte: 6,
+                                    ..
                                 },
                             },
-                        ),
-                        eq: Span {
-                            start: Loc {
-                                byte: 29,
-                                ..
-                            },
-                            end: Loc {
-                                byte: 30,
-                                ..
-                            },
+                            value: Idx::<Term>(0),
                         },
-                        value: Idx::<Term>(2),
-                    },
+                    ),
+                    Term(
+                        TermDefn {
+                            name: SpanOf {
+                                start: Loc {
+                                    byte: 9,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 4,
+                                    },
+                                ),
+                                end: Loc {
+                                    byte: 10,
+                                    ..
+                                },
+                            },
+                            annotation: Some(
+                                Annotation {
+                                    colon: Span {
+                                        start: Loc {
+                                            byte: 10,
+                                            ..
+                                        },
+                                        end: Loc {
+                                            byte: 11,
+                                            ..
+                                        },
+                                    },
+                                    type_: Scheme {
+                                        quantifiers: [
+                                            Quantifier {
+                                                forall: Span {
+                                                    start: Loc {
+                                                        byte: 12,
+                                                        ..
+                                                    },
+                                                    end: Loc {
+                                                        byte: 18,
+                                                        ..
+                                                    },
+                                                },
+                                                var: SpanOf {
+                                                    start: Loc {
+                                                        byte: 19,
+                                                        ..
+                                                    },
+                                                    value: Ident(
+                                                        Id {
+                                                            value: 5,
+                                                        },
+                                                    ),
+                                                    end: Loc {
+                                                        byte: 20,
+                                                        ..
+                                                    },
+                                                },
+                                                dot: Span {
+                                                    start: Loc {
+                                                        byte: 20,
+                                                        ..
+                                                    },
+                                                    end: Loc {
+                                                        byte: 21,
+                                                        ..
+                                                    },
+                                                },
+                                            },
+                                        ],
+                                        qualifiers: None,
+                                        type_: Idx::<Ident>>(3),
+                                    },
+                                },
+                            ),
+                            eq: Span {
+                                start: Loc {
+                                    byte: 29,
+                                    ..
+                                },
+                                end: Loc {
+                                    byte: 30,
+                                    ..
+                                },
+                            },
+                            value: Idx::<Term>(2),
+                        },
+                    ),
                 ],
             }
         "#]];
