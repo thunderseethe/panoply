@@ -51,7 +51,7 @@ pub trait EffectInfo {
 
 #[salsa::jar(db = Db)]
 
-pub struct Jar(SalsaTypedItem, type_scheme_of);
+pub struct Jar(TypedItem, type_scheme_of);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_desugar::Db {
     fn as_tc_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -97,7 +97,7 @@ where
 }
 
 #[salsa::tracked]
-pub struct SalsaTypedItem {
+pub struct TypedItem {
     #[id]
     pub item_id: ItemId,
     #[return_ref]
@@ -108,7 +108,7 @@ pub struct SalsaTypedItem {
 }
 
 #[salsa::tracked]
-pub fn type_scheme_of(db: &dyn crate::Db, module: Module, item_id: ItemId) -> SalsaTypedItem {
+pub fn type_scheme_of(db: &dyn crate::Db, module: Module, item_id: ItemId) -> TypedItem {
     let ast_db = db.as_ast_db();
     let ast_module = db.desugar_module_of(module);
     let ast = ast_module
@@ -130,7 +130,7 @@ pub fn type_scheme_of(db: &dyn crate::Db, module: Module, item_id: ItemId) -> Sa
 
     //TODO: Push errors to diagnostic
     drop(diags);
-    SalsaTypedItem::new(db, item_id, var_to_tys, terms_to_tys, ty_scheme)
+    TypedItem::new(db, item_id, var_to_tys, terms_to_tys, ty_scheme)
 }
 
 type TypeCheckOutput = (

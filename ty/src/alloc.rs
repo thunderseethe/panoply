@@ -127,12 +127,12 @@ pub mod db {
 
     #[salsa::interned]
     #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-    pub struct SalsaRowFields {
+    pub struct RowFields {
         #[return_ref]
         pub fields: Vec<Ident>,
     }
     #[salsa::interned]
-    pub struct SalsaRowValues {
+    pub struct RowValues {
         #[return_ref]
         pub values: Vec<Ty<InDb>>,
     }
@@ -143,9 +143,9 @@ pub mod db {
     impl TypeAlloc for InDb {
         type TypeData = TyData;
 
-        type RowFields = SalsaRowFields;
+        type RowFields = RowFields;
 
-        type RowValues = SalsaRowValues;
+        type RowValues = RowValues;
 
         type TypeVar = TyVarId;
     }
@@ -175,8 +175,8 @@ pub mod db {
             debug_assert!(fields.iter().considered_sorted());
 
             ClosedRow {
-                fields: SalsaRowFields::new(self.as_ty_db(), fields.to_vec()),
-                values: SalsaRowValues::new(self.as_ty_db(), values.to_vec()),
+                fields: RowFields::new(self.as_ty_db(), fields.to_vec()),
+                values: RowValues::new(self.as_ty_db(), values.to_vec()),
             }
         }
     }

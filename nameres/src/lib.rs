@@ -28,7 +28,7 @@ pub mod top_level;
 #[salsa::jar(db = Db)]
 pub struct Jar(
     NameResModule,
-    SalsaItem,
+    NameResItem,
     all_effects,
     effect_name,
     effect_member_name,
@@ -85,7 +85,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_parser::Db {}
 
 #[salsa::tracked]
-pub struct SalsaItem {
+pub struct NameResItem {
     #[id]
     pub name: ModuleName,
     #[return_ref]
@@ -94,7 +94,7 @@ pub struct SalsaItem {
     pub alloc: nst::NstIndxAlloc,
 }
 
-impl SalsaItem {
+impl NameResItem {
     pub fn span_of(&self, db: &dyn crate::Db) -> Span {
         match self.data(db) {
             nst::Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
@@ -107,9 +107,9 @@ impl SalsaItem {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct SalsaModuleResolution {
+pub struct ModuleResolution {
     pub local_ids: LocalIds,
-    pub resolved_items: Vec<Option<SalsaItem>>,
+    pub resolved_items: Vec<Option<NameResItem>>,
 }
 
 #[salsa::tracked]
@@ -120,7 +120,7 @@ pub struct NameResModule {
     #[return_ref]
     pub names: FxHashMap<Module, ModuleNames>,
     #[return_ref]
-    pub items: SalsaModuleResolution,
+    pub items: ModuleResolution,
 }
 
 #[salsa::tracked]
@@ -137,7 +137,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
         .build(&arena, module, db, &mut module_names);
     let mod_resolution = resolve_module(&arena, cst_module, base, &mut errors);
 
-    let salsa_resolution = SalsaModuleResolution {
+    let salsa_resolution = ModuleResolution {
         local_ids: mod_resolution.locals,
         resolved_items: mod_resolution
             .resolved_items
@@ -148,7 +148,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
                         nst::Item::Effect { name, .. } => ModuleName::from(name.value),
                         nst::Item::Term { name, .. } => ModuleName::from(name.value),
                     };
-                    SalsaItem::new(db, name, item.item, item.alloc)
+                    NameResItem::new(db, name, item.item, item.alloc)
                 })
             })
             .collect(),

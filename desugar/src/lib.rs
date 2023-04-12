@@ -1,7 +1,7 @@
 use std::ops::Not;
 
 use aiahr_ast::{
-    self as ast, Ast, AstModule, Direction, Item, SalsaItem,
+    self as ast, Ast, AstItem, AstModule, Direction, Item,
     Term::{self, *},
 };
 use aiahr_core::{
@@ -66,10 +66,10 @@ pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) 
 #[salsa::tracked]
 pub fn desugar_item(
     db: &dyn crate::Db,
-    item: aiahr_nameres::SalsaItem,
+    item: aiahr_nameres::NameResItem,
     vars: usize,
     ty_vars: usize,
-) -> ast::SalsaItem {
+) -> ast::AstItem {
     // TODO: Handle separation of name based Ids and desugar generated Ids better.
     let mut ty_vars = IdGen::from_iter((0..ty_vars).map(|_| false));
     let mut vars = IdGen::from_iter((0..vars).map(|_| false));
@@ -89,11 +89,11 @@ pub fn desugar_item(
         }
     };
 
-    SalsaItem::new(db.as_ast_db(), salsa_ast)
+    AstItem::new(db.as_ast_db(), salsa_ast)
 }
 
 #[salsa::tracked]
-pub fn desugar_item_of_id(db: &dyn crate::Db, module: Module, item_id: ItemId) -> SalsaItem {
+pub fn desugar_item_of_id(db: &dyn crate::Db, module: Module, item_id: ItemId) -> AstItem {
     let nameres_module = db.nameres_module_of(module);
     let ast_module = desugar_module(db, nameres_module);
     ast_module
@@ -751,7 +751,7 @@ mod tests {
     fn ds_snippet<'db>(
         db: &'db TestDatabase,
         input: &str,
-    ) -> (aiahr_nameres::SalsaItem, &'db ast::SalsaItem) {
+    ) -> (aiahr_nameres::NameResItem, &'db ast::AstItem) {
         let mut content = "item = ".to_string();
         content.push_str(input);
         let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test.aiahr")), content);

@@ -14,7 +14,7 @@ use aiahr_core::{
 use aiahr_ty::{Ty, TyScheme};
 
 #[salsa::jar(db = Db)]
-pub struct Jar(AstModule, SalsaItem);
+pub struct Jar(AstModule, AstItem);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     fn as_ast_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -409,7 +409,7 @@ impl<Var: Hash> std::hash::Hash for Ast<Var> {
 }
 
 #[salsa::tracked]
-pub struct SalsaItem {
+pub struct AstItem {
     #[id]
     pub item: Item<VarId>,
 }
@@ -437,7 +437,7 @@ pub struct AstModule {
     #[id]
     pub module: Module,
     #[return_ref]
-    pub items: Vec<SalsaItem>,
+    pub items: Vec<AstItem>,
 }
 
 /// An ast definition of an effect

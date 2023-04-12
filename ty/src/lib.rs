@@ -7,7 +7,7 @@ use std::ops::Deref;
 mod alloc;
 use self::fold::DefaultFold;
 pub use alloc::{
-    db::{InDb, SalsaRowFields, SalsaRowValues, TyData},
+    db::{InDb, RowFields, RowValues, TyData},
     AccessTy, MkTy, TypeAlloc, TypeVarOf,
 };
 
@@ -24,7 +24,7 @@ use row::{ClosedRow, Row};
 pub mod infer;
 
 #[salsa::jar(db = Db)]
-pub struct Jar(TyData, SalsaRowFields, SalsaRowValues);
+pub struct Jar(TyData, RowFields, RowValues);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     fn as_ty_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
