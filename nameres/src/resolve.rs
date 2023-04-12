@@ -1,7 +1,7 @@
 use crate::{
     base::BaseNames,
     name::{BaseName, ModuleName, Name, NameKinded},
-    names::{LocalIds, Names},
+    names::Names,
     ops::{IdOps, InsertResult},
 };
 use aiahr_core::{
@@ -22,6 +22,7 @@ use aiahr_cst::{
     Annotation, CstIndxAlloc, Field, IdField,
 };
 use bumpalo::Bump;
+use cst::nameres::LocalIds;
 use la_arena::Idx;
 
 const TERM_KINDS: NameKinds = NameKinds::EFFECT_OP
@@ -830,16 +831,16 @@ pub fn resolve_module<'a, 'b: 'a, E>(
     module: &cst::CstModule,
     base: BaseNames<'_, 'a>,
     errors: &mut E,
-) -> ModuleResolution
+) -> Vec<Option<nst::AllocItem>>
 where
     E: DiagnosticSink<NameResolutionError>,
 {
-    let mut names = Names::new(&base);
     let resolved_items = base
         .iter()
         .zip(module.items.iter())
         .map(|(name, item)| match (&name, &item) {
             (ModuleName::Effect(e), cst::Item::Effect(ref eff)) => {
+                let mut names = Names::new(&base);
                 let mut alloc = NstIndxAlloc::default();
                 let mut ctx = NameResCtx {
                     cst_alloc: &module.indices,
@@ -849,9 +850,14 @@ where
                     names: &mut names,
                 };
                 ctx.resolve_effect(base.me(), *e, eff)
-                    .map(|item| AllocItem { alloc, item })
+                    .map(|item| AllocItem {
+                        alloc,
+                        local_ids: names.into_local_ids(),
+                        item,
+                    })
             }
             (ModuleName::Item(i), cst::Item::Term(ref term)) => {
+                let mut names = Names::new(&base);
                 let mut alloc = NstIndxAlloc::default();
                 let mut ctx = NameResCtx {
                     cst_alloc: &module.indices,
@@ -860,8 +866,11 @@ where
                     alloc: &mut alloc,
                     names: &mut names,
                 };
-                ctx.resolve_term_item(*i, term)
-                    .map(|item| AllocItem { alloc, item })
+                ctx.resolve_term_item(*i, term).map(|item| AllocItem {
+                    alloc,
+                    local_ids: names.into_local_ids(),
+                    item,
+                })
             }
             _ => panic!(
                 "Expected same kinds of names, got {:?} and {:?}",
@@ -869,10 +878,7 @@ where
             ),
         })
         .collect();
-    ModuleResolution {
-        locals: names.into_local_ids(),
-        resolved_items,
-    }
+    resolved_items
 }
 
 #[cfg(test)]
@@ -886,12 +892,11 @@ mod tests {
         span::Span,
         span_of,
     };
+    use aiahr_cst::nameres::LocalIds;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
 
-    use crate::{module::ModuleNames, names::LocalIds, ops::IdOps, Db as NameResDb};
-
-    use super::ModuleResolution;
+    use crate::{module::ModuleNames, ops::IdOps, Db as NameResDb};
 
     use aiahr_test::{
         assert_ident_text_matches_name, field, id_field, nitem_term, npat_prod, npat_var,
@@ -907,43 +912,14 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    fn parse_resolve_term<'a>(
-        db: &'a TestDatabase,
-        arena: &'a Bump,
-        input: &str,
-    ) -> (
-        Option<&'a aiahr_test::nst::Term<'a>>,
-        LocalIds,
-        Vec<NameResolutionError>,
-    ) {
-        // Wrap our term in an item def
-        let mut content = "item = ".to_string();
-        content.push_str(input);
-
-        let (resolution, _, errors) = parse_resolve_module(db, arena, content);
-
-        (
-            resolution
-                .resolved_items
-                .first()
-                .unwrap()
-                .as_ref()
-                .map(|item| match item {
-                    // We hard code wrap our input in an item def, an effect isn't possible here
-                    aiahr_test::nst::Item::Effect { .. } => unreachable!(),
-                    aiahr_test::nst::Item::Term { value, .. } => *value,
-                }),
-            resolution.locals.clone(),
-            errors,
-        )
-    }
+    type TestNstItem<'a> = (aiahr_test::nst::Item<'a>, &'a LocalIds);
 
     fn parse_resolve_module<'a, S: ToString>(
         db: &'a TestDatabase,
         arena: &'a Bump,
         input: S,
     ) -> (
-        ModuleResolution<aiahr_test::nst::Item<'a>>,
+        Vec<Option<TestNstItem<'a>>>,
         &'a ModuleNames,
         Vec<NameResolutionError>,
     ) {
@@ -952,20 +928,16 @@ mod tests {
         let _ = SourceFileSet::new(db, vec![file]);
 
         let nameres_module = db.nameres_module_for_file(file);
-        let resolution = nameres_module.items(db);
-        let resolution = ModuleResolution {
-            locals: resolution.local_ids.clone(),
-            resolved_items: resolution
-                .resolved_items
-                .iter()
-                .map(|oi| {
-                    oi.map(|item| {
-                        let mut ref_alloc = NstRefAlloc::new(arena, item.alloc(db));
-                        item.data(db).ref_alloc(&mut ref_alloc)
-                    })
+        let items = nameres_module
+            .items(db)
+            .iter()
+            .map(|oi| {
+                oi.map(|item| {
+                    let mut ref_alloc = NstRefAlloc::new(arena, item.alloc(db));
+                    (item.data(db).ref_alloc(&mut ref_alloc), item.locals(db))
                 })
-                .collect(),
-        };
+            })
+            .collect();
 
         let errors = db
             .nameres_errors()
@@ -979,8 +951,36 @@ mod tests {
             .collect();
 
         (
-            resolution,
+            items,
             &nameres_module.names(db)[&nameres_module.module(db)],
+            errors,
+        )
+    }
+
+    fn parse_resolve_term<'a>(
+        db: &'a TestDatabase,
+        arena: &'a Bump,
+        input: &str,
+    ) -> (
+        Option<(&'a aiahr_test::nst::Term<'a>, &'a LocalIds)>,
+        Vec<NameResolutionError>,
+    ) {
+        // Wrap our term in an item def
+        let mut content = "item = ".to_string();
+        content.push_str(input);
+
+        let (items, _, errors) = parse_resolve_module(db, arena, content);
+
+        (
+            items
+                .first()
+                .unwrap()
+                .as_ref()
+                .map(|(item, locals)| match item {
+                    // We hard code wrap our input in an item def, an effect isn't possible here
+                    aiahr_test::nst::Item::Effect { .. } => unreachable!(),
+                    aiahr_test::nst::Item::Term { value, .. } => (*value, *locals),
+                }),
             errors,
         )
     }
@@ -989,15 +989,15 @@ mod tests {
     fn test_local_binding() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "x = {}; y = {}; x");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; y = {}; x");
         assert_matches!(errs[..], []);
         assert_matches!(
             term,
-            Some(nterm_local!(
+            Some((nterm_local!(
                 x,
                 nterm_prod!(),
                 nterm_local!(y, nterm_prod!(), nterm_var!(x1))
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(locals.vars[y].value.text(&db), "y");
                 assert_eq!(x1, x);
@@ -1009,16 +1009,16 @@ mod tests {
     fn test_local_binding_types() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "x: a = {}; y: {} = {}; x");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x: a = {}; y: {} = {}; x");
         assert_matches!(errs[..], []);
         assert_matches!(
             term,
-            Some(nterm_local!(
+            Some((nterm_local!(
                 x,
                 type_named!(a),
                 nterm_prod!(),
                 nterm_local!(y, type_prod!(), nterm_prod!(), nterm_var!(x1))
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.ty_vars[a].value.text(&db), "a");
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(locals.vars[y].value.text(&db), "y");
@@ -1031,14 +1031,14 @@ mod tests {
     fn test_local_binding_shadowing() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "x = {}; x = x; x");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; x = x; x");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_local!(
+            Some((nterm_local!(
                 x_out,
                 nterm_prod!(),
                 nterm_local!(x_in, nterm_var!(x1), nterm_var!(x2))
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[x_out].value.text(&db), "x");
                 assert_eq!(locals.vars[x_in].value.text(&db), "x");
                 assert_eq!(x1, x_out);
@@ -1051,7 +1051,7 @@ mod tests {
     fn test_local_binding_errors() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, _, errs) = parse_resolve_term(&db, &arena, "x = y; z");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x = y; z");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
@@ -1077,14 +1077,14 @@ mod tests {
     fn test_handler() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "x = {}; with x do x");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; with x do x");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_local!(
+            Some((nterm_local!(
                 x,
                 nterm_prod!(),
                 nterm_with!(nterm_var!(x1), nterm_var!(x2))
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
@@ -1096,7 +1096,7 @@ mod tests {
     fn test_handler_errors() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, _, errs) = parse_resolve_term(&db, &arena, "with h do x");
+        let (term, errs) = parse_resolve_term(&db, &arena, "with h do x");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
@@ -1122,16 +1122,16 @@ mod tests {
     fn test_abstraction() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "|x| |y| y(x)");
+        let (term, errs) = parse_resolve_term(&db, &arena, "|x| |y| y(x)");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_abs!(
+            Some((nterm_abs!(
                 x,
                 nterm_abs!(
                     y,
                     nterm_app!(nterm_var!(y1), nterm_var!(x1))
                 )
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(locals.vars[y].value.text(&db), "y");
                 assert_eq!(x1, x);
@@ -1144,10 +1144,10 @@ mod tests {
     fn test_abstraction_types() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "|x: {}| |y: a -> b| y(x)");
+        let (term, errs) = parse_resolve_term(&db, &arena, "|x: {}| |y: a -> b| y(x)");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_abs!(
+            Some((nterm_abs!(
                 x,
                 type_prod!(),
                 nterm_abs!(
@@ -1155,7 +1155,7 @@ mod tests {
                     type_func!(type_named!(a), type_named!(b)),
                     nterm_app!(nterm_var!(y1), nterm_var!(x1))
                 )
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.ty_vars[a].value.text(&db), "a");
                 assert_eq!(locals.ty_vars[b].value.text(&db), "b");
                 assert_eq!(locals.vars[x].value.text(&db), "x");
@@ -1170,16 +1170,16 @@ mod tests {
     fn test_abstraction_shadowing() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "|x| |x| x(x)");
+        let (term, errs) = parse_resolve_term(&db, &arena, "|x| |x| x(x)");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_abs!(
+            Some((nterm_abs!(
                 x_out,
                 nterm_abs!(
                     x_in,
                     nterm_app!(nterm_var!(x1), nterm_var!(x2))
                 )
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[x_out].value.text(&db), "x");
                 assert_eq!(locals.vars[x_in].value.text(&db), "x");
                 assert_eq!(x1, x_in);
@@ -1192,13 +1192,13 @@ mod tests {
     fn test_application() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "|x| x(x)");
+        let (term, errs) = parse_resolve_term(&db, &arena, "|x| x(x)");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_abs!(
+            Some((nterm_abs!(
                 x,
                 nterm_app!(nterm_var!(x1), nterm_var!(x2))
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(x1, x);
                 assert_eq!(x2, x);
@@ -1210,7 +1210,7 @@ mod tests {
     fn test_application_errors() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, _, errs) = parse_resolve_term(&db, &arena, "f(x)");
+        let (term, errs) = parse_resolve_term(&db, &arena, "f(x)");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
@@ -1236,17 +1236,17 @@ mod tests {
     fn test_product_row() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "x = {}; {a = x, b = {x = x}}");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; {a = x, b = {x = x}}");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_local!(x_var, nterm_prod!(),
+            Some((nterm_local!(x_var, nterm_prod!(),
                 nterm_prod!(
                 id_field!(a, nterm_var!(x1)),
                 id_field!(
                     b,
                     nterm_prod!(id_field!(x, nterm_var!(x2)))
                 ),
-            ))) => {
+            )), locals)) => {
                 assert_ident_text_matches_name!(db, [a, b, x]);
                 assert_eq!(locals.vars[x_var].value.text(&db), "x");
                 assert_eq!(x_var, x1);
@@ -1259,7 +1259,7 @@ mod tests {
     fn test_product_row_errors() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, _, errs) = parse_resolve_term(&db, &arena, "{x = y, z = x}");
+        let (term, errs) = parse_resolve_term(&db, &arena, "{x = y, z = x}");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
@@ -1285,10 +1285,10 @@ mod tests {
     fn test_sum_row() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "|x| <a = x>");
+        let (term, errs) = parse_resolve_term(&db, &arena, "|x| <a = x>");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_abs!(x, nterm_sum!(id_field!(a, nterm_var!(x1))))) => {
+            Some((nterm_abs!(x, nterm_sum!(id_field!(a, nterm_var!(x1)))), locals)) => {
                 assert_ident_text_matches_name!(db, a);
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(x1, x);
@@ -1300,7 +1300,7 @@ mod tests {
     fn test_sum_row_errors() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, _, errs) = parse_resolve_term(&db, &arena, "<x = x>");
+        let (term, errs) = parse_resolve_term(&db, &arena, "<x = x>");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
@@ -1318,17 +1318,17 @@ mod tests {
     fn test_dot_access() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "id = |x| x; {x = id}.x");
+        let (term, errs) = parse_resolve_term(&db, &arena, "id = |x| x; {x = id}.x");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_local!(
+            Some((nterm_local!(
                 id,
                 nterm_abs!(x_var, nterm_var!(x_var1)),
                 nterm_dot!(
                     nterm_prod!(id_field!(x, nterm_var!(id1))),
                     x_id1
                 )
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[id].value.text(&db), "id");
                 assert_eq!(locals.vars[x_var].value.text(&db), "x");
                 assert_eq!(x_var1, x_var);
@@ -1343,7 +1343,7 @@ mod tests {
     fn test_dot_access_errors() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, _, errs) = parse_resolve_term(&db, &arena, "x.a");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x.a");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
@@ -1361,13 +1361,13 @@ mod tests {
     fn test_match() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "match <{a = x} => x, y => y>");
+        let (term, errs) = parse_resolve_term(&db, &arena, "match <{a = x} => x, y => y>");
         assert_matches!(errs[..], []);
         assert_matches!(term,
-            Some(nterm_match!(
+            Some((nterm_match!(
                 field!(npat_prod!(id_field!(a, npat_var!(x))), nterm_var!(x1)),
                 field!(npat_var!(y), nterm_var!(y1))
-            )) => {
+            ), locals)) => {
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(locals.vars[y].value.text(&db), "y");
                 assert_eq!(x1, x);
@@ -1381,7 +1381,7 @@ mod tests {
     fn test_match_error_name_not_found() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, _, errs) = parse_resolve_term(&db, &arena, "match <{a = x} => f(x), {} => z>");
+        let (term, errs) = parse_resolve_term(&db, &arena, "match <{a = x} => f(x), {} => z>");
         assert_matches!(term, None);
         assert_matches!(
             errs[..],
@@ -1407,8 +1407,7 @@ mod tests {
     fn test_match_error_duplicate_name() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) =
-            parse_resolve_term(&db, &arena, "match <{a = x, b = x} => x(x)>");
+        let (term, errs) = parse_resolve_term(&db, &arena, "match <{a = x, b = x} => x(x)>");
         assert_matches!(
             errs[..],
             [NameResolutionError::Duplicate {
@@ -1423,13 +1422,13 @@ mod tests {
         );
         assert_matches!(
             term,
-            Some(nterm_match!(field!(
+            Some((nterm_match!(field!(
                 npat_prod!(
                     id_field!(a, npat_var!(x)),
                     id_field!(b, npat_var!(x_again))
                 ),
                 nterm_app!(nterm_var!(x1), nterm_var!(x2))
-            ))) => {
+            )), locals)) => {
                 assert_ident_text_matches_name!(db, [a, b]);
                 assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(locals.vars[x_again].value.text(&db), "x");
@@ -1443,11 +1442,11 @@ mod tests {
     fn test_mixed_shadowing() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (term, locals, errs) = parse_resolve_term(&db, &arena, "x = {}; |x| match <x => x>");
+        let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; |x| match <x => x>");
         assert_matches!(errs[..], []);
         assert_matches!(
             term,
-            Some(nterm_local!(x_top, nterm_prod!(), nterm_abs!(x_mid, nterm_match!(field!(npat_var!(x_bot), nterm_var!(x1)))))) => {
+            Some((nterm_local!(x_top, nterm_prod!(), nterm_abs!(x_mid, nterm_match!(field!(npat_var!(x_bot), nterm_var!(x1))))), locals)) => {
                 assert_eq!(locals.vars[x_top].value.text(&db), "x");
                 assert_eq!(locals.vars[x_mid].value.text(&db), "x");
                 assert_eq!(locals.vars[x_bot].value.text(&db), "x");
@@ -1463,13 +1462,13 @@ mod tests {
         let (res, ids, errs) = parse_resolve_module(&db, &arena, "foo : forall a. a -> a = |x| x");
         assert_matches!(errs[..], []);
         assert_matches!(
-            res.resolved_items[..],
+            res[..],
             [
-                Some(nitem_term!(foo, scheme!(quant!(a), None, type_func!(type_named!(a1), type_named!(a2))), nterm_abs!(x, nterm_var!(x1)))),
+                Some((nitem_term!(foo, scheme!(quant!(a), None, type_func!(type_named!(a1), type_named!(a2))), nterm_abs!(x, nterm_var!(x1))), locals)),
             ] => {
                 assert_eq!(ids.get(foo).value.text(&db), "foo");
-                assert_eq!(res.locals.ty_vars[a].value.text(&db), "a");
-                assert_eq!(res.locals.vars[x].value.text(&db), "x");
+                assert_eq!(locals.ty_vars[a].value.text(&db), "a");
+                assert_eq!(locals.vars[x].value.text(&db), "x");
                 assert_eq!(a1, a);
                 assert_eq!(a2, a);
                 assert_eq!(x1, x);
@@ -1484,10 +1483,10 @@ mod tests {
         let (res, ids, errs) = parse_resolve_module(&db, &arena, "foo = bar\nbar = foo");
         assert_matches!(errs[..], []);
         assert_matches!(
-            res.resolved_items[..],
+            res[..],
             [
-                Some(nitem_term!(foo, nterm_item!(mbar, bar1))),
-                Some(nitem_term!(bar, nterm_item!(mfoo, foo1)))
+                Some((nitem_term!(foo, nterm_item!(mbar, bar1)), _)),
+                Some((nitem_term!(bar, nterm_item!(mfoo, foo1)), _))
             ] => {
                 assert_eq!(ids.get(foo).value.text(&db), "foo");
                 assert_eq!(ids.get(bar).value.text(&db), "bar");
@@ -1503,7 +1502,7 @@ mod tests {
         let arena = Bump::new();
         let db = TestDatabase::default();
         let (res, _, errs) = parse_resolve_module(&db, &arena, "foo = x\nbar = y");
-        assert_matches!(res.resolved_items[..], [None, None]);
+        assert_matches!(res[..], [None, None]);
         assert_matches!(
             errs[..],
             [

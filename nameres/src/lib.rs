@@ -4,7 +4,7 @@ use aiahr_core::id::{EffectId, EffectOpId, ItemId};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
 use aiahr_core::span::{Span, Spanned};
-use aiahr_cst::nameres as nst;
+use aiahr_cst::nameres::{self as nst, LocalIds};
 use aiahr_parser::ParseFile;
 use rustc_hash::FxHashMap;
 
@@ -14,7 +14,6 @@ use crate::resolve::resolve_module;
 use crate::top_level::BaseBuilder;
 
 use self::module::ModuleNames;
-use self::names::LocalIds;
 
 pub mod base;
 pub mod effect;
@@ -92,6 +91,8 @@ pub struct NameResItem {
     pub data: nst::Item,
     #[return_ref]
     pub alloc: nst::NstIndxAlloc,
+    #[return_ref]
+    pub locals: LocalIds,
 }
 
 impl NameResItem {
@@ -106,12 +107,6 @@ impl NameResItem {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ModuleResolution {
-    pub local_ids: LocalIds,
-    pub resolved_items: Vec<Option<NameResItem>>,
-}
-
 #[salsa::tracked]
 pub struct NameResModule {
     #[id]
@@ -120,7 +115,7 @@ pub struct NameResModule {
     #[return_ref]
     pub names: FxHashMap<Module, ModuleNames>,
     #[return_ref]
-    pub items: ModuleResolution,
+    pub items: Vec<Option<NameResItem>>,
 }
 
 #[salsa::tracked]
@@ -135,24 +130,20 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
     let base = BaseBuilder::new()
         .add_slice(&cst_module.items, &mut errors)
         .build(&arena, module, db, &mut module_names);
-    let mod_resolution = resolve_module(&arena, cst_module, base, &mut errors);
+    let resolved_items = resolve_module(&arena, cst_module, base, &mut errors);
 
-    let salsa_resolution = ModuleResolution {
-        local_ids: mod_resolution.locals,
-        resolved_items: mod_resolution
-            .resolved_items
-            .into_iter()
-            .map(|oi| {
-                oi.map(|item| {
-                    let name = match &item.item {
-                        nst::Item::Effect(eff) => ModuleName::from(eff.name.value),
-                        nst::Item::Term(term) => ModuleName::from(term.name.value),
-                    };
-                    NameResItem::new(db, name, item.item, item.alloc)
-                })
+    let items = resolved_items
+        .into_iter()
+        .map(|oi| {
+            oi.map(|item| {
+                let name = match &item.item {
+                    nst::Item::Effect(eff) => ModuleName::from(eff.name.value),
+                    nst::Item::Term(term) => ModuleName::from(term.name.value),
+                };
+                NameResItem::new(db, name, item.item, item.alloc, item.local_ids)
             })
-            .collect(),
-    };
+        })
+        .collect();
 
     for error in errors {
         AiahrcErrors::push(db.as_core_db(), AiahrcError::from(error));
@@ -164,7 +155,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
             .into_iter()
             .map(|(key, value)| (key, value.clone()))
             .collect(),
-        salsa_resolution,
+        items,
     )
 }
 
@@ -326,7 +317,6 @@ pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
     let nameres_module = db.nameres_module_of(module);
     nameres_module
         .items(db)
-        .resolved_items
         .iter()
         .filter_map(|item| item.as_ref())
         .filter_map(|item| match item.data(db) {

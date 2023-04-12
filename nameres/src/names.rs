@@ -6,6 +6,7 @@ use aiahr_core::{
     modules::Module,
     span::{SpanOf, Spanned},
 };
+use aiahr_cst::nameres::LocalIds;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -93,12 +94,6 @@ impl MatchesOps<VarId> for Matches {
     fn get_mut(&mut self) -> &mut Option<VarId> {
         &mut self.var
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LocalIds {
-    pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,
-    pub vars: Box<Ids<VarId, SpanOf<Ident>>>,
 }
 
 /// The names visible from a given context in a module. Supports shadowing.

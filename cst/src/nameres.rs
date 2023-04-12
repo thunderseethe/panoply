@@ -8,7 +8,7 @@ pub use super::{
     Separated, SumRow, Type, TypeAnnotation, TypeRow,
 };
 use aiahr_core::{
-    id::{EffectId, EffectOpId, ItemId, TyVarId, VarId},
+    id::{EffectId, EffectOpId, Ids, ItemId, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaMut, HasArenaRef, IdxAlloc},
     modules::Module,
@@ -207,7 +207,14 @@ pub enum Item {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalIds {
+    pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,
+    pub vars: Box<Ids<VarId, SpanOf<Ident>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AllocItem {
     pub alloc: NstIndxAlloc,
+    pub local_ids: LocalIds,
     pub item: Item,
 }

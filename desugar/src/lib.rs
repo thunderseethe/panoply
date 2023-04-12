@@ -47,32 +47,26 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_a
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
 pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) -> AstModule {
-    let resolution = module.items(db.as_nameres_db());
-    let ty_vars = resolution.local_ids.ty_vars.len();
-    let vars = resolution.local_ids.vars.len();
+    let items = module.items(db.as_nameres_db());
     AstModule::new(
         db.as_ast_db(),
         module.module(db.as_nameres_db()),
-        resolution
-            .resolved_items
+        items
             .iter()
             .flat_map(|opt_item| opt_item.as_ref().into_iter())
-            .map(|nst_item| desugar_item(db, *nst_item, vars, ty_vars))
+            .map(|nst_item| desugar_item(db, *nst_item))
             .collect(),
     )
 }
 
 /// Desugar an NST Item into an AST Item.
 #[salsa::tracked]
-pub fn desugar_item(
-    db: &dyn crate::Db,
-    item: aiahr_nameres::NameResItem,
-    vars: usize,
-    ty_vars: usize,
-) -> ast::AstItem {
+pub fn desugar_item(db: &dyn crate::Db, item: aiahr_nameres::NameResItem) -> ast::AstItem {
     // TODO: Handle separation of name based Ids and desugar generated Ids better.
-    let mut ty_vars = IdGen::from_iter((0..ty_vars).map(|_| false));
-    let mut vars = IdGen::from_iter((0..vars).map(|_| false));
+
+    let locals = item.locals(db.as_nameres_db());
+    let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
+    let mut ty_vars = locals.ty_vars.to_gen().into_iter().map(|_| true).collect();
 
     let ast_res = desugar(
         db,
@@ -754,12 +748,7 @@ mod tests {
         SourceFileSet::new(db, vec![file]);
         let namesres_module = db.nameres_module_for_file(file);
         (
-            namesres_module
-                .items(db)
-                .resolved_items
-                .first()
-                .unwrap()
-                .unwrap(),
+            namesres_module.items(db).first().unwrap().unwrap(),
             db.desugar_module_of(namesres_module.module(db))
                 .items(db)
                 .first()
