@@ -166,9 +166,10 @@ pub fn desugar(
     let terms = la_arena::Arena::default();
     let mut ds_ctx = DesugarCtx::new(db, terms, arenas, vars, ty_vars);
     Ok(match nst {
-        nst::Item::Effect { name, ops, .. } => Item::Effect(ast::EffectItem {
-            name: name.value,
-            ops: ops
+        nst::Item::Effect(eff) => Item::Effect(ast::EffectItem {
+            name: eff.name.value,
+            ops: eff
+                .ops
                 .iter()
                 .map(|opt_op| {
                     opt_op.as_ref().map(|op| {
@@ -187,19 +188,14 @@ pub fn desugar(
                 })
                 .collect(),
         }),
-        nst::Item::Term {
-            name,
-            annotation,
-            value,
-            ..
-        } => {
-            let tree = ds_ctx.ds_term(*value)?;
-            Item::Function(match annotation {
-                Some(scheme) => {
+        nst::Item::Term(term) => {
+            let tree = ds_ctx.ds_term(term.value)?;
+            Item::Function(match term.annotation {
+                Some(ref scheme) => {
                     let scheme = ds_ctx.ds_scheme(&scheme.type_);
-                    Ast::new(name.value, ds_ctx.spans, scheme, ds_ctx.terms, tree)
+                    Ast::new(term.name.value, ds_ctx.spans, scheme, ds_ctx.terms, tree)
                 }
-                None => Ast::with_untyped(name.value, ds_ctx.spans, ds_ctx.terms, tree),
+                None => Ast::with_untyped(term.name.value, ds_ctx.spans, ds_ctx.terms, tree),
             })
         }
     })

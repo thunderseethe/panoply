@@ -472,31 +472,20 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Item {
 
     fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
         match self {
-            nst::Item::Effect {
-                effect,
-                name,
-                lbrace,
-                ops,
-                rbrace,
-            } => Item::Effect {
-                effect: *effect,
-                name: *name,
-                lbrace: *lbrace,
+            nst::Item::Effect(eff) => Item::Effect {
+                effect: eff.effect,
+                name: eff.name,
+                lbrace: eff.lbrace,
                 ops: alloc
                     .ref_arena()
-                    .alloc_slice_fill_iter(ops.iter().map(|op| op.ref_alloc(alloc))),
-                rbrace: *rbrace,
+                    .alloc_slice_fill_iter(eff.ops.iter().map(|op| op.ref_alloc(alloc))),
+                rbrace: eff.rbrace,
             },
-            nst::Item::Term {
-                name,
-                annotation,
-                eq,
-                value,
-            } => Item::Term {
-                name: *name,
-                annotation: annotation.ref_alloc(alloc),
-                eq: *eq,
-                value: value.ref_alloc(alloc),
+            nst::Item::Term(term) => Item::Term {
+                name: term.name,
+                annotation: term.annotation.ref_alloc(alloc),
+                eq: term.eq,
+                value: term.value.ref_alloc(alloc),
             },
         }
     }

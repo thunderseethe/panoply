@@ -788,7 +788,7 @@ where
         ops: &[cst::EffectOp<Ident, Ident>],
         rbrace: Span,
     ) -> Option<nst::Item> {
-        Some(nst::Item::Effect {
+        Some(nst::Item::Effect(nst::EffectDefn {
             effect,
             name: name.span().of(eid),
             lbrace,
@@ -802,7 +802,7 @@ where
                 .map(|(opid, op)| self.resolve_effect_op(opid, op))
                 .collect(),
             rbrace,
-        })
+        }))
     }
 
     /// Resolves the given item.
@@ -814,14 +814,14 @@ where
         eq: Span,
         value: Idx<cst::Term>,
     ) -> Option<nst::Item> {
-        Some(nst::Item::Term {
+        Some(nst::Item::Term(nst::TermDefn {
             name: name.span().of(id),
             annotation: annotation
                 .map(|annotation| self.resolve_scheme_annotation(annotation))
                 .transpose()?,
             eq,
             value: self.resolve_term(value)?,
-        })
+        }))
     }
 }
 

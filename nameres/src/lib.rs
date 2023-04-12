@@ -97,10 +97,10 @@ pub struct NameResItem {
 impl NameResItem {
     pub fn span_of(&self, db: &dyn crate::Db) -> Span {
         match self.data(db) {
-            nst::Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
-            nst::Item::Term { value, .. } => {
+            nst::Item::Effect(eff) => Span::join(&eff.effect, &eff.rbrace),
+            nst::Item::Term(term) => {
                 let alloc = self.alloc(db);
-                alloc[*value].spanned(alloc).span()
+                alloc[term.value].spanned(alloc).span()
             }
         }
     }
@@ -145,8 +145,8 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
             .map(|oi| {
                 oi.map(|item| {
                     let name = match &item.item {
-                        nst::Item::Effect { name, .. } => ModuleName::from(name.value),
-                        nst::Item::Term { name, .. } => ModuleName::from(name.value),
+                        nst::Item::Effect(eff) => ModuleName::from(eff.name.value),
+                        nst::Item::Term(term) => ModuleName::from(term.name.value),
                     };
                     NameResItem::new(db, name, item.item, item.alloc)
                 })
@@ -330,8 +330,8 @@ pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
         .iter()
         .filter_map(|item| item.as_ref())
         .filter_map(|item| match item.data(db) {
-            nst::Item::Term { .. } => None,
-            nst::Item::Effect { name, .. } => Some(name.value),
+            nst::Item::Term(_) => None,
+            nst::Item::Effect(eff) => Some(eff.name.value),
         })
         .collect()
 }

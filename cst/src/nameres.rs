@@ -182,22 +182,28 @@ impl Spanned for SpanTerm<'_> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct EffectDefn {
+    pub effect: Span,
+    pub name: SpanOf<EffectId>,
+    pub lbrace: Span,
+    pub ops: Vec<Option<EffectOp<EffectOpId, TyVarId>>>,
+    pub rbrace: Span,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct TermDefn {
+    pub name: SpanOf<ItemId>,
+    pub annotation: Option<SchemeAnnotation<TyVarId>>,
+    pub eq: Span,
+    pub value: Idx<Term>,
+}
+
 /// A top-level item in an Aiahr source file with names resolved.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Item {
-    Effect {
-        effect: Span,
-        name: SpanOf<EffectId>,
-        lbrace: Span,
-        ops: Vec<Option<EffectOp<EffectOpId, TyVarId>>>,
-        rbrace: Span,
-    },
-    Term {
-        name: SpanOf<ItemId>,
-        annotation: Option<SchemeAnnotation<TyVarId>>,
-        eq: Span,
-        value: Idx<Term>,
-    },
+    Effect(EffectDefn),
+    Term(TermDefn),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
