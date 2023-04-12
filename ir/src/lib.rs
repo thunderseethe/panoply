@@ -278,8 +278,8 @@ impl Iterator for UnboundVars<'_> {
     }
 }
 
-impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &IrVarTy {
-    fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, ()> {
+impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVarTy {
+    fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, A> {
         allocator
             .as_string(self.var.0)
             .append(allocator.text(":"))
@@ -292,16 +292,28 @@ impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &IrVarTy {
     }
 }
 
-impl<'a, D: ?Sized + DocAllocator<'a>> Pretty<'a, D> for &IrVar {
-    fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, ()> {
+impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVar {
+    fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, A> {
         arena
-            .text("Var")
-            .append(arena.text(self.var.0.to_string()).parens())
+            .text("ir_var")
+            .append(arena.text(self.var.0.to_string()).angles())
     }
 }
 
-impl<'a> Pretty<'a, pretty::Arena<'a>> for &IrKind {
-    fn pretty(self, arena: &'a pretty::Arena<'a>) -> pretty::DocBuilder<'a, pretty::Arena<'a>, ()> {
+impl<'a, A: 'a, D: DocAllocator<'a, A> + 'a> Pretty<'a, D, A> for &Ir
+where
+    DocBuilder<'a, D, A>: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, A> {
+        self.kind.pretty(allocator)
+    }
+}
+
+impl<'a, A: 'a, D: DocAllocator<'a, A> + 'a> Pretty<'a, D, A> for &IrKind
+where
+    DocBuilder<'a, D, A>: Clone,
+{
+    fn pretty(self, arena: &'a D) -> pretty::DocBuilder<'a, D, A> {
         fn gather_abs<'a>(vars: &mut Vec<IrVar>, kind: &'a IrKind) -> &'a IrKind {
             match kind {
                 Abs(arg, body) => {
@@ -320,10 +332,6 @@ impl<'a> Pretty<'a, pretty::Arena<'a>> for &IrKind {
                 _ => kind,
             }
         }
-        let paren_app_arg = |arg: &IrKind| match arg {
-            App(_, _) => arg.pretty(arena).parens(),
-            _ => arg.pretty(arena),
-        };
         match self {
             Int(i) => i.to_string().pretty(arena),
             Var(v) => v.pretty(arena),
@@ -332,36 +340,43 @@ impl<'a> Pretty<'a, pretty::Arena<'a>> for &IrKind {
                 let body = gather_abs(&mut vars, &body.deref().kind);
                 docs![
                     arena,
-                    docs![
-                        arena,
-                        "fun",
-                        arena.space(),
-                        arena
-                            .intersperse(
-                                vars.into_iter().map(|v| v.pretty(arena)),
-                                arena.text(",").append(arena.space()),
-                            )
-                            .group()
-                            .parens()
-                    ]
-                    .group(),
+                    "fun",
                     arena.space(),
-                    body.pretty(arena)
-                        .enclose(arena.line(), arena.line())
-                        .nest(2)
-                        .braces(),
+                    arena
+                        .intersperse(
+                            vars.into_iter().map(|v| v.pretty(arena)),
+                            arena.text(",").append(arena.space()),
+                        )
+                        .group()
+                        .parens(),
                     arena.softline(),
+                    "(",
+                    body.pretty(arena).align().nest(2),
+                    ")",
+                    arena.line(),
                 ]
             }
             App(func, arg) => {
-                let func_doc = match &func.deref().kind {
-                    // Wrap lambda literals in parens so they're easier to read
-                    f @ Abs(_, _) => f.pretty(arena).parens(),
-                    f => f.pretty(arena),
-                };
-                func_doc
-                    .append(arena.space())
-                    .append(paren_app_arg(&arg.deref().kind))
+                match &func.deref().kind {
+                    // If we see App(Abs(_, _), _) print this as a let binding
+                    Abs(var, body) => docs![
+                        arena,
+                        "let",
+                        arena.space(),
+                        var,
+                        arena.space(),
+                        "=",
+                        arena.softline(),
+                        arg.deref().pretty(arena).group().nest(2).align(),
+                        ";",
+                        arena.line(),
+                        body.deref().pretty(arena).nest(2).align(),
+                    ],
+                    // Print application as normal
+                    func => func
+                        .pretty(arena)
+                        .append(arg.deref().pretty(arena).parens()),
+                }
             }
             TyAbs(tyvar, body) => {
                 let mut tyvars = vec![*tyvar];
@@ -385,15 +400,15 @@ impl<'a> Pretty<'a, pretty::Arena<'a>> for &IrKind {
             }
             Struct(elems) => arena
                 .intersperse(
-                    elems.iter().map(|elem| elem.deref().kind.pretty(arena)),
+                    elems.iter().map(|elem| elem.deref().pretty(arena)),
                     arena.text(",").append(arena.softline()),
                 )
-                .enclose(arena.softline(), arena.softline())
-                .nest(2)
-                .braces(),
+                .enclose(arena.softline_(), arena.softline_())
+                .braces()
+                .align()
+                .group(),
             FieldProj(idx, term) => term
                 .deref()
-                .kind
                 .pretty(arena)
                 .append(arena.as_string(idx).brackets()),
             Tag(tag, term) => docs![
@@ -401,22 +416,24 @@ impl<'a> Pretty<'a, pretty::Arena<'a>> for &IrKind {
                 arena.as_string(tag),
                 arena.text(":"),
                 arena.space(),
-                &term.deref().kind
+                term.deref()
             ]
-            .angles(),
+            .angles()
+            .group(),
             Case(discr, branches) => docs![
                 arena,
                 "case",
                 arena.space(),
-                &discr.deref().kind,
-                arena.space(),
+                discr.deref(),
+                arena.softline(),
                 arena
                     .intersperse(
-                        branches.iter().map(|b| b.deref().kind.pretty(arena)),
-                        arena.hardline()
+                        branches.iter().map(|b| b.deref().pretty(arena)),
+                        arena.line()
                     )
                     .nest(2)
                     .angles()
+                    .align()
             ],
             TyApp(_, _) => todo!(),
             NewPrompt(p_var, body) => docs![

@@ -329,10 +329,17 @@ where
                                     var: case_var_id,
                                     ty: self.lower_ty(*ty),
                                 };
-                                let length = if i < left_len { left_len } else { right_len };
+                                let (branch_var, length) = if i < left_len {
+                                    (left_branch_var, left_len)
+                                } else {
+                                    (right_branch_var, right_len)
+                                };
                                 Ir::abss(
                                     [case_var],
-                                    Ir::app(Ir::var(case_var), [inj(i, length, Ir::var(case_var))]),
+                                    Ir::app(
+                                        Ir::var(branch_var),
+                                        [inj(i, length, Ir::var(case_var))],
+                                    ),
                                 )
                             });
 

@@ -323,3 +323,14 @@ where
             .append(alloc.as_string(self.0).angles())
     }
 }
+
+impl<'a, D, A: 'a> Pretty<'a, D, A> for IrVarId
+where
+    D: DocAllocator<'a, A>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        allocator
+            .text("ir_var")
+            .append(allocator.as_string(self.0).angles())
+    }
+}

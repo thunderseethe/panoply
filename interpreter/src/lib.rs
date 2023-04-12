@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use std::ops::Deref;
+
 use aiahr_core::id::IrVarId;
 use aiahr_ir::{Ir, IrKind, IrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -31,6 +33,66 @@ pub enum Value {
     /// A continuation is a slice of the stack reified as a value
     Cont(Stack),
     Vector(im::Vector<Value>),
+}
+
+use pretty::{docs, DocAllocator, DocBuilder, Pretty};
+
+fn pretty_env<'a, D, A: 'a>(
+    env: &FxHashMap<IrVarId, Value>,
+    a: &'a D,
+) -> pretty::DocBuilder<'a, D, A>
+where
+    D: DocAllocator<'a, A>,
+    DocBuilder<'a, D, A>: Clone,
+{
+    if env.is_empty() {
+        return a.nil();
+    }
+
+    a.intersperse(
+        env.iter().map(|(ir_var, _)| ir_var.pretty(a)),
+        a.text(",").append(a.softline()),
+    )
+    .brackets()
+}
+
+impl<'a, D, A: 'a> Pretty<'a, D, A> for &Value
+where
+    D: DocAllocator<'a, A> + 'a,
+    DocBuilder<'a, D, A>: Clone,
+{
+    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        match self {
+            Value::Int(i) => a.as_string(i),
+            Value::Lam { env, arg, body } => docs![
+                a,
+                pretty_env(env, a),
+                "|",
+                arg,
+                "|",
+                a.line(),
+                body.deref().pretty(a).nest(2).align(),
+            ],
+            Value::Tuple(vals) => a
+                .intersperse(
+                    vals.iter().map(|val| val.pretty(a)),
+                    a.text(",").append(a.softline()),
+                )
+                .align()
+                .nest(2)
+                .braces(),
+            Value::Tag(tag, val) => a
+                .as_string(tag)
+                .append(a.text(":"))
+                .append(a.softline())
+                .append(val.deref())
+                .group()
+                .angles(),
+            Value::Prompt(_) => todo!(),
+            Value::Cont(_) => todo!(),
+            Value::Vector(_) => todo!(),
+        }
+    }
 }
 
 impl Value {
@@ -238,10 +300,17 @@ impl Machine {
     fn step(&mut self, ir: Ir) -> InterpretResult {
         match ir.kind {
             // Literals
-            IrKind::Int(i) => self.unwind(Value::Int(i)),
+            IrKind::Int(i) => {
+                log::info!("Unwind: Int({})", i);
+                self.unwind(Value::Int(i))
+            }
             // Lambda Calculus
-            IrKind::Var(v) => self.unwind(self.lookup_var(v)),
+            IrKind::Var(v) => {
+                log::info!("Unwind: Var({:?})", v);
+                self.unwind(self.lookup_var(v))
+            }
             IrKind::Abs(arg, body) => {
+                log::info!("Unwind: Lam({:?}, {:?})", arg, body);
                 // TODO: make this check each env scope for all variables rathan than looking up
                 // all variables one by one.
                 let env = body
@@ -251,6 +320,7 @@ impl Machine {
                 self.unwind(Value::Lam { env, arg, body })
             }
             IrKind::App(func, arg) => {
+                log::info!("Step: App({:?}, {:?})", func, arg);
                 self.cur_frame.push(EvalCtx::ArgApp { func });
                 InterpretResult::Step(arg)
             }
@@ -259,8 +329,12 @@ impl Machine {
                 elems.reverse();
                 match elems.pop() {
                     // if elems is empty unwind with unit value
-                    None => self.unwind(Value::Tuple(vec![])),
+                    None => {
+                        log::info!("Unwind: {{}}");
+                        self.unwind(Value::Tuple(vec![]))
+                    }
                     Some(next) => {
+                        log::info!("Step: Struct({:?})", elems);
                         self.cur_frame.push(EvalCtx::StructEval {
                             vals: vec![],
                             rest: elems,
@@ -270,15 +344,18 @@ impl Machine {
                 }
             }
             IrKind::FieldProj(index, value) => {
+                log::info!("Step: FieldProj({:?}, {:?})", value, index);
                 self.cur_frame.push(EvalCtx::Index { index });
                 InterpretResult::Step(value)
             }
             // Sum rows
             IrKind::Tag(tag, value) => {
+                log::info!("Step: Tag({:?}, {:?})", tag, value);
                 self.cur_frame.push(EvalCtx::Tag { tag });
                 InterpretResult::Step(value)
             }
             IrKind::Case(discr, branches) => {
+                log::info!("Step: Case({:?}, {:?})", discr, branches);
                 self.cur_frame.push(EvalCtx::CaseScrutinee { branches });
                 InterpretResult::Step(discr)
             }
@@ -314,7 +391,7 @@ impl Machine {
                 self.unwind(val.clone())
             }
             // Type applications
-            // TODO:
+            // TODO: Handle type applications but they shouldn't show up in real runtime
             IrKind::TyAbs(_, body) => InterpretResult::Step(body),
             IrKind::TyApp(_, _) => todo!(),
         }

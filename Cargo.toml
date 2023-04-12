@@ -15,13 +15,14 @@ aiahr-core.workspace = true
 aiahr-desugar.workspace = true
 aiahr-interpreter.workspace = true
 aiahr-ir.workspace = true
-aiahr-nameres.workspace = true
 aiahr-lower-ir.workspace = true
+aiahr-nameres.workspace = true
 aiahr-parser.workspace = true
 aiahr-tc.workspace = true
 aiahr-ty.workspace = true
 clap = { workspace = true, features = ["derive"] }
 eyre.workspace = true
+pretty.workspace = true
 salsa.workspace = true
 
 [workspace]
@@ -74,6 +75,7 @@ eyre = "0.6.8"
 im = "15.1"
 ir-matcher = { path = "lower-ir/ir-matcher" }
 la-arena = "0.3.0"
+log = "0.4"
 pretty = "0.11.3"
 proc-macro2 = "1.0"
 quote = "1.0"

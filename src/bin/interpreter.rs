@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::path::PathBuf;
 
 use aiahr::AiahrDatabase;
@@ -7,6 +8,7 @@ use aiahr_interpreter::Machine;
 use aiahr_lower_ir::Db as LowerIrDb;
 use aiahr_parser::Db;
 use clap::Parser;
+use pretty::{BoxDoc, Pretty};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -54,10 +56,15 @@ fn main() -> eyre::Result<()> {
         }
     };
 
+    let doc: BoxDoc<'_, ()> = ir.item(&db).pretty(&pretty::BoxAllocator).into_doc();
+    println!("{}", doc.deref().pretty(80));
+
     let mut interpreter = Machine::default();
     let value = interpreter.interpret(ir.item(&db).clone());
+    println!("\n\nINTERPRETS INTO\n");
 
-    println!("{:?}", value);
+    let doc: BoxDoc<'_, ()> = value.pretty(&pretty::BoxAllocator).into_doc();
+    println!("{}", doc.deref().pretty(80));
 
     Ok(())
 }

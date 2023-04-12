@@ -17,5 +17,7 @@ aiahr-lower-ir.workspace = true
 aiahr-core.workspace = true
 aiahr-ir.workspace = true
 im.workspace = true
+log.workspace = true
+pretty.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
