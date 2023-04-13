@@ -17,6 +17,7 @@ use aiahr_cst::{
     nameres::{self as nst, NstIndxAlloc},
     Field,
 };
+use aiahr_nameres::{name::ModuleName, NameResItem};
 use aiahr_ty::{row::Row, Evidence, MkTy, Ty, TyScheme, TypeKind};
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
@@ -47,23 +48,47 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_a
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
 pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) -> AstModule {
-    let items = module.items(db.as_nameres_db());
+    let nameres_db = db.as_nameres_db();
+    let terms = module
+        .terms(nameres_db)
+        .iter()
+        .filter_map(|term| term.as_ref())
+        .map(|term| {
+            NameResItem::new(
+                nameres_db,
+                ModuleName::Item(term.name(nameres_db)),
+                nst::Item::Term(term.data(nameres_db).clone()),
+                term.alloc(nameres_db).clone(),
+                term.locals(nameres_db).clone(),
+            )
+        });
+    let effects = module
+        .effects(nameres_db)
+        .iter()
+        .filter_map(|effect| effect.as_ref())
+        .map(|effect| {
+            NameResItem::new(
+                nameres_db,
+                ModuleName::Effect(effect.name(nameres_db)),
+                nst::Item::Effect(effect.data(nameres_db).clone()),
+                effect.alloc(nameres_db).clone(),
+                effect.locals(nameres_db).clone(),
+            )
+        });
     AstModule::new(
         db.as_ast_db(),
         module.module(db.as_nameres_db()),
-        items
-            .iter()
-            .flat_map(|opt_item| opt_item.as_ref().into_iter())
-            .map(|nst_item| desugar_item(db, *nst_item))
+        terms
+            .chain(effects)
+            .map(|nst_item| desugar_item(db, nst_item))
             .collect(),
     )
 }
 
 /// Desugar an NST Item into an AST Item.
 #[salsa::tracked]
-pub fn desugar_item(db: &dyn crate::Db, item: aiahr_nameres::NameResItem) -> ast::AstItem {
+pub fn desugar_item(db: &dyn crate::Db, item: NameResItem) -> ast::AstItem {
     // TODO: Handle separation of name based Ids and desugar generated Ids better.
-
     let locals = item.locals(db.as_nameres_db());
     let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
     let mut ty_vars = locals.ty_vars.to_gen().into_iter().map(|_| true).collect();
@@ -741,14 +766,14 @@ mod tests {
     fn ds_snippet<'db>(
         db: &'db TestDatabase,
         input: &str,
-    ) -> (aiahr_nameres::NameResItem, &'db ast::AstItem) {
+    ) -> (aiahr_nameres::NameResTerm, &'db ast::AstItem) {
         let mut content = "item = ".to_string();
         content.push_str(input);
         let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test.aiahr")), content);
         SourceFileSet::new(db, vec![file]);
         let namesres_module = db.nameres_module_for_file(file);
         (
-            namesres_module.items(db).first().unwrap().unwrap(),
+            namesres_module.terms(db).first().unwrap().unwrap(),
             db.desugar_module_of(namesres_module.module(db))
                 .items(db)
                 .first()

@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use aiahr_core::{
-    id::{EffectId, IdGen, Ids, TyVarId, VarId},
+    id::{EffectId, IdGen, TyVarId, VarId},
     ident::Ident,
     modules::Module,
     span::{SpanOf, Spanned},

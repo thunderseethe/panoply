@@ -213,8 +213,8 @@ pub struct LocalIds {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AllocItem {
+pub struct AllocItem<T> {
     pub alloc: NstIndxAlloc,
     pub local_ids: LocalIds,
-    pub item: Item,
+    pub item: T,
 }

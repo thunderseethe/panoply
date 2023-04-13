@@ -28,6 +28,8 @@ pub mod top_level;
 pub struct Jar(
     NameResModule,
     NameResItem,
+    NameResTerm,
+    NameResEffect,
     all_effects,
     effect_name,
     effect_member_name,
@@ -95,16 +97,35 @@ pub struct NameResItem {
     pub locals: LocalIds,
 }
 
-impl NameResItem {
+#[salsa::tracked]
+pub struct NameResTerm {
+    #[id]
+    pub name: ItemId,
+    #[return_ref]
+    pub data: nst::TermDefn,
+    #[return_ref]
+    pub alloc: nst::NstIndxAlloc,
+    #[return_ref]
+    pub locals: LocalIds,
+}
+
+impl NameResTerm {
     pub fn span_of(&self, db: &dyn crate::Db) -> Span {
-        match self.data(db) {
-            nst::Item::Effect(eff) => Span::join(&eff.effect, &eff.rbrace),
-            nst::Item::Term(term) => {
-                let alloc = self.alloc(db);
-                alloc[term.value].spanned(alloc).span()
-            }
-        }
+        let alloc = self.alloc(db);
+        alloc[self.data(db).value].spanned(alloc).span()
     }
+}
+
+#[salsa::tracked]
+pub struct NameResEffect {
+    #[id]
+    pub name: EffectId,
+    #[return_ref]
+    pub data: nst::EffectDefn,
+    #[return_ref]
+    pub alloc: nst::NstIndxAlloc,
+    #[return_ref]
+    pub locals: LocalIds,
 }
 
 #[salsa::tracked]
@@ -115,7 +136,9 @@ pub struct NameResModule {
     #[return_ref]
     pub names: FxHashMap<Module, ModuleNames>,
     #[return_ref]
-    pub items: Vec<Option<NameResItem>>,
+    pub terms: Vec<Option<NameResTerm>>,
+    #[return_ref]
+    pub effects: Vec<Option<NameResEffect>>,
 }
 
 #[salsa::tracked]
@@ -130,20 +153,20 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
     let base = BaseBuilder::new()
         .add_slice(&cst_module.items, &mut errors)
         .build(&arena, module, db, &mut module_names);
-    let resolved_items = resolve_module(&arena, cst_module, base, &mut errors);
+    let (terms, effects) = resolve_module(&arena, cst_module, base, &mut errors);
 
-    let items = resolved_items
-        .into_iter()
-        .map(|oi| {
-            oi.map(|item| {
-                let name = match &item.item {
-                    nst::Item::Effect(eff) => ModuleName::from(eff.name.value),
-                    nst::Item::Term(term) => ModuleName::from(term.name.value),
-                };
-                NameResItem::new(db, name, item.item, item.alloc, item.local_ids)
-            })
+    /*let items = resolved_items
+    .into_iter()
+    .map(|oi| {
+        oi.map(|item| {
+            let name = match &item.item {
+                nst::Item::Effect(eff) => ModuleName::from(eff.name.value),
+                nst::Item::Term(term) => ModuleName::from(term.name.value),
+            };
+            NameResItem::new(db, name, item.item, item.alloc, item.local_ids)
         })
-        .collect();
+    })
+    .collect();*/
 
     for error in errors {
         AiahrcErrors::push(db.as_core_db(), AiahrcError::from(error));
@@ -155,7 +178,34 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
             .into_iter()
             .map(|(key, value)| (key, value.clone()))
             .collect(),
-        items,
+        terms
+            .into_iter()
+            .map(|ot| {
+                ot.map(|term| {
+                    NameResTerm::new(
+                        db,
+                        term.item.name.value,
+                        term.item,
+                        term.alloc,
+                        term.local_ids,
+                    )
+                })
+            })
+            .collect(),
+        effects
+            .into_iter()
+            .map(|oe| {
+                oe.map(|effect| {
+                    NameResEffect::new(
+                        db,
+                        effect.item.name.value,
+                        effect.item,
+                        effect.alloc,
+                        effect.local_ids,
+                    )
+                })
+            })
+            .collect(),
     )
 }
 
@@ -316,13 +366,10 @@ pub fn effect_handler_op_index(
 pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
     let nameres_module = db.nameres_module_of(module);
     nameres_module
-        .items(db)
+        .effects(db)
         .iter()
         .filter_map(|item| item.as_ref())
-        .filter_map(|item| match item.data(db) {
-            nst::Item::Term(_) => None,
-            nst::Item::Effect(eff) => Some(eff.name.value),
-        })
+        .map(|effect| effect.name(db))
         .collect()
 }
 
