@@ -877,7 +877,7 @@ mod tests {
         span::Span,
         span_of,
     };
-    use aiahr_cst::nameres::{Item, LocalIds};
+    use aiahr_cst::nameres::LocalIds;
     use assert_matches::assert_matches;
     use bumpalo::Bump;
 
@@ -917,7 +917,7 @@ mod tests {
             ot.map(|term| {
                 let mut ref_alloc = NstRefAlloc::new(arena, term.alloc(db));
                 (
-                    Item::Term(term.data(db).clone()).ref_alloc(&mut ref_alloc),
+                    aiahr_test::nst::Item::Term(term.data(db).clone().ref_alloc(&mut ref_alloc)),
                     term.locals(db),
                 )
             })
@@ -926,7 +926,9 @@ mod tests {
             oe.map(|effect| {
                 let mut ref_alloc = NstRefAlloc::new(arena, effect.alloc(db));
                 (
-                    Item::Effect(effect.data(db).clone()).ref_alloc(&mut ref_alloc),
+                    aiahr_test::nst::Item::Effect(
+                        effect.data(db).clone().ref_alloc(&mut ref_alloc),
+                    ),
                     effect.locals(db),
                 )
             })
@@ -971,8 +973,8 @@ mod tests {
                 .as_ref()
                 .map(|(item, locals)| match item {
                     // We hard code wrap our input in an item def, an effect isn't possible here
-                    aiahr_test::nst::Item::Effect { .. } => unreachable!(),
-                    aiahr_test::nst::Item::Term { value, .. } => (*value, *locals),
+                    aiahr_test::nst::Item::Effect(_) => unreachable!(),
+                    aiahr_test::nst::Item::Term(term) => (term.value, *locals),
                 }),
             errors,
         )

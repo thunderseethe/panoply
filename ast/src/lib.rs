@@ -14,7 +14,7 @@ use aiahr_core::{
 use aiahr_ty::{Ty, TyScheme};
 
 #[salsa::jar(db = Db)]
-pub struct Jar(AstModule, AstItem);
+pub struct Jar(AstModule, AstTerm, AstEffect);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     fn as_ast_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -408,28 +408,22 @@ impl<Var: Hash> std::hash::Hash for Ast<Var> {
     }
 }
 
+/// A top-level effect in an Aiahr module
 #[salsa::tracked]
-pub struct AstItem {
+pub struct AstEffect {
     #[id]
-    pub item: Item<VarId>,
+    pub name: EffectId,
+    #[return_ref]
+    pub data: EffectDefn,
 }
 
-/// A top-level item in an Aiahr source file.
-/// This is desugared from an NST item and all of it's spans are moved out of band to make working
-/// with the semantic information of the tree easier.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Item<Var> {
-    Effect(EffectItem),
-    Function(Ast<Var>),
-}
-
-impl<Var> Item<Var> {
-    pub fn unwrap_func(self) -> Ast<Var> {
-        match self {
-            Item::Effect(_) => panic!("Expected Function but got Effect"),
-            Item::Function(ast) => ast,
-        }
-    }
+/// A top-level term in an Aiahr module
+#[salsa::tracked]
+pub struct AstTerm {
+    #[id]
+    pub name: ItemId,
+    #[return_ref]
+    pub data: Ast<VarId>,
 }
 
 #[salsa::tracked]
@@ -437,12 +431,14 @@ pub struct AstModule {
     #[id]
     pub module: Module,
     #[return_ref]
-    pub items: Vec<AstItem>,
+    pub terms: Vec<AstTerm>,
+    #[return_ref]
+    pub effects: Vec<AstEffect>,
 }
 
 /// An ast definition of an effect
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct EffectItem {
+pub struct EffectDefn {
     pub name: EffectId,
     pub ops: Vec<Option<(EffectOpId, TyScheme)>>,
 }

@@ -199,13 +199,6 @@ pub struct TermDefn {
     pub value: Idx<Term>,
 }
 
-/// A top-level item in an Aiahr source file with names resolved.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Item {
-    Effect(EffectDefn),
-    Term(TermDefn),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalIds {
     pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,

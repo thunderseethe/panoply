@@ -27,7 +27,6 @@ pub mod top_level;
 #[salsa::jar(db = Db)]
 pub struct Jar(
     NameResModule,
-    NameResItem,
     NameResTerm,
     NameResEffect,
     all_effects,
@@ -86,18 +85,6 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_parser::Db {}
 
 #[salsa::tracked]
-pub struct NameResItem {
-    #[id]
-    pub name: ModuleName,
-    #[return_ref]
-    pub data: nst::Item,
-    #[return_ref]
-    pub alloc: nst::NstIndxAlloc,
-    #[return_ref]
-    pub locals: LocalIds,
-}
-
-#[salsa::tracked]
 pub struct NameResTerm {
     #[id]
     pub name: ItemId,
@@ -154,19 +141,6 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
         .add_slice(&cst_module.items, &mut errors)
         .build(&arena, module, db, &mut module_names);
     let (terms, effects) = resolve_module(&arena, cst_module, base, &mut errors);
-
-    /*let items = resolved_items
-    .into_iter()
-    .map(|oi| {
-        oi.map(|item| {
-            let name = match &item.item {
-                nst::Item::Effect(eff) => ModuleName::from(eff.name.value),
-                nst::Item::Term(term) => ModuleName::from(term.name.value),
-            };
-            NameResItem::new(db, name, item.item, item.alloc, item.local_ids)
-        })
-    })
-    .collect();*/
 
     for error in errors {
         AiahrcErrors::push(db.as_core_db(), AiahrcError::from(error));

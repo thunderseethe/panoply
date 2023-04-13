@@ -105,29 +105,45 @@ impl<'a> Spanned for Term<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct EffectDefn<'a> {
+    pub effect: Span,
+    pub name: SpanOf<EffectId>,
+    pub lbrace: Span,
+    pub ops: &'a [Option<EffectOp<'a, EffectOpId, TyVarId>>],
+    pub rbrace: Span,
+}
+impl<'a> Spanned for EffectDefn<'a> {
+    fn span(&self) -> Span {
+        Span::join(&self.effect, &self.rbrace)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TermDefn<'a> {
+    pub name: SpanOf<ItemId>,
+    pub annotation: Option<SchemeAnnotation<'a, TyVarId>>,
+    pub eq: Span,
+    pub value: &'a Term<'a>,
+}
+impl<'a> Spanned for TermDefn<'a> {
+    fn span(&self) -> Span {
+        Span::join(&self.name, self.value)
+    }
+}
+
 /// A top-level item in an Aiahr source file with names resolved.
 #[derive(Clone, Copy, Debug)]
 pub enum Item<'a> {
-    Effect {
-        effect: Span,
-        name: SpanOf<EffectId>,
-        lbrace: Span,
-        ops: &'a [Option<EffectOp<'a, EffectOpId, TyVarId>>],
-        rbrace: Span,
-    },
-    Term {
-        name: SpanOf<ItemId>,
-        annotation: Option<SchemeAnnotation<'a, TyVarId>>,
-        eq: Span,
-        value: &'a Term<'a>,
-    },
+    Effect(EffectDefn<'a>),
+    Term(TermDefn<'a>),
 }
 
 impl<'a> Spanned for Item<'a> {
     fn span(&self) -> Span {
         match self {
-            Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),
-            Item::Term { name, value, .. } => Span::join(name, *value),
+            Item::Effect(eff) => eff.span(),
+            Item::Term(term) => term.span(),
         }
     }
 }
@@ -467,26 +483,31 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Scheme<TyVarId> {
     }
 }
 
-impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Item {
-    type Out = Item<'a>;
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::EffectDefn {
+    type Out = EffectDefn<'a>;
 
     fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
-        match self {
-            nst::Item::Effect(eff) => Item::Effect {
-                effect: eff.effect,
-                name: eff.name,
-                lbrace: eff.lbrace,
-                ops: alloc
-                    .ref_arena()
-                    .alloc_slice_fill_iter(eff.ops.iter().map(|op| op.ref_alloc(alloc))),
-                rbrace: eff.rbrace,
-            },
-            nst::Item::Term(term) => Item::Term {
-                name: term.name,
-                annotation: term.annotation.ref_alloc(alloc),
-                eq: term.eq,
-                value: term.value.ref_alloc(alloc),
-            },
+        EffectDefn {
+            effect: self.effect,
+            name: self.name,
+            lbrace: self.lbrace,
+            ops: alloc
+                .ref_arena()
+                .alloc_slice_fill_iter(self.ops.iter().map(|op| op.ref_alloc(alloc))),
+            rbrace: self.rbrace,
+        }
+    }
+}
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::TermDefn {
+    type Out = TermDefn<'a>;
+
+    fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        TermDefn {
+            name: self.name,
+            annotation: self.annotation.ref_alloc(alloc),
+            eq: self.eq,
+            value: self.value.ref_alloc(alloc),
         }
     }
 }
@@ -640,29 +661,29 @@ macro_rules! nterm_paren {
 #[macro_export]
 macro_rules! nitem_effect {
     ($name:pat, $($ops:pat),* $(,)?) => {
-        $crate::nst::Item::Effect {
+        $crate::nst::Item::Effect($crate::nst::EffectDefn {
             name: aiahr_core::span_of!($name),
             ops: &[$($ops),*],
             ..
-        }
+        })
     };
 }
 
 #[macro_export]
 macro_rules! nitem_term {
     ($name:pat, $value:pat) => {
-        $crate::nst::Item::Term {
+        $crate::nst::Item::Term($crate::nst::TermDefn {
             name: aiahr_core::span_of!($name),
             value: $value,
             ..
-        }
+        })
     };
     ($name:pat, $type_:pat, $value:pat) => {
-        $crate::nst::Item::Term {
+        $crate::nst::Item::Term($crate::nst::TermDefn {
             name: aiahr_core::span_of!($name),
             annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
             ..
-        }
+        })
     };
 }

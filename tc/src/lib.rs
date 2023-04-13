@@ -111,22 +111,19 @@ pub struct TypedItem {
 pub fn type_scheme_of(db: &dyn crate::Db, module: Module, item_id: ItemId) -> TypedItem {
     let ast_db = db.as_ast_db();
     let ast_module = db.desugar_module_of(module);
-    let ast = ast_module
-        .items(ast_db)
+    let term = ast_module
+        .terms(ast_db)
         .iter()
-        .find_map(|item| match item.item(ast_db) {
-            ast::Item::Effect(_) => None,
-            ast::Item::Function(ast) => (ast.name == item_id).then_some(ast),
-        })
+        .find(|term| term.name(db.as_ast_db()) == item_id)
         .unwrap_or_else(|| {
-            dbg!(ast_module.items(ast_db));
             panic!(
                 "ICE: Constructed ItemId {:?} without associated item",
                 item_id
             )
         });
 
-    let (var_to_tys, terms_to_tys, ty_scheme, diags) = type_check(db, db, module, &ast);
+    let (var_to_tys, terms_to_tys, ty_scheme, diags) =
+        type_check(db, db, module, term.data(db.as_ast_db()));
 
     //TODO: Push errors to diagnostic
     drop(diags);

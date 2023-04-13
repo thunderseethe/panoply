@@ -1,7 +1,7 @@
 use std::ops::Not;
 
 use aiahr_ast::{
-    self as ast, Ast, AstItem, AstModule, Direction, Item,
+    self as ast, Ast, AstModule, Direction,
     Term::{self, *},
 };
 use aiahr_core::{
@@ -17,8 +17,9 @@ use aiahr_cst::{
     nameres::{self as nst, NstIndxAlloc},
     Field,
 };
-use aiahr_nameres::{name::ModuleName, NameResItem};
+use aiahr_nameres::{NameResEffect, NameResTerm};
 use aiahr_ty::{row::Row, Evidence, MkTy, Ty, TyScheme, TypeKind};
+use ast::{AstEffect, AstTerm};
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
 use salsa::AsId;
@@ -26,8 +27,9 @@ use salsa::AsId;
 #[salsa::jar(db = Db)]
 pub struct Jar(
     desugar_module,
-    desugar_item,
     desugar_item_of_id,
+    desugar_effect,
+    desugar_term,
     effect_of,
     effect_op_tyscheme_of,
 );
@@ -49,79 +51,76 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_a
 #[salsa::tracked]
 pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) -> AstModule {
     let nameres_db = db.as_nameres_db();
-    let terms = module
-        .terms(nameres_db)
-        .iter()
-        .filter_map(|term| term.as_ref())
-        .map(|term| {
-            NameResItem::new(
-                nameres_db,
-                ModuleName::Item(term.name(nameres_db)),
-                nst::Item::Term(term.data(nameres_db).clone()),
-                term.alloc(nameres_db).clone(),
-                term.locals(nameres_db).clone(),
-            )
-        });
-    let effects = module
-        .effects(nameres_db)
-        .iter()
-        .filter_map(|effect| effect.as_ref())
-        .map(|effect| {
-            NameResItem::new(
-                nameres_db,
-                ModuleName::Effect(effect.name(nameres_db)),
-                nst::Item::Effect(effect.data(nameres_db).clone()),
-                effect.alloc(nameres_db).clone(),
-                effect.locals(nameres_db).clone(),
-            )
-        });
+
     AstModule::new(
         db.as_ast_db(),
         module.module(db.as_nameres_db()),
-        terms
-            .chain(effects)
-            .map(|nst_item| desugar_item(db, nst_item))
+        module
+            .terms(nameres_db)
+            .iter()
+            .filter_map(|opt_term| opt_term.as_ref())
+            .map(|term| desugar_term(db, *term))
+            .collect(),
+        module
+            .effects(nameres_db)
+            .iter()
+            .filter_map(|opt_effect| opt_effect.as_ref())
+            .map(|effect| desugar_effect(db, *effect))
             .collect(),
     )
 }
 
-/// Desugar an NST Item into an AST Item.
 #[salsa::tracked]
-pub fn desugar_item(db: &dyn crate::Db, item: NameResItem) -> ast::AstItem {
+fn desugar_effect(db: &dyn crate::Db, effect: NameResEffect) -> AstEffect {
     // TODO: Handle separation of name based Ids and desugar generated Ids better.
-    let locals = item.locals(db.as_nameres_db());
+    let locals = effect.locals(db.as_nameres_db());
     let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
     let mut ty_vars = locals.ty_vars.to_gen().into_iter().map(|_| true).collect();
 
-    let ast_res = desugar(
+    let eff_defn = desugar_effect_defn(
         db,
         &mut vars,
         &mut ty_vars,
-        item.alloc(db.as_nameres_db()),
-        item.data(db.as_nameres_db()),
+        effect.alloc(db.as_nameres_db()),
+        effect.data(db.as_nameres_db()),
     );
 
-    let salsa_ast = match ast_res {
-        Ok(item) => item,
+    AstEffect::new(db.as_ast_db(), effect.name(db.as_nameres_db()), eff_defn)
+}
+
+#[salsa::tracked]
+fn desugar_term(db: &dyn crate::Db, term: NameResTerm) -> AstTerm {
+    // TODO: Handle separation of name based Ids and desugar generated Ids better.
+    let locals = term.locals(db.as_nameres_db());
+    let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
+    let mut ty_vars = locals.ty_vars.to_gen().into_iter().map(|_| true).collect();
+
+    let term_defn_res = desugar_term_defn(
+        db,
+        &mut vars,
+        &mut ty_vars,
+        term.alloc(db.as_nameres_db()),
+        term.data(db.as_nameres_db()),
+    );
+
+    let term_defn = match term_defn_res {
+        Ok(term) => term,
         Err(_pat_err) => {
             todo!()
         }
     };
 
-    AstItem::new(db.as_ast_db(), salsa_ast)
+    AstTerm::new(db.as_ast_db(), term.name(db.as_nameres_db()), term_defn)
 }
 
 #[salsa::tracked]
-pub fn desugar_item_of_id(db: &dyn crate::Db, module: Module, item_id: ItemId) -> AstItem {
+pub fn desugar_item_of_id(db: &dyn crate::Db, module: Module, item_id: ItemId) -> AstTerm {
     let nameres_module = db.nameres_module_of(module);
     let ast_module = desugar_module(db, nameres_module);
     ast_module
-        .items(db.as_ast_db())
+        .terms(db.as_ast_db())
         .iter()
-        .find(|item| match item.item(db.as_ast_db()) {
-            Item::Effect(_) => false,
-            Item::Function(ast) => ast.name == item_id,
-        })
+        .find(|term| term.name(db.as_ast_db()) == item_id)
         .cloned()
         .unwrap_or_else(|| {
             panic!(
@@ -132,15 +131,12 @@ pub fn desugar_item_of_id(db: &dyn crate::Db, module: Module, item_id: ItemId) -
 }
 
 #[salsa::tracked]
-pub fn effect_of(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> ast::EffectItem {
+pub fn effect_of(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> AstEffect {
     let ast_mod = db.desugar_module_of(module);
-    ast_mod
-        .items(db.as_ast_db())
+    *ast_mod
+        .effects(db.as_ast_db())
         .iter()
-        .find_map(|item| match item.item(db.as_ast_db()) {
-            Item::Effect(eff_item) => (eff_item.name == effect_id).then_some(eff_item),
-            Item::Function(_) => None,
-        })
+        .find(|effect| effect.name(db.as_ast_db()) == effect_id)
         .unwrap_or_else(|| {
             panic!(
                 "ICE: Constructed EffectId {:?} without an Effect definition",
@@ -157,7 +153,8 @@ pub fn effect_op_tyscheme_of(
     op_id: EffectOpId,
 ) -> TyScheme {
     let eff = effect_of(db, module, eff_id);
-    eff.ops
+    eff.data(db.as_ast_db())
+        .ops
         .iter()
         .find_map(|opt_op| {
             opt_op
@@ -172,51 +169,55 @@ pub fn effect_op_tyscheme_of(
         })
 }
 
-/// Desugar a NST into an AST.
-/// This removes syntax sugar and lowers down into AST which contains a subset of Nodes availabe in
-/// the NST.
-pub fn desugar(
+pub(crate) fn desugar_effect_defn(
     db: &dyn crate::Db,
     vars: &mut IdGen<VarId, bool>,
     ty_vars: &mut IdGen<TyVarId, bool>,
     arenas: &NstIndxAlloc,
-    nst: &nst::Item,
-) -> Result<ast::Item<VarId>, PatternMatchError> {
+    eff: &nst::EffectDefn,
+) -> ast::EffectDefn {
     let terms = la_arena::Arena::default();
     let mut ds_ctx = DesugarCtx::new(db, terms, arenas, vars, ty_vars);
-    Ok(match nst {
-        nst::Item::Effect(eff) => Item::Effect(ast::EffectItem {
-            name: eff.name.value,
-            ops: eff
-                .ops
-                .iter()
-                .map(|opt_op| {
-                    opt_op.as_ref().map(|op| {
-                        let ty = ds_ctx.ds_type(op.type_);
-                        let eff_var = ds_ctx.ty_vars.push(true);
-                        (
-                            op.name.value,
-                            TyScheme {
-                                bound: vec![eff_var],
-                                constrs: vec![],
-                                eff: Row::Open(eff_var),
-                                ty,
-                            },
-                        )
-                    })
+    ast::EffectDefn {
+        name: eff.name.value,
+        ops: eff
+            .ops
+            .iter()
+            .map(|opt_op| {
+                opt_op.as_ref().map(|op| {
+                    let ty = ds_ctx.ds_type(op.type_);
+                    let eff_var = ds_ctx.ty_vars.push(true);
+                    (
+                        op.name.value,
+                        TyScheme {
+                            bound: vec![eff_var],
+                            constrs: vec![],
+                            eff: Row::Open(eff_var),
+                            ty,
+                        },
+                    )
                 })
-                .collect(),
-        }),
-        nst::Item::Term(term) => {
-            let tree = ds_ctx.ds_term(term.value)?;
-            Item::Function(match term.annotation {
-                Some(ref scheme) => {
-                    let scheme = ds_ctx.ds_scheme(&scheme.type_);
-                    Ast::new(term.name.value, ds_ctx.spans, scheme, ds_ctx.terms, tree)
-                }
-                None => Ast::with_untyped(term.name.value, ds_ctx.spans, ds_ctx.terms, tree),
             })
+            .collect(),
+    }
+}
+
+pub(crate) fn desugar_term_defn(
+    db: &dyn crate::Db,
+    vars: &mut IdGen<VarId, bool>,
+    ty_vars: &mut IdGen<TyVarId, bool>,
+    arenas: &NstIndxAlloc,
+    term: &nst::TermDefn,
+) -> Result<ast::Ast<VarId>, PatternMatchError> {
+    let terms = la_arena::Arena::default();
+    let mut ds_ctx = DesugarCtx::new(db, terms, arenas, vars, ty_vars);
+    let tree = ds_ctx.ds_term(term.value)?;
+    Ok(match term.annotation {
+        Some(ref scheme) => {
+            let scheme = ds_ctx.ds_scheme(&scheme.type_);
+            Ast::new(term.name.value, ds_ctx.spans, scheme, ds_ctx.terms, tree)
         }
+        None => Ast::with_untyped(term.name.value, ds_ctx.spans, ds_ctx.terms, tree),
     })
 }
 
@@ -766,7 +767,7 @@ mod tests {
     fn ds_snippet<'db>(
         db: &'db TestDatabase,
         input: &str,
-    ) -> (aiahr_nameres::NameResTerm, &'db ast::AstItem) {
+    ) -> (aiahr_nameres::NameResTerm, &'db ast::AstTerm) {
         let mut content = "item = ".to_string();
         content.push_str(input);
         let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test.aiahr")), content);
@@ -775,7 +776,7 @@ mod tests {
         (
             namesres_module.terms(db).first().unwrap().unwrap(),
             db.desugar_module_of(namesres_module.module(db))
-                .items(db)
+                .terms(db)
                 .first()
                 .unwrap(),
         )
@@ -786,7 +787,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let (nst_item, ast_item) = ds_snippet(&db, "|x| x");
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));
 
@@ -803,7 +804,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let (nst_item, ast_item) = ds_snippet(&db, "|f| |x| f(x)");
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));
         let pretty_ast = ast
@@ -819,7 +820,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let (nst_item, ast_item) = ds_snippet(&db, "|a||b| x = a; x(b)");
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));
         let pretty_ast = ast
@@ -835,7 +836,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let (nst_item, ast_item) = ds_snippet(&db, "{}");
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));
         assert_eq!(ast.view(ast.tree), &Unit);
@@ -846,7 +847,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let (nst_item, ast_item) = ds_snippet(&db, "|x||y||z| { abc = x, def = y, ghi = z }");
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));
         let pretty_ast = ast
@@ -864,7 +865,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let (nst_item, ast_item) = ds_snippet(&db, "|base| base.state");
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)),);
         let pretty_ast = ast
@@ -880,7 +881,7 @@ mod tests {
         let db = TestDatabase::default();
 
         let (nst_item, ast_item) = ds_snippet(&db, "< true = {} >");
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)),);
         let pretty_ast = ast
@@ -904,7 +905,8 @@ match <
 >
 "#,
         );
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
+
         let pretty_ast = ast
             .pretty(&db, &pretty::BoxAllocator)
             .pretty(WIDTH)
@@ -930,7 +932,8 @@ match <
 >
 "#,
         );
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
+
         assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));
         let pretty_ast = ast
             .pretty(&db, &pretty::BoxAllocator)
@@ -953,7 +956,8 @@ match <
 >
 "#,
         );
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
+
         let pretty_ast = ast
             .pretty(&db, &pretty::BoxAllocator)
             .pretty(WIDTH)
@@ -978,7 +982,7 @@ match <
 >
 "#,
         );
-        let ast = ast_item.item(&db).unwrap_func();
+        let ast = ast_item.data(&db);
 
         let pretty_ast = ast
             .pretty(&db, &pretty::BoxAllocator)

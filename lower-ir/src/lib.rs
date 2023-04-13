@@ -1,4 +1,4 @@
-use aiahr_ast::{self as ast, Ast, AstModule, Term};
+use aiahr_ast::{Ast, AstModule, Term};
 use aiahr_core::{
     id::{EffectId, EffectOpId, IrTyVarId, ItemId, VarId},
     ident::Ident,
@@ -92,19 +92,14 @@ pub struct IrItem {
 fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
     let ast_db = db.as_ast_db();
     let items = module
-        .items(ast_db)
+        .terms(ast_db)
         .iter()
-        .map(|salsa_item| {
-            let ast_item = salsa_item.item(ast_db);
-            match ast_item {
-                ast::Item::Effect(_) => todo!(),
-                ast::Item::Function(ast) => {
-                    let module = module.module(ast_db);
-                    let scheme = db.lookup_scheme(module, ast.name);
-                    let ir = lower(db, module, &scheme, &ast);
-                    IrItem::new(db, ModuleName::from(ast.name), ir)
-                }
-            }
+        .map(|term| {
+            let module = module.module(ast_db);
+            let ast = term.data(db.as_ast_db());
+            let scheme = db.lookup_scheme(module, ast.name);
+            let ir = lower(db, module, &scheme, ast);
+            IrItem::new(db, ModuleName::from(ast.name), ir)
         })
         .collect();
     IrModule::new(db, module.module(ast_db), items)
