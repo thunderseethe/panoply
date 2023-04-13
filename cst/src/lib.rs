@@ -404,6 +404,8 @@ pub struct TermDefn {
 
 /// A top-level item in an Aiahr source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
+// Clippy thinks our second largest variant is 0 bytes which is clearly wrong.
+#[allow(clippy::large_enum_variant)]
 pub enum Item {
     Effect(EffectDefn),
     Term(TermDefn),

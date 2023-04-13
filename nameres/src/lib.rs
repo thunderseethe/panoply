@@ -10,7 +10,7 @@ use rustc_hash::FxHashMap;
 
 use crate::name::ModuleName;
 use crate::ops::IdOps;
-use crate::resolve::resolve_module;
+use crate::resolve::{resolve_module, ModuleResolution};
 use crate::top_level::BaseBuilder;
 
 use self::module::ModuleNames;
@@ -140,7 +140,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
     let base = BaseBuilder::new()
         .add_slice(&cst_module.items, &mut errors)
         .build(&arena, module, db, &mut module_names);
-    let (terms, effects) = resolve_module(&arena, cst_module, base, &mut errors);
+    let ModuleResolution { terms, effects } = resolve_module(&arena, cst_module, base, &mut errors);
 
     for error in errors {
         AiahrcErrors::push(db.as_core_db(), AiahrcError::from(error));

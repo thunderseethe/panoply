@@ -817,16 +817,18 @@ where
     }
 }
 
+pub(crate) struct ModuleResolution {
+    pub(crate) terms: Vec<Option<nst::AllocItem<nst::TermDefn>>>,
+    pub(crate) effects: Vec<Option<nst::AllocItem<nst::EffectDefn>>>,
+}
+
 /// Resolves the given module.
-pub fn resolve_module<'a, 'b: 'a, E>(
+pub(crate) fn resolve_module<'a, 'b: 'a, E>(
     arena: &'a Bump,
     module: &cst::CstModule,
     base: BaseNames<'_, 'a>,
     errors: &mut E,
-) -> (
-    Vec<Option<nst::AllocItem<nst::TermDefn>>>,
-    Vec<Option<nst::AllocItem<nst::EffectDefn>>>,
-)
+) -> ModuleResolution
 where
     E: DiagnosticSink<NameResolutionError>,
 {
@@ -863,7 +865,7 @@ where
             ),
         }
     }
-    (terms, effects)
+    ModuleResolution { terms, effects }
 }
 
 #[cfg(test)]
