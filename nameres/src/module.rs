@@ -1,8 +1,9 @@
-use std::slice::Iter;
+use std::{collections::hash_map::Entry, slice::Iter};
 
 use aiahr_core::{
-    id::{EffectId, IdGen, Ids, ItemId},
+    id::{EffectName, TermName},
     ident::Ident,
+    modules::Module,
     span::{SpanOf, Spanned},
 };
 use rustc_hash::FxHashMap;
@@ -10,37 +11,31 @@ use rustc_hash::FxHashMap;
 use crate::{
     effect::EffectNames,
     name::ModuleName,
-    ops::{GensOps, IdOps, InsertResult, MatchesOps},
+    ops::{IdOps, InsertResult, MatchesOps},
 };
 
 #[derive(Debug, Default)]
 struct Gens {
-    effects: IdGen<EffectId, (SpanOf<Ident>, EffectNames)>,
-    items: IdGen<ItemId, SpanOf<Ident>>,
+    effects: FxHashMap<EffectName, (SpanOf<Ident>, EffectNames)>,
+    terms: FxHashMap<TermName, SpanOf<Ident>>,
 }
 
-impl IdOps<EffectId> for Gens {
-    fn get(&self, id: EffectId) -> SpanOf<Ident> {
-        self.effects[id].0
+impl IdOps<EffectName> for Gens {
+    fn get(&self, id: EffectName) -> SpanOf<Ident> {
+        self.effects[&id].0
     }
 }
 
-impl IdOps<ItemId> for Gens {
-    fn get(&self, id: ItemId) -> SpanOf<Ident> {
-        self.items[id]
-    }
-}
-
-impl GensOps<ItemId> for Gens {
-    fn push(&mut self, name: SpanOf<Ident>) -> ItemId {
-        self.items.push(name)
+impl IdOps<TermName> for Gens {
+    fn get(&self, id: TermName) -> SpanOf<Ident> {
+        self.terms[&id]
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Matches {
-    effect: Option<EffectId>,
-    item: Option<ItemId>,
+    effect: Option<EffectName>,
+    item: Option<TermName>,
 }
 
 impl Matches {
@@ -52,94 +47,102 @@ impl Matches {
     }
 }
 
-impl MatchesOps<EffectId> for Matches {
-    fn new(id: EffectId) -> Self {
+impl MatchesOps<EffectName> for Matches {
+    fn new(id: EffectName) -> Self {
         Matches {
             effect: Some(id),
             ..Default::default()
         }
     }
 
-    fn get_mut(&mut self) -> &mut Option<EffectId> {
+    fn get_mut(&mut self) -> &mut Option<EffectName> {
         &mut self.effect
     }
 }
 
-impl MatchesOps<ItemId> for Matches {
-    fn new(id: ItemId) -> Self {
+impl MatchesOps<TermName> for Matches {
+    fn new(id: TermName) -> Self {
         Matches {
             item: Some(id),
             ..Default::default()
         }
     }
 
-    fn get_mut(&mut self) -> &mut Option<ItemId> {
+    fn get_mut(&mut self) -> &mut Option<TermName> {
         &mut self.item
     }
 }
 
 /// An accumulator for top-level names in a module.
-#[derive(Debug, Default)]
-pub struct ModuleNamesBuilder {
+pub struct ModuleNamesBuilder<'a> {
+    db: &'a dyn crate::Db,
     gens: Gens,
     names: FxHashMap<Ident, Matches>,
     id_order: Vec<ModuleName>,
 }
 
-impl ModuleNamesBuilder {
-    fn insert<I>(&mut self, name: SpanOf<Ident>) -> InsertResult<I>
-    where
-        I: Copy,
-        ModuleName: From<I>,
-        Gens: GensOps<I>,
-        Matches: MatchesOps<I>,
-    {
-        let id = self.gens.push(name);
-        self.id_order.push(ModuleName::from(id));
-        if let Some(ms) = self.names.get_mut(&name.value) {
-            if let Some(old) = ms.get_mut() {
-                InsertResult::err(id, self.gens.get(*old).span().of(*old))
-            } else {
-                *ms.get_mut() = Some(id);
-                InsertResult::ok(id)
-            }
-        } else {
-            self.names.insert(name.value, Matches::new(id));
-            InsertResult::ok(id)
+impl<'a> ModuleNamesBuilder<'a> {
+    pub fn new(db: &'a dyn crate::Db) -> Self {
+        Self {
+            db,
+            gens: Gens::default(),
+            names: FxHashMap::default(),
+            id_order: Vec::default(),
         }
     }
 
     /// Inserts an effect into the top-level scope.
     pub fn insert_effect(
         &mut self,
-        name: SpanOf<Ident>,
+        span_eff_name: SpanOf<EffectName>,
         ops: EffectNames,
-    ) -> InsertResult<EffectId> {
-        let id = self.gens.effects.push((name, ops));
-        self.id_order.push(ModuleName::Effect(id));
-        if let Some(ms) = self.names.get_mut(&name.value) {
-            if let Some(old) = ms.get_mut() {
-                InsertResult::err(id, self.gens.effects[*old].0.span().of(*old))
-            } else {
-                *ms.get_mut() = Some(id);
-                InsertResult::ok(id)
+    ) -> InsertResult<EffectName> {
+        let eff_name = span_eff_name.value;
+        let span_id = span_eff_name.map(|eff_name| eff_name.name(self.db.as_core_db()));
+        self.gens.effects.insert(eff_name, (span_id, ops));
+        self.id_order.push(ModuleName::Effect(eff_name));
+        match self.names.entry(eff_name.name(self.db.as_core_db())) {
+            Entry::Occupied(mut occ) => {
+                let old = occ.get_mut().get_mut().get_or_insert(eff_name);
+                if *old == eff_name {
+                    InsertResult::ok(eff_name)
+                } else {
+                    InsertResult::err(eff_name, self.gens.effects[old].0.span().of(*old))
+                }
             }
-        } else {
-            self.names.insert(name.value, Matches::new(id));
-            InsertResult::ok(id)
+            Entry::Vacant(vac) => {
+                vac.insert(Matches::new(eff_name));
+                InsertResult::ok(eff_name)
+            }
         }
     }
 
     /// Inserts an item into the top-level scope.
-    pub fn insert_item(&mut self, name: SpanOf<Ident>) -> InsertResult<ItemId> {
-        self.insert(name)
+    pub fn insert_term(&mut self, module: Module, name: SpanOf<Ident>) -> InsertResult<TermName> {
+        let id = TermName::new(self.db.as_core_db(), name.value, module);
+        self.gens.terms.insert(id, name);
+        self.id_order.push(ModuleName::from(id));
+        match self.names.entry(name.value) {
+            Entry::Occupied(mut occ) => {
+                let old = *occ.get_mut().get_mut().get_or_insert(id);
+                if old == id {
+                    InsertResult::ok(id)
+                } else {
+                    InsertResult::err(id, self.gens.get(old).span().of(old))
+                }
+            }
+            Entry::Vacant(vac) => {
+                vac.insert(Matches::new(id));
+                InsertResult::ok(id)
+            }
+        }
     }
 
     /// Finalizes the names.
     pub fn build(self) -> ModuleNames {
         ModuleNames {
-            effects: self.gens.effects.into_boxed_ids(),
-            items: self.gens.items.into_boxed_ids(),
+            effects: self.gens.effects,
+            items: self.gens.terms,
             names: self.names,
             id_order: self.id_order.into_boxed_slice(),
         }
@@ -149,15 +152,15 @@ impl ModuleNamesBuilder {
 /// A leaf module in the module tree. Holds top-level names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleNames {
-    pub(crate) effects: Box<Ids<EffectId, (SpanOf<Ident>, EffectNames)>>,
-    items: Box<Ids<ItemId, SpanOf<Ident>>>,
+    pub(crate) effects: FxHashMap<EffectName, (SpanOf<Ident>, EffectNames)>,
+    items: FxHashMap<TermName, SpanOf<Ident>>,
     names: FxHashMap<Ident, Matches>,
     id_order: Box<[ModuleName]>,
 }
 
 impl ModuleNames {
     /// Gets the operations associated with an effect.
-    pub fn get_effect(&self, id: EffectId) -> &EffectNames {
+    pub fn get_effect(&self, id: &EffectName) -> &EffectNames {
         &self.effects[id].1
     }
 
@@ -182,8 +185,8 @@ where
 {
     fn get(&self, id: I) -> SpanOf<Ident> {
         match ModuleName::from(id) {
-            ModuleName::Effect(e) => self.effects[e].0,
-            ModuleName::Item(i) => self.items[i],
+            ModuleName::Effect(e) => self.effects[&e].0,
+            ModuleName::Item(i) => self.items[&i],
         }
     }
 }

@@ -8,6 +8,8 @@ use std::{
 
 use pretty::{DocAllocator, Pretty};
 
+use crate::{ident::Ident, modules::Module};
+
 /// An ID type that wraps a `usize`. Used to assign unique IDs to objects based on their index in an
 /// array.
 pub trait Id {
@@ -267,6 +269,27 @@ macro_rules! define_ids {
             }
         })*
     };
+}
+
+/// An identifier for a name resolved term definition
+#[salsa::interned]
+pub struct TermName {
+    pub name: Ident,
+    pub module: Module,
+}
+
+/// An identifier for a name resolved effect definition
+#[salsa::interned]
+pub struct EffectName {
+    pub name: Ident,
+    pub module: Module,
+}
+
+/// An identifier for a name resolved effect operator definition
+#[salsa::interned]
+pub struct EffectOpName {
+    pub name: Ident,
+    pub effect: EffectName,
 }
 
 define_ids!(

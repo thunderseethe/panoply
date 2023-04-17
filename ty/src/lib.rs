@@ -273,3 +273,16 @@ pub struct TyScheme<A: TypeAlloc = InDb> {
     pub eff: Row<A>,
     pub ty: Ty<A>,
 }
+impl<Db> DebugWithDb<Db> for TyScheme
+where
+    Db: ?Sized + crate::Db,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
+        f.debug_struct("TyScheme")
+            .field("bound", &self.bound)
+            .field("constrs", &self.constrs)
+            .field("eff", &self.eff.debug(db))
+            .field("ty", &self.ty.debug(db))
+            .finish()
+    }
+}

@@ -6,7 +6,7 @@ use pretty::{docs, DocAllocator, Pretty};
 use rustc_hash::FxHashMap;
 
 use aiahr_core::{
-    id::{EffectId, EffectOpId, ItemId, VarId},
+    id::{EffectName, EffectOpName, TermName, VarId},
     ident::Ident,
     modules::Module,
     span::Span,
@@ -38,7 +38,7 @@ pub enum Term<Var> {
     Variable(Var),
     Int(usize),
     // A global variable binding
-    Item((Module, ItemId)),
+    Item(TermName),
     // A unit value
     // Because all products are represented in terms of concat, we don't actually have a way to
     // represent unit at this level
@@ -72,7 +72,7 @@ pub enum Term<Var> {
         term: Idx<Self>,
     },
     // An effect operation
-    Operation((Module, EffectId, EffectOpId)),
+    Operation(EffectOpName),
     Handle {
         handler: Idx<Self>,
         body: Idx<Self>,
@@ -107,21 +107,11 @@ where
     fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, A> {
         match &self.arena[self.root] {
             Term::Variable(var) => var.clone().pretty(alloc),
-            Term::Item((module, item_id)) => docs![
+            Term::Item(t) => docs![alloc, "fun", alloc.text(format!("{:?}", t)).angles()],
+            Term::Operation(op_name) => docs![
                 alloc,
-                "module",
-                alloc.text(format!("{:?}", module)).angles(),
-                ".item",
-                alloc.as_string(item_id.0).angles()
-            ],
-            Term::Operation((module, eff_id, op_id)) => docs![
-                alloc,
-                "module",
-                alloc.text(format!("{:?}", module)).angles(),
-                ".effect",
-                alloc.as_string(eff_id.0).angles(),
-                ".op",
-                alloc.as_string(op_id.0).angles()
+                "eff_op",
+                alloc.text(format!("{:?}", op_name)).angles()
             ],
             Term::Int(i) => alloc.as_string(i),
             Term::Unit => alloc.text("{}"),
@@ -315,7 +305,6 @@ impl<'a, Var> Iterator for TermTraverse<'a, Var> {
 /// Abstract Syntax Tree (AST)
 #[derive(Debug, Clone, Eq)]
 pub struct Ast<Var> {
-    pub name: ItemId,
     // We store spans of the Ast out of band because we won't need them for most operations.
     spans: FxHashMap<Idx<Term<Var>>, Span>,
     pub annotation: Option<TyScheme>,
@@ -324,14 +313,12 @@ pub struct Ast<Var> {
 }
 impl<Var> Ast<Var> {
     pub fn new(
-        name: ItemId,
         spans: FxHashMap<Idx<Term<Var>>, Span>,
         annotation: TyScheme,
         terms: Arena<Term<Var>>,
         tree: Idx<Term<Var>>,
     ) -> Self {
         Self {
-            name,
             spans,
             annotation: Some(annotation),
             terms,
@@ -339,13 +326,11 @@ impl<Var> Ast<Var> {
         }
     }
     pub fn with_untyped(
-        name: ItemId,
         spans: FxHashMap<Idx<Term<Var>>, Span>,
         terms: Arena<Term<Var>>,
         tree: Idx<Term<Var>>,
     ) -> Self {
         Self {
-            name,
             spans,
             annotation: None,
             terms,
@@ -389,8 +374,7 @@ impl<Var> Ast<Var> {
 }
 impl<Var: PartialEq> PartialEq for Ast<Var> {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
-            && self.tree == other.tree
+        self.tree == other.tree
             && self.annotation == other.annotation
             && self.spans == other.spans
             && self.terms == other.terms
@@ -398,7 +382,6 @@ impl<Var: PartialEq> PartialEq for Ast<Var> {
 }
 impl<Var: Hash> std::hash::Hash for Ast<Var> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
         for (idx, span) in self.spans.iter() {
             idx.hash(state);
             span.hash(state);
@@ -412,7 +395,7 @@ impl<Var: Hash> std::hash::Hash for Ast<Var> {
 #[salsa::tracked]
 pub struct AstEffect {
     #[id]
-    pub name: EffectId,
+    pub name: EffectName,
     #[return_ref]
     pub data: EffectDefn,
 }
@@ -421,7 +404,7 @@ pub struct AstEffect {
 #[salsa::tracked]
 pub struct AstTerm {
     #[id]
-    pub name: ItemId,
+    pub name: TermName,
     #[return_ref]
     pub data: Ast<VarId>,
 }
@@ -439,8 +422,8 @@ pub struct AstModule {
 /// An ast definition of an effect
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EffectDefn {
-    pub name: EffectId,
-    pub ops: Vec<Option<(EffectOpId, TyScheme)>>,
+    pub name: EffectName,
+    pub ops: Vec<Option<(EffectOpName, TyScheme)>>,
 }
 
 /// Direction of a row operation.

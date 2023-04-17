@@ -1,12 +1,12 @@
 use aiahr_ast::{Ast, Direction, RowTerm, RowTermView, Term};
 use aiahr_core::{
-    id::{IrTyVarId, IrVarId, ItemId, TyVarId, VarId},
+    id::{IrTyVarId, IrVarId, TermName, TyVarId, VarId},
     modules::Module,
 };
 use aiahr_ir::{
     Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, MkIrTy, P,
 };
-use aiahr_tc::TyChkRes;
+use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
     row::{ClosedRow, Row},
     AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
@@ -49,32 +49,27 @@ fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row 
 }
 
 pub trait ItemSchemes {
-    fn lookup_scheme(&self, module: Module, item_id: ItemId) -> TyScheme;
+    fn lookup_scheme(&self, term: TermName) -> TyScheme;
 }
 pub trait VarTys {
-    fn lookup_var(&self, module: Module, item_id: ItemId, var_id: VarId) -> Ty;
+    fn lookup_var(&self, term: TermName, var_id: VarId) -> Ty;
 }
 pub trait TermTys {
-    fn lookup_term(
-        &self,
-        module: Module,
-        item_id: ItemId,
-        term: Idx<Term<VarId>>,
-    ) -> TyChkRes<InDb>;
+    fn lookup_term(&self, term_name: TermName, term: Idx<Term<VarId>>) -> TyChkRes<InDb>;
 }
 
 /// Selects an item based on it's module id and item id.
 pub(crate) struct ItemSelector {
     pub(crate) module: Module,
-    pub(crate) item: ItemId,
+    pub(crate) item: TermName,
 }
 
 // TODO: Wip name
 pub(crate) struct Evidenceless;
 pub(crate) struct Evidentfull;
 
-pub(crate) struct LowerCtx<'a, 'b, Db: ?Sized, State = Evidenceless> {
-    db: &'a Db,
+pub(crate) struct LowerCtx<'a, 'b, State = Evidenceless> {
+    db: &'a dyn crate::Db,
     current: ItemSelector,
     var_conv: &'b mut IdConverter<VarId, IrVarId>,
     tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
@@ -83,10 +78,7 @@ pub(crate) struct LowerCtx<'a, 'b, Db: ?Sized, State = Evidenceless> {
     _marker: std::marker::PhantomData<State>,
 }
 
-impl<'a, 'b, Db, S> MkIrTy for LowerCtx<'a, 'b, Db, S>
-where
-    Db: ?Sized + MkIrTy,
-{
+impl<'a, 'b, S> MkIrTy for LowerCtx<'a, 'b, S> {
     fn mk_ir_ty(&self, kind: IrTyKind) -> IrTy {
         self.db.mk_ir_ty(kind)
     }
@@ -100,31 +92,17 @@ where
     }
 }
 
-impl<'a, Db, S> LowerCtx<'a, '_, Db, S>
-where
-    Db: ?Sized + TermTys,
-{
+impl<'a, S> LowerCtx<'a, '_, S> {
     fn lookup_term(&self, term: Idx<Term<VarId>>) -> TyChkRes<InDb> {
-        self.db
-            .lookup_term(self.current.module, self.current.item, term)
+        self.db.lookup_term(self.current.item, term)
     }
-}
 
-impl<'a, Db, S> LowerCtx<'a, '_, Db, S>
-where
-    Db: ?Sized + VarTys,
-{
     fn lookup_var(&self, var_id: VarId) -> Ty {
-        self.db
-            .lookup_var(self.current.module, self.current.item, var_id)
+        self.db.lookup_var(self.current.item, var_id)
     }
 }
 
-impl<'a, Db, S> LowerCtx<'a, '_, Db, S>
-where
-    Db: ?Sized + MkIrTy,
-    &'a Db: AccessTy<'a, InDb>,
-{
+impl<'a, S> LowerCtx<'a, '_, S> {
     pub(crate) fn lower_scheme(&mut self, scheme: &TyScheme) -> IrTy {
         let ir_ty = self.lower_ty(scheme.ty);
         let mut row_kinds = FxHashSet::default();
@@ -472,19 +450,11 @@ where
     }
 }
 
-type LowerOutput<'a, 'b, Db> = (
-    LowerCtx<'a, 'b, Db, Evidentfull>,
-    Vec<(IrVar, Ir)>,
-    Vec<IrVar>,
-);
+type LowerOutput<'a, 'b> = (LowerCtx<'a, 'b, Evidentfull>, Vec<(IrVar, Ir)>, Vec<IrVar>);
 
-impl<'a, 'b, Db> LowerCtx<'a, 'b, Db, Evidenceless>
-where
-    Db: ?Sized + ItemSchemes + VarTys + TermTys + IrEffectInfo + MkTy<InDb> + MkIrTy,
-    &'a Db: AccessTy<'a, InDb>,
-{
+impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
     pub(crate) fn new(
-        db: &'a Db,
+        db: &'a dyn crate::Db,
         var_conv: &'b mut IdConverter<VarId, IrVarId>,
         tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
         current: ItemSelector,
@@ -574,7 +544,7 @@ where
         mut self,
         term_evs: impl IntoIterator<Item = RowTermView<VarId>>,
         scheme_constrs: impl IntoIterator<Item = &'ev Evidence>,
-    ) -> LowerOutput<'a, 'b, Db> {
+    ) -> LowerOutput<'a, 'b> {
         let locals = self
             .solved_row_ev(term_evs)
             .into_iter()
@@ -610,12 +580,8 @@ where
     }
 }
 
-impl<'a, 'b, Db> LowerCtx<'a, 'b, Db, Evidentfull>
-where
-    Db: ?Sized + ItemSchemes + VarTys + TermTys + IrEffectInfo + MkIrTy,
-    &'a Db: AccessTy<'a, InDb>,
-{
-    fn with_evidenceless(prior: LowerCtx<'a, 'b, Db, Evidenceless>) -> Self {
+impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
+    fn with_evidenceless(prior: LowerCtx<'a, 'b, Evidenceless>) -> Self {
         Self {
             db: prior.db,
             current: prior.current,
@@ -652,7 +618,7 @@ where
                 }))
             }
             Term::Int(i) => Ir::new(IrKind::Int(*i)),
-            Item((_module_id, _item_id)) => todo!(),
+            Item(_term_name) => todo!(),
             // At this level Label/Unlabel are removed
             Label { term, .. } => self.lower_term(ast, *term),
             Unlabel { term, .. } => self.lower_term(ast, *term),
@@ -730,7 +696,7 @@ where
                 Ir::app(inj, [self.lower_term(ast, *subterm)])
             }
             // Effect stuff
-            Operation((mod_id, eff_id, op)) => {
+            Operation(op) => {
                 let (value_ty, _) = self
                     .lookup_term(term)
                     .ty
@@ -740,9 +706,10 @@ where
                     var: self.var_conv.generate(),
                     ty: self.lower_ty(value_ty),
                 };
+                let eff = op.effect(self.db.as_core_db());
                 let handle_var = IrVar {
                     var: self.var_conv.generate(),
-                    ty: self.db.effect_handler_ir_ty(*mod_id, *eff_id),
+                    ty: self.db.effect_handler_ir_ty(eff),
                 };
                 let kont_var = IrVar {
                     var: self.var_conv.generate(),
@@ -756,8 +723,8 @@ where
                     ty: self.mk_ir_ty(IntTy),
                 };
 
-                let handler_index = self.db.effect_handler_op_index(*mod_id, *eff_id, *op);
-                let eff_index = self.db.effect_vector_index(*mod_id, *eff_id);
+                let handler_index = self.db.effect_handler_op_index(*op);
+                let eff_index = self.db.effect_vector_index(eff);
                 Ir::app(
                     Ir::abss(
                         [handle_var, value_var],
@@ -793,11 +760,11 @@ where
                         unreachable!("Handler effect expect to be closed row, found row variable")
                     }
                 };
-                let (mod_id, eff) = self
+                let eff_name = self
                     .db
                     .lookup_effect_by_name(self.current.module, eff_name)
                     .expect("Invalid effect name should've been caught in type checking");
-                let eff_index = self.db.effect_vector_index(mod_id, eff);
+                let eff_index = self.db.effect_vector_index(eff_name);
                 let handler_var = IrVar {
                     var: self.var_conv.generate(),
                     ty: self.lower_ty(handler_infer.ty),
@@ -807,7 +774,7 @@ where
                 let ret_ty = self.lower_ty(self.lookup_term(term).ty);
 
                 let body_ty = self.lower_ty(self.lookup_term(*body).ty);
-                let ret_index = self.db.effect_handler_return_index(mod_id, eff);
+                let ret_index = self.db.effect_handler_return_index(eff_name);
                 let updated_evv = Ir::new(VectorSet(
                     self.evv_var,
                     eff_index,

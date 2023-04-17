@@ -146,7 +146,6 @@ impl IrMatch {
                 let mut args = bindings.args.into_iter();
                 let arg = args.next().unwrap();
                 let (tmp, match_res) = args
-                    .into_iter()
                     .rfold((tmp.clone(), bindings.matcher.into_match(quote!(#tmp.kind()), match_res, uniq, bound)),
                     |(tmp, arm), arg| {
                         let id = uniq.ident("body");
@@ -174,7 +173,7 @@ impl IrMatch {
                     arg.into_match(quote!(#arg_id.kind()), match_res, uniq, bound.clone());
                 let hd_match =
                     head.into_match(quote!(#hd_id.kind()), arg_match, uniq, bound.clone());
-                let (hd, arg, match_res) = spine.into_iter().fold((hd_id, arg_id, hd_match), |(hd, arg, match_), next_arg| {
+                let (hd, arg, match_res) = spine.fold((hd_id, arg_id, hd_match), |(hd, arg, match_), next_arg| {
                     let level = uniq.next();
                     let hd_id = Ident::new(&format!("head{level}"), Span::call_site());
                     let arg_id = Ident::new(&format!("arg{level}"), Span::call_site());
@@ -199,8 +198,7 @@ impl IrMatch {
                 let mut args = bindings.args.into_iter();
                 let tv = args.next();
                 let (tmp, match_) =
-                    args.into_iter()
-                        .rfold((tmp, body_match), |(tmp, matcher), tv| {
+                    args.rfold((tmp, body_match), |(tmp, matcher), tv| {
                             let id = uniq.ident("body");
                             (
                                 id.clone(),

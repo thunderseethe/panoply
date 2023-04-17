@@ -2,9 +2,8 @@ use std::convert::Infallible;
 
 use aiahr_core::{
     diagnostic::{Citation, Diagnostic},
-    id::{ItemId, VarId},
+    id::{TermName, VarId},
     ident::Ident,
-    modules::Module,
     span::Span,
 };
 use aiahr_ty::{
@@ -20,7 +19,7 @@ use pretty::{docs, DocAllocator};
 pub(crate) enum TypeCheckError<'ctx> {
     /// A variable we expected to exist with a type, did not
     VarNotDefined(VarId),
-    ItemNotDefined((Module, ItemId)),
+    ItemNotDefined(TermName),
     TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
     OccursCheckFailed(TypeVarOf<InArena<'ctx>>, InferTy<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),

@@ -1,11 +1,11 @@
-use aiahr_core::modules::Module;
+use aiahr_core::id::{EffectName, EffectOpName, TermName};
 use bumpalo::Bump;
 use la_arena::{Arena, Idx};
 
 use crate::cst::{EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation};
 use aiahr_core::span::{Span, SpanOf, Spanned};
 use aiahr_core::{
-    id::{EffectId, EffectOpId, ItemId, TyVarId, VarId},
+    id::{TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaRef, HasRefArena, ReferenceAllocate},
 };
@@ -76,8 +76,8 @@ pub enum Term<'a> {
         cases: Separated<'a, Field<&'a Pattern<'a>, &'a Term<'a>>>,
         rangle: Span,
     },
-    EffectOpRef(SpanOf<(Module, EffectId, EffectOpId)>),
-    ItemRef(SpanOf<(Module, ItemId)>),
+    EffectOpRef(SpanOf<EffectOpName>),
+    ItemRef(SpanOf<TermName>),
     VariableRef(SpanOf<VarId>),
     Parenthesized {
         lpar: Span,
@@ -108,9 +108,9 @@ impl<'a> Spanned for Term<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct EffectDefn<'a> {
     pub effect: Span,
-    pub name: SpanOf<EffectId>,
+    pub name: SpanOf<EffectName>,
     pub lbrace: Span,
-    pub ops: &'a [Option<EffectOp<'a, EffectOpId, TyVarId>>],
+    pub ops: &'a [Option<EffectOp<'a, EffectOpName, TyVarId>>],
     pub rbrace: Span,
 }
 impl<'a> Spanned for EffectDefn<'a> {
@@ -121,7 +121,7 @@ impl<'a> Spanned for EffectDefn<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct TermDefn<'a> {
-    pub name: SpanOf<ItemId>,
+    pub name: SpanOf<TermName>,
     pub annotation: Option<SchemeAnnotation<'a, TyVarId>>,
     pub eq: Span,
     pub value: &'a Term<'a>,
@@ -171,14 +171,6 @@ where
 {
     fn arena(&self) -> &Arena<T> {
         self.indices.arena()
-    }
-}
-
-impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for EffectOpId {
-    type Out = EffectOpId;
-
-    fn ref_alloc(&self, _: &mut NstRefAlloc<'a, '_>) -> Self::Out {
-        *self
     }
 }
 
@@ -408,8 +400,8 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for Idx<nst::Type<TyVarId>> 
     }
 }
 
-impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::EffectOp<EffectOpId, TyVarId> {
-    type Out = EffectOp<'a, EffectOpId, TyVarId>;
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::EffectOp<EffectOpName, TyVarId> {
+    type Out = EffectOp<'a, EffectOpName, TyVarId>;
 
     fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
         EffectOp {
@@ -483,6 +475,21 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::Scheme<TyVarId> {
     }
 }
 
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for EffectOpName {
+    type Out = EffectOpName;
+
+    fn ref_alloc(&self, _: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        *self
+    }
+}
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for EffectName {
+    type Out = EffectName;
+
+    fn ref_alloc(&self, _: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        *self
+    }
+}
+
 impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::EffectDefn {
     type Out = EffectDefn<'a>;
 
@@ -496,6 +503,14 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for nst::EffectDefn {
                 .alloc_slice_fill_iter(self.ops.iter().map(|op| op.ref_alloc(alloc))),
             rbrace: self.rbrace,
         }
+    }
+}
+
+impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for TermName {
+    type Out = TermName;
+
+    fn ref_alloc(&self, _: &mut NstRefAlloc<'a, '_>) -> Self::Out {
+        *self
     }
 }
 
@@ -639,8 +654,8 @@ macro_rules! nterm_toplvl {
 
 #[macro_export]
 macro_rules! nterm_item {
-    ($mod_:pat, $item:pat) => {
-        &$crate::nst::Term::ItemRef(aiahr_core::span_of!(($mod_, $item)))
+    ($item:pat) => {
+        &$crate::nst::Term::ItemRef(aiahr_core::span_of!($item))
     };
 }
 

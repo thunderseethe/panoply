@@ -8,10 +8,9 @@ pub use super::{
     Separated, SumRow, Type, TypeAnnotation, TypeRow,
 };
 use aiahr_core::{
-    id::{EffectId, EffectOpId, Ids, ItemId, TyVarId, VarId},
+    id::{EffectName, EffectOpName, Ids, TermName, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaMut, HasArenaRef, IdxAlloc},
-    modules::Module,
     span::{Span, SpanOf, Spanned},
 };
 
@@ -137,8 +136,8 @@ pub enum Term {
         cases: Separated<Field<Idx<Pattern>, Idx<Self>>>,
         rangle: Span,
     },
-    EffectOpRef(SpanOf<(Module, EffectId, EffectOpId)>),
-    ItemRef(SpanOf<(Module, ItemId)>),
+    EffectOpRef(SpanOf<EffectOpName>),
+    ItemRef(SpanOf<TermName>),
     VariableRef(SpanOf<VarId>),
     Parenthesized {
         lpar: Span,
@@ -185,15 +184,15 @@ impl Spanned for SpanTerm<'_> {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct EffectDefn {
     pub effect: Span,
-    pub name: SpanOf<EffectId>,
+    pub name: SpanOf<EffectName>,
     pub lbrace: Span,
-    pub ops: Vec<Option<EffectOp<EffectOpId, TyVarId>>>,
+    pub ops: Vec<Option<EffectOp<EffectOpName, TyVarId>>>,
     pub rbrace: Span,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TermDefn {
-    pub name: SpanOf<ItemId>,
+    pub name: SpanOf<TermName>,
     pub annotation: Option<SchemeAnnotation<TyVarId>>,
     pub eq: Span,
     pub value: Idx<Term>,

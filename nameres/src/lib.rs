@@ -1,6 +1,6 @@
 use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
 use aiahr_core::file::{FileId, SourceFile};
-use aiahr_core::id::{EffectId, EffectOpId, ItemId};
+use aiahr_core::id::{EffectName, EffectOpName, TermName};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
 use aiahr_core::span::{Span, Spanned};
@@ -9,7 +9,6 @@ use aiahr_parser::ParseFile;
 use rustc_hash::FxHashMap;
 
 use crate::name::ModuleName;
-use crate::ops::IdOps;
 use crate::resolve::{resolve_module, ModuleResolution};
 use crate::top_level::BaseBuilder;
 
@@ -64,11 +63,11 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
         self.nameres_module_for_file(file)
     }
 
-    fn item_name(&self, module: Module, item_id: ItemId) -> Ident {
-        item_name(self.as_nameres_db(), module, item_id)
+    fn item_name(&self, term: TermName) -> Ident {
+        item_name(self.as_nameres_db(), term)
     }
 
-    fn id_for_name(&self, module: Module, name: Ident) -> Option<ItemId> {
+    fn id_for_name(&self, module: Module, name: Ident) -> Option<TermName> {
         id_for_name(self.as_nameres_db(), module, name)
     }
 
@@ -87,7 +86,7 @@ impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_parser::Db {
 #[salsa::tracked]
 pub struct NameResTerm {
     #[id]
-    pub name: ItemId,
+    pub name: TermName,
     #[return_ref]
     pub data: nst::TermDefn,
     #[return_ref]
@@ -106,7 +105,7 @@ impl NameResTerm {
 #[salsa::tracked]
 pub struct NameResEffect {
     #[id]
-    pub name: EffectId,
+    pub name: EffectName,
     #[return_ref]
     pub data: nst::EffectDefn,
     #[return_ref]
@@ -137,9 +136,9 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
 
     let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = vec![];
     let mut module_names = FxHashMap::default();
-    let base = BaseBuilder::new()
-        .add_slice(&cst_module.items, &mut errors)
-        .build(&arena, module, db, &mut module_names);
+    let base = BaseBuilder::new(db)
+        .add_slice(module, &cst_module.items, &mut errors)
+        .build(module, db, &mut module_names);
     let ModuleResolution { terms, effects } = resolve_module(&arena, cst_module, base, &mut errors);
 
     for error in errors {
@@ -150,7 +149,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
         parse_module.module(db.as_parser_db()),
         module_names
             .into_iter()
-            .map(|(key, value)| (key, value.clone()))
+            .map(|(key, value)| (key, value))
             .collect(),
         terms
             .into_iter()
@@ -190,13 +189,12 @@ fn nameres_module_of(db: &dyn crate::Db, module: Module) -> NameResModule {
 }
 
 #[salsa::tracked]
-fn item_name(db: &dyn crate::Db, module: Module, item_id: ItemId) -> Ident {
-    let nr_module = db.nameres_module_of(module);
-    nr_module.names(db)[&module].get(item_id).value
+fn item_name(db: &dyn crate::Db, term: TermName) -> Ident {
+    term.name(db.as_core_db())
 }
 
 #[salsa::tracked]
-fn id_for_name(db: &dyn crate::Db, module: Module, name: Ident) -> Option<ItemId> {
+fn id_for_name(db: &dyn crate::Db, module: Module, name: Ident) -> Option<TermName> {
     let nr_module = db.nameres_module_of(module);
     nr_module.names(db)[&module]
         .find(name)
@@ -207,34 +205,22 @@ fn id_for_name(db: &dyn crate::Db, module: Module, name: Ident) -> Option<ItemId
 }
 
 #[salsa::tracked]
-pub fn effect_name(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> Ident {
-    let name_res = db.nameres_module_of(module);
-
-    name_res.names(db)[&module].get(effect_id).value
+pub fn effect_name(db: &dyn crate::Db, effect: EffectName) -> Ident {
+    effect.name(db.as_core_db())
 }
 
 #[salsa::tracked]
-pub fn effect_member_name(
-    db: &dyn crate::Db,
-    module: Module,
-    eff_id: EffectId,
-    op_id: EffectOpId,
-) -> Ident {
-    let name_res = db.nameres_module_of(module);
-
-    name_res.names(db)[&module]
-        .get_effect(eff_id)
-        .ops
-        .get(op_id)
-        .value
+pub fn effect_member_name(db: &dyn crate::Db, effect_op: EffectOpName) -> Ident {
+    effect_op.name(db.as_core_db())
 }
 
 #[salsa::tracked(return_ref)]
-pub fn effect_members(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> Vec<EffectOpId> {
+pub fn effect_members(db: &dyn crate::Db, effect: EffectName) -> Vec<EffectOpName> {
+    let module = effect.module(db.as_core_db());
     let name_res = db.nameres_module_of(module);
 
     name_res.names(db)[&module]
-        .get_effect(effect_id)
+        .get_effect(&effect)
         .iter()
         .collect()
 }
@@ -244,7 +230,7 @@ pub fn lookup_effect_by_member_names(
     db: &dyn crate::Db,
     module: Module,
     members: Box<[Ident]>,
-) -> Option<(Module, EffectId)> {
+) -> Option<EffectName> {
     let mut members: Vec<Ident> = members.as_ref().to_vec();
     // TODO: Consider making it invariant that members must be sorted to avoid this allocation.
     members.sort();
@@ -253,10 +239,8 @@ pub fn lookup_effect_by_member_names(
             // if length's don't match up we don't need to iterate
             members.len() == eff_names.ops.len()
                 && eff_names
-                    .ops
-                    .iter_enumerate()
-                    .map(|(_, name)| name.value)
-                    .all(|id| members.binary_search(&id).is_ok()))
+                    .ops.values()
+                    .all(|name| members.binary_search(&name.value).is_ok()))
 }
 
 #[salsa::tracked]
@@ -264,7 +248,7 @@ pub fn lookup_effect_by_name(
     db: &dyn crate::Db,
     module: Module,
     effect_name: Ident,
-) -> Option<(Module, EffectId)> {
+) -> Option<EffectName> {
     lookup_effect_by(db, module, |(name, _)| name.value == effect_name)
 }
 
@@ -272,27 +256,27 @@ fn lookup_effect_by(
     db: &dyn crate::Db,
     module: Module,
     mut find_by: impl FnMut(&(aiahr_core::span::SpanOf<Ident>, effect::EffectNames)) -> bool,
-) -> Option<(Module, EffectId)> {
+) -> Option<EffectName> {
     let name_res = db.nameres_module_of(module);
 
     let names = name_res.names(db);
     names
         .iter()
-        .flat_map(|(mod_id, names)| {
+        .flat_map(|(_, names)| {
             names
                 .effects
-                .iter_enumerate()
-                .map(|(eff_id, names)| ((*mod_id, eff_id), names))
+                .iter()
+                .map(|(eff_name, names)| (*eff_name, names))
         })
         .find(|(_, names)| find_by(names))
         .map(|(ids, _)| ids)
 }
 
 #[salsa::tracked(return_ref)]
-fn effect_handler_order(db: &dyn crate::Db, module: Module, eff_id: EffectId) -> Vec<Ident> {
-    let mut members = effect_members(db, module, eff_id)
+fn effect_handler_order(db: &dyn crate::Db, eff_name: EffectName) -> Vec<Ident> {
+    let mut members = effect_members(db, eff_name)
         .iter()
-        .map(|op_id| effect_member_name(db, module, eff_id, *op_id))
+        .map(|eff_op| effect_member_name(db, *eff_op))
         .collect::<Vec<_>>();
 
     // Insert `return` so it get's ordered as well.
@@ -302,42 +286,35 @@ fn effect_handler_order(db: &dyn crate::Db, module: Module, eff_id: EffectId) ->
 }
 
 #[salsa::tracked]
-pub fn effect_handler_return_index(
-    db: &dyn crate::Db,
-    module: Module,
-    effect_id: EffectId,
-) -> usize {
+pub fn effect_handler_return_index(db: &dyn crate::Db, eff: EffectName) -> usize {
     let return_id = db.ident_str("return");
-    effect_handler_order(db, module, effect_id)
+    effect_handler_order(db, eff)
         .binary_search(&return_id)
         .unwrap_or_else(|_| {
             panic!(
                 "ICE: Created handler order for effect {:?} that did not contain `return`",
-                effect_id
+                eff.name(db.as_core_db()),
             )
         })
 }
 
 #[salsa::tracked]
-pub fn effect_handler_op_index(
-    db: &dyn crate::Db,
-    module: Module,
-    effect_id: EffectId,
-    op_id: EffectOpId,
-) -> usize {
-    let member_id = effect_member_name(db, module, effect_id, op_id);
-    effect_handler_order(db, module, effect_id)
+pub fn effect_handler_op_index(db: &dyn crate::Db, eff_op: EffectOpName) -> usize {
+    let member_id = effect_member_name(db, eff_op);
+    let eff = eff_op.effect(db.as_core_db());
+    effect_handler_order(db, eff)
         .binary_search(&member_id)
         .unwrap_or_else(|_| {
             panic!(
                 "ICE: Created handler order for effect {:?} that did not contain member {:?}",
-                effect_id, op_id
+                eff.name(db.as_core_db()).text(db.as_core_db()),
+                eff_op.name(db.as_core_db()).text(db.as_core_db())
             )
         })
 }
 
 #[salsa::tracked(return_ref)]
-pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
+pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectName> {
     let nameres_module = db.nameres_module_of(module);
     nameres_module
         .effects(db)
@@ -348,15 +325,11 @@ pub fn module_effects(db: &dyn crate::Db, module: Module) -> Vec<EffectId> {
 }
 
 #[salsa::tracked(return_ref)]
-pub fn all_effects(db: &dyn crate::Db) -> Vec<(Module, EffectId)> {
+pub fn all_effects(db: &dyn crate::Db) -> Vec<EffectName> {
     let module_tree = db.all_modules();
     let mut effects = module_tree
         .iter()
-        .flat_map(|module| {
-            module_effects(db, *module)
-                .iter()
-                .map(move |eff_id| (*module, *eff_id))
-        })
+        .flat_map(|module| module_effects(db, *module).iter().copied())
         .collect::<Vec<_>>();
 
     effects.sort();
@@ -364,14 +337,12 @@ pub fn all_effects(db: &dyn crate::Db) -> Vec<(Module, EffectId)> {
 }
 
 #[salsa::tracked]
-pub fn effect_vector_index(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> usize {
+pub fn effect_vector_index(db: &dyn crate::Db, effect: EffectName) -> usize {
     let effects = all_effects(db);
-    effects
-        .binary_search(&(module, effect_id))
-        .unwrap_or_else(|_| {
-            panic!(
-                "ICE: {:?} expected effect to exist but it was not found",
-                (module, effect_id)
-            )
-        })
+    effects.binary_search(&effect).unwrap_or_else(|_| {
+        panic!(
+            "ICE: {:?} expected effect to exist but it was not found",
+            effect.name(db.as_core_db()).text(db.as_core_db())
+        )
+    })
 }

@@ -6,7 +6,7 @@ use aiahr_ast::{
 };
 use aiahr_core::{
     file::FileId,
-    id::{EffectId, EffectOpId, Id, IdGen, ItemId, TyVarId, VarId},
+    id::{EffectName, EffectOpName, Id, IdGen, TermName, TyVarId, VarId},
     ident::Ident,
     loc::Loc,
     modules::Module,
@@ -114,57 +114,55 @@ fn desugar_term(db: &dyn crate::Db, term: NameResTerm) -> AstTerm {
 }
 
 #[salsa::tracked]
-pub fn desugar_item_of_id(db: &dyn crate::Db, module: Module, item_id: ItemId) -> AstTerm {
+pub fn desugar_item_of_id(db: &dyn crate::Db, term_name: TermName) -> AstTerm {
+    let module = term_name.module(db.as_core_db());
     let nameres_module = db.nameres_module_of(module);
     let ast_module = desugar_module(db, nameres_module);
     ast_module
         .terms(db.as_ast_db())
         .iter()
-        .find(|term| term.name(db.as_ast_db()) == item_id)
+        .find(|term| term.name(db.as_ast_db()) == term_name)
         .cloned()
         .unwrap_or_else(|| {
             panic!(
-                "ICE: Created ItemId {:?} without corresponding Item",
-                item_id
+                "ICE: Created TermName {:?} without corresponding Term",
+                term_name.name(db.as_core_db()).text(db.as_core_db())
             )
         })
 }
 
 #[salsa::tracked]
-pub fn effect_of(db: &dyn crate::Db, module: Module, effect_id: EffectId) -> AstEffect {
+pub fn effect_of(db: &dyn crate::Db, effect_name: EffectName) -> AstEffect {
+    let module = effect_name.module(db.as_core_db());
     let ast_mod = db.desugar_module_of(module);
     *ast_mod
         .effects(db.as_ast_db())
         .iter()
-        .find(|effect| effect.name(db.as_ast_db()) == effect_id)
+        .find(|effect| effect.name(db.as_ast_db()) == effect_name)
         .unwrap_or_else(|| {
             panic!(
-                "ICE: Constructed EffectId {:?} without an Effect definition",
-                effect_id
+                "ICE: Constructed EffectName {:?} without an Effect definition",
+                effect_name.name(db.as_core_db()).text(db.as_core_db())
             )
         })
 }
 
 #[salsa::tracked]
-pub fn effect_op_tyscheme_of(
-    db: &dyn crate::Db,
-    module: Module,
-    eff_id: EffectId,
-    op_id: EffectOpId,
-) -> TyScheme {
-    let eff = effect_of(db, module, eff_id);
+pub fn effect_op_tyscheme_of(db: &dyn crate::Db, effect_op: EffectOpName) -> TyScheme {
+    let effect = effect_op.effect(db.as_core_db());
+    let eff = effect_of(db, effect);
     eff.data(db.as_ast_db())
         .ops
         .iter()
         .find_map(|opt_op| {
             opt_op
                 .as_ref()
-                .and_then(|op| (op.0 == op_id).then_some(op.1.clone()))
+                .and_then(|op| (op.0 == effect_op).then_some(op.1.clone()))
         })
         .unwrap_or_else(|| {
             panic!(
-                "ICE: Constructed EffectOpId {:?} with an Effect Operation defintion",
-                op_id
+                "ICE: Constructed EffectOpName {:?} with an Effect Operation defintion",
+                effect_op.name(db.as_core_db()).text(db.as_core_db())
             )
         })
 }
@@ -186,13 +184,13 @@ pub(crate) fn desugar_effect_defn(
             .map(|opt_op| {
                 opt_op.as_ref().map(|op| {
                     let ty = ds_ctx.ds_type(op.type_);
-                    let eff_var = ds_ctx.ty_vars.push(true);
                     (
                         op.name.value,
                         TyScheme {
-                            bound: vec![eff_var],
+                            bound: vec![],
                             constrs: vec![],
-                            eff: Row::Open(eff_var),
+                            // TODO: We probably want to allow operations to throw effects?
+                            eff: Row::Closed(db.empty_row()),
                             ty,
                         },
                     )
@@ -215,9 +213,9 @@ pub(crate) fn desugar_term_defn(
     Ok(match term.annotation {
         Some(ref scheme) => {
             let scheme = ds_ctx.ds_scheme(&scheme.type_);
-            Ast::new(term.name.value, ds_ctx.spans, scheme, ds_ctx.terms, tree)
+            Ast::new(ds_ctx.spans, scheme, ds_ctx.terms, tree)
         }
-        None => Ast::with_untyped(term.name.value, ds_ctx.spans, ds_ctx.terms, tree),
+        None => Ast::with_untyped(ds_ctx.spans, ds_ctx.terms, tree),
     })
 }
 
@@ -345,16 +343,18 @@ impl<'a> DesugarCtx<'a> {
                             label: field.label.value,
                             term,
                         });
-                        self.spans.insert(
-                            right,
-                            field
-                                .label
-                                .join_spans(&self.arenas[field.target].spanned(self.arenas)),
-                        );
-                        Ok(self.terms.alloc(Concat {
-                            left: concat?,
-                            right,
-                        }))
+                        let span = field
+                            .label
+                            .join_spans(&self.arenas[field.target].spanned(self.arenas));
+                        self.spans.insert(right, span);
+                        let span = self.spans[&concat?].join_spans(&span);
+                        Ok(self.mk_term(
+                            span,
+                            Concat {
+                                left: concat?,
+                                right,
+                            },
+                        ))
                     })?
                 }
             },
@@ -399,7 +399,11 @@ impl<'a> DesugarCtx<'a> {
                     .collect::<Result<_, _>>()?;
                 self.desugar_pattern_matrix(&mut [], matrix)?
             }
-            nst::Term::Handle { .. } => todo!(),
+            nst::Term::Handle { handler, expr, .. } => {
+                let handler = self.ds_term(*handler)?;
+                let body = self.ds_term(*expr)?;
+                self.terms.alloc(ast::Term::Handle { handler, body })
+            }
         };
         self.spans.insert(ast, nst.spanned(self.arenas).span());
         Ok(ast)

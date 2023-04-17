@@ -2,7 +2,7 @@ use std::slice::Iter;
 
 use aiahr_core::{
     file::FileId,
-    id::EffectId,
+    id::EffectName,
     ident::Ident,
     loc::Loc,
     modules::Module,
@@ -24,12 +24,12 @@ fn canonical_span(file: FileId) -> Span {
 
 /// A collection of names visible throughout a module. Also accumulates the local variable IDs of
 /// the module.
-pub struct BaseNames<'b, 'a> {
+pub struct BaseNames<'b> {
     me: Module,
     db: &'b dyn crate::Db,
-    module_names: &'b FxHashMap<Module, &'a ModuleNames>,
+    module_names: &'b FxHashMap<Module, ModuleNames>,
 }
-impl std::fmt::Debug for BaseNames<'_, '_> {
+impl std::fmt::Debug for BaseNames<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BaseNames")
             .field("me", &self.me)
@@ -38,12 +38,12 @@ impl std::fmt::Debug for BaseNames<'_, '_> {
     }
 }
 
-impl<'b, 'a> BaseNames<'b, 'a> {
+impl<'b> BaseNames<'b> {
     /// Creates a new `BaseNames`.
     pub fn new(
         me: Module,
         db: &'b dyn crate::Db,
-        module_names: &'b FxHashMap<Module, &'a ModuleNames>,
+        module_names: &'b FxHashMap<Module, ModuleNames>,
     ) -> Self {
         Self {
             me,
@@ -58,8 +58,8 @@ impl<'b, 'a> BaseNames<'b, 'a> {
     }
 
     /// Gets the effect corresponding to the given ID.
-    pub fn get_effect(&self, module: Module, effect: EffectId) -> &EffectNames {
-        self.module_names[&module].get_effect(effect)
+    pub fn get_effect(&self, effect: &EffectName) -> &EffectNames {
+        self.module_names[&effect.module(self.db.as_core_db())].get_effect(effect)
     }
 
     /// Finds the correct ID associated with the given string.
@@ -75,16 +75,16 @@ impl<'b, 'a> BaseNames<'b, 'a> {
     ) -> impl '_ + Iterator<Item = SpanOf<BaseName>> {
         self.module_names[&module]
             .find(name)
-            .map(move |sn| sn.map(|n| n.based_in(module)))
+            .map(move |sn| sn.map(BaseName::from))
     }
 
     /// Iterates over all IDs defined in this module in the order that they were generated.
-    pub fn iter<'c>(&'c self) -> Iter<'a, ModuleName> {
+    pub fn iter(&self) -> Iter<'_, ModuleName> {
         self.module_names[&self.me].iter()
     }
 }
 
-impl<'b, 'a, I> IdOps<I> for BaseNames<'b, 'a>
+impl<'b, I> IdOps<I> for BaseNames<'b>
 where
     BaseName: From<I>,
 {
@@ -93,9 +93,14 @@ where
             BaseName::Module(m) => {
                 canonical_span(m.uri(self.db.as_core_db())).of(m.name(self.db.as_core_db()))
             }
-            BaseName::Effect(m, e) => self.module_names[&m].get(e),
-            BaseName::EffectOp(m, e, o) => self.module_names[&m].get_effect(e).get(o),
-            BaseName::Item(m, i) => self.module_names[&m].get(i),
+            BaseName::Effect(e) => self.module_names[&e.module(self.db.as_core_db())].get(e),
+            BaseName::EffectOp(o) => {
+                let core_db = self.db.as_core_db();
+                let e = o.effect(core_db);
+                let m = e.module(core_db);
+                self.module_names[&m].get_effect(&e).get(o)
+            }
+            BaseName::Item(t) => self.module_names[&t.module(self.db.as_core_db())].get(t),
         }
     }
 }

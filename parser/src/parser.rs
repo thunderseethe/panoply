@@ -599,7 +599,7 @@ pub fn aiahr_parser() -> impl Parser<Token, IdxState<Vec<cst::Item>>, Error = Pa
     let effect = lit(Token::KwEffect)
         .then(ident())
         .then(lit(Token::LBrace))
-        .then(effect_op().repeated())
+        .then(effect_op().separated_by(lit(Token::Comma)))
         .then(lit(Token::RBrace))
         .map_state(|((((effect, name), lbrace), ops), rbrace), alloc| {
             cst::Item::Effect(cst::EffectDefn {

@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use aiahr_core::{
-    id::{EffectId, IdGen, TyVarId, VarId},
+    id::{EffectName, IdGen, TyVarId, VarId},
     ident::Ident,
     modules::Module,
     span::{SpanOf, Spanned},
@@ -98,16 +98,16 @@ impl MatchesOps<VarId> for Matches {
 
 /// The names visible from a given context in a module. Supports shadowing.
 #[derive(Debug)]
-pub struct Names<'b, 'a> {
-    base: &'b BaseNames<'b, 'a>,
+pub struct Names<'b> {
+    base: &'b BaseNames<'b>,
     gens: Gens,
     names: FxHashMap<Ident, Vec<Matches>>,
     scopes: Vec<FxHashSet<Ident>>,
 }
 
-impl<'b, 'a> Names<'b, 'a> {
+impl<'b> Names<'b> {
     /// Constructs a new `Names` with the given base.
-    pub fn new(base: &'b BaseNames<'b, 'a>) -> Names<'b, 'a> {
+    pub fn new(base: &'b BaseNames<'b>) -> Names<'b> {
         Names {
             base,
             gens: Gens {
@@ -126,7 +126,7 @@ impl<'b, 'a> Names<'b, 'a> {
     /// Executes the given function on a subscope of the current object.
     pub fn subscope<R, F>(&mut self, f: F) -> R
     where
-        F: FnOnce(&mut Names<'b, 'a>) -> R,
+        F: FnOnce(&mut Names<'b>) -> R,
     {
         self.scopes.push(FxHashSet::default());
         let ret = f(self);
@@ -139,8 +139,8 @@ impl<'b, 'a> Names<'b, 'a> {
     }
 
     /// Gets the effect corresponding to the given ID.
-    pub fn get_effect(&self, module: Module, effect: EffectId) -> &EffectNames {
-        self.base.get_effect(module, effect)
+    pub fn get_effect(&self, effect: &EffectName) -> &EffectNames {
+        self.base.get_effect(effect)
     }
 
     fn insert<I>(&mut self, name: SpanOf<Ident>) -> InsertResult<I>
@@ -191,7 +191,7 @@ impl<'b, 'a> Names<'b, 'a> {
             .get(&name)
             .into_iter()
             .flat_map(|stack| stack.iter().rev().flat_map(Matches::iter))
-            .map(|n| self.get(n).span().of(n))
+            .map(|n| self.get(n).map(|_| n))
             .chain(self.base.find(name).map(|sn| sn.map(Name::from)))
     }
 
@@ -210,16 +210,16 @@ impl<'b, 'a> Names<'b, 'a> {
     }
 }
 
-impl<'b, 'a, I> IdOps<I> for Names<'b, 'a>
+impl<'b, I> IdOps<I> for Names<'b>
 where
     Name: From<I>,
 {
     fn get(&self, id: I) -> SpanOf<Ident> {
         match Name::from(id) {
             Name::Module(m) => self.base.get(m),
-            Name::Effect(m, e) => self.base.get((m, e)),
-            Name::EffectOp(m, e, o) => self.base.get((m, e, o)),
-            Name::Item(m, i) => self.base.get((m, i)),
+            Name::Effect(e) => self.base.get(e),
+            Name::EffectOp(o) => self.base.get(o),
+            Name::Item(i) => self.base.get(i),
             Name::TyVar(t) => self.gens.ty_vars[t],
             Name::Var(v) => self.gens.vars[v],
         }

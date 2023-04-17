@@ -29,6 +29,9 @@ pub struct Jar(
     file::SourceFile,
     file::SourceFileSet,
     file::file_for_id,
+    id::TermName,
+    id::EffectName,
+    id::EffectOpName,
     ident::Ident,
     modules::Module,
 );

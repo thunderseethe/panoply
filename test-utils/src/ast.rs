@@ -1,8 +1,5 @@
 use aiahr_ast::{Ast, Direction, Term, Term::*};
-use aiahr_core::{
-    id::{Id, ItemId},
-    span::Span,
-};
+use aiahr_core::span::Span;
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
 
@@ -37,12 +34,10 @@ pub trait MkTerm<'a, Var> {
 /// AST.
 pub struct AstBuilder<'a, Var> {
     db: &'a dyn aiahr_core::Db,
-    name: ItemId,
-    //arena: &'a Bump,
-    terms: RefCell<Arena<Term<Var>>>,
     // TODO: This is bad but it's annoying to fix because rust won't let you take a mutable borrow
     // and then a second mutable borrow passed as a parameter to the original. Even though that'll
     // work if you store the value in a temporary.
+    terms: RefCell<Arena<Term<Var>>>,
     spans: RefCell<FxHashMap<Idx<Term<Var>>, Span>>,
 }
 
@@ -50,16 +45,14 @@ impl<'a, Var> AstBuilder<'a, Var> {
     pub fn new(db: &'a dyn aiahr_core::Db) -> Self {
         Self {
             db,
-            name: ItemId::from_raw(0),
             terms: RefCell::new(Arena::default()),
             spans: RefCell::new(FxHashMap::default()),
         }
     }
 
-    pub fn with_name(db: &'a dyn aiahr_core::Db, name: ItemId) -> Self {
+    pub fn with_name(db: &'a dyn aiahr_core::Db) -> Self {
         Self {
             db,
-            name,
             terms: RefCell::new(Arena::default()),
             spans: RefCell::new(FxHashMap::default()),
         }
@@ -74,12 +67,7 @@ impl<'a, Var: Eq + Hash> AstBuilder<'a, Var> {
 
     pub fn build(self, root: Term<Var>) -> Ast<Var> {
         let root = self.mk_term(root);
-        Ast::with_untyped(
-            self.name,
-            self.spans.into_inner(),
-            self.terms.into_inner(),
-            root,
-        )
+        Ast::with_untyped(self.spans.into_inner(), self.terms.into_inner(), root)
     }
 
     pub fn with_builder(

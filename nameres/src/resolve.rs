@@ -9,7 +9,7 @@ use aiahr_core::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
     },
-    id::{EffectId, EffectOpId, ItemId, TyVarId, VarId},
+    id::{EffectName, EffectOpName, TermName, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaRef, IdxAlloc},
     modules::Module,
@@ -32,7 +32,7 @@ pub(crate) struct NameResCtx<'a, 'b, 'c, E> {
     cst_alloc: &'b CstIndxAlloc,
     arena: &'a Bump,
     alloc: &'b mut NstIndxAlloc,
-    names: &'b mut Names<'c, 'a>,
+    names: &'b mut Names<'c>,
     errors: &'b mut E,
 }
 
@@ -117,20 +117,13 @@ where
     })
 }
 
-// A module or some other value.
-#[derive(Clone, Copy, Debug)]
-enum ModuleOr<T> {
-    Module(Module),
-    Value(T),
-}
-
 // The possible meanings of a `DotAccess` term.
 #[derive(Debug)]
 enum DotResolution {
     Module(Module),
-    Effect(Module, EffectId),
-    EffectOp(Module, EffectId, EffectOpId),
-    Item(Module, ItemId),
+    Effect(EffectName),
+    EffectOp(EffectOpName),
+    Item(TermName),
     FieldAccess {
         base: Idx<nst::Term>,
         dot: Span,
@@ -142,9 +135,9 @@ impl From<BaseName> for DotResolution {
     fn from(base: BaseName) -> Self {
         match base {
             BaseName::Module(m) => DotResolution::Module(m),
-            BaseName::Effect(m, e) => DotResolution::Effect(m, e),
-            BaseName::EffectOp(m, e, o) => DotResolution::EffectOp(m, e, o),
-            BaseName::Item(m, i) => DotResolution::Item(m, i),
+            BaseName::Effect(e) => DotResolution::Effect(e),
+            BaseName::EffectOp(o) => DotResolution::EffectOp(o),
+            BaseName::Item(i) => DotResolution::Item(i),
         }
     }
 }
@@ -152,7 +145,7 @@ impl From<BaseName> for DotResolution {
 // Resolves a symbol or suggests names that the user might have intended.
 fn resolve_or_suggest<I, N, T, F>(
     iterator: I,
-    names: &Names<'_, '_>,
+    names: &Names<'_>,
     mut f: F,
 ) -> Result<T, Vec<Suggestion>>
 where
@@ -222,7 +215,7 @@ where
     // Inserts a symbol into the current scope using the given function.
     fn insert_symbol<I, F>(&mut self, kind: NameKind, var: SpanOf<Ident>, f: F) -> SpanOf<I>
     where
-        F: FnOnce(&mut Names<'_, 'a>, SpanOf<Ident>) -> InsertResult<I>,
+        F: FnOnce(&mut Names<'_>, SpanOf<Ident>) -> InsertResult<I>,
     {
         let InsertResult { id, existing } = f(self.names, var);
         if let Some(orig) = existing {
@@ -248,21 +241,17 @@ where
     // Resolves an effect operation symbolto a value of type `T`, using the given function to decide which names are valid for the symbol.
     fn resolve_operation_symbol<T, F>(
         &mut self,
-        module: Module,
-        effect: EffectId,
+        effect: EffectName,
         var: SpanOf<Ident>,
-        mut f: F,
+        f: F,
     ) -> Option<T>
     where
-        F: FnMut(EffectOpId) -> Result<T, RejectionReason>,
+        F: FnMut(EffectOpName) -> Result<T, RejectionReason>,
     {
         match resolve_or_suggest(
-            self.names
-                .get_effect(module, effect)
-                .find(var.value)
-                .map(|sn| sn.map(|o| (module, effect, o))),
+            self.names.get_effect(&effect).find(var.value),
             self.names,
-            |(_, _, o)| f(o),
+            f,
         ) {
             Ok(x) => Some(x),
             Err(suggestions) => {
@@ -546,10 +535,10 @@ where
                 DotResolution::Module(m) => {
                     self.resolve_symbol_in(m, field, |name| Ok(DotResolution::from(name)))?
                 }
-                DotResolution::Effect(m, e) => self.resolve_operation_symbol(m, e, field, |o| {
-                    Ok(DotResolution::EffectOp(m, e, o))
-                })?,
-                DotResolution::EffectOp(_, _, _) => {
+                DotResolution::Effect(e) => {
+                    self.resolve_operation_symbol(e, field, |o| Ok(DotResolution::EffectOp(o)))?
+                }
+                DotResolution::EffectOp(_) => {
                     self.errors.add(NameResolutionError::WrongKind {
                         expr: self.span_of(base),
                         actual: NameKind::EffectOp,
@@ -557,8 +546,8 @@ where
                     });
                     return None;
                 }
-                DotResolution::Item(m, i) => DotResolution::FieldAccess {
-                    base: self.mk_term(nst::Term::ItemRef(self.span_of(base).of((m, i)))),
+                DotResolution::Item(i) => DotResolution::FieldAccess {
+                    base: self.mk_term(nst::Term::ItemRef(self.span_of(base).of(i))),
                     dot,
                     field,
                 },
@@ -579,23 +568,33 @@ where
             },
             // n . field
             cst::Term::SymbolRef(n) => {
+                // Resolution of a symbol to some definition
+                #[derive(Clone, Debug)]
+                enum SymbolRes {
+                    Module(Module),
+                    Effect(EffectName),
+                    Term(nst::Term),
+                }
+
                 let base_span = self.span_of(base);
                 let module_or_term = self.resolve_symbol(*n, |name| match name {
-                    Name::Module(m) => Ok(ModuleOr::Module(m)),
-                    Name::Item(m, i) => {
-                        Ok(ModuleOr::Value(nst::Term::ItemRef(base_span.of((m, i)))))
-                    }
-                    Name::Var(v) => Ok(ModuleOr::Value(nst::Term::VariableRef(base_span.of(v)))),
+                    Name::Module(m) => Ok(SymbolRes::Module(m)),
+                    Name::Item(i) => Ok(SymbolRes::Term(nst::Term::ItemRef(base_span.of(i)))),
+                    Name::Var(v) => Ok(SymbolRes::Term(nst::Term::VariableRef(base_span.of(v)))),
+                    Name::Effect(e) => Ok(SymbolRes::Effect(e)),
                     _ => Err(RejectionReason::WrongKind {
                         actual: name.kind(),
                         expected: NameKinds::MODULE | TERM_KINDS,
                     }),
                 })?;
                 match module_or_term {
-                    ModuleOr::Module(m) => {
+                    SymbolRes::Module(m) => {
                         self.resolve_symbol_in(m, field, |name| Ok(DotResolution::from(name)))?
                     }
-                    ModuleOr::Value(value) => DotResolution::FieldAccess {
+                    SymbolRes::Effect(e) => {
+                        self.resolve_operation_symbol(e, field, |o| Ok(DotResolution::EffectOp(o)))?
+                    }
+                    SymbolRes::Term(value) => DotResolution::FieldAccess {
                         base: self.mk_term(value),
                         dot,
                         field,
@@ -710,7 +709,7 @@ where
                         });
                         return None;
                     }
-                    DotResolution::Effect(_, _) => {
+                    DotResolution::Effect(_) => {
                         self.errors.add(NameResolutionError::WrongKind {
                             expr: self.span_of(term),
                             actual: NameKind::Effect,
@@ -718,10 +717,8 @@ where
                         });
                         return None;
                     }
-                    DotResolution::EffectOp(m, e, o) => {
-                        nst::Term::EffectOpRef(self.span_of(term).of((m, e, o)))
-                    }
-                    DotResolution::Item(m, i) => nst::Term::ItemRef(self.span_of(term).of((m, i))),
+                    DotResolution::EffectOp(o) => nst::Term::EffectOpRef(self.span_of(term).of(o)),
+                    DotResolution::Item(i) => nst::Term::ItemRef(self.span_of(term).of(i)),
                     DotResolution::FieldAccess { base, dot, field } => {
                         nst::Term::FieldAccess { base, dot, field }
                     }
@@ -749,7 +746,7 @@ where
                 rangle: *rangle,
             },
             cst::Term::SymbolRef(var) => self.resolve_symbol(*var, |name| match name {
-                Name::Item(m, i) => Ok(nst::Term::ItemRef(var.span().of((m, i)))),
+                Name::Item(i) => Ok(nst::Term::ItemRef(var.span().of(i))),
                 Name::Var(v) => Ok(nst::Term::VariableRef(var.span().of(v))),
                 _ => Err(RejectionReason::WrongKind {
                     actual: name.kind(),
@@ -768,9 +765,9 @@ where
     /// Resolves an effect operation signature.
     fn resolve_effect_op(
         &mut self,
-        opid: EffectOpId,
+        opid: EffectOpName,
         op: &cst::EffectOp<Ident, Ident>,
-    ) -> Option<nst::EffectOp<EffectOpId, TyVarId>> {
+    ) -> Option<nst::EffectOp<EffectOpName, TyVarId>> {
         Some(nst::EffectOp {
             name: op.name.span().of(opid),
             colon: op.colon,
@@ -781,17 +778,16 @@ where
     /// Resolves the given effect.
     fn resolve_effect(
         &mut self,
-        module: Module,
-        eid: EffectId,
+        eff_name: EffectName,
         eff: &cst::EffectDefn,
     ) -> Option<nst::EffectDefn> {
         Some(nst::EffectDefn {
             effect: eff.effect,
-            name: eff.name.span().of(eid),
+            name: eff.name.span().of(eff_name),
             lbrace: eff.lbrace,
             ops: self
                 .names
-                .get_effect(module, eid)
+                .get_effect(&eff_name)
                 .iter()
                 .collect::<Vec<_>>()
                 .into_iter()
@@ -803,7 +799,11 @@ where
     }
 
     /// Resolves the given item.
-    pub fn resolve_term_item(&mut self, id: ItemId, term: &cst::TermDefn) -> Option<nst::TermDefn> {
+    pub fn resolve_term_item(
+        &mut self,
+        id: TermName,
+        term: &cst::TermDefn,
+    ) -> Option<nst::TermDefn> {
         Some(nst::TermDefn {
             name: term.name.span().of(id),
             annotation: term
@@ -826,7 +826,7 @@ pub(crate) struct ModuleResolution {
 pub(crate) fn resolve_module<'a, 'b: 'a, E>(
     arena: &'a Bump,
     module: &cst::CstModule,
-    base: BaseNames<'_, 'a>,
+    base: BaseNames<'_>,
     errors: &mut E,
 ) -> ModuleResolution
 where
@@ -846,7 +846,7 @@ where
         };
         match (&name, &item) {
             (ModuleName::Effect(e), cst::Item::Effect(ref eff)) => {
-                effects.push(ctx.resolve_effect(base.me(), *e, eff).map(|eff| AllocItem {
+                effects.push(ctx.resolve_effect(*e, eff).map(|eff| AllocItem {
                     alloc,
                     local_ids: names.into_local_ids(),
                     item: eff,
@@ -1477,17 +1477,17 @@ mod tests {
     fn test_top_level_letrec() {
         let arena = Bump::new();
         let db = TestDatabase::default();
-        let (res, ids, errs) = parse_resolve_module(&db, &arena, "foo = bar\nbar = foo");
+        let (res, _, errs) = parse_resolve_module(&db, &arena, "foo = bar\nbar = foo");
         assert_matches!(errs[..], []);
         assert_matches!(
             res[..],
             [
-                Some((nitem_term!(foo, nterm_item!(mbar, bar1)), _)),
-                Some((nitem_term!(bar, nterm_item!(mfoo, foo1)), _))
+                Some((nitem_term!(foo, nterm_item!(bar1)), _)),
+                Some((nitem_term!(bar, nterm_item!(foo1)), _))
             ] => {
-                assert_eq!(ids.get(foo).value.text(&db), "foo");
-                assert_eq!(ids.get(bar).value.text(&db), "bar");
-                assert_eq!(mbar, mfoo);
+                assert_eq!(foo.name(&db).text(&db), "foo");
+                assert_eq!(bar.name(&db).text(&db), "bar");
+                assert_eq!(foo1.module(&db), bar1.module(&db));
                 assert_eq!(bar1, bar);
                 assert_eq!(foo1, foo);
             }

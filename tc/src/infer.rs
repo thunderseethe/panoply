@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use crate::{
     diagnostic::{into_diag, TypeCheckDiagnostic, TypeCheckError},
     folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
+    type_scheme_of,
     unsolved_row::{ClosedGoal, OpenGoal, OrderedRowXorRow, UnsolvedRowEquation},
     Db, EffectInfo, Evidence, TyScheme,
 };
@@ -446,6 +447,14 @@ where
                     }
                 };
             }
+            (Item(term_name), _) => {
+                let scheme =
+                    type_scheme_of(self.db.as_tc_db(), *term_name).ty_scheme(self.db.as_tc_db());
+                let span = current_span();
+                let ty_chk = self.instantiate(scheme, span);
+                self.row_eq_constraint(ty_chk.eff, expected.eff, span);
+                self.constraints.add_ty_eq(ty_chk.ty, expected.ty, span);
+            }
             // Bucket case for when we need to check a rule against a type but no case applies
             (_, _) => {
                 // Infer a type for our term and check that the expected type is equal to the
@@ -482,10 +491,12 @@ where
         E: ?Sized + EffectInfo,
     {
         let current_span = || {
-            *self
-                .ast
-                .span_of(term)
-                .expect("ICE: Term should have span in tc after desugaring")
+            *self.ast.span_of(term).unwrap_or_else(|| {
+                panic!(
+                    "ICE: Term should have span in tc after desugaring. {:?}",
+                    self.ast.view(term)
+                )
+            })
         };
         let res = match self.ast.view(term) {
             // Abstraction inference  is done by creating two new unifiers <arg> and <body>
@@ -666,16 +677,13 @@ where
 
                 InferResult::new(self.mk_ty(SumTy(big_row)), eff)
             }
-            Operation((mod_id, eff_id, eff_op_id)) => {
-                let sig = self.instantiate(
-                    eff_info.effect_member_sig(*mod_id, *eff_id, *eff_op_id),
-                    current_span(),
-                );
+            Operation(op_name) => {
+                let sig = self.instantiate(eff_info.effect_member_sig(*op_name), current_span());
 
                 InferResult::new(
                     sig.ty,
                     Row::Closed(self.single_row(
-                        eff_info.effect_name(*mod_id, *eff_id),
+                        eff_info.effect_name(op_name.effect(self.db.as_core_db())),
                         self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
                     )),
                 )
@@ -747,8 +755,11 @@ where
                 self._check(eff_info, *term, res);
                 res
             }
-            // TODOs
-            Item(_) => todo!(),
+            Item(term_name) => {
+                let scheme =
+                    type_scheme_of(self.db.as_tc_db(), *term_name).ty_scheme(self.db.as_tc_db());
+                self.instantiate(scheme, current_span())
+            }
         };
         self.state.term_tys.insert(term, res);
         res
@@ -1413,16 +1424,16 @@ where
 
         match (normal_handler, normal_eff) {
             (Row::Closed(handler), Row::Open(eff_var)) => {
-                let (mod_id, eff_id) = eff_info
+                let eff_name = eff_info
                     .lookup_effect_by_member_names(self.module, &handler.fields)
                     .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
                 let mut members_sig = eff_info
-                    .effect_members(mod_id, eff_id)
+                    .effect_members(eff_name)
                     .iter()
                     .map(|eff_op_id| {
                         (
-                            eff_info.effect_member_name(mod_id, eff_id, *eff_op_id),
-                            eff_info.effect_member_sig(mod_id, eff_id, *eff_op_id),
+                            eff_info.effect_member_name(*eff_op_id),
+                            eff_info.effect_member_sig(*eff_op_id),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -1432,29 +1443,27 @@ where
                 // order"?
                 members_sig.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-                println!("Effect Id: {:?}", eff_id);
-
                 unify_sig_handler(self, members_sig, handler)?;
 
                 // We succesfully unified the handler against it's expected signature.
                 // That means we can unify our eff_var against our effect
-                let eff_name = eff_info.effect_name(mod_id, eff_id);
+                let name = eff_info.effect_name(eff_name);
                 let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
-                let eff_row = self.mk_row(&[eff_name], &[unit_ty]);
+                let eff_row = self.mk_row(&[name], &[unit_ty]);
                 self.unify_var_ty(eff_var, self.mk_ty(RowTy(eff_row)))
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
-                let (mod_id, eff_id) = eff_info
+                let eff_name = eff_info
                     .lookup_effect_by_name(self.module, eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let mut members_sig = eff_info
-                    .effect_members(mod_id, eff_id)
+                    .effect_members(eff_name)
                     .iter()
                     .map(|eff_op_id| {
                         (
-                            eff_info.effect_member_name(mod_id, eff_id, *eff_op_id),
-                            eff_info.effect_member_sig(mod_id, eff_id, *eff_op_id),
+                            eff_info.effect_member_name(*eff_op_id),
+                            eff_info.effect_member_sig(*eff_op_id),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -1468,14 +1477,14 @@ where
             }
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
-                let (mod_id, eff_id) = eff_info
+                let eff_name = eff_info
                     .lookup_effect_by_name(self.module, eff.fields[0])
                     .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
                 let members_sig = eff_info
-                    .effect_members(mod_id, eff_id)
+                    .effect_members(eff_name)
                     .iter()
                     .map(|eff_op_id| {
-                        let scheme = eff_info.effect_member_sig(mod_id, eff_id, *eff_op_id);
+                        let scheme = eff_info.effect_member_sig(*eff_op_id);
                         let mut inst = Instantiate {
                             db: self.db,
                             ctx: self.ctx,
@@ -1499,10 +1508,7 @@ where
                             scheme.ty.try_fold_with(&mut inst).unwrap(),
                         )?;
 
-                        Ok((
-                            eff_info.effect_member_name(mod_id, eff_id, *eff_op_id),
-                            member_ty,
-                        ))
+                        Ok((eff_info.effect_member_name(*eff_op_id), member_ty))
                     })
                     .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
 
