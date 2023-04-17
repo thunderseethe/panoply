@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use aiahr_core::{
     diagnostic::{Citation, Diagnostic},
-    id::{TermName, VarId},
+    id::VarId,
     ident::Ident,
     span::Span,
 };
@@ -19,7 +19,6 @@ use pretty::{docs, DocAllocator};
 pub(crate) enum TypeCheckError<'ctx> {
     /// A variable we expected to exist with a type, did not
     VarNotDefined(VarId),
-    ItemNotDefined(TermName),
     TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
     OccursCheckFailed(TypeVarOf<InArena<'ctx>>, InferTy<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),
@@ -166,7 +165,6 @@ pub(crate) fn into_diag(
                 message: format!("undefined variable v<{}>", var.0),
             },
         },
-        TypeCheckError::ItemNotDefined(_) => todo!(),
     }
 }
 

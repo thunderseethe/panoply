@@ -293,18 +293,6 @@ pub struct EffectOpName {
 }
 
 define_ids!(
-/// An ID for a top-level item in a module. Unique within a module.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub ItemId;
-
-/// An ID for a top-level effect definition in a module. Unique within a module.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub EffectId;
-
-/// An ID for an effect operation in an effect definition. Unique within an effect definition.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub EffectOpId;
-
 /// A type variable. Unique within a type scheme.
 /// These are explicity referred to by the AST and can persist through type checking (unlike
 /// unification variables). They may not be modified by the type checking process, often
