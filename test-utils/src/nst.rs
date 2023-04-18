@@ -64,6 +64,11 @@ pub enum Term<'a> {
         rpar: Span,
     },
     ProductRow(ProductRow<'a, &'a Term<'a>>),
+    Concat {
+        left: &'a Term<'a>,
+        concat: Span,
+        right: &'a Term<'a>,
+    },
     SumRow(SumRow<&'a Term<'a>>),
     FieldAccess {
         base: &'a Term<'a>,
@@ -101,6 +106,7 @@ impl<'a> Spanned for Term<'a> {
             Term::ItemRef(i) => i.span(),
             Term::VariableRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+            Term::Concat { left, right, .. } => Span::join(left, right),
         }
     }
 }
@@ -349,6 +355,15 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for Idx<nst::Term> {
                 lpar,
                 term: term.ref_alloc(alloc),
                 rpar,
+            },
+            nst::Term::Concat {
+                left,
+                concat,
+                right,
+            } => Term::Concat {
+                left: left.ref_alloc(alloc),
+                concat,
+                right: right.ref_alloc(alloc),
             },
         };
         alloc.ref_arena().alloc(term) as &_

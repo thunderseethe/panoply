@@ -535,7 +535,27 @@ pub fn term() -> impl AiahrIdxParser<Idx<cst::Term>> {
             .map_state(|(l, rs), alloc| {
                 rs.into_iter()
                     .fold(l.apply(alloc), |l, r| r.apply(alloc).apply(alloc, l))
-            });
+            })
+            .boxed();
+
+        let concats = separated(
+            app_access.clone(),
+            lit(Token::Comma)
+                .then(lit(Token::Comma))
+                .map_with_span(|_, span| span),
+        )
+        .map_state(|sep, alloc| {
+            let sep = sep.apply(alloc);
+            sep.elems
+                .into_iter()
+                .fold(sep.first, |left, (concat, right)| {
+                    alloc.alloc(cst::Term::Concat {
+                        left,
+                        concat,
+                        right,
+                    })
+                })
+        });
 
         // Local variable binding
         let local_bind = ident()
@@ -585,7 +605,7 @@ pub fn term() -> impl AiahrIdxParser<Idx<cst::Term>> {
         // in right associative order.
         choice((local_bind, handle, closure))
             .repeated()
-            .then(app_access)
+            .then(concats)
             .map_state(|(ls, r), alloc| {
                 ls.into_iter()
                     .rfold(r.apply(alloc), |r, l| l.apply(alloc).apply(alloc, r))
@@ -1079,6 +1099,25 @@ mod tests {
         assert_matches!(
             parse_term_unwrap(&db, &Bump::new(), "a.x(b)"),
             term_app!(term_dot!(term_sym!(a), x), term_sym!(b)) => assert_ident_text_matches_name!(db, [a, x, b])
+        );
+    }
+
+    #[test]
+    fn test_concat_variables() {
+        let db = TestDatabase::default();
+        assert_matches!(
+            parse_term_unwrap(&db, &Bump::new(), "x ,, y ,, z"),
+            aiahr_test::cst::Term::Concat {
+                left: aiahr_test::cst::Term::Concat {
+                    left: term_sym!(x),
+                    right: term_sym!(y),
+                    ..
+                },
+                right: term_sym!(z),
+                ..
+            } => {
+                assert_ident_text_matches_name!(db, [x, y, z]);
+            }
         );
     }
 

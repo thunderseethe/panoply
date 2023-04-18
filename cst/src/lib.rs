@@ -331,6 +331,13 @@ pub enum Term {
         rpar: Span,
     },
     ProductRow(ProductRow<Idx<Self>>),
+    // TODO: Roll this into product row once we figure out better syntax.
+    // Consider copying over what we do for prod types where we allow `{ x, y, z }` syntax.
+    Concat {
+        left: Idx<Self>,
+        concat: Span,
+        right: Idx<Self>,
+    },
     SumRow(SumRow<Idx<Self>>),
     DotAccess {
         base: Idx<Self>,
@@ -375,6 +382,9 @@ impl Spanned for SpanTerm<'_> {
             Term::Abstraction { lbar, body, .. } => Span::join(lbar, &self.with_term(*body)),
             Term::Application { func, rpar, .. } => Span::join(&self.with_term(*func), rpar),
             Term::ProductRow(p) => p.span(),
+            Term::Concat { left, right, .. } => {
+                Span::join(&self.with_term(*left), &self.with_term(*right))
+            }
             Term::SumRow(s) => s.span(),
             Term::DotAccess { base, field, .. } => Span::join(&self.with_term(*base), field),
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),

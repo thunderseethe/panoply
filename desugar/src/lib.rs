@@ -404,6 +404,11 @@ impl<'a> DesugarCtx<'a> {
                 let body = self.ds_term(*expr)?;
                 self.terms.alloc(ast::Term::Handle { handler, body })
             }
+            nst::Term::Concat { left, right, .. } => {
+                let left = self.ds_term(*left)?;
+                let right = self.ds_term(*right)?;
+                self.terms.alloc(ast::Term::Concat { left, right })
+            }
         };
         self.spans.insert(ast, nst.spanned(self.arenas).span());
         Ok(ast)

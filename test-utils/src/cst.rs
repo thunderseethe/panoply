@@ -342,6 +342,11 @@ pub enum Term<'a> {
         rpar: Span,
     },
     ProductRow(ProductRow<'a, &'a Term<'a>>),
+    Concat {
+        left: &'a Term<'a>,
+        concat: Span,
+        right: &'a Term<'a>,
+    },
     SumRow(SumRow<&'a Term<'a>>),
     DotAccess {
         base: &'a Term<'a>,
@@ -370,6 +375,7 @@ impl<'a> Spanned for Term<'a> {
             Term::Abstraction { lbar, body, .. } => Span::join(lbar, *body),
             Term::Application { func, rpar, .. } => Span::join(*func, rpar),
             Term::ProductRow(p) => p.span(),
+            Term::Concat { left, right, .. } => Span::join(left, right),
             Term::SumRow(s) => s.span(),
             Term::DotAccess { base, field, .. } => Span::join(*base, field),
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
@@ -709,6 +715,15 @@ impl<'a> ReferenceAllocate<'a, CstRefAlloc<'a, '_>> for Idx<cst::Term> {
                 lpar,
                 term: term.ref_alloc(alloc),
                 rpar,
+            },
+            cst::Term::Concat {
+                left,
+                concat,
+                right,
+            } => Term::Concat {
+                left: left.ref_alloc(alloc),
+                concat,
+                right: right.ref_alloc(alloc),
             },
         };
         alloc.ref_arena().alloc(term) as &_

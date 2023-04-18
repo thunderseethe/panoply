@@ -758,6 +758,15 @@ where
                 term: self.resolve_term(*term)?,
                 rpar: *rpar,
             },
+            cst::Term::Concat {
+                left,
+                concat,
+                right,
+            } => nst::Term::Concat {
+                left: self.resolve_term(*left)?,
+                concat: *concat,
+                right: self.resolve_term(*right)?,
+            },
         };
         Some(self.mk_term(term))
     }
