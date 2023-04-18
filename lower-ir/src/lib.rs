@@ -251,26 +251,16 @@ pub fn lower(
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Deref;
-
     use crate::Db as LowerIrDb;
 
-    use aiahr_ast::{Direction, Term};
     use aiahr_core::{
         file::{FileId, SourceFile, SourceFileSet},
-        id::{TermName, VarId},
-        modules::Module,
         Db,
     };
-    use aiahr_ir::{
-        Db as IrDb, Ir,
-        IrKind::{self, *},
-        IrTyKind::*,
-    };
-    use aiahr_test::ast::{AstBuilder, MkTerm};
-    use assert_matches::assert_matches;
-    use ir_matcher::ir_matcher;
-    use salsa::AsId;
+    use aiahr_ir::Ir;
+    use aiahr_parser::Db as ParserDb;
+    use expect_test::expect;
+    use pretty::{BoxAllocator, BoxDoc, Doc, Pretty};
 
     #[derive(Default)]
     #[salsa::db(
@@ -297,9 +287,13 @@ mod tests {
         let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
         SourceFileSet::new(db, vec![file]);
 
-        db.lower_item_for_file_name(path, db.ident_str("main"))
-            .unwrap()
-            .item(db)
+        match db.lower_item_for_file_name(path, db.ident_str("main")) {
+            Some(term) => term.item(db),
+            None => {
+                dbg!(db.parse_errors());
+                panic!("Errors occurred")
+            }
+        }
     }
 
     #[test]
@@ -308,9 +302,10 @@ mod tests {
 
         let ir = lower_snippet(&db, "|x| x");
 
-        ir_matcher!(ir, TyAbs([ty_var], Abs([var], Var(var))) => {
-            assert_eq!(var.ty.kind(db.as_ir_db()), VarTy(*ty_var));
-        })
+        let pretty_ir =
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&BoxAllocator).into_doc(), 80).to_string();
+        let expect = expect!["forall (0: Type) . fun (ir_var<1>) (ir_var<1>)"];
+        expect.assert_eq(&pretty_ir);
     }
 
     #[test]
@@ -318,39 +313,40 @@ mod tests {
         let db = TestDatabase::default();
 
         let ir = lower_snippet(&db, "|a| { x = a, y = a }");
-        ir_matcher!(ir,
-            TyAbs([_ty_var],
-                  App([
-                      Abs([ev, a], App([FieldProj(0, Var(ev)), Var(a), Var(a)])),
-                      Struct(ev_terms)])) => {
-            let ir = &ev_terms[0];
-            ir_matcher!(ir, Abs([m, n], Struct(splat)) => {
-                assert_matches!(splat[0].deref().kind, Var(_m) => { assert_eq!(*m, _m); });
-                assert_matches!(splat[1].deref().kind, Var(_n) => { assert_eq!(*n, _n); });
-            });
-        });
+
+        let pretty_ir =
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&BoxAllocator).into_doc(), 80).to_string();
+        let expect = expect![[r#"
+            forall (0: Type) . let ir_var<1> = {fun (ir_var<2>, ir_var<3>) ({ir_var<2>,
+                                                                            ir_var<3>}),
+                                               forall (2: Type) .
+                                                 fun (ir_var<2>, ir_var<3>, ir_var<4>)
+                                                 (case ir_var<4> <fun (ir_var<5>)
+                                                                   (ir_var<2>(ir_var<5>))
+                                                                   fun (ir_var<5>)
+                                                                   (ir_var<3>(ir_var<5>))>),
+                                               {fun (ir_var<4>) (ir_var<4>[0]),
+                                               fun (ir_var<2>) (<0: ir_var<2>>)}, {
+                                                                                  fun (ir_var<4>)
+                                                                                  (ir_var<4>[1]),
+                                                                                  fun (ir_var<3>)
+                                                                                  (<1: ir_var<3>>)
+                                                                                  }};
+              fun (ir_var<6>) (ir_var<1>[0](ir_var<6>)(ir_var<6>))"#]];
+        expect.assert_eq(&pretty_ir);
     }
 
-    //TODO: Turn back on, once we have syntax for concat
-    #[allow(dead_code)]
+    #[test]
     fn lower_wand() {
         let db = TestDatabase::default();
-        let m = VarId(0);
-        let n = VarId(1);
-        let ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_abss(
-                [m, n],
-                builder.mk_unlabel(
-                    "x",
-                    builder.mk_project(
-                        Direction::Left,
-                        builder.mk_concat(Term::Variable(m), Term::Variable(n)),
-                    ),
-                ),
-            )
-        });
-        let module = Module::from_id(salsa::Id::from_u32(0));
-        let _name = TermName::new(&db, db.ident_str("test"), module);
-        let (_var_tys, _term_tys, _scheme, _) = aiahr_tc::type_check(&db, &db, module, &ast);
+        let ir = lower_snippet(&db, "|m| |n| (m ,, n).x");
+        let pretty_ir =
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&BoxAllocator).into_doc(), 80).to_string();
+
+        let expect = expect![[r#"
+            forall (4: Type) (5: Type) (0: Type) (2: Type) (1: Type) .
+              fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>)
+              (ir_var<1>[3][0](ir_var<2>[0](ir_var<3>)(ir_var<4>)))"#]];
+        expect.assert_eq(&pretty_ir)
     }
 }

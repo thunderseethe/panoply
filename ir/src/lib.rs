@@ -353,7 +353,6 @@ where
                     "(",
                     body.pretty(arena).align().nest(2),
                     ")",
-                    arena.line(),
                 ]
             }
             App(func, arg) => {
