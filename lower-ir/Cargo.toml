@@ -9,7 +9,6 @@ aiahr-desugar.workspace = true
 aiahr-test.workspace = true
 assert_matches.workspace = true
 expect-test.workspace = true
-ir-matcher.workspace = true
 pretty.workspace = true
 
 [dependencies]

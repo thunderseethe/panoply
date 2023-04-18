@@ -34,7 +34,6 @@ members = [
     "interpreter",
     "ir",
     "lower-ir",
-    "lower-ir/ir-matcher",
     "nameres",
     "parser",
     "tc",
@@ -73,7 +72,6 @@ ena = "0.14.0"
 expect-test = "1.4"
 eyre = "0.6.8"
 im = "15.1"
-ir-matcher = { path = "lower-ir/ir-matcher" }
 la-arena = "0.3.0"
 log = "0.4"
 pretty = "0.11.3"
