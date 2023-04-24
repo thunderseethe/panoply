@@ -25,7 +25,9 @@ aiahr-parser.workspace = true
 aiahr-tc.workspace = true
 aiahr-ty.workspace = true
 clap = { workspace = true, features = ["derive"] }
+env_logger.workspace = true
 eyre.workspace = true
+log.workspace = true
 pretty.workspace = true
 salsa.workspace = true
 tower-lsp.workspace = true
@@ -74,6 +76,7 @@ chumsky = "0.9"
 clap = "4.2"
 dashmap = "5.4"
 ena = "0.14.0"
+env_logger = "0.10"
 expect-test = "1.4"
 eyre = "0.6.8"
 im = "15.1"

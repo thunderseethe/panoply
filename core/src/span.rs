@@ -54,6 +54,11 @@ impl Span {
     pub fn by_precedence(&self) -> ByPrecedence {
         ByPrecedence(*self)
     }
+
+    /// Returns true if loc is contained within self, false otherwise.
+    pub fn contains(&self, loc: Loc) -> bool {
+        self.start <= loc && loc <= self.end
+    }
 }
 
 impl chumsky::Span for Span {
@@ -112,6 +117,25 @@ impl PartialOrd for ByPrecedence {
             Some(Ordering::Less)
         } else if other.0.end <= self.0.start {
             Some(Ordering::Greater)
+        } else {
+            None
+        }
+    }
+}
+
+impl PartialEq<Loc> for ByPrecedence {
+    fn eq(&self, other: &Loc) -> bool {
+        self.0.contains(*other)
+    }
+}
+impl PartialOrd<Loc> for ByPrecedence {
+    fn partial_cmp(&self, other: &Loc) -> Option<Ordering> {
+        if *other <= self.0.start {
+            Some(Ordering::Less)
+        } else if *other >= self.0.end {
+            Some(Ordering::Greater)
+        } else if self.0.start <= *other && self.0.end >= *other {
+            Some(Ordering::Equal)
         } else {
             None
         }

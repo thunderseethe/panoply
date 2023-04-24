@@ -10,7 +10,7 @@ pub use super::{
 use aiahr_core::{
     id::{EffectName, EffectOpName, Ids, TermName, TyVarId, VarId},
     ident::Ident,
-    indexed::{HasArenaMut, HasArenaRef, IdxAlloc},
+    indexed::{HasArenaMut, HasArenaRef, IdxAlloc, IdxView},
     span::{Span, SpanOf, Spanned},
 };
 
@@ -19,21 +19,6 @@ pub struct NstIndxAlloc {
     types: Arena<Type<TyVarId>>,
     terms: Arena<Term>,
     pats: Arena<Pattern>,
-}
-impl IdxAlloc<Term> for NstIndxAlloc {
-    fn alloc(&mut self, value: Term) -> Idx<Term> {
-        self.terms.alloc(value)
-    }
-}
-impl IdxAlloc<Type<TyVarId>> for NstIndxAlloc {
-    fn alloc(&mut self, value: Type<TyVarId>) -> Idx<Type<TyVarId>> {
-        self.types.alloc(value)
-    }
-}
-impl IdxAlloc<Pattern> for NstIndxAlloc {
-    fn alloc(&mut self, value: Pattern) -> Idx<Pattern> {
-        self.pats.alloc(value)
-    }
 }
 impl HasArenaRef<Type<TyVarId>> for NstIndxAlloc {
     fn arena(&self) -> &Arena<Type<TyVarId>> {
@@ -65,14 +50,30 @@ impl HasArenaMut<Pattern> for NstIndxAlloc {
         &mut self.pats
     }
 }
-impl<T> Index<Idx<T>> for NstIndxAlloc
+impl<T> IdxAlloc<T> for NstIndxAlloc
+where
+    Self: HasArenaMut<T>,
+{
+    fn alloc(&mut self, value: T) -> Idx<T> {
+        self.arena_mut().alloc(value)
+    }
+}
+impl<T> IdxView<T> for NstIndxAlloc
 where
     Self: HasArenaRef<T>,
+{
+    fn view(&self, idx: Idx<T>) -> &T {
+        &self.arena()[idx]
+    }
+}
+impl<T> Index<Idx<T>> for NstIndxAlloc
+where
+    Self: IdxView<T>,
 {
     type Output = T;
 
     fn index(&self, index: Idx<T>) -> &Self::Output {
-        &self.arena()[index]
+        self.view(index)
     }
 }
 
@@ -197,6 +198,11 @@ pub struct EffectDefn {
     pub ops: Vec<Option<EffectOp<EffectOpName, TyVarId>>>,
     pub rbrace: Span,
 }
+impl Spanned for EffectDefn {
+    fn span(&self) -> Span {
+        Span::join(&self.effect, &self.rbrace)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct TermDefn {
@@ -204,6 +210,11 @@ pub struct TermDefn {
     pub annotation: Option<SchemeAnnotation<TyVarId>>,
     pub eq: Span,
     pub value: Idx<Term>,
+}
+impl TermDefn {
+    pub fn spanned(&self, arenas: &NstIndxAlloc) -> Span {
+        Span::join(&self.name.span(), &arenas[self.value].spanned(arenas))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -217,4 +228,219 @@ pub struct AllocItem<T> {
     pub alloc: NstIndxAlloc,
     pub local_ids: LocalIds,
     pub item: T,
+}
+
+pub mod traverse {
+    use std::ops::ControlFlow;
+
+    use aiahr_core::id::{EffectOpName, TermName, TyVarId, VarId};
+    use aiahr_core::ident::Ident;
+    use aiahr_core::indexed::IdxView;
+    use aiahr_core::span::SpanOf;
+    use la_arena::Idx;
+
+    use crate::{IdField, Row, Type};
+
+    use super::{Pattern, Term};
+
+    /// A depth-first traversal of our NST. Expectation is this traversal will be used to search
+    /// the tree for a particular value, so each traversal method returns a `ControlFlow` to allow
+    /// breaking early with the found value.
+    ///
+    /// We also support a suite of `should_traverse` method that will skip irrelevant nodes. These
+    /// are split out as their own methods so they can be override without users having to override
+    /// the default `traverse_*` method just to return early.
+    ///
+    /// By default each traverse method will continue the search until we've touched every tree
+    /// node. This can lead to suboptimal default behavior when a traversal knows it won't find
+    /// what it's looking for but does not break with a value.
+    pub trait DfsTraverseNst: IdxView<Term> + IdxView<Type<TyVarId>> + IdxView<Pattern> {
+        type Out;
+
+        fn traverse_var(&self, _: &SpanOf<VarId>) -> ControlFlow<Self::Out> {
+            ControlFlow::Continue(())
+        }
+        fn traverse_ty_var(&self, _: &SpanOf<TyVarId>) -> ControlFlow<Self::Out> {
+            ControlFlow::Continue(())
+        }
+        fn traverse_row_label(&self, _: &SpanOf<Ident>) -> ControlFlow<Self::Out> {
+            ControlFlow::Continue(())
+        }
+        fn traverse_effect_op(&self, _: &SpanOf<EffectOpName>) -> ControlFlow<Self::Out> {
+            ControlFlow::Continue(())
+        }
+        fn traverse_term_name(&self, _: &SpanOf<TermName>) -> ControlFlow<Self::Out> {
+            ControlFlow::Continue(())
+        }
+
+        fn should_traverse_row(&self, _: &Row<TyVarId, IdField<Idx<Type<TyVarId>>>>) -> bool {
+            true
+        }
+        fn traverse_row(
+            &self,
+            row: &Row<TyVarId, IdField<Idx<Type<TyVarId>>>>,
+        ) -> ControlFlow<Self::Out> {
+            if !self.should_traverse_row(row) {
+                return ControlFlow::Continue(());
+            }
+            match row {
+                Row::Concrete(closed) => {
+                    for field in closed.elements() {
+                        self.traverse_row_label(&field.label)?;
+                        self.traverse_type(field.target)?;
+                    }
+                    ControlFlow::Continue(())
+                }
+                Row::Variable(vars) => {
+                    for ty_var in vars {
+                        self.traverse_ty_var(ty_var)?;
+                    }
+                    ControlFlow::Continue(())
+                }
+                Row::Mixed {
+                    concrete,
+                    variables,
+                    ..
+                } => {
+                    for field in concrete.elements() {
+                        self.traverse_row_label(&field.label)?;
+                        self.traverse_type(field.target)?;
+                    }
+                    for ty_var in variables {
+                        self.traverse_ty_var(ty_var)?;
+                    }
+                    ControlFlow::Continue(())
+                }
+            }
+        }
+
+        fn should_traverse_type(&self, _: &Type<TyVarId>) -> bool {
+            true
+        }
+        fn traverse_type(&self, idx: Idx<Type<TyVarId>>) -> ControlFlow<Self::Out> {
+            let ty = self.view(idx);
+            if !self.should_traverse_type(ty) {
+                return ControlFlow::Continue(());
+            }
+            match ty {
+                Type::Named(ty_var) => self.traverse_ty_var(ty_var),
+                Type::Sum { variants, .. } => self.traverse_row(variants),
+                Type::Product { fields, .. } => match fields {
+                    Some(fields) => self.traverse_row(fields),
+                    None => ControlFlow::Continue(()),
+                },
+                Type::Function {
+                    domain, codomain, ..
+                } => {
+                    self.traverse_type(*domain)?;
+                    self.traverse_type(*codomain)
+                }
+                Type::Parenthesized { type_, .. } => self.traverse_type(*type_),
+            }
+        }
+
+        fn should_traverse_pat(&self, _: &Pattern) -> bool {
+            true
+        }
+        fn traverse_pat(&self, idx: Idx<Pattern>) -> ControlFlow<Self::Out> {
+            let pat = self.view(idx);
+            if !self.should_traverse_pat(pat) {
+                return ControlFlow::Continue(());
+            }
+            match pat {
+                Pattern::ProductRow(prod) => {
+                    if let Some(fields) = &prod.fields {
+                        for field in fields.elements() {
+                            self.traverse_row_label(&field.label)?;
+                            self.traverse_pat(field.target)?;
+                        }
+                    }
+                    ControlFlow::Continue(())
+                }
+                Pattern::SumRow(sum) => {
+                    self.traverse_row_label(&sum.field.label)?;
+                    self.traverse_pat(sum.field.target)
+                }
+                Pattern::Whole(var) => self.traverse_var(var),
+            }
+        }
+
+        fn should_traverse_term(&self, _: &Term) -> bool {
+            true
+        }
+        fn traverse_term(&self, idx: Idx<Term>) -> ControlFlow<Self::Out> {
+            let term = self.view(idx);
+            if !self.should_traverse_term(term) {
+                return ControlFlow::Continue(());
+            }
+            match term {
+                Term::Binding {
+                    var,
+                    annotation,
+                    value,
+                    expr,
+                    ..
+                } => {
+                    self.traverse_var(var)?;
+                    if let Some(ann) = annotation {
+                        self.traverse_type(ann.type_)?;
+                    }
+                    self.traverse_term(*value)?;
+                    self.traverse_term(*expr)
+                }
+                Term::Handle { handler, expr, .. } => {
+                    self.traverse_term(*handler)?;
+                    self.traverse_term(*expr)
+                }
+                Term::Abstraction {
+                    arg,
+                    annotation,
+                    body,
+                    ..
+                } => {
+                    self.traverse_var(arg)?;
+                    if let Some(ann) = annotation {
+                        self.traverse_type(ann.type_)?;
+                    }
+                    self.traverse_term(*body)
+                }
+                Term::Application { func, arg, .. } => {
+                    self.traverse_term(*func)?;
+                    self.traverse_term(*arg)
+                }
+                Term::ProductRow(prod) => {
+                    if let Some(fields) = &prod.fields {
+                        for field in fields.elements() {
+                            self.traverse_row_label(&field.label)?;
+                            self.traverse_term(field.target)?;
+                        }
+                    }
+                    ControlFlow::Continue(())
+                }
+                Term::Concat { left, right, .. } => {
+                    self.traverse_term(*left)?;
+                    self.traverse_term(*right)
+                }
+                Term::SumRow(sum) => {
+                    self.traverse_row_label(&sum.field.label)?;
+                    self.traverse_term(sum.field.target)
+                }
+                Term::FieldAccess { base, field, .. } => {
+                    self.traverse_term(*base)?;
+                    self.traverse_row_label(field)
+                }
+                Term::Match { cases, .. } => {
+                    for case in cases.elements() {
+                        self.traverse_pat(case.label)?;
+                        self.traverse_term(case.target)?;
+                    }
+                    ControlFlow::Continue(())
+                }
+                Term::EffectOpRef(eff_op) => self.traverse_effect_op(eff_op),
+                Term::ItemRef(term) => self.traverse_term_name(term),
+                Term::VariableRef(var) => self.traverse_var(var),
+                Term::Parenthesized { term, .. } => self.traverse_term(*term),
+            }
+        }
+    }
 }

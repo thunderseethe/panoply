@@ -1,11 +1,18 @@
+use std::ops::ControlFlow;
+
 use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
 use aiahr_core::file::{FileId, SourceFile};
-use aiahr_core::id::{EffectName, EffectOpName, TermName};
+use aiahr_core::id::{EffectName, EffectOpName, TermName, TyVarId, VarId};
 use aiahr_core::ident::Ident;
+use aiahr_core::indexed::IdxView;
+use aiahr_core::loc::Loc;
 use aiahr_core::modules::Module;
-use aiahr_core::span::{Span, Spanned};
-use aiahr_cst::nameres::{self as nst, LocalIds};
+use aiahr_core::span::{Span, SpanOf, Spanned};
+use aiahr_cst::nameres::traverse::DfsTraverseNst;
+use aiahr_cst::nameres::{self as nst, LocalIds, NstIndxAlloc, Pattern, Term};
+use aiahr_cst::{IdField, Row, Type};
 use aiahr_parser::ParseFile;
+use la_arena::Idx;
 use rustc_hash::FxHashMap;
 
 use crate::name::ModuleName;
@@ -29,6 +36,7 @@ pub struct Jar(
     NameResTerm,
     NameResEffect,
     all_effects,
+    effect_defn,
     effect_name,
     effect_member_name,
     effect_members,
@@ -41,8 +49,10 @@ pub struct Jar(
     lookup_effect_by_member_names,
     lookup_effect_by_name,
     module_effects,
+    name_at_loc,
     nameres_module,
     nameres_module_of,
+    term_defn,
 );
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
     fn as_nameres_db(&self) -> &dyn crate::Db {
@@ -71,6 +81,18 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
         id_for_name(self.as_nameres_db(), module, name)
     }
 
+    fn effect_defn(&self, eff_name: EffectName) -> NameResEffect {
+        effect_defn(self.as_nameres_db(), eff_name)
+    }
+
+    fn term_defn(&self, term_name: TermName) -> NameResTerm {
+        term_defn(self.as_nameres_db(), term_name)
+    }
+
+    fn name_at_position(&self, file: FileId, line: u32, col: u32) -> Option<InScopeName> {
+        name_at_loc(self.as_nameres_db(), file, line, col)
+    }
+
     fn nameres_errors(&self) -> Vec<AiahrcError> {
         self.all_modules()
             .iter()
@@ -82,6 +104,38 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_parser::Db {}
+
+#[salsa::tracked]
+fn effect_defn(db: &dyn crate::Db, eff_name: EffectName) -> NameResEffect {
+    let nameres_module = db.nameres_module_of(eff_name.module(db.as_core_db()));
+    *nameres_module
+        .effects(db)
+        .iter()
+        .flat_map(|eff| eff.iter())
+        .find(|eff| eff.name(db) == eff_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "ICE: Constructed EffectName {:?} with no effect definition",
+                eff_name.name(db.as_core_db()).text(db.as_core_db())
+            )
+        })
+}
+
+#[salsa::tracked]
+fn term_defn(db: &dyn crate::Db, term_name: TermName) -> NameResTerm {
+    let nameres_module = db.nameres_module_of(term_name.module(db.as_core_db()));
+    *nameres_module
+        .terms(db)
+        .iter()
+        .flat_map(|term| term.iter())
+        .find(|term| term.name(db) == term_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "ICE: Constructed TermName {:?} with no term definition",
+                term_name.name(db.as_core_db()).text(db.as_core_db())
+            )
+        })
+}
 
 #[salsa::tracked]
 pub struct NameResTerm {
@@ -345,4 +399,151 @@ pub fn effect_vector_index(db: &dyn crate::Db, effect: EffectName) -> usize {
             effect.name(db.as_core_db()).text(db.as_core_db())
         )
     })
+}
+
+#[salsa::tracked]
+fn name_at_loc(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -> Option<InScopeName> {
+    let loc = db.locate(file_id, line, col)?;
+    let file = db.file_for_id(file_id);
+
+    let nst_module = db.nameres_module_for_file(file);
+    // TODO: We could be more efficient here by ordering our defs by span and then binary searching
+    // so we more quickly locate the item we want to dfs into.
+    for effect in nst_module.effects(db).iter().flat_map(|eff| eff.iter()) {
+        let eff_defn = effect.data(db);
+        if !eff_defn.span().contains(loc) {
+            continue;
+        }
+        if eff_defn.name.span().contains(loc) {
+            return Some(InScopeName::Effect(eff_defn.name.value));
+        }
+        let ops = eff_defn.ops.iter().flat_map(|op| op.iter());
+        for op in ops {
+            if op.name.span().contains(loc) {
+                return Some(InScopeName::EffectOp(op.name.value));
+            }
+            let dfs = FindSpanName {
+                defn_name: op.name.value,
+                indices: effect.alloc(db),
+                needle: loc,
+            };
+            if let ControlFlow::Break(found) = dfs.traverse_type(op.type_) {
+                return Some(found);
+            }
+        }
+    }
+    for term in nst_module.terms(db).iter().flat_map(|term| term.iter()) {
+        let term_defn = term.data(db);
+        if term_defn.name.span().contains(loc) {
+            return Some(InScopeName::Term(term_defn.name.value));
+        }
+        let dfs = FindSpanName {
+            defn_name: term_defn.name.value,
+            indices: term.alloc(db),
+            needle: loc,
+        };
+        if let ControlFlow::Break(found) = dfs.traverse_term(term_defn.value) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InScopeName {
+    Effect(EffectName),
+    EffectOp(EffectOpName),
+    Term(TermName),
+    TermTyVar(TermName, TyVarId),
+    TermVar(TermName, VarId),
+    // VarIds cannot appear in effect definitions
+    EffectTyVar(EffectOpName, TyVarId),
+}
+
+struct FindSpanName<'a, Name> {
+    defn_name: Name,
+    indices: &'a NstIndxAlloc,
+    needle: Loc,
+}
+impl<T, Name> IdxView<T> for FindSpanName<'_, Name>
+where
+    NstIndxAlloc: IdxView<T>,
+{
+    fn view(&self, idx: Idx<T>) -> &T {
+        self.indices.view(idx)
+    }
+}
+
+impl DfsTraverseNst for FindSpanName<'_, EffectOpName> {
+    type Out = InScopeName;
+
+    fn traverse_ty_var(&self, name: &SpanOf<TyVarId>) -> ControlFlow<Self::Out> {
+        if name.span().contains(self.needle) {
+            ControlFlow::Break(InScopeName::EffectTyVar(self.defn_name, name.value))
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn should_traverse_term(&self, _: &Term) -> bool {
+        false
+    }
+    fn should_traverse_pat(&self, _: &Pattern) -> bool {
+        false
+    }
+
+    fn should_traverse_type(&self, ty: &Type<TyVarId>) -> bool {
+        ty.spanned(self.indices).span().contains(self.needle)
+    }
+    fn should_traverse_row(&self, row: &Row<TyVarId, IdField<Idx<Type<TyVarId>>>>) -> bool {
+        row.spanned(self.indices).span().contains(self.needle)
+    }
+}
+impl DfsTraverseNst for FindSpanName<'_, TermName> {
+    type Out = InScopeName;
+
+    fn traverse_var(&self, name: &SpanOf<VarId>) -> std::ops::ControlFlow<Self::Out> {
+        if name.span().contains(self.needle) {
+            ControlFlow::Break(InScopeName::TermVar(self.defn_name, name.value))
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn traverse_ty_var(&self, name: &SpanOf<TyVarId>) -> ControlFlow<Self::Out> {
+        if name.span().contains(self.needle) {
+            ControlFlow::Break(InScopeName::TermTyVar(self.defn_name, name.value))
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn traverse_effect_op(&self, name: &SpanOf<EffectOpName>) -> ControlFlow<Self::Out> {
+        if name.span().contains(self.needle) {
+            ControlFlow::Break(InScopeName::EffectOp(name.value))
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn traverse_term_name(&self, name: &SpanOf<TermName>) -> ControlFlow<Self::Out> {
+        if name.span().contains(self.needle) {
+            ControlFlow::Break(InScopeName::Term(name.value))
+        } else {
+            ControlFlow::Continue(())
+        }
+    }
+
+    fn should_traverse_term(&self, term: &Term) -> bool {
+        term.spanned(self.indices).span().contains(self.needle)
+    }
+    fn should_traverse_type(&self, ty: &Type<TyVarId>) -> bool {
+        ty.spanned(self.indices).span().contains(self.needle)
+    }
+    fn should_traverse_pat(&self, pat: &Pattern) -> bool {
+        pat.span().contains(self.needle)
+    }
+    fn should_traverse_row(&self, row: &Row<TyVarId, IdField<Idx<Type<TyVarId>>>>) -> bool {
+        row.spanned(self.indices).span().contains(self.needle)
+    }
 }

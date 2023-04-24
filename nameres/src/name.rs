@@ -134,7 +134,7 @@ impl NameKinded for LocalName {
 }
 
 /// Any kind of name in Aiahr.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Name {
     Module(Module),
     Effect(EffectName),

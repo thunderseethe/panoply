@@ -100,6 +100,17 @@ pub struct Separated<T> {
     pub elems: Vec<(Span, T)>,
     pub comma: Option<Span>,
 }
+impl<T> Separated<T> {
+    pub fn span_with(&self, f: impl Fn(&T) -> Span) -> Span {
+        Span::join(
+            &f(&self.first),
+            &self
+                .comma
+                .or_else(|| self.elems.last().map(|e| e.0))
+                .unwrap_or_else(|| f(&self.first)),
+        )
+    }
+}
 impl<T: Spanned> Spanned for Separated<T> {
     fn span(&self) -> Span {
         Span::join(
@@ -217,6 +228,52 @@ pub enum Row<V, C> {
     },
 }
 
+impl<V, C> Spanned for Row<V, C>
+where
+    C: Spanned,
+{
+    fn span(&self) -> Span {
+        match self {
+            Row::Concrete(closed) => closed.span(),
+            Row::Variable(vars) => vars.span(),
+            Row::Mixed {
+                concrete,
+                variables,
+                ..
+            } => Span::join(&concrete.span(), &variables.span()),
+        }
+    }
+}
+
+impl<V> Row<V, IdField<Idx<Type<V>>>> {
+    pub fn spanned<A>(&self, arenas: &A) -> Span
+    where
+        A: HasArenaRef<Type<V>>,
+    {
+        match self {
+            Row::Concrete(closed) => closed.span_with(|field| {
+                field
+                    .label
+                    .span()
+                    .join_spans(&arenas.arena()[field.target].spanned(arenas))
+            }),
+            Row::Variable(vars) => vars.span(),
+            Row::Mixed {
+                concrete,
+                variables,
+                ..
+            } => concrete
+                .span_with(|field| {
+                    field
+                        .label
+                        .span()
+                        .join_spans(&arenas.arena()[field.target].spanned(arenas))
+                })
+                .join_spans(&variables.span()),
+        }
+    }
+}
+
 /// A row of types.
 pub type TypeRow<V> = Row<V, IdField<Idx<Type<V>>>>;
 
@@ -244,6 +301,25 @@ pub enum Type<V> {
         type_: Idx<Self>,
         rpar: Span,
     },
+}
+
+impl<V> Type<V> {
+    pub fn spanned<A>(&self, arenas: &A) -> Span
+    where
+        A: HasArenaRef<Self>,
+    {
+        match self {
+            Type::Named(var) => var.span(),
+            Type::Sum { langle, rangle, .. } => Span::join(langle, rangle),
+            Type::Product { lbrace, rbrace, .. } => Span::join(lbrace, rbrace),
+            Type::Function {
+                domain, codomain, ..
+            } => arenas.arena()[*domain]
+                .spanned(arenas)
+                .join_spans(&arenas.arena()[*codomain].spanned(arenas)),
+            Type::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+        }
+    }
 }
 
 /// An atomic row for use in a type constraint.
@@ -298,6 +374,15 @@ pub enum Pattern {
     ProductRow(ProductRow<Idx<Self>>),
     SumRow(SumRow<Idx<Self>>),
     Whole(SpanOf<Ident>),
+}
+impl Spanned for Pattern {
+    fn span(&self) -> Span {
+        match self {
+            Pattern::ProductRow(prod) => prod.lbrace.join_spans(&prod.rbrace),
+            Pattern::SumRow(sum) => sum.langle.join_spans(&sum.rangle),
+            Pattern::Whole(var) => var.span(),
+        }
+    }
 }
 
 /// An Aiahr term.
@@ -403,6 +488,11 @@ pub struct EffectDefn {
     pub ops: Vec<EffectOp<Ident, Ident>>,
     pub rbrace: Span,
 }
+impl Spanned for EffectDefn {
+    fn span(&self) -> Span {
+        self.effect.join_spans(&self.rbrace)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TermDefn {
@@ -419,6 +509,15 @@ pub struct TermDefn {
 pub enum Item {
     Effect(EffectDefn),
     Term(TermDefn),
+}
+
+impl Item {
+    pub fn span(&self, arenas: &CstIndxAlloc) -> Span {
+        match self {
+            Item::Effect(eff) => Span::join(&eff.effect, &eff.rbrace),
+            Item::Term(term) => Span::join(&term.name, &arenas[term.value].spanned(arenas)),
+        }
+    }
 }
 
 /// A parsed module.

@@ -1,3 +1,5 @@
+use self::file::{file_for_id, FileId, SourceFile};
+
 pub mod diagnostic;
 mod display_iter;
 pub mod displayer;
@@ -48,6 +50,10 @@ pub trait Db: salsa::DbWithJar<Jar> {
     // So instead we have a manual specialization for `&str`
     fn ident_str(&self, text: &str) -> ident::Ident {
         self.ident(text.to_string())
+    }
+
+    fn file_for_id(&self, file_id: FileId) -> SourceFile {
+        file_for_id(self.as_core_db(), file_id)
     }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}

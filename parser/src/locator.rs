@@ -1,12 +1,11 @@
-use std::marker::PhantomData;
 use std::str::CharIndices;
 
 use aiahr_core::file::FileId;
 use aiahr_core::loc::Loc;
 
 // A line of source text.
-#[derive(Debug)]
-struct Line<'i> {
+#[derive(Debug, PartialEq, Eq)]
+struct Line {
     // The byte in the source text at which this line starts.
     start_byte: usize,
     // The byte indices of each character of the line, measured from the beginning of the source
@@ -14,13 +13,12 @@ struct Line<'i> {
     char_indices: Vec<usize>,
     // The length of the line in bytes. Includes the newline (if any).
     length: usize,
-    _phantom: PhantomData<&'i str>,
 }
 
-impl<'i> Line<'i> {
+impl Line {
     // Consumes and returns a new line from the given `CharIndices` iterator. Also returns whether
     // there are more lines in the source text.
-    fn from_char_indices(start: usize, iter: &mut CharIndices<'i>) -> (Line<'i>, bool) {
+    fn from_char_indices(start: usize, iter: &mut CharIndices<'_>) -> (Line, bool) {
         let mut char_indices = Vec::new();
         let mut length = 0;
         let mut more = false;
@@ -37,7 +35,6 @@ impl<'i> Line<'i> {
                 start_byte: start,
                 char_indices,
                 length,
-                _phantom: PhantomData,
             },
             more,
         )
@@ -72,18 +69,18 @@ impl<'i> Line<'i> {
 }
 
 /// Converts byte indices in a particular source text to `Loc`s.
-#[derive(Debug)]
-pub struct Locator<'i> {
+#[derive(Debug, PartialEq, Eq)]
+pub struct Locator {
     file: FileId,
     // The lines of source text. Always holds at least one value.
-    lines: Vec<Line<'i>>,
+    lines: Vec<Line>,
     // The total length of the source text in bytes.
     length: usize,
 }
 
-impl<'i> Locator<'i> {
+impl Locator {
     /// Returns a new `Locator` for the given source text.
-    pub fn new(file: FileId, text: &'i str) -> Locator<'i> {
+    pub fn new(file: FileId, text: &str) -> Locator {
         let mut ci = text.char_indices();
         let mut lines = Vec::new();
         let mut length = 0;

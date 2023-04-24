@@ -691,6 +691,7 @@ mod tests {
     use expect_test::expect;
 
     use crate::error::ParseErrors;
+    use crate::locator::Locator;
     use crate::{lexer::aiahr_lexer, Db};
 
     use super::{term, to_stream, type_};
@@ -707,11 +708,9 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> Result<&'a Term<'a>, Vec<ParseErrors>> {
+        let file_id = FileId::new(db.as_core_db(), PathBuf::from("test.aiahr"));
         let (tokens, eoi) = aiahr_lexer(db)
-            .lex(
-                FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
-                input,
-            )
+            .lex(&Locator::new(file_id, input), input)
             .expect("Lexing input failed");
 
         term().parse(to_stream(tokens, eoi)).map(|idx_term| {
@@ -729,7 +728,10 @@ mod tests {
     ) -> &'a Type<'a, Ident> {
         let (tokens, eoi) = aiahr_lexer(db)
             .lex(
-                FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
+                &Locator::new(
+                    FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
+                    input,
+                ),
                 input,
             )
             .unwrap();
@@ -750,7 +752,10 @@ mod tests {
     ) -> &'a Scheme<'a, Ident> {
         let (tokens, eoi) = aiahr_lexer(db)
             .lex(
-                FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
+                &Locator::new(
+                    FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
+                    input,
+                ),
                 input,
             )
             .unwrap();

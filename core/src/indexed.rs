@@ -123,3 +123,7 @@ where
 pub trait IdxAlloc<T> {
     fn alloc(&mut self, value: T) -> Idx<T>;
 }
+
+pub trait IdxView<T> {
+    fn view(&self, idx: Idx<T>) -> &T;
+}
