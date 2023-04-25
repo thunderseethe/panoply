@@ -9,7 +9,7 @@ use aiahr_core::loc::Loc;
 use aiahr_core::span::{Span, Spanned};
 use aiahr_core::Db as CoreDb;
 use aiahr_nameres::ops::IdOps;
-use aiahr_nameres::Db as NameResDb;
+use aiahr_nameres::{Db as NameResDb, InScopeName};
 use aiahr_parser::Db;
 use salsa::{Durability, ParallelDatabase};
 use tower_lsp::jsonrpc::{Error, Result};
@@ -22,7 +22,7 @@ use tower_lsp::lsp_types::{
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 struct Backend {
-    _client: Client,
+    client: Client,
     db: Arc<Mutex<AiahrDatabase>>,
 }
 
@@ -152,7 +152,7 @@ impl LanguageServer for Backend {
             })
             .collect();
 
-        self._client
+        self.client
             .publish_diagnostics(
                 params.text_document.uri,
                 diags,
@@ -184,46 +184,12 @@ impl LanguageServer for Backend {
         );
         let resp = db
             .name_at_position(file_id, line, character)
-            .map(|name| match name {
-                aiahr_nameres::InScopeName::Effect(eff) => {
-                    let module = eff.module(core_db);
-                    let nameres_module = db.nameres_module_of(module);
-                    let module_names = &nameres_module.names(db.as_nameres_db())[&module];
-                    let span = module_names.get(eff).span();
-                    (module.uri(core_db).path(core_db), span)
-                }
-                aiahr_nameres::InScopeName::EffectOp(eff_op) => {
-                    let effect = eff_op.effect(core_db);
-                    let module = effect.module(core_db);
-                    let nameres_module = db.nameres_module_of(module);
-                    let module_names = &nameres_module.names(db.as_nameres_db())[&module];
-                    let span = module_names.get_effect(&effect).get(eff_op).span();
-                    (module.uri(core_db).path(core_db), span)
-                }
-                aiahr_nameres::InScopeName::Term(term) => {
-                    let module = term.module(db.as_core_db());
-                    let nameres_module = db.nameres_module_of(module);
-                    let module_names = &nameres_module.names(db.as_nameres_db())[&module];
-                    let span = module_names.get(term).span();
-                    (module.uri(core_db).path(core_db), span)
-                }
-                aiahr_nameres::InScopeName::TermTyVar(term, ty_var) => {
-                    let module = term.module(db.as_core_db());
-                    let span = db.term_defn(term).locals(db.as_nameres_db()).ty_vars[ty_var].span();
-                    (module.uri(core_db).path(core_db), span)
-                }
-                aiahr_nameres::InScopeName::TermVar(term, var) => {
-                    let module = term.module(db.as_core_db());
-                    let span = db.term_defn(term).locals(db.as_nameres_db()).vars[var].span();
-                    (module.uri(core_db).path(core_db), span)
-                }
-                aiahr_nameres::InScopeName::EffectTyVar(eff_op, ty_var) => {
-                    let effect = eff_op.effect(db.as_core_db());
-                    let module = effect.module(db.as_core_db());
-                    let span =
-                        db.effect_defn(effect).locals(db.as_nameres_db()).ty_vars[ty_var].span();
-                    (module.uri(core_db).path(core_db), span)
-                }
+            .map(|name| {
+                let core_db = db.as_core_db();
+                (
+                    name.module(core_db).uri(core_db).path(core_db),
+                    name.span(db.deref()),
+                )
             })
             .map(|(path, span)| {
                 let uri = Url::from_file_path(path)
@@ -258,7 +224,7 @@ async fn main() -> eyre::Result<()> {
     let stdout = tokio::io::stdout();
 
     let (service, socket) = LspService::new(|client| Backend {
-        _client: client,
+        client,
         db: Arc::new(Mutex::new(db)),
     });
 

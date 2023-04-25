@@ -20,6 +20,7 @@ use crate::resolve::{resolve_module, ModuleResolution};
 use crate::top_level::BaseBuilder;
 
 use self::module::ModuleNames;
+use self::ops::IdOps;
 
 pub mod base;
 pub mod effect;
@@ -463,6 +464,52 @@ pub enum InScopeName {
     TermVar(TermName, VarId),
     // VarIds cannot appear in effect definitions
     EffectTyVar(EffectOpName, TyVarId),
+}
+impl InScopeName {
+    pub fn module(&self, db: &dyn aiahr_core::Db) -> Module {
+        match self {
+            InScopeName::Effect(eff) => eff.module(db),
+            InScopeName::EffectOp(eff_op) | InScopeName::EffectTyVar(eff_op, _) => {
+                eff_op.effect(db).module(db)
+            }
+            InScopeName::Term(term)
+            | InScopeName::TermTyVar(term, _)
+            | InScopeName::TermVar(term, _) => term.module(db),
+        }
+    }
+
+    pub fn span(&self, db: &dyn crate::Db) -> Span {
+        let core_db = db.as_core_db();
+        let module = self.module(core_db);
+        match self {
+            InScopeName::Effect(eff) => {
+                let nameres_module = db.nameres_module_of(module);
+                let module_names = &nameres_module.names(db.as_nameres_db())[&module];
+                module_names.get(*eff).span()
+            }
+            InScopeName::EffectOp(eff_op) => {
+                let effect = eff_op.effect(core_db);
+                let nameres_module = db.nameres_module_of(module);
+                let module_names = &nameres_module.names(db.as_nameres_db())[&module];
+                module_names.get_effect(&effect).get(*eff_op).span()
+            }
+            InScopeName::Term(term) => {
+                let nameres_module = db.nameres_module_of(module);
+                let module_names = &nameres_module.names(db.as_nameres_db())[&module];
+                module_names.get(*term).span()
+            }
+            InScopeName::TermTyVar(term, ty_var) => {
+                db.term_defn(*term).locals(db.as_nameres_db()).ty_vars[*ty_var].span()
+            }
+            InScopeName::TermVar(term, var) => {
+                db.term_defn(*term).locals(db.as_nameres_db()).vars[*var].span()
+            }
+            InScopeName::EffectTyVar(eff_op, ty_var) => {
+                let effect = eff_op.effect(db.as_core_db());
+                db.effect_defn(effect).locals(db.as_nameres_db()).ty_vars[*ty_var].span()
+            }
+        }
+    }
 }
 
 struct FindSpanName<'a, Name> {
