@@ -1,8 +1,8 @@
-fst c = (match <
+fst = |c| (match <
   {x = a, y = b} => a,
 >)(c)
 
 main = (match <
   <and = y> => y,
   <or = x> => x
->)(<and = {}>)(fst {x = {}, y = {}})
+>)(<and = {}>)(fst({x = {}, y = {}}))

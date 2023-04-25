@@ -113,7 +113,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
         self.parse_module(file)
     }
 
-    fn parse_errors(&self) -> Vec<AiahrcError> {
+    fn all_parse_errors(&self) -> Vec<AiahrcError> {
         let file_set = SourceFileSet::get(self.as_core_db());
         file_set
             .files(self.as_core_db())
@@ -122,6 +122,11 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
                 parse_module::accumulated::<AiahrcErrors>(self.as_parser_db(), file).into_iter()
             })
             .collect()
+    }
+
+    fn parse_errors(&self, file_id: FileId) -> Vec<AiahrcError> {
+        let file = self.file_for_id(file_id);
+        parse_module::accumulated::<AiahrcErrors>(self.as_parser_db(), file)
     }
 
     fn ident_starting_at(&self, file_id: FileId, line: u32, col: u32) -> Option<Ident> {

@@ -946,7 +946,7 @@ mod tests {
         });
 
         let errors = db
-            .nameres_errors()
+            .all_nameres_errors()
             .into_iter()
             .map(|err| match err {
                 aiahr_core::diagnostic::aiahr::AiahrcError::NameResolutionError(name_res) => {

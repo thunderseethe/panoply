@@ -1,18 +1,23 @@
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase};
+use aiahr_core::diagnostic::Diagnostic as AiahrDiagnostic;
 use aiahr_core::file::FileId;
 use aiahr_core::loc::Loc;
 use aiahr_core::span::{Span, Spanned};
 use aiahr_core::Db as CoreDb;
 use aiahr_nameres::ops::IdOps;
 use aiahr_nameres::Db as NameResDb;
-use salsa::Durability;
+use aiahr_parser::Db;
+use salsa::{Durability, ParallelDatabase};
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
-    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
-    InitializeResult, Location, Position, Range, ServerCapabilities, Url, WorkspaceFolder,
+    Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,
+    GotoDefinitionResponse, InitializeParams, InitializeResult, Location, OneOf, Position,
+    PositionEncodingKind, Range, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -27,6 +32,7 @@ fn from_loc(loc: Loc) -> Position {
         character: loc.col.try_into().unwrap(),
     }
 }
+
 fn from_span(span: Span) -> Range {
     Range {
         start: from_loc(span.start),
@@ -34,12 +40,12 @@ fn from_span(span: Span) -> Range {
     }
 }
 
-fn init_lsp(db: &AiahrDatabase, folders: Vec<WorkspaceFolder>) -> eyre::Result<()> {
-    let paths = folders.into_iter().flat_map(|folder| {
-        folder
-            .uri
-            .to_file_path()
-            .and_then(|dir_path| std::fs::read_dir(dir_path).map_err(|_| ()))
+fn init_lsp(
+    db: &AiahrDatabase,
+    paths: impl IntoIterator<Item = std::result::Result<PathBuf, ()>>,
+) -> eyre::Result<()> {
+    let paths = paths.into_iter().flat_map(|path| {
+        path.and_then(|dir_path| std::fs::read_dir(dir_path).map_err(|_| ()))
             .map(|read_dirs| {
                 read_dirs.filter_map(|dir_entry| {
                     dir_entry
@@ -66,14 +72,29 @@ fn init_lsp(db: &AiahrDatabase, folders: Vec<WorkspaceFolder>) -> eyre::Result<(
 impl LanguageServer for Backend {
     async fn initialize(&self, init: InitializeParams) -> Result<InitializeResult> {
         if let Some(folders) = init.workspace_folders {
-            if let Err(err) = init_lsp(&self.db.lock().expect("Mutex not to be poisoned"), folders)
-            {
+            log::debug!("Init with workspace folders");
+            if let Err(err) = init_lsp(
+                &self.db.lock().expect("Mutex not to be poisoned"),
+                folders.into_iter().map(|folder| folder.uri.to_file_path()),
+            ) {
+                return Result::Err(Error::invalid_params(err.root_cause().to_string()));
+            }
+        } else if let Some(root_uri) = init.root_uri {
+            log::debug!("Init with root uri");
+            if let Err(err) = init_lsp(
+                &self.db.lock().expect("Mutex not to be poisoned"),
+                std::iter::once(root_uri.to_file_path()),
+            ) {
                 return Result::Err(Error::invalid_params(err.root_cause().to_string()));
             }
         }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                definition_provider: Some(tower_lsp::lsp_types::OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                position_encoding: Some(PositionEncodingKind::UTF32),
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
                 ..Default::default()
             },
             server_info: None,
@@ -86,6 +107,7 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let path_buf = params.text_document.uri.to_file_path().unwrap();
+        log::debug!("did_open {}", path_buf.display());
         let mut db = self.db.lock().unwrap();
         let file_id = FileId::new(db.as_core_db(), path_buf);
         let source_file = db.file_for_id(file_id);
@@ -94,6 +116,49 @@ impl LanguageServer for Backend {
             .set_contents(db.deref_mut())
             .with_durability(Durability::LOW)
             .to(params.text_document.text);
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let path_buf = params.text_document.uri.to_file_path().unwrap();
+        log::debug!("did_change {}", path_buf.display());
+        // Scoped mutable database access
+        // We do this so we drop our lock on the database before our await point.
+        let file_id = {
+            let mut db = self.db.lock().unwrap();
+            let file_id = FileId::new(db.as_core_db(), path_buf);
+            let source_file = db.file_for_id(file_id);
+
+            source_file
+                .set_contents(db.deref_mut())
+                .with_durability(Durability::LOW)
+                .to(params.content_changes[0].text.clone());
+
+            file_id
+        };
+
+        // Immutable database access
+        let db = {
+            let lock = self.db.lock().unwrap();
+            lock.snapshot()
+        };
+
+        let diags = db
+            .parse_errors(file_id)
+            .into_iter()
+            .chain(db.nameres_errors(file_id))
+            .map(|err| {
+                let citation = err.principal(db.deref());
+                Diagnostic::new_simple(from_span(citation.span), citation.message)
+            })
+            .collect();
+
+        self._client
+            .publish_diagnostics(
+                params.text_document.uri,
+                diags,
+                Some(params.text_document.version),
+            )
+            .await;
     }
 
     async fn goto_definition(
@@ -111,9 +176,9 @@ impl LanguageServer for Backend {
         let file_id = FileId::new(db.as_core_db(), path_buf);
         // TODO: Figure out how character works
         let Position { line, character } = params.text_document_position_params.position;
-        log::info!(
-            "GoToDefinition: {:?}:{}:{}",
-            file_id.path(core_db),
+        log::debug!(
+            "GoToDefinition: {}:{}:{}",
+            file_id.path(core_db).display(),
             line,
             character
         );
@@ -174,6 +239,19 @@ impl LanguageServer for Backend {
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{} {}] {}",
+                record.level(),
+                record.target(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Debug)
+        .chain(std::io::stdout())
+        .chain(fern::log_file("output.log")?)
+        .apply()?;
     let db = AiahrDatabase::default();
 
     let stdin = tokio::io::stdin();

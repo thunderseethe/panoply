@@ -290,7 +290,7 @@ mod tests {
         match db.lower_item_for_file_name(path, db.ident_str("main")) {
             Some(term) => term.item(db),
             None => {
-                dbg!(db.parse_errors());
+                dbg!(db.all_parse_errors());
                 panic!("Errors occurred")
             }
         }

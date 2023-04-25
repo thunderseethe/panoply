@@ -22,7 +22,7 @@ fn main() -> eyre::Result<()> {
     let ir = match opt_ir {
         Some(ir) => ir,
         None => {
-            for err in db.parse_errors() {
+            for err in db.all_parse_errors() {
                 println!("{:?}", err);
             }
             return Ok(());

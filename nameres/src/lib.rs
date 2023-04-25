@@ -93,7 +93,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
         name_at_loc(self.as_nameres_db(), file, line, col)
     }
 
-    fn nameres_errors(&self) -> Vec<AiahrcError> {
+    fn all_nameres_errors(&self) -> Vec<AiahrcError> {
         self.all_modules()
             .iter()
             .flat_map(|module| {
@@ -101,6 +101,11 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
                     .into_iter()
             })
             .collect()
+    }
+
+    fn nameres_errors(&self, file_id: FileId) -> Vec<AiahrcError> {
+        let module = self.root_module_for_file(self.file_for_id(file_id));
+        nameres_module_of::accumulated::<AiahrcErrors>(self.as_nameres_db(), module)
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_parser::Db {}

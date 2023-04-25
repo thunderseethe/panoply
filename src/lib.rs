@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use aiahr_core::displayer::Displayer;
 use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
+use aiahr_core::ident::Ident;
+use aiahr_core::modules::Module;
+use aiahr_core::Db;
 use clap::Parser;
 
 #[salsa::db(
@@ -24,6 +28,24 @@ impl salsa::ParallelDatabase for AiahrDatabase {
         salsa::Snapshot::new(Self {
             storage: self.storage.snapshot(),
         })
+    }
+}
+
+impl Displayer<Module> for AiahrDatabase {
+    type Output<'a> = String;
+
+    fn show<'a>(&self, value: &'a Module) -> Self::Output<'a> {
+        value
+            .name(self.as_core_db())
+            .text(self.as_core_db())
+            .clone()
+    }
+}
+impl Displayer<Ident> for AiahrDatabase {
+    type Output<'a> = String;
+
+    fn show<'a>(&self, value: &'a Ident) -> Self::Output<'a> {
+        value.text(self.as_core_db()).clone()
     }
 }
 
