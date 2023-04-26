@@ -182,7 +182,7 @@ where
     DB: ?Sized + crate::Db,
 {
     fn lookup_scheme(&self, term: TermName) -> TyScheme {
-        let typed_item = aiahr_tc::type_scheme_of(self.as_tc_db(), term);
+        let typed_item = self.type_scheme_of(term);
         typed_item.ty_scheme(self.as_tc_db())
     }
 }
@@ -191,7 +191,7 @@ where
     DB: ?Sized + crate::Db,
 {
     fn lookup_var(&self, term: TermName, var_id: VarId) -> Ty {
-        let typed_item = aiahr_tc::type_scheme_of(self.as_tc_db(), term);
+        let typed_item = self.type_scheme_of(term);
         typed_item.var_to_tys(self.as_tc_db())[&var_id]
     }
 }
@@ -200,7 +200,7 @@ where
     DB: ?Sized + crate::Db,
 {
     fn lookup_term(&self, name: TermName, term: Idx<Term<VarId>>) -> aiahr_tc::TyChkRes<InDb> {
-        let typed_item = aiahr_tc::type_scheme_of(self.as_tc_db(), name);
+        let typed_item = self.type_scheme_of(name);
         typed_item.term_to_tys(self.as_tc_db())[&term]
     }
 }

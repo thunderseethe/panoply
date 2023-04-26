@@ -5,6 +5,7 @@ mod english;
 pub mod lexer;
 pub mod nameres;
 pub mod parser;
+pub mod tc;
 
 use crate::ident::Ident;
 use crate::modules::Module;

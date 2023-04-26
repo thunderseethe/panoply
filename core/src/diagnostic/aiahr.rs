@@ -4,6 +4,7 @@ use crate::displayer::Displayer;
 use crate::ident::Ident;
 use crate::modules::Module;
 
+use super::tc::TypeCheckDiagnostic;
 use super::{
     lexer::LexError, nameres::NameResolutionError, parser::ParseError, Citation, Diagnostic,
 };
@@ -14,6 +15,7 @@ pub enum AiahrcError {
     LexError(LexError),
     NameResolutionError(NameResolutionError),
     ParseError(ParseError),
+    TypeCheckError(TypeCheckDiagnostic),
 }
 
 impl From<LexError> for AiahrcError {
@@ -34,12 +36,19 @@ impl From<ParseError> for AiahrcError {
     }
 }
 
+impl From<TypeCheckDiagnostic> for AiahrcError {
+    fn from(err: TypeCheckDiagnostic) -> Self {
+        AiahrcError::TypeCheckError(err)
+    }
+}
+
 impl Diagnostic for AiahrcError {
     fn name(&self) -> &'static str {
         match self {
             AiahrcError::LexError(err) => err.name(),
             AiahrcError::NameResolutionError(err) => err.name(),
             AiahrcError::ParseError(err) => err.name(),
+            AiahrcError::TypeCheckError(err) => err.name(),
         }
     }
 
@@ -51,6 +60,7 @@ impl Diagnostic for AiahrcError {
             AiahrcError::LexError(err) => err.principal(modules),
             AiahrcError::NameResolutionError(err) => err.principal(modules),
             AiahrcError::ParseError(err) => err.principal(modules),
+            AiahrcError::TypeCheckError(err) => err.principal(modules),
         }
     }
 
@@ -62,6 +72,7 @@ impl Diagnostic for AiahrcError {
             AiahrcError::LexError(err) => err.additional(modules),
             AiahrcError::NameResolutionError(err) => err.additional(modules),
             AiahrcError::ParseError(err) => err.additional(modules),
+            AiahrcError::TypeCheckError(err) => err.additional(modules),
         }
     }
 }

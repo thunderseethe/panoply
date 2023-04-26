@@ -6,11 +6,11 @@ use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase};
 use aiahr_core::diagnostic::Diagnostic as AiahrDiagnostic;
 use aiahr_core::file::FileId;
 use aiahr_core::loc::Loc;
-use aiahr_core::span::{Span, Spanned};
+use aiahr_core::span::Span;
 use aiahr_core::Db as CoreDb;
-use aiahr_nameres::ops::IdOps;
-use aiahr_nameres::{Db as NameResDb, InScopeName};
+use aiahr_nameres::Db as NameResDb;
 use aiahr_parser::Db;
+use aiahr_tc::Db as TcDb;
 use salsa::{Durability, ParallelDatabase};
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
@@ -146,6 +146,7 @@ impl LanguageServer for Backend {
             .parse_errors(file_id)
             .into_iter()
             .chain(db.nameres_errors(file_id))
+            .chain(db.type_check_errors(file_id))
             .map(|err| {
                 let citation = err.principal(db.deref());
                 Diagnostic::new_simple(from_span(citation.span), citation.message)

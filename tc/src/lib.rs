@@ -1,11 +1,15 @@
 use aiahr_ast::{self as ast, Ast, Term};
 use aiahr_core::{
+    diagnostic::{
+        aiahr::{AiahrcError, AiahrcErrors},
+        tc::TypeCheckDiagnostic,
+    },
+    file::FileId,
     id::{EffectName, EffectOpName, Id, TermName, TyVarId, VarId},
     ident::Ident,
     modules::Module,
 };
 use bumpalo::Bump;
-use diagnostic::TypeCheckDiagnostic;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use la_arena::Idx;
 use rustc_hash::FxHashMap;
@@ -49,11 +53,29 @@ pub trait EffectInfo {
 }
 
 #[salsa::jar(db = Db)]
-
 pub struct Jar(TypedItem, type_scheme_of);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_desugar::Db {
     fn as_tc_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
+    }
+
+    fn type_scheme_of(&self, term_name: TermName) -> TypedItem {
+        type_scheme_of(self.as_tc_db(), term_name)
+    }
+
+    fn type_check_errors(&self, file_id: FileId) -> Vec<AiahrcError> {
+        let nameres_module = self.nameres_module_for_file_id(file_id);
+        nameres_module
+            .terms(self.as_nameres_db())
+            .iter()
+            .filter_map(|term| term.as_ref())
+            .flat_map(|term| {
+                type_scheme_of::accumulated::<AiahrcErrors>(
+                    self.as_tc_db(),
+                    term.name(self.as_nameres_db()),
+                )
+            })
+            .collect()
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_desugar::Db {}
@@ -107,7 +129,7 @@ pub struct TypedItem {
 }
 
 #[salsa::tracked]
-pub fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedItem {
+pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedItem {
     let module = term_name.module(db.as_core_db());
     let ast_db = db.as_ast_db();
     let ast_module = db.desugar_module_of(module);
@@ -125,8 +147,9 @@ pub fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedItem {
     let (var_to_tys, terms_to_tys, ty_scheme, diags) =
         type_check(db, db, module, term.data(db.as_ast_db()));
 
-    //TODO: Push errors to diagnostic
-    drop(diags);
+    for diag in diags {
+        AiahrcErrors::push(db, diag.into())
+    }
     TypedItem::new(db, term_name, var_to_tys, terms_to_tys, ty_scheme)
 }
 
@@ -308,6 +331,7 @@ mod tests {
 
     use aiahr_ast::{Direction, Term::*};
     use aiahr_core::{
+        diagnostic::tc::TypeCheckDiagnostic,
         file::{FileId, SourceFile, SourceFileSet},
         id::{TermName, TyVarId, VarId},
         modules::Module,
@@ -323,7 +347,7 @@ mod tests {
     use assert_matches::assert_matches;
     use salsa::AsId;
 
-    use crate::{diagnostic::TypeCheckDiagnostic, test_utils::DummyEff, Evidence};
+    use crate::{test_utils::DummyEff, Evidence};
     use crate::{type_check, type_scheme_of};
 
     macro_rules! assert_matches_unit_ty {

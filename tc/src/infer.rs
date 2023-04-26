@@ -1,5 +1,8 @@
 use aiahr_ast::{Ast, Direction, Term, Term::*};
-use aiahr_core::{id::VarId, ident::Ident, memory::handle::Handle, modules::Module, span::Span};
+use aiahr_core::{
+    diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, memory::handle::Handle,
+    modules::Module, span::Span,
+};
 use aiahr_ty::{
     infer::{InArena, InferRow, InferTy, TcUnifierVar},
     row::*,
@@ -13,7 +16,7 @@ use salsa::DebugWithDb;
 use std::collections::BTreeSet;
 
 use crate::{
-    diagnostic::{into_diag, TypeCheckDiagnostic, TypeCheckError},
+    diagnostic::{into_diag, TypeCheckError},
     folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
     type_scheme_of,
     unsolved_row::{ClosedGoal, OpenGoal, OrderedRowXorRow, UnsolvedRowEquation},
