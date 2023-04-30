@@ -190,7 +190,7 @@ pub(crate) fn desugar_effect_defn(
                             bound: vec![],
                             constrs: vec![],
                             // TODO: We probably want to allow operations to throw effects?
-                            eff: Row::Closed(db.empty_row()),
+                            eff: Row::Closed(db.empty_simple_row()),
                             ty,
                         },
                     )
@@ -420,7 +420,7 @@ impl<'a> DesugarCtx<'a> {
     ) -> Row {
         match row {
             cst::Row::Concrete(closed) => Row::Closed(
-                self.db.as_ty_db().construct_row(
+                self.db.as_ty_db().construct_simple_row(
                     closed
                         .elements()
                         .map(|field| (field.label.value, self.ds_type(field.target)))
@@ -450,7 +450,7 @@ impl<'a> DesugarCtx<'a> {
                 fields
                     .as_ref()
                     .map(|row| self.ds_row(row))
-                    .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
+                    .unwrap_or(Row::Closed(self.db.as_ty_db().empty_simple_row())),
             )),
             cst::Type::Function {
                 domain, codomain, ..
@@ -465,7 +465,7 @@ impl<'a> DesugarCtx<'a> {
     fn ds_row_atom(&mut self, row_atom: &cst::RowAtom<TyVarId>) -> Row {
         match row_atom {
             cst::RowAtom::Concrete { fields, .. } => Row::Closed(
-                self.db.as_ty_db().construct_row(
+                self.db.as_ty_db().construct_simple_row(
                     fields
                         .elements()
                         .map(|field| (field.label.value, self.ds_type(field.target)))

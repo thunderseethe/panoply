@@ -1,11 +1,10 @@
-use pretty::{docs, DocAllocator, DocBuilder, Pretty};
+use pretty::{docs, DocAllocator};
 use salsa::DebugWithDb;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::ops::Deref;
 
 mod alloc;
-use self::fold::DefaultFold;
 pub use alloc::{
     db::{InDb, RowFields, RowValues, TyData},
     AccessTy, MkTy, TypeAlloc, TypeVarOf,
@@ -15,10 +14,11 @@ mod evidence;
 pub use evidence::Evidence;
 
 mod fold;
+use self::fold::DefaultFold;
 pub use fold::{FallibleEndoTypeFold, FallibleTypeFold, TypeFoldable};
 
 pub mod row;
-use row::{ClosedRow, Row};
+use row::{Row, SimpleClosedRow};
 
 #[cfg(feature = "type_infer")]
 pub mod infer;
@@ -31,6 +31,21 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+
+pub trait PrettyType<Db: ?Sized, A: TypeAlloc> {
+    fn pretty<'a, 'b, D, Ann>(
+        &self,
+        allocator: &'a D,
+        db: &Db,
+        acc: &impl AccessTy<'b, A>,
+    ) -> pretty::DocBuilder<'a, D, Ann>
+    where
+        D: ?Sized + DocAllocator<'a, Ann>,
+        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
+        A::TypeVar: pretty::Pretty<'a, D, Ann>,
+        A: 'b,
+        Ann: 'a;
+}
 
 /// A monomorphic type.
 ///
@@ -118,7 +133,7 @@ pub enum TypeKind<A: TypeAlloc = InDb> {
     /// A type variable, during type checking this may be either a unifier or a proper type variable
     VarTy(A::TypeVar),
     /// A row type, this is specifically a closed row. Open rows are represented as VarTy
-    RowTy(ClosedRow<A>),
+    RowTy(SimpleClosedRow<A>),
     /// A function type
     FunTy(Ty<A>, Ty<A>),
     /// A product type. This is purely a wrapper type to coerce a row type to be a product.
@@ -130,7 +145,7 @@ impl<A: TypeAlloc> Copy for TypeKind<A>
 where
     A: Clone,
     A::TypeVar: Copy,
-    ClosedRow<A>: Copy,
+    SimpleClosedRow<A>: Copy,
     Row<A>: Copy,
     Ty<A>: Copy,
 {
@@ -181,7 +196,7 @@ where
                 fold.ctx().mk_ty(TypeKind::<F::Out>::FunTy(arg_, ret_))
             }
             TypeKind::RowTy(ref row) => {
-                let row_: ClosedRow<F::Out> = row.clone().try_fold_with(fold)?;
+                let row_ = row.clone().try_fold_with(fold)?;
                 fold.ctx().mk_ty(TypeKind::<F::Out>::RowTy(row_))
             }
             TypeKind::ProdTy(ref row) => {
@@ -211,41 +226,51 @@ where
     }
 }
 
-impl<A: TypeAlloc> Ty<A> {
-    pub fn pretty<'a, 'b, D>(
+impl<A, Db> PrettyType<Db, A> for Ty<A>
+where
+    A: TypeAlloc,
+    Db: ?Sized + crate::Db,
+{
+    fn pretty<'a, 'b, D, Ann>(
         &self,
-        a: &'a D,
-        db: &dyn crate::Db,
+        allocator: &'a D,
+        db: &Db,
         acc: &impl AccessTy<'b, A>,
-    ) -> DocBuilder<'a, D>
+    ) -> pretty::DocBuilder<'a, D, Ann>
     where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-        A::TypeVar: Pretty<'a, D>,
+        D: ?Sized + DocAllocator<'a, Ann>,
+        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
+        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
         A: 'b,
+        Ann: 'a,
     {
-        acc.kind(self).pretty(a, db, acc)
+        acc.kind(self).pretty(allocator, db, acc)
     }
 }
 
-impl<A: TypeAlloc> TypeKind<A> {
-    pub fn pretty<'a, 'b, D>(
+impl<A, Db> PrettyType<Db, A> for TypeKind<A>
+where
+    A: TypeAlloc,
+    Db: ?Sized + crate::Db,
+{
+    fn pretty<'a, 'b, D, Ann>(
         &self,
         a: &'a D,
-        db: &dyn crate::Db,
+        db: &Db,
         acc: &impl AccessTy<'b, A>,
-    ) -> DocBuilder<'a, D>
+    ) -> pretty::DocBuilder<'a, D, Ann>
     where
-        D: ?Sized + DocAllocator<'a>,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-        A::TypeVar: Pretty<'a, D>,
+        D: ?Sized + DocAllocator<'a, Ann>,
+        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
+        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
         A: 'b,
+        Ann: 'a,
     {
         match self {
             TypeKind::ErrorTy => a.as_string("Error"),
             TypeKind::IntTy => a.as_string("Int"),
             TypeKind::VarTy(tv) => pretty::Pretty::pretty(tv.clone(), a),
-            TypeKind::RowTy(closed_row) => closed_row.pretty(a, db, acc).nest(2).parens().group(),
+            TypeKind::RowTy(simple_row) => simple_row.pretty(a, db, acc).nest(2).parens().group(),
             TypeKind::FunTy(arg, ret) => arg
                 .pretty(a, db, acc)
                 .append(docs![a, a.softline(), "->", a.softline(), ret.pretty(a, db, acc)].nest(2)),

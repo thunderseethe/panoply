@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 
 use aiahr_ty::{
     infer::InArena,
-    row::{ClosedRow, Row},
+    row::{Row, SimpleClosedRow},
     Evidence, FallibleTypeFold, TypeAlloc, TypeFoldable,
 };
 
@@ -16,7 +16,10 @@ impl<'ctx> From<OrderedRowXorRow<InArena<'ctx>>> for (Row<InArena<'ctx>>, Row<In
     }
 }
 impl<'ctx> TryFrom<(Row<InArena<'ctx>>, Row<InArena<'ctx>>)> for OrderedRowXorRow<InArena<'ctx>> {
-    type Error = (ClosedRow<InArena<'ctx>>, ClosedRow<InArena<'ctx>>);
+    type Error = (
+        SimpleClosedRow<InArena<'ctx>>,
+        SimpleClosedRow<InArena<'ctx>>,
+    );
 
     fn try_from(value: (Row<InArena<'ctx>>, Row<InArena<'ctx>>)) -> Result<Self, Self::Error> {
         match value {
@@ -82,15 +85,15 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for CombineInto<A> {
 ///  2. We can store at most one closed row. Two closed rows is considered invalid, unlike if we
 ///     stored a `(Row<'ctx, TV>, Row<'ctx, TV>)`).
 #[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OrderedRowXorRow<A: TypeAlloc> {
-    ClosedOpen(ClosedRow<A>, A::TypeVar),
+pub enum OrderedRowXorRow<A: TypeAlloc, Closed = SimpleClosedRow<A>> {
+    ClosedOpen(Closed, A::TypeVar),
     OpenOpen { min: A::TypeVar, max: A::TypeVar },
 }
-impl<A: TypeAlloc> Copy for OrderedRowXorRow<A>
+impl<A: TypeAlloc, Closed> Copy for OrderedRowXorRow<A, Closed>
 where
     A: Clone,
     A::TypeVar: Copy,
-    ClosedRow<A>: Copy,
+    Closed: Copy,
 {
 }
 impl<A: TypeAlloc> OrderedRowXorRow<A> {
@@ -127,15 +130,15 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ClosedGoal<A: TypeAlloc> {
-    pub(crate) goal: ClosedRow<A>,
+pub(crate) struct ClosedGoal<A: TypeAlloc, Closed = SimpleClosedRow<A>> {
+    pub(crate) goal: Closed,
     pub(crate) min: A::TypeVar,
     pub(crate) max: A::TypeVar,
 }
-impl<A: TypeAlloc> Copy for ClosedGoal<A>
+impl<A: TypeAlloc, Closed> Copy for ClosedGoal<A, Closed>
 where
     A: Clone,
-    ClosedRow<A>: Copy,
+    Closed: Copy,
     A::TypeVar: Copy,
 {
 }

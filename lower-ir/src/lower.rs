@@ -8,7 +8,7 @@ use aiahr_ir::{
 };
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
-    row::{ClosedRow, Row},
+    row::{Row, SimpleClosedRow},
     AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
 };
 use la_arena::Idx;
@@ -164,18 +164,16 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 }))
             }
             TypeKind::ProdTy(Row::Closed(row)) => {
-                let elems = self
-                    .db
-                    .row_values(&row.values)
+                let elems = row
+                    .values(&self.db)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
                 self.mk_prod_ty(elems.as_slice())
             }
             TypeKind::SumTy(Row::Closed(row)) => {
-                let elems = self
-                    .db
-                    .row_values(&row.values)
+                let elems = row
+                    .values(&self.db)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
@@ -184,7 +182,12 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         }
     }
 
-    fn row_evidence_ir(&mut self, left: ClosedRow, right: ClosedRow, goal: ClosedRow) -> Ir {
+    fn row_evidence_ir(
+        &mut self,
+        left: SimpleClosedRow,
+        right: SimpleClosedRow,
+        goal: SimpleClosedRow,
+    ) -> Ir {
         let (left_prod, left_coprod) = self.row_ir_tys(&Row::Closed(left));
         let (right_prod, right_coprod) = self.row_ir_tys(&Row::Closed(right));
         let (goal_prod, goal_coprod) = self.row_ir_tys(&Row::Closed(goal));
@@ -296,11 +299,10 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                         debug_assert!(left_len + right_len == goal_len);
 
                         let case_var_id = self.var_conv.generate();
-                        let elems = self
-                            .db
-                            .row_values(&left.values)
+                        let elems = left
+                            .values(&self.db)
                             .iter()
-                            .chain(self.db.row_values(&right.values).iter())
+                            .chain(right.values(&self.db).iter())
                             .enumerate()
                             .map(|(i, ty)| {
                                 let case_var = IrVar {
@@ -343,17 +345,13 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 let case_var_id = self.var_conv.generate();
                 Ir::case_on_var(
                     left_coprod_var,
-                    self.db
-                        .row_values(&left.values)
-                        .iter()
-                        .enumerate()
-                        .map(|(i, ty)| {
-                            let y = IrVar {
-                                var: case_var_id,
-                                ty: self.lower_ty(*ty),
-                            };
-                            Ir::abss([y], inj(i, goal_len, Ir::var(y)))
-                        }),
+                    left.values(&self.db).iter().enumerate().map(|(i, ty)| {
+                        let y = IrVar {
+                            var: case_var_id,
+                            ty: self.lower_ty(*ty),
+                        };
+                        Ir::abss([y], inj(i, goal_len, Ir::var(y)))
+                    }),
                 )
             },
         ));
@@ -365,17 +363,13 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 let case_var_id = self.var_conv.generate();
                 Ir::case_on_var(
                     right_coprod_var,
-                    self.db
-                        .row_values(&right.values)
-                        .iter()
-                        .enumerate()
-                        .map(|(i, ty)| {
-                            let y = IrVar {
-                                var: case_var_id,
-                                ty: self.lower_ty(*ty),
-                            };
-                            Ir::abss([y], inj(goal_len - right_len + i, goal_len, Ir::var(y)))
-                        }),
+                    right.values(&self.db).iter().enumerate().map(|(i, ty)| {
+                        let y = IrVar {
+                            var: case_var_id,
+                            ty: self.lower_ty(*ty),
+                        };
+                        Ir::abss([y], inj(goal_len - right_len + i, goal_len, Ir::var(y)))
+                    }),
                 )
             },
         ));
@@ -399,9 +393,8 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 (var, var)
             }
             Row::Closed(row) => {
-                let elems = self
-                    .db
-                    .row_values(&row.values)
+                let elems = row
+                    .values(&self.db)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
@@ -481,7 +474,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
         // Since we type-checked successfully we know nothing refers to that variable and we can use
         // whatever row type for it.
-        let unit_row: ClosedRow = self.db.mk_row(&[], &[]);
+        let unit_row = self.db.mk_simple_row(&[], &[]);
 
         let mut solved_ev = term_rows
             .into_iter()
@@ -754,7 +747,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let eff_name = match handler_infer.eff {
                     Row::Closed(eff_row) => {
                         debug_assert!(eff_row.len(&self.db) == 1);
-                        self.db.row_fields(&eff_row.fields)[0]
+                        eff_row.fields(&self.db)[0]
                     }
                     Row::Open(_) => {
                         unreachable!("Handler effect expect to be closed row, found row variable")

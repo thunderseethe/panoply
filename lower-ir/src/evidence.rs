@@ -1,10 +1,8 @@
 use std::ops::Index;
 
 use aiahr_ir::IrVar;
-use aiahr_ty::{
-    row::{ClosedRow, Row},
-    Evidence, InDb,
-};
+use aiahr_ty::row::SimpleClosedRow;
+use aiahr_ty::{row::Row, Evidence, InDb};
 
 use rustc_hash::FxHashMap;
 
@@ -81,9 +79,9 @@ impl Index<&PartialEv> for EvidenceMap {
 /// Row evidence where every row is closed.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub(crate) struct SolvedRowEv {
-    pub(crate) goal: ClosedRow,
-    pub(crate) left: ClosedRow,
-    pub(crate) right: ClosedRow,
+    pub(crate) goal: SimpleClosedRow,
+    pub(crate) left: SimpleClosedRow,
+    pub(crate) right: SimpleClosedRow,
 }
 impl From<SolvedRowEv> for Evidence {
     fn from(val: SolvedRowEv) -> Self {
@@ -95,7 +93,11 @@ impl From<SolvedRowEv> for Evidence {
     }
 }
 impl SolvedRowEv {
-    pub(crate) fn new(left: ClosedRow, right: ClosedRow, goal: ClosedRow) -> Self {
+    pub(crate) fn new(
+        left: SimpleClosedRow,
+        right: SimpleClosedRow,
+        goal: SimpleClosedRow,
+    ) -> Self {
         Self { goal, left, right }
     }
 }

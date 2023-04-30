@@ -339,11 +339,7 @@ mod tests {
     };
     use aiahr_parser::Db as ParserDb;
     use aiahr_test::ast::{AstBuilder, MkTerm};
-    use aiahr_ty::{
-        row::{ClosedRow, Row},
-        AccessTy, TypeKind,
-        TypeKind::*,
-    };
+    use aiahr_ty::{row::Row, AccessTy, TypeKind, TypeKind::*};
     use assert_matches::assert_matches;
     use salsa::AsId;
 
@@ -352,9 +348,8 @@ mod tests {
 
     macro_rules! assert_matches_unit_ty {
         ($db:expr, $term:expr) => {
-            assert_matches!($db.kind($term), TypeKind::ProdTy(Row::Closed(ClosedRow { fields, values })) => {
-                assert!(fields.fields($db).is_empty());
-                assert!(values.values($db).is_empty());
+            assert_matches!($db.kind($term), TypeKind::ProdTy(Row::Closed(closed)) => {
+                assert!(closed.is_empty(&$db))
             });
         }
     }
@@ -454,9 +449,9 @@ mod tests {
             FunTy(arg, ret)
             => {
                 assert_matches!((db.kind(arg), db.kind(ret)),
-                    (VarTy(a), RowTy(ClosedRow { fields, values })) => {
-                        assert_eq!(fields.fields(db).get(0).map(|start| start.text(db).as_str()), Some("start"));
-                        assert_eq!(values.values(db).get(0).map(|val| db.kind(val)), Some(&VarTy(*a)));
+                    (VarTy(a), RowTy(closed)) => {
+                        assert_eq!(closed.fields(&db).get(0).map(|start| start.text(db).as_str()), Some("start"));
+                        assert_eq!(closed.values(&db).get(0).map(|val| db.kind(val)), Some(&VarTy(*a)));
                 });
             }
         );
@@ -514,12 +509,12 @@ mod tests {
         FunTy(arg, ret) => {
             let ty_var = assert_matches!(
                 db.kind(arg),
-                SumTy(Row::Closed(ClosedRow { fields, values })) => {
-                    assert_matches!(fields.fields(db).as_slice(), [true_, false_] => {
+                SumTy(Row::Closed(closed)) => {
+                    assert_matches!(closed.fields(&db), [true_, false_] => {
                         assert_eq!(false_.text(db), "false");
                         assert_eq!(true_.text(db), "true");
                     });
-                    assert_matches!(values.values(db).as_slice(), [a, b] => {
+                    assert_matches!(closed.values(&db), [a, b] => {
                         assert_eq!(a, b);
                         a
                     })
@@ -556,14 +551,14 @@ mod tests {
         assert_matches!(
         db.kind(&scheme.ty),
         FunTy(arg, ret) => {
-            assert_matches!(db.kind(ret), ProdTy(Row::Closed(ClosedRow { fields, values })) => {
-                assert_matches!(fields.fields(db).as_slice(), [a, b, c, d] => {
+            assert_matches!(db.kind(ret), ProdTy(Row::Closed(closed)) => {
+                assert_matches!(closed.fields(&db), [a, b, c, d] => {
                     assert_eq!(a.text(db), "a");
                     assert_eq!(b.text(db), "b");
                     assert_eq!(c.text(db), "c");
                     assert_eq!(d.text(db), "d");
                 });
-                assert_matches!(values.values(db).as_slice(), [a, b, c, d] => {
+                assert_matches!(closed.values(&db), [a, b, c, d] => {
                     assert_eq!(a, arg);
                     assert_eq!(b, arg);
                     assert_eq!(c, arg);
@@ -603,16 +598,16 @@ mod tests {
                     goal: Row::Open(b)
                 },
                 Evidence::Row {
-                    left: Row::Closed(ClosedRow { fields, values }),
+                    left: Row::Closed(closed),
                     right: Row::Open(_),
                     goal: Row::Open(a)
                 }
             ] => {
                 assert_eq!(a, b);
-                assert_matches!(fields.fields(&db).as_slice(), [x] => {
+                assert_matches!(closed.fields(&&db), [x] => {
                     assert_eq!(x.text(&db), "x");
                 });
-                assert_matches!(values.values(&db).as_slice(), [ty] => ty)
+                assert_matches!(closed.values(&&db), [ty] => ty)
             }
         );
         let db = &db;
@@ -654,14 +649,14 @@ mod tests {
         assert_vec_matches!(
             scheme.constrs,
             [Evidence::Row {
-                left: Row::Closed(ClosedRow { fields, values }),
+                left: Row::Closed(closed),
                 right: Row::Open(_),
                 goal: Row::Open(_),
             }] => {
-                assert_matches!(fields.fields(&db).as_slice(), [x] => {
+                assert_matches!(closed.fields(&&db), [x] => {
                     assert_eq!(x.text(&db), "x");
                 });
-                assert_matches!(values.values(&db).as_slice(), [unit] => {
+                assert_matches!(closed.values(&&db), [unit] => {
                     assert_matches_unit_ty!(&db, unit);
                 });
             }
@@ -701,17 +696,17 @@ f = State.get({})
         let scheme = typed_item.ty_scheme(&db);
 
         let db = &db;
-        assert_matches!(scheme.eff, Row::Closed(ClosedRow { fields, values }) => {
-            assert_matches!(fields.fields(db).as_slice(), [state] => {
+        assert_matches!(scheme.eff, Row::Closed(closed) => {
+            assert_matches!(closed.fields(&db), [state] => {
                 assert_eq!(state.text(db), "State");
             });
-            assert_matches!(values.values(db).as_slice(), [unit] => {
+            assert_matches!(closed.values(&db), [unit] => {
                 assert_matches_unit_ty!(db, unit);
             });
         });
-        assert_matches!(db.kind(&scheme.ty), ProdTy(Row::Closed(ClosedRow { fields, values })) => {
-            assert!(fields.fields(db).is_empty());
-            assert!(values.values(db).is_empty());
+        assert_matches!(db.kind(&scheme.ty), ProdTy(Row::Closed(closed)) => {
+            assert!(closed.is_empty(&db));
+            assert!(closed.is_empty(&db));
         });
     }
 
@@ -745,17 +740,14 @@ f = with {
 
         let scheme = typed_item.ty_scheme(&db);
         let db = &db;
-        assert_matches!(db.kind(&scheme.ty), ProdTy(Row::Closed(ClosedRow { fields, values })) => {
-            assert!(fields.fields(db).is_empty());
-            assert!(values.values(db).is_empty());
-        });
+        assert_matches_unit_ty!(db, &scheme.ty);
         assert_matches!(
             scheme.eff,
-            Row::Closed(ClosedRow { fields, values }) => {
-                assert_matches!(fields.fields(db).as_slice(), [reader] => {
+            Row::Closed(closed) => {
+                assert_matches!(closed.fields(&db), [reader] => {
                     assert_eq!(reader.text(db), "Reader");
                 });
-                assert_matches!(values.values(db).as_slice(), [unit] => {
+                assert_matches!(closed.values(&db), [unit] => {
                     assert_matches_unit_ty!(db, unit);
                 });
             }

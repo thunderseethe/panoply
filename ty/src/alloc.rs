@@ -1,7 +1,7 @@
 use aiahr_core::ident::Ident;
 
 use crate::{
-    row::{ClosedRow, RowLabel},
+    row::{RowLabel, SimpleClosedRow},
     Ty, TypeKind,
 };
 use std::cmp::Ordering;
@@ -33,22 +33,22 @@ pub type TypeVarOf<A> = <A as TypeAlloc>::TypeVar;
 pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
     fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A>;
     fn mk_label(&self, label: &str) -> RowLabel;
-    fn mk_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> ClosedRow<A>;
+    fn mk_simple_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> SimpleClosedRow<A>;
 
-    fn empty_row(&self) -> ClosedRow<A> {
-        self.mk_row(&[], &[])
+    fn empty_simple_row(&self) -> SimpleClosedRow<A> {
+        self.mk_simple_row(&[], &[])
     }
     fn empty_row_ty(&self) -> Ty<A> {
-        self.mk_ty(TypeKind::RowTy(self.empty_row()))
+        self.mk_ty(TypeKind::RowTy(self.empty_simple_row()))
     }
-    fn single_row(&self, label: Ident, value: Ty<A>) -> ClosedRow<A> {
-        self.mk_row(&[label], &[value])
+    fn single_simple_row(&self, label: Ident, value: Ty<A>) -> SimpleClosedRow<A> {
+        self.mk_simple_row(&[label], &[value])
     }
     fn single_row_ty(&self, label: Ident, value: Ty<A>) -> Ty<A> {
-        self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
+        self.mk_ty(TypeKind::RowTy(self.single_simple_row(label, value)))
     }
 
-    fn construct_row(&self, mut row: Vec<(RowLabel, Ty<A>)>) -> ClosedRow<A> {
+    fn construct_simple_row(&self, mut row: Vec<(RowLabel, Ty<A>)>) -> SimpleClosedRow<A> {
         row.sort_by(|a, b| Ident::cmp(&a.0, &b.0));
 
         let mut fields = Vec::with_capacity(row.len());
@@ -58,7 +58,7 @@ pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
             values.push(v);
         }
 
-        self.mk_row(&fields, &values)
+        self.mk_simple_row(&fields, &values)
     }
 }
 
@@ -109,12 +109,10 @@ impl<I: Iterator> IteratorSorted for I {
 
 pub mod db {
     use crate::alloc::IteratorSorted;
+    use crate::row::SimpleClosedRow;
     use aiahr_core::{id::TyVarId, ident::Ident};
 
-    use crate::{
-        row::{ClosedRow, RowLabel},
-        MkTy, Ty, TypeKind,
-    };
+    use crate::{row::RowLabel, MkTy, Ty, TypeKind};
 
     use super::{AccessTy, TypeAlloc};
 
@@ -170,14 +168,14 @@ pub mod db {
             self.ident_str(label)
         }
 
-        fn mk_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> ClosedRow<InDb> {
+        fn mk_simple_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> SimpleClosedRow<InDb> {
             debug_assert_eq!(fields.len(), values.len());
             debug_assert!(fields.iter().considered_sorted());
 
-            ClosedRow {
-                fields: RowFields::new(self.as_ty_db(), fields.to_vec()),
-                values: RowValues::new(self.as_ty_db(), values.to_vec()),
-            }
+            SimpleClosedRow::new(
+                RowFields::new(self.as_ty_db(), fields.to_vec()),
+                RowValues::new(self.as_ty_db(), values.to_vec()),
+            )
         }
     }
 

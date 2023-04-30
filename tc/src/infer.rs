@@ -1,7 +1,6 @@
 use aiahr_ast::{Ast, Direction, Term, Term::*};
 use aiahr_core::{
-    diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, memory::handle::Handle,
-    modules::Module, span::Span,
+    diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, modules::Module, span::Span,
 };
 use aiahr_ty::{
     infer::{InArena, InferRow, InferTy, TcUnifierVar},
@@ -96,17 +95,6 @@ impl InferState for Generation {
 }
 impl InferState for Solution {
     type Storage<'infer> = BTreeSet<UnsolvedRowEquation<InArena<'infer>>>;
-}
-
-/// Shorthand for a pattern that matches the given type
-macro_rules! ty_pat {
-    // The Unit type
-    ({}) => {
-        ProdTy(Row::Closed(ClosedRow {
-            fields: Handle([]),
-            values: Handle([]),
-        }))
-    };
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -215,8 +203,8 @@ impl<'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx<'_, '
         self.ctx.mk_label(label)
     }
 
-    fn mk_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> ClosedRow<A> {
-        self.ctx.mk_row(fields, values)
+    fn mk_simple_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> SimpleClosedRow<A> {
+        self.ctx.mk_simple_row(fields, values)
     }
 }
 
@@ -320,7 +308,7 @@ where
             }
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
-                if row.fields.len() != 1 {
+                if row.len(self) != 1 {
                     self.errors.push(into_diag(
                         self.db,
                         (self.single_row_ty(*label, self.mk_ty(ErrorTy)), expected.ty).into(),
@@ -329,7 +317,7 @@ where
                     return;
                 }
                 // If our singleton row is a different field name, fail
-                if *label != row.fields[0] {
+                if Some(label) != row.fields(self).first() {
                     self.errors.push(into_diag(
                         self.db,
                         (self.single_row_ty(*label, self.mk_ty(ErrorTy)), expected.ty).into(),
@@ -339,11 +327,26 @@ where
 
                 // If this is a singleton row with the right label check it's value type matches
                 // our term type
-                self._check(eff_info, *term, expected.with_ty(row.values[0]))
+                self._check(
+                    eff_info,
+                    *term,
+                    expected.with_ty(
+                        *row.values(self)
+                            .first()
+                            .expect("ICE: singleton row with no value"),
+                    ),
+                )
             }
-            (Unit, ty_pat!({})) | (Int(_), IntTy) => self.constraints.add_ty_eq(
+            (Unit, ProdTy(Row::Closed(closed))) if closed.is_empty(self) => {
+                self.constraints.add_ty_eq(
+                    expected.eff.to_ty(self),
+                    Row::Closed(self.empty_simple_row()).to_ty(self),
+                    current_span(),
+                )
+            }
+            (Int(_), IntTy) => self.constraints.add_ty_eq(
                 expected.eff.to_ty(self),
-                Row::Closed(self.empty_row()).to_ty(self),
+                Row::Closed(self.empty_simple_row()).to_ty(self),
                 current_span(),
             ),
             (Unlabel { label, term }, _) => {
@@ -540,7 +543,7 @@ where
             Variable(var) => {
                 if let Some(ty) = self.local_env.get(var).cloned() {
                     self.state.var_tys.insert(*var, ty);
-                    InferResult::new(ty, Row::Closed(self.empty_row()))
+                    InferResult::new(ty, Row::Closed(self.empty_simple_row()))
                 } else {
                     self.errors.push(into_diag(
                         self.db,
@@ -549,7 +552,7 @@ where
                     ));
                     let err_ty = self.mk_ty(ErrorTy);
                     self.state.var_tys.insert(*var, err_ty);
-                    InferResult::new(err_ty, Row::Closed(self.empty_row()))
+                    InferResult::new(err_ty, Row::Closed(self.empty_simple_row()))
                 }
             }
             Label { label, term } => {
@@ -562,12 +565,18 @@ where
                 term_infer.map_ty(|ty| match *ty {
                     // If our output type is already a singleton row of without a label, use it
                     // directly. This avoids introducing needless unifiers
-                    RowTy(row) if row.len(self.ctx) == 1 && row.fields[0] == field => row.values[0],
+                    RowTy(row)
+                        if row.len(self.ctx) == 1 && row.fields(self).first() == Some(&field) =>
+                    {
+                        *row.values(self)
+                            .first()
+                            .expect("ICE: singleton row has field but no value")
+                    }
                     // Othewise introduce a unifier, and rely on unification for any needed error
                     // reporting
                     _ => {
                         let out_ty = self.fresh_var();
-                        let row_ty = self.mk_ty(RowTy(self.mk_row(&[field], &[out_ty])));
+                        let row_ty = self.mk_ty(RowTy(self.mk_simple_row(&[field], &[out_ty])));
                         self.constraints.add_ty_eq(row_ty, ty, current_span());
                         out_ty
                     }
@@ -575,7 +584,7 @@ where
             }
             Unit => {
                 // Represent unit by an empty product type
-                let unit = Row::Closed(self.empty_row());
+                let unit = Row::Closed(self.empty_simple_row());
                 InferResult::new(self.mk_ty(ProdTy(unit)), unit)
             }
             Concat { left, right } => {
@@ -685,9 +694,9 @@ where
 
                 InferResult::new(
                     sig.ty,
-                    Row::Closed(self.single_row(
+                    Row::Closed(self.single_simple_row(
                         eff_info.effect_name(op_name.effect(self.db.as_core_db())),
-                        self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
+                        self.mk_ty(ProdTy(Row::Closed(self.empty_simple_row()))),
                     )),
                 )
             }
@@ -700,7 +709,7 @@ where
                 } = self._infer(eff_info, *body);
 
                 // Ensure there is a return clause in the handler
-                let ret_row = self.mk_row(
+                let ret_row = self.mk_simple_row(
                     &[self.mk_label("return")],
                     &[self.mk_ty(FunTy(body_ty, ret_ty))],
                 );
@@ -743,7 +752,7 @@ where
 
                 InferResult::new(ret_ty, out_eff)
             }
-            Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_row())),
+            Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_simple_row())),
             Annotated { ty, term } => {
                 let eff = self.fresh_row();
                 let mut inst = Instantiate {
@@ -950,7 +959,7 @@ where
     fn dispatch_solved_eqs(
         &mut self,
         var: TypeVarOf<InArena<'infer>>,
-        row: ClosedRow<InArena<'infer>>,
+        row: SimpleClosedRow<InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>> {
         // We want any unifications we do as a byproduct of this to see the updated state so we
         // save them here until we've finished our intial removals from state
@@ -1052,20 +1061,20 @@ where
             .map_err(|e| e.into())
     }
 
-    fn unify_closedrow_closedrow(
+    fn unify_simplerow_simplerow(
         &mut self,
-        left: ClosedRow<InArena<'infer>>,
-        right: ClosedRow<InArena<'infer>>,
+        left: SimpleClosedRow<InArena<'infer>>,
+        right: SimpleClosedRow<InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>> {
         // If our row labels aren't equal the types cannot be equal
-        if left.fields != right.fields {
+        if !left.is_unifiable(right) {
             return Err(TypeCheckError::RowsNotEqual(
                 Row::Closed(left),
                 Row::Closed(right),
             ));
         }
 
-        for (left_ty, right_ty) in left.values.iter().zip(right.values.iter()) {
+        for (left_ty, right_ty) in left.values(self).iter().zip(right.values(self).iter()) {
             self.unify_ty_ty(*left_ty, *right_ty)?;
         }
 
@@ -1107,7 +1116,7 @@ where
                 self.unify_ty_ty_normalized(left_ret, right_ret)
             }
             (RowTy(left_row), RowTy(right_row)) => {
-                self.unify_closedrow_closedrow(left_row, right_row)
+                self.unify_simplerow_simplerow(left_row, right_row)
             }
             (ProdTy(left), ProdTy(right)) => {
                 self.unify_ty_ty_normalized(left.to_ty(self), right.to_ty(self))
@@ -1168,10 +1177,10 @@ where
             Row::Open(goal_var) => match (left, right) {
                 // With only one open variable we can solve
                 (Row::Closed(left), Row::Closed(right)) => {
-                    let (fields, values) = left.disjoint_union(right).map_err(|err| {
+                    let (fields, values) = left.disjoint_union(&right).map_err(|err| {
                         TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
                     })?;
-                    let row = self.mk_ty(RowTy(self.mk_row(&fields, &values)));
+                    let row = self.mk_ty(RowTy(self.mk_simple_row(&fields, &values)));
                     self.unify_var_ty(goal_var, row)
                 }
                 (Row::Open(left_var), Row::Closed(right_row)) => self
@@ -1182,14 +1191,14 @@ where
                             goal,
                             orxr: OrderedRowXorRow::ClosedOpen(closed, open),
                         }) if goal_var.eq(goal)
-                            && (right_row.fields == closed.fields || left_var.eq(open)) =>
+                            && (right_row.is_unifiable(*closed) || left_var.eq(open)) =>
                         {
                             Some((*goal, *closed, *open))
                         }
                         UnsolvedRowEquation::OpenGoal(OpenGoal {
                             goal,
                             orxr: OrderedRowXorRow::ClosedOpen(closed, open),
-                        }) if right_row.fields == closed.fields && left_var.eq(open) => {
+                        }) if right_row.is_unifiable(*closed) && left_var.eq(open) => {
                             Some((*goal, *closed, *open))
                         }
                         _ => None,
@@ -1197,7 +1206,7 @@ where
                     .map(|(goal, closed, open)| {
                         self.unifiers.unify_var_var(goal, goal_var)?;
                         self.unifiers.unify_var_var(open, left_var)?;
-                        self.unify_closedrow_closedrow(closed, right_row)
+                        self.unify_simplerow_simplerow(closed, right_row)
                     })
                     .unwrap_or_else(|| {
                         self.state.insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
@@ -1214,7 +1223,7 @@ where
                             goal,
                             orxr: OrderedRowXorRow::ClosedOpen(closed, open),
                         }) if *goal == goal_var
-                            && (*open == right_var || closed.fields == left_row.fields) =>
+                            && (*open == right_var || closed.is_unifiable(left_row)) =>
                         {
                             Some((*closed, *open))
                         }
@@ -1222,7 +1231,7 @@ where
                     })
                     .map(|(closed, open)| {
                         self.unifiers.unify_var_var(open, right_var)?;
-                        self.unify_closedrow_closedrow(closed, left_row)
+                        self.unify_simplerow_simplerow(closed, left_row)
                     })
                     .unwrap_or_else(|| {
                         self.state.insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
@@ -1268,27 +1277,27 @@ where
             Row::Closed(goal_row) => match (left, right) {
                 // Our rows are all closed, we just need to check they are equal and discharge them
                 (Row::Closed(left_row), Row::Closed(right_row)) => {
-                    let (fields, values) = left_row.disjoint_union(right_row).map_err(|err| {
+                    let (fields, values) = left_row.disjoint_union(&right_row).map_err(|err| {
                         TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
                     })?;
-                    let row = self.mk_row(&fields, &values);
-                    self.unify_closedrow_closedrow(goal_row, row)
+                    let row = self.mk_simple_row(&fields, &values);
+                    self.unify_simplerow_simplerow(goal_row, row)
                 }
                 // With one open row we solve that row
                 (Row::Open(left_var), Row::Closed(right_row)) => {
                     let (fields, values) = goal_row.difference(right_row);
-                    let row = self.mk_row(&fields, &values);
+                    let row = self.mk_simple_row(&fields, &values);
                     let (fields, values) = goal_row.difference(row);
-                    let right_goal_row = self.mk_row(&fields, &values);
-                    self.unify_closedrow_closedrow(right_row, right_goal_row)?;
+                    let right_goal_row = self.mk_simple_row(&fields, &values);
+                    self.unify_simplerow_simplerow(right_row, right_goal_row)?;
                     self.unify_var_ty(left_var, self.mk_ty(RowTy(row)))
                 }
                 (Row::Closed(left_row), Row::Open(right_var)) => {
                     let (fields, values) = goal_row.difference(left_row);
-                    let row = self.mk_row(&fields, &values);
+                    let row = self.mk_simple_row(&fields, &values);
                     let (fields, values) = goal_row.difference(row);
-                    let left_goal_row = self.mk_row(&fields, &values);
-                    self.unify_closedrow_closedrow(left_row, left_goal_row)
+                    let left_goal_row = self.mk_simple_row(&fields, &values);
+                    self.unify_simplerow_simplerow(left_row, left_goal_row)
                         .unwrap();
                     self.unify_var_ty(right_var, self.mk_ty(RowTy(row)))
                 }
@@ -1302,7 +1311,7 @@ where
                     };
                     let is_unifiable = |cand: &ClosedGoal<InArena<'infer>>| {
                         // If any two components are equal we should unify
-                        (cand.goal.fields == goal_row.fields
+                        (cand.goal.is_unifiable(goal_row)
                             && (cand.min == min_var || cand.max == max_var))
                             || (cand.min == min_var && cand.max == max_var)
                     };
@@ -1327,7 +1336,7 @@ where
                                 Row::Open(var) => {
                                     self.unify_var_ty(var, self.mk_ty(RowTy(goal_row)))
                                 }
-                                Row::Closed(row) => self.unify_closedrow_closedrow(row, goal_row),
+                                Row::Closed(row) => self.unify_simplerow_simplerow(row, goal_row),
                             }
                         })
                         .unwrap_or_else(|| {
@@ -1379,56 +1388,57 @@ where
             }
         };
 
-        let unify_sig_handler = |ctx: &mut Self,
-                                 members_sig: Vec<(Ident, TyScheme)>,
-                                 sig: ClosedRow<InArena<'infer>>| {
-            let sig_unify = members_sig
-                .into_iter()
-                .zip(sig.fields.iter().zip(sig.values.iter()));
-            for ((member_name, scheme), (field_name, ty)) in sig_unify {
-                // Sanity check that our handler fields and effect members line up the way we
-                // expect them to.
-                debug_assert_eq!(&member_name, field_name);
+        let unify_sig_handler =
+            |ctx: &mut Self,
+             members_sig: Vec<(Ident, TyScheme)>,
+             sig: SimpleClosedRow<InArena<'infer>>| {
+                let sig_unify = members_sig.into_iter().zip(sig.iter());
+                for ((member_name, scheme), (field_name, ty)) in sig_unify {
+                    // Sanity check that our handler fields and effect members line up the way we
+                    // expect them to.
+                    debug_assert_eq!(&member_name, field_name);
 
-                let mut inst = Instantiate {
-                    db: ctx.db,
-                    ctx: ctx.ctx,
-                    unifiers: scheme
-                        .bound
-                        .into_iter()
-                        .map(|_| ctx.unifiers.new_key(None))
-                        .collect(),
-                };
+                    let mut inst = Instantiate {
+                        db: ctx.db,
+                        ctx: ctx.ctx,
+                        unifiers: scheme
+                            .bound
+                            .into_iter()
+                            .map(|_| ctx.unifiers.new_key(None))
+                            .collect(),
+                    };
 
-                // Transform our scheme ty into the type a handler should have
-                // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
-                let member_ty =
-                    transform_to_cps_handler_ty(ctx, scheme.ty.try_fold_with(&mut inst).unwrap())?;
+                    // Transform our scheme ty into the type a handler should have
+                    // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+                    let member_ty = transform_to_cps_handler_ty(
+                        ctx,
+                        scheme.ty.try_fold_with(&mut inst).unwrap(),
+                    )?;
 
-                // Unify our instantiated and transformed member type agaisnt the handler field
-                // type.
-                println!("unify_ty_ty\n\t{:?}\n\t{:?}", member_ty, ty);
-                ctx.unify_ty_ty(member_ty, *ty)?;
+                    // Unify our instantiated and transformed member type agaisnt the handler field
+                    // type.
+                    println!("unify_ty_ty\n\t{:?}\n\t{:?}", member_ty, ty);
+                    ctx.unify_ty_ty(member_ty, *ty)?;
 
-                // We want to check constrs after we unify our scheme type so that we've alread
-                // unified as many fresh variables into handler field variables as possible.
-                for constrs in scheme.constrs {
-                    match constrs.try_fold_with(&mut inst).unwrap() {
-                        Evidence::Row { left, right, goal } => {
-                            ctx.unify_row_combine(left, right, goal)?
+                    // We want to check constrs after we unify our scheme type so that we've alread
+                    // unified as many fresh variables into handler field variables as possible.
+                    for constrs in scheme.constrs {
+                        match constrs.try_fold_with(&mut inst).unwrap() {
+                            Evidence::Row { left, right, goal } => {
+                                ctx.unify_row_combine(left, right, goal)?
+                            }
                         }
                     }
+                    // TODO: We should check scheme.eff here as well, at least to confirm they are
+                    // all the same
                 }
-                // TODO: We should check scheme.eff here as well, at least to confirm they are
-                // all the same
-            }
-            Ok(())
-        };
+                Ok(())
+            };
 
         match (normal_handler, normal_eff) {
             (Row::Closed(handler), Row::Open(eff_var)) => {
                 let eff_name = eff_info
-                    .lookup_effect_by_member_names(self.module, &handler.fields)
+                    .lookup_effect_by_member_names(self.module, handler.fields(self))
                     .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
                 let mut members_sig = eff_info
                     .effect_members(eff_name)
@@ -1451,15 +1461,16 @@ where
                 // We succesfully unified the handler against it's expected signature.
                 // That means we can unify our eff_var against our effect
                 let name = eff_info.effect_name(eff_name);
-                let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
-                let eff_row = self.mk_row(&[name], &[unit_ty]);
+                let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_simple_row(&[], &[]))));
+                let eff_row = self.mk_simple_row(&[name], &[unit_ty]);
                 self.unify_var_ty(eff_var, self.mk_ty(RowTy(eff_row)))
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
+                let eff_ident = *eff.fields(self).first().unwrap();
                 let eff_name = eff_info
-                    .lookup_effect_by_name(self.module, eff.fields[0])
-                    .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
+                    .lookup_effect_by_name(self.module, eff_ident)
+                    .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
                 let mut members_sig = eff_info
                     .effect_members(eff_name)
                     .iter()
@@ -1480,9 +1491,10 @@ where
             }
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
+                let eff_ident = *eff.fields(self).first().unwrap();
                 let eff_name = eff_info
-                    .lookup_effect_by_name(self.module, eff.fields[0])
-                    .ok_or(TypeCheckError::UndefinedEffect(eff.fields[0]))?;
+                    .lookup_effect_by_name(self.module, eff_ident)
+                    .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
                 let members_sig = eff_info
                     .effect_members(eff_name)
                     .iter()
@@ -1515,7 +1527,7 @@ where
                     })
                     .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
 
-                let member_row = self.construct_row(members_sig);
+                let member_row = self.construct_simple_row(members_sig);
                 self.unify_var_ty(handler_var, self.mk_ty(RowTy(member_row)))
             }
             // We didn't learn enough info to solve our handle term, this is an error

@@ -6,7 +6,7 @@ use ena::unify::{EqUnifyValue, UnifyKey, UnifyValue};
 use pretty::DocAllocator;
 
 use crate::{
-    row::{ClosedRow, Row, RowInternals, RowLabel},
+    row::{ClosedRow, Row, RowInternals, RowLabel, SimpleClosedRow},
     Ty, TypeKind,
 };
 
@@ -79,7 +79,7 @@ impl<'ctx> EqUnifyValue for Ty<InArena<'ctx>> {}
 pub(crate) mod arena {
     use crate::{
         alloc::IteratorSorted,
-        row::{ClosedRow, RowLabel},
+        row::{RowLabel, SimpleClosedRow},
         AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
     };
     use aiahr_core::memory::{
@@ -142,11 +142,11 @@ pub(crate) mod arena {
             self.db.ident_str(label)
         }
 
-        fn mk_row(
+        fn mk_simple_row(
             &self,
             fields: &[RowLabel],
             values: &[Ty<InArena<'ctx>>],
-        ) -> ClosedRow<InArena<'ctx>> {
+        ) -> SimpleClosedRow<InArena<'ctx>> {
             debug_assert!(
                 fields.len() == values.len(),
                 "Expected row fields and valuse to be the same length"
@@ -155,10 +155,10 @@ pub(crate) mod arena {
                 fields.iter().considered_sorted(),
                 "Expected row fields to be sorted"
             );
-            ClosedRow {
-                fields: self.row_fields.intern_by_ref(fields),
-                values: self.row_values.intern_by_ref(values),
-            }
+            SimpleClosedRow::new(
+                self.row_fields.intern_by_ref(fields),
+                self.row_values.intern_by_ref(values),
+            )
         }
     }
 
@@ -246,7 +246,7 @@ impl<'ctx> Ty<InArena<'ctx>> {
     }
 }
 
-impl<'ctx> EqUnifyValue for ClosedRow<InArena<'ctx>> {}
+impl<'ctx> EqUnifyValue for SimpleClosedRow<InArena<'ctx>> {}
 
 pub type InferRow<'ctx> = Row<InArena<'ctx>>;
 
@@ -270,16 +270,15 @@ impl<'ctx> UnifyValue for InferRow<'ctx> {
 
 pub struct RowsNotDisjoint<'ctx> {
     /// Left row that was expected to be disjoint
-    pub left: ClosedRow<InArena<'ctx>>,
+    pub left: SimpleClosedRow<InArena<'ctx>>,
     /// Right row that was expected to be disjoint
-    pub right: ClosedRow<InArena<'ctx>>,
+    pub right: SimpleClosedRow<InArena<'ctx>>,
     /// The label left and right both contain
     pub label: RowLabel,
 }
 
 impl<'ctx> ClosedRow<InArena<'ctx>> {
-    /// Create a new row that contains all self fields that are not present in sub.
-    pub fn difference(self, sub: Self) -> (Box<[RowLabel]>, Box<[Ty<InArena<'ctx>>]>) {
+    fn difference(self, sub: Self) -> (Box<[RowLabel]>, Box<[Ty<InArena<'ctx>>]>) {
         let out_row = self
             .fields
             .iter()
@@ -293,19 +292,36 @@ impl<'ctx> ClosedRow<InArena<'ctx>> {
         }
         (fields.into_boxed_slice(), values.into_boxed_slice())
     }
+}
+impl<'ctx> SimpleClosedRow<InArena<'ctx>> {
+    /// Create a new row that contains all self fields that are not present in sub.
+    pub fn difference(self, sub: Self) -> RowInternals<InArena<'ctx>> {
+        self.0.difference(sub.0)
+    }
 
     /// Combine two disjoint rows into a new row.
     /// This maintains the row invariants in the resulting row.
     /// If called on two overlapping rows an error is thrown.
     pub fn disjoint_union(
         self,
-        right: Self,
+        right: &Self,
     ) -> Result<RowInternals<InArena<'ctx>>, RowsNotDisjoint<'ctx>> {
         self._disjoint_union(right, &(), |left, right, lbl| RowsNotDisjoint {
-            left,
-            right,
+            left: *left,
+            right: *right,
             label: *lbl,
         })
+    }
+
+    /// Checks if we can attempt to unify two rows.
+    /// If two rows have different lenghts or different field labels we know they cannot unify so
+    /// we don't need to attempt the more expensive unification on their row values.
+    pub fn is_unifiable(self, right: Self) -> bool {
+        self.0.fields == right.0.fields
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&RowLabel, &Ty<InArena<'ctx>>)> {
+        self.0.fields.iter().zip(self.0.values.iter())
     }
 }
 
@@ -313,6 +329,7 @@ impl<'ctx> ClosedRow<InArena<'ctx>> {
 mod tests {
     use aiahr_core::id::TyVarId;
 
+    use crate::PrettyType;
     use crate::{row::Row, MkTy, TypeKind::*};
 
     #[derive(Default)]
@@ -329,7 +346,7 @@ mod tests {
         //let ctx: TyCtx<'_> = TyCtx::new(&db, &arena);
 
         let int = db.mk_ty(IntTy);
-        let row = db.mk_row(
+        let row = db.mk_simple_row(
             &[db.mk_label("x"), db.mk_label("y"), db.mk_label("z")],
             &[int, int, int],
         );

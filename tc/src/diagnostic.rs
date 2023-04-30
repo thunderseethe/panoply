@@ -8,8 +8,8 @@ use aiahr_core::{
 };
 use aiahr_ty::{
     infer::{InArena, InferRow, InferTy, UnifierToTcVarError},
-    row::{ClosedRow, RowLabel},
-    TypeVarOf,
+    row::{RowLabel, SimpleClosedRow},
+    PrettyType, TypeVarOf,
 };
 
 use pretty::{docs, DocAllocator};
@@ -22,9 +22,13 @@ pub(crate) enum TypeCheckError<'ctx> {
     TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
     OccursCheckFailed(TypeVarOf<InArena<'ctx>>, InferTy<'ctx>),
     UnifierToTcVar(UnifierToTcVarError),
-    RowsNotDisjoint(ClosedRow<InArena<'ctx>>, ClosedRow<InArena<'ctx>>, RowLabel),
+    RowsNotDisjoint(
+        SimpleClosedRow<InArena<'ctx>>,
+        SimpleClosedRow<InArena<'ctx>>,
+        RowLabel,
+    ),
     RowsNotEqual(InferRow<'ctx>, InferRow<'ctx>),
-    UndefinedEffectSignature(ClosedRow<InArena<'ctx>>),
+    UndefinedEffectSignature(SimpleClosedRow<InArena<'ctx>>),
     UndefinedEffect(Ident),
     UnsolvedHandle {
         handler: TypeVarOf<InArena<'ctx>>,
