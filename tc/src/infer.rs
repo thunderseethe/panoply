@@ -55,8 +55,6 @@ pub struct Constraints<'infer> {
     tys: Vec<(InferTy<'infer>, InferTy<'infer>, Span)>,
     /// Sets of data row combinations predicates that must hold
     data_rows: Vec<(SimpleRowCombination<'infer>, Span)>,
-    /// Sets of data row equalities that must hold
-    data_eq: Vec<(SimpleInferRow<'infer>, SimpleInferRow<'infer>, Span)>,
     /// Sets of effect row combinations predicates that must hold
     effect_rows: Vec<(ScopedRowCombination<'infer>, Span)>,
     /// Sets of effect row equalities that must hold
@@ -79,15 +77,6 @@ impl<'infer> Constraints<'infer> {
     ) {
         self.data_rows
             .push((RowCombination { left, right, goal }, span))
-    }
-
-    fn add_data_row_eq(
-        &mut self,
-        left: SimpleInferRow<'infer>,
-        right: SimpleInferRow<'infer>,
-        span: Span,
-    ) {
-        self.data_eq.push((left, right, span))
     }
 
     fn add_effect_row_combine(
@@ -926,14 +915,268 @@ where
             }
         }
     }
+}
 
-    fn row_eq_constraint(
+/// This trait covers the bulk of our work in the solution stage.
+/// Unification proceeds by decomposing types and rows and unifying various combinations of their
+/// components. For ease of use we capture these various possible combinations as impls of this
+/// trait.
+trait Unify<'infer, L, R> {
+    /// Synytactically unify L and R. Returns Ok(()) if they are unifiable, otherwise returns an error.
+    fn unify(&mut self, left: L, right: R) -> Result<(), TypeCheckError<'infer>>;
+}
+
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, TypeK>, InferTy<'infer>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    /// Unify a variable and a type.
+    /// This checks that the variable is not present in type, throwing an error if varaibles is
+    /// present.
+    /// If not we record that the unification variable is solved to given type.
+    fn unify(
+        &mut self,
+        var: TcUnifierVar<'infer, TypeK>,
+        ty: InferTy<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let ty_ = ty
+            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
+            .map_err(|var| TypeCheckError::TypeOccursCheckFailed(var, ty))?;
+        self.ty_unifiers
+            .unify_var_value(var, Some(ty_))
+            .map_err(|e| e.into())
+    }
+}
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, TypeK>, TcUnifierVar<'infer, TypeK>>
+    for InferCtx<'_, 'infer, I, Solution>
+{
+    fn unify(
+        &mut self,
+        left: TcUnifierVar<'infer, TypeK>,
+        right: TcUnifierVar<'infer, TypeK>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        self.ty_unifiers
+            .unify_var_var(left, right)
+            .map_err(From::from)
+    }
+}
+
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, SimpleRowK>, TcUnifierVar<'infer, SimpleRowK>>
+    for InferCtx<'_, 'infer, I, Solution>
+{
+    fn unify(
+        &mut self,
+        left: TcUnifierVar<'infer, SimpleRowK>,
+        right: TcUnifierVar<'infer, SimpleRowK>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        self.data_row_unifiers
+            .unify_var_var(left, right)
+            .map_err(From::from)
+    }
+}
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, SimpleRowK>, SimpleClosedRow<InArena<'infer>>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        var: TcUnifierVar<'infer, SimpleRowK>,
+        row: SimpleClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let row_ = row
+            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
+            .map_err(|var| TypeCheckError::DataRowOccursCheckFailed(var, row))?;
+        self.dispatch_solved_data_eqs(var, row)?;
+        self.data_row_unifiers
+            .unify_var_value(var, Some(row_))
+            .map_err(|err| TypeCheckError::DataRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1)))
+    }
+}
+
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, TcUnifierVar<'infer, ScopedRowK>>
+    for InferCtx<'_, 'infer, I, Solution>
+{
+    fn unify(
+        &mut self,
+        left: TcUnifierVar<'infer, ScopedRowK>,
+        right: TcUnifierVar<'infer, ScopedRowK>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        self.eff_row_unifiers
+            .unify_var_var(left, right)
+            .map_err(From::from)
+    }
+}
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, ScopedClosedRow<InArena<'infer>>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        var: TcUnifierVar<'infer, ScopedRowK>,
+        row: ScopedClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let row_ = row
+            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
+            .map_err(|var| TypeCheckError::EffectRowOccursCheckFailed(var, row))?;
+        self.dispatch_solved_eff_eqs(var, row)?;
+        self.eff_row_unifiers
+            .unify_var_value(var, Some(row_))
+            .map_err(|err| {
+                TypeCheckError::EffectRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1))
+            })
+    }
+}
+impl<'infer, I> Unify<'infer, SimpleClosedRow<InArena<'infer>>, SimpleClosedRow<InArena<'infer>>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        left: SimpleClosedRow<InArena<'infer>>,
+        right: SimpleClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        if !left.is_unifiable(right) {
+            return Err((left, right).into());
+        }
+
+        for (left, right) in left.values(self).iter().zip(right.values(self).iter()) {
+            self.unify(*left, *right)?;
+        }
+
+        Ok(())
+    }
+}
+impl<'infer, I> Unify<'infer, SimpleInferRow<'infer>, SimpleInferRow<'infer>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
         &mut self,
         left: SimpleInferRow<'infer>,
         right: SimpleInferRow<'infer>,
-        span: Span,
-    ) {
-        self.constraints.add_data_row_eq(left, right, span)
+    ) -> Result<(), TypeCheckError<'infer>> {
+        match (left, right) {
+            (Row::Open(left), Row::Open(right)) => self.unify(left, right),
+            (Row::Open(var), Row::Closed(row)) | (Row::Closed(row), Row::Open(var)) => {
+                self.unify(var, row)
+            }
+            (Row::Closed(left), Row::Closed(right)) => self.unify(left, right),
+        }
+    }
+}
+
+impl<'infer, I> Unify<'infer, ScopedClosedRow<InArena<'infer>>, ScopedClosedRow<InArena<'infer>>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        left: ScopedClosedRow<InArena<'infer>>,
+        right: ScopedClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        if !left.is_unifiable(right) {
+            return Err((left, right).into());
+        }
+
+        for (left, right) in left.values(self).iter().zip(right.values(self).iter()) {
+            self.unify(*left, *right)?;
+        }
+
+        Ok(())
+    }
+}
+impl<'infer, I> Unify<'infer, ScopedInferRow<'infer>, ScopedInferRow<'infer>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        left: ScopedInferRow<'infer>,
+        right: ScopedInferRow<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        match (left, right) {
+            (Row::Open(left), Row::Open(right)) => self.unify(left, right),
+            (Row::Open(var), Row::Closed(row)) | (Row::Closed(row), Row::Open(var)) => {
+                self.unify(var, row)
+            }
+            (Row::Closed(left), Row::Closed(right)) => self.unify(left, right),
+        }
+    }
+}
+
+/// This is the main entry point of unificaiton and handles unifying two arbitrary types.
+/// Each type is substituted by the current substitution to remove as many unification
+/// variables as possible before unifying.
+impl<'infer, I> Unify<'infer, InferTy<'infer>, InferTy<'infer>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        left: InferTy<'infer>,
+        right: InferTy<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let left = self.normalize_ty(left);
+        let right = self.normalize_ty(right);
+
+        match (*left, *right) {
+            // If an error appears anywhere fail unification
+            (ErrorTy, _) | (_, ErrorTy) => Err((left, right).into()),
+
+            // Special case for when two keys meet
+            // Instead of unifiying either variable as a value of the other, we need to record that
+            // the two key's equivalence classes must be the same.
+            (VarTy(left_var), VarTy(right_var)) => self.unify(left_var, right_var),
+
+            // If a key meets a new ty record they must be equal
+            (_, VarTy(var)) => self.unify(var, left),
+            (VarTy(var), _) => self.unify(var, right),
+
+            // Coerce a product into a row
+            (RowTy(left), ProdTy(right)) => self.unify(Row::Closed(left), right),
+            (ProdTy(left), RowTy(right)) => self.unify(left, Row::Closed(right)),
+
+            // Coerce a sum into a row
+            (RowTy(left), SumTy(right)) => self.unify(Row::Closed(left), right),
+            (SumTy(left), RowTy(right)) => self.unify(left, Row::Closed(right)),
+
+            // Decompose compound types
+            (FunTy(left_arg, left_ret), FunTy(right_arg, right_ret)) => {
+                self.unify(left_arg, right_arg)?;
+                self.unify(left_ret, right_ret)
+            }
+            (RowTy(left_row), RowTy(right_row)) => self.unify(left_row, right_row),
+            (ProdTy(left), ProdTy(right)) => self.unify(left, right),
+            (SumTy(left), SumTy(right)) => self.unify(left, right),
+            // Discharge equal types
+            (IntTy, IntTy) => Ok(()),
+
+            // Type mismatch
+            (IntTy, FunTy(_, _))
+            | (IntTy, RowTy(_))
+            | (IntTy, ProdTy(_))
+            | (IntTy, SumTy(_))
+            | (FunTy(_, _), IntTy)
+            | (FunTy(_, _), RowTy(_))
+            | (FunTy(_, _), ProdTy(_))
+            | (FunTy(_, _), SumTy(_))
+            | (RowTy(_), IntTy)
+            | (RowTy(_), FunTy(_, _))
+            | (ProdTy(_), IntTy)
+            | (ProdTy(_), FunTy(_, _))
+            | (ProdTy(_), SumTy(_))
+            | (SumTy(_), IntTy)
+            | (SumTy(_), FunTy(_, _))
+            | (SumTy(_), ProdTy(_)) => Err((left, right).into()),
+        }
     }
 }
 
@@ -981,7 +1224,7 @@ where
     {
         let constraints = std::mem::take(&mut self.constraints);
         for (left, right, span) in constraints.tys {
-            self.unify_ty_ty(left, right)
+            self.unify(left, right)
                 .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
@@ -1272,178 +1515,6 @@ where
         Ok(())
     }
 
-    /// Unify a variable and a type.
-    /// This checks that the variable is not present in type, throwing an error if varaibles is
-    /// present.
-    /// If not we record that the unification variable is solved to given type.
-    fn unify_var_ty(
-        &mut self,
-        var: TcUnifierVar<'infer>,
-        ty: InferTy<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let ty_ = ty
-            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
-            .map_err(|var| TypeCheckError::TypeOccursCheckFailed(var, ty))?;
-        self.ty_unifiers
-            .unify_var_value(var, Some(ty_))
-            .map_err(|e| e.into())
-    }
-
-    fn unify_datarow_datarow(
-        &mut self,
-        left: SimpleClosedRow<InArena<'infer>>,
-        right: SimpleClosedRow<InArena<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        // If our row labels aren't equal the types cannot be equal
-        if !left.is_unifiable(right) {
-            return Err(TypeCheckError::DataRowsNotEqual(
-                Row::Closed(left),
-                Row::Closed(right),
-            ));
-        }
-
-        for (left_ty, right_ty) in left.values(self).iter().zip(right.values(self).iter()) {
-            self.unify_ty_ty(*left_ty, *right_ty)?;
-        }
-
-        Ok(())
-    }
-
-    fn unify_ty_ty_normalized(
-        &mut self,
-        left: InferTy<'infer>,
-        right: InferTy<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        match (*left, *right) {
-            // If an error appears anywhere fail unification
-            (ErrorTy, _) | (_, ErrorTy) => Err((left, right).into()),
-
-            // Special case for when two keys meet
-            // Instead of unifiying either variable as a value of the other, we need to record that
-            // the two key's equivalence classes must be the same.
-            (VarTy(left_var), VarTy(right_var)) => self
-                .ty_unifiers
-                .unify_var_var(left_var, right_var)
-                .map_err(|e| e.into()),
-
-            // If a key meets a new ty record they must be equal
-            (_, VarTy(var)) => self.unify_var_ty(var, left),
-            (VarTy(var), _) => self.unify_var_ty(var, right),
-
-            // Coerce a product into a row
-            (RowTy(left), ProdTy(right)) => self.unify_datarow_eq(Row::Closed(left), right),
-            (ProdTy(left), RowTy(right)) => self.unify_datarow_eq(left, Row::Closed(right)),
-
-            // Coerce a sum into a row
-            (RowTy(left), SumTy(right)) => self.unify_datarow_eq(Row::Closed(left), right),
-            (SumTy(left), RowTy(right)) => self.unify_datarow_eq(left, Row::Closed(right)),
-
-            // Decompose compound types
-            (FunTy(left_arg, left_ret), FunTy(right_arg, right_ret)) => {
-                self.unify_ty_ty_normalized(left_arg, right_arg)?;
-                self.unify_ty_ty_normalized(left_ret, right_ret)
-            }
-            (RowTy(left_row), RowTy(right_row)) => self.unify_datarow_datarow(left_row, right_row),
-            (ProdTy(left), ProdTy(right)) => self.unify_datarow_eq(left, right),
-            (SumTy(left), SumTy(right)) => self.unify_datarow_eq(left, right),
-            // Discharge equal types
-            (IntTy, IntTy) => Ok(()),
-
-            // Type mismatch
-            (IntTy, FunTy(_, _))
-            | (IntTy, RowTy(_))
-            | (IntTy, ProdTy(_))
-            | (IntTy, SumTy(_))
-            | (FunTy(_, _), IntTy)
-            | (FunTy(_, _), RowTy(_))
-            | (FunTy(_, _), ProdTy(_))
-            | (FunTy(_, _), SumTy(_))
-            | (RowTy(_), IntTy)
-            | (RowTy(_), FunTy(_, _))
-            | (ProdTy(_), IntTy)
-            | (ProdTy(_), FunTy(_, _))
-            | (ProdTy(_), SumTy(_))
-            | (SumTy(_), IntTy)
-            | (SumTy(_), FunTy(_, _))
-            | (SumTy(_), ProdTy(_)) => Err((left, right).into()),
-        }
-    }
-
-    /// This is the main entry point of unificaiton and handles unifying two arbitrary types.
-    /// Each type is substituted by the current substitution to remove as many unification
-    /// variables as possible before unifying.
-    fn unify_ty_ty(
-        &mut self,
-        left: InferTy<'infer>,
-        right: InferTy<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        // Apply current partial substitution before comparing
-        let normal_left = self.normalize_ty(left);
-        let normal_right = self.normalize_ty(right);
-
-        self.unify_ty_ty_normalized(normal_left, normal_right)
-    }
-
-    fn unify_datarow_eq(
-        &mut self,
-        left: SimpleInferRow<'infer>,
-        right: SimpleInferRow<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        match (left, right) {
-            (Row::Open(l_var), Row::Open(r_var)) => {
-                self.data_row_unifiers.unify_var_var(l_var, r_var)?
-            }
-            (Row::Open(var), Row::Closed(row)) | (Row::Closed(row), Row::Open(var)) => {
-                self.unify_rowvar_datarow(var, row)?
-            }
-            (Row::Closed(left_row), Row::Closed(right_row)) => {
-                if left_row.len(self) != right_row.len(self) {
-                    return Err(TypeCheckError::DataRowsNotEqual(
-                        Row::Closed(left_row),
-                        Row::Closed(right_row),
-                    ));
-                }
-                for ((left_field, left_value), (right_field, right_value)) in
-                    left_row.iter().zip(right_row.iter())
-                {
-                    debug_assert_eq!(left_field, right_field);
-                    self.unify_ty_ty(*left_value, *right_value)?;
-                }
-            }
-        };
-        Ok(())
-    }
-
-    fn unify_rowvar_datarow(
-        &mut self,
-        var: TcUnifierVar<'infer, SimpleRowK>,
-        row: SimpleClosedRow<InArena<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let row_ = row
-            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
-            .map_err(|var| TypeCheckError::DataRowOccursCheckFailed(var, row))?;
-        self.dispatch_solved_data_eqs(var, row)?;
-        self.data_row_unifiers
-            .unify_var_value(var, Some(row_))
-            .map_err(|err| TypeCheckError::DataRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1)))
-    }
-
-    fn unify_rowvar_effrow(
-        &mut self,
-        var: TcUnifierVar<'infer, ScopedRowK>,
-        row: ScopedClosedRow<InArena<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let row_ = row
-            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
-            .map_err(|var| TypeCheckError::EffectRowOccursCheckFailed(var, row))?;
-        self.dispatch_solved_eff_eqs(var, row)?;
-        self.eff_row_unifiers
-            .unify_var_value(var, Some(row_))
-            .map_err(|err| {
-                TypeCheckError::EffectRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1))
-            })
-    }
-
     fn unify_eff_row_combine(
         &mut self,
         left: ScopedInferRow<'infer>,
@@ -1458,8 +1529,8 @@ where
             Row::Open(goal_var) => match (left, right) {
                 (Row::Closed(left), Row::Closed(right)) => {
                     let (fields, values) = left.union(&right);
-                    let row = self.mk_row(&fields, &values);
-                    self.unify_rowvar_effrow(goal_var, row)?;
+                    let row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&fields, &values);
+                    self.unify(goal_var, row)?;
                 }
                 (Row::Open(left_var), Row::Closed(right_row)) => {
                     self.state
@@ -1478,9 +1549,9 @@ where
                             _ => None,
                         })
                         .map(|(left, right, goal)| {
-                            self.eff_row_unifiers.unify_var_var(goal, goal_var)?;
-                            self.eff_row_unifiers.unify_var_var(left, left_var)?;
-                            self.unify_effrow_effrow(right, right_row)
+                            self.unify(goal, goal_var)?;
+                            self.unify(left, left_var)?;
+                            self.unify(right, right_row)
                         })
                         .unwrap_or_else(|| {
                             self.state.eff_eqns.insert(ScopedRowEquation::OpenGoal(
@@ -1512,9 +1583,9 @@ where
                             _ => None,
                         })
                         .map(|(left, right, goal)| {
-                            self.eff_row_unifiers.unify_var_var(goal, goal_var)?;
-                            self.eff_row_unifiers.unify_var_var(right, right_var)?;
-                            self.unify_effrow_effrow(left, left_row)
+                            self.unify(goal, goal_var)?;
+                            self.unify(right, right_var)?;
+                            self.unify(left, left_row)
                         })
                         .unwrap_or_else(|| {
                             self.state.eff_eqns.insert(ScopedRowEquation::OpenGoal(
@@ -1546,9 +1617,9 @@ where
                             _ => None,
                         })
                         .map(|(left, right, goal)| {
-                            self.eff_row_unifiers.unify_var_var(left, left_var)?;
-                            self.eff_row_unifiers.unify_var_var(right, right_var)?;
-                            self.eff_row_unifiers.unify_var_var(goal, goal_var)
+                            self.unify(left, left_var)?;
+                            self.unify(right, right_var)?;
+                            self.unify(goal, goal_var)
                         })
                         .unwrap_or_else(|| {
                             self.state.eff_eqns.insert(ScopedRowEquation::OpenGoal(
@@ -1580,9 +1651,9 @@ where
                             _ => None,
                         })
                         .map(|(left_var, right_var, goal_row)| {
-                            self.eff_row_unifiers.unify_var_var(left_var, left)?;
-                            self.eff_row_unifiers.unify_var_var(right_var, right)?;
-                            self.unify_effrow_effrow(goal_row, goal)
+                            self.unify(left_var, left)?;
+                            self.unify(right_var, right)?;
+                            self.unify(goal_row, goal)
                         })
                         .unwrap_or_else(|| {
                             self.state
@@ -1600,29 +1671,10 @@ where
                 (Row::Closed(left), Row::Closed(right)) => {
                     let (fields, values) = left.union(&right);
                     let row = self.mk_row(&fields, &values);
-                    self.unify_effrow_effrow(goal, row)?;
+                    self.unify(goal, row)?;
                 }
             },
         };
-        Ok(())
-    }
-
-    fn unify_effrow_effrow(
-        &mut self,
-        left: ScopedClosedRow<InArena<'infer>>,
-        right: ScopedClosedRow<InArena<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        if !left.is_unifiable(right) {
-            return Err(TypeCheckError::EffectRowsNotEqual(
-                Row::Closed(left),
-                Row::Closed(right),
-            ));
-        }
-
-        for (left_ty, right_ty) in left.values(self).iter().zip(right.values(self).iter()) {
-            self.unify_ty_ty(*left_ty, *right_ty)?;
-        }
-
         Ok(())
     }
 
@@ -1643,8 +1695,8 @@ where
                     let (fields, values) = left.disjoint_union(&right).map_err(|err| {
                         TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
                     })?;
-                    let row = self.mk_row(&fields, &values);
-                    self.unify_rowvar_datarow(goal_var, row)
+                    let row: SimpleClosedRow<InArena<'infer>> = self.mk_row(&fields, &values);
+                    self.unify(goal_var, row)
                 }
                 (Row::Open(left_var), Row::Closed(right_row)) => self
                     .state
@@ -1668,9 +1720,9 @@ where
                         _ => None,
                     })
                     .map(|(goal, closed, open)| {
-                        self.data_row_unifiers.unify_var_var(goal, goal_var)?;
-                        self.data_row_unifiers.unify_var_var(open, left_var)?;
-                        self.unify_datarow_datarow(closed, right_row)
+                        self.unify(goal, goal_var)?;
+                        self.unify(open, left_var)?;
+                        self.unify(closed, right_row)
                     })
                     .unwrap_or_else(|| {
                         self.state
@@ -1697,8 +1749,8 @@ where
                         _ => None,
                     })
                     .map(|(closed, open)| {
-                        self.data_row_unifiers.unify_var_var(open, right_var)?;
-                        self.unify_datarow_datarow(closed, left_row)
+                        self.unify(open, right_var)?;
+                        self.unify(closed, left_row)
                     })
                     .unwrap_or_else(|| {
                         self.state
@@ -1725,15 +1777,14 @@ where
                             }) if (*goal == goal_var && (*min == min_var || *max == right_var))
                                 || (*min == min_var && *max == max_var) =>
                             {
-                                Some((min, max, goal))
+                                Some((*min, *max, *goal))
                             }
                             _ => None,
                         })
                         .map(|(left, right, goal)| {
-                            self.data_row_unifiers.unify_var_var(*left, left_var)?;
-                            self.data_row_unifiers.unify_var_var(*right, right_var)?;
-                            self.data_row_unifiers.unify_var_var(*goal, goal_var)?;
-                            Ok(())
+                            self.unify(left, left_var)?;
+                            self.unify(right, right_var)?;
+                            self.unify(goal, goal_var)
                         })
                         .unwrap_or_else(|| {
                             self.state
@@ -1753,7 +1804,7 @@ where
                         TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
                     })?;
                     let row = self.mk_row(&fields, &values);
-                    self.unify_datarow_datarow(goal_row, row)
+                    self.unify(goal_row, row)
                 }
                 // With one open row we solve that row
                 (Row::Open(left_var), Row::Closed(right_row)) => {
@@ -1761,16 +1812,16 @@ where
                     let row = self.mk_row(&fields, &values);
                     let (fields, values) = goal_row.difference(row);
                     let right_goal_row = self.mk_row(&fields, &values);
-                    self.unify_datarow_datarow(right_row, right_goal_row)?;
-                    self.unify_rowvar_datarow(left_var, row)
+                    self.unify(right_row, right_goal_row)?;
+                    self.unify(left_var, row)
                 }
                 (Row::Closed(left_row), Row::Open(right_var)) => {
                     let (fields, values) = goal_row.difference(left_row);
                     let row = self.mk_row(&fields, &values);
                     let (fields, values) = goal_row.difference(row);
                     let left_goal_row = self.mk_row(&fields, &values);
-                    self.unify_datarow_datarow(left_row, left_goal_row).unwrap();
-                    self.unify_rowvar_datarow(right_var, row)
+                    self.unify(left_row, left_goal_row).unwrap();
+                    self.unify(right_var, row)
                 }
                 // We can't unify this case as is, we need more information.
                 // And our goal is closed so we can't set it to pending
@@ -1802,11 +1853,11 @@ where
                             _ => None,
                         })
                         .map(|(min, max, goal)| {
-                            self.data_row_unifiers.unify_var_var(min_var, min)?;
-                            self.data_row_unifiers.unify_var_var(max_var, max)?;
+                            self.unify(min_var, min)?;
+                            self.unify(max_var, max)?;
                             match goal {
-                                Row::Open(var) => self.unify_rowvar_datarow(var, goal_row),
-                                Row::Closed(row) => self.unify_datarow_datarow(row, goal_row),
+                                Row::Open(var) => self.unify(var, goal_row),
+                                Row::Closed(row) => self.unify(row, goal_row),
                             }
                         })
                         .unwrap_or_else(|| {
@@ -1890,8 +1941,7 @@ where
 
                     // Unify our instantiated and transformed member type agaisnt the handler field
                     // type.
-                    println!("unify_ty_ty\n\t{:?}\n\t{:?}", member_ty, ty);
-                    ctx.unify_ty_ty(member_ty, *ty)?;
+                    ctx.unify(member_ty, *ty)?;
 
                     // We want to check constrs after we unify our scheme type so that we've alread
                     // unified as many fresh variables into handler field variables as possible.
@@ -1935,8 +1985,8 @@ where
                 // That means we can unify our eff_var against our effect
                 let name = eff_info.effect_name(eff_name);
                 let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
-                let eff_row = self.mk_row(&[name], &[unit_ty]);
-                self.unify_rowvar_effrow(eff_var, eff_row)
+                let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[unit_ty]);
+                self.unify(eff_var, eff_row)
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
@@ -2003,7 +2053,7 @@ where
                     .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
 
                 let member_row = self.construct_simple_row(members_sig);
-                self.unify_rowvar_datarow(handler_var, member_row)
+                self.unify(handler_var, member_row)
             }
             // We didn't learn enough info to solve our handle term, this is an error
             (Row::Open(handler_var), Row::Open(eff_var)) => Err(TypeCheckError::UnsolvedHandle {
