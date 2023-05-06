@@ -7,7 +7,7 @@ use std::ops::Deref;
 mod alloc;
 pub use alloc::{
     db::{InDb, RowFields, RowValues, TyData},
-    AccessTy, MkTy, TypeAlloc, TypeVarOf,
+    AccessTy, MkTy, ScopedRowVarOf, SimpleRowVarOf, TypeAlloc, TypeVarOf,
 };
 
 mod evidence;
@@ -15,6 +15,7 @@ pub use evidence::Evidence;
 
 mod fold;
 use self::fold::DefaultFold;
+use self::row::ScopedRow;
 pub use fold::{FallibleEndoTypeFold, FallibleTypeFold, TypeFoldable};
 
 pub mod row;
@@ -32,8 +33,8 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 
-pub trait PrettyType<Db: ?Sized, A: TypeAlloc> {
-    fn pretty<'a, 'b, D, Ann>(
+pub trait PrettyType<Db: ?Sized, A: TypeAlloc, Ann> {
+    fn pretty<'a, 'b, D>(
         &self,
         allocator: &'a D,
         db: &Db,
@@ -42,7 +43,7 @@ pub trait PrettyType<Db: ?Sized, A: TypeAlloc> {
     where
         D: ?Sized + DocAllocator<'a, Ann>,
         D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        A::TypeVar: pretty::Pretty<'a, D, Ann>,
+        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
         A: 'b,
         Ann: 'a;
 }
@@ -226,12 +227,12 @@ where
     }
 }
 
-impl<A, Db> PrettyType<Db, A> for Ty<A>
+impl<A, Ann, Db> PrettyType<Db, A, Ann> for Ty<A>
 where
     A: TypeAlloc,
     Db: ?Sized + crate::Db,
 {
-    fn pretty<'a, 'b, D, Ann>(
+    fn pretty<'a, 'b, D>(
         &self,
         allocator: &'a D,
         db: &Db,
@@ -248,12 +249,12 @@ where
     }
 }
 
-impl<A, Db> PrettyType<Db, A> for TypeKind<A>
+impl<A, Db, Ann> PrettyType<Db, A, Ann> for TypeKind<A>
 where
     A: TypeAlloc,
     Db: ?Sized + crate::Db,
 {
-    fn pretty<'a, 'b, D, Ann>(
+    fn pretty<'a, 'b, D>(
         &self,
         a: &'a D,
         db: &Db,
@@ -295,7 +296,7 @@ where
 pub struct TyScheme<A: TypeAlloc = InDb> {
     pub bound: Vec<A::TypeVar>,
     pub constrs: Vec<Evidence<A>>,
-    pub eff: Row<A>,
+    pub eff: ScopedRow<A>,
     pub ty: Ty<A>,
 }
 impl<Db> DebugWithDb<Db> for TyScheme

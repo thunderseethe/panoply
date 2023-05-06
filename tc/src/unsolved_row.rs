@@ -2,20 +2,24 @@
 use std::cmp::Ordering;
 
 use aiahr_ty::{
-    infer::InArena,
-    row::{Row, SimpleClosedRow},
+    infer::{InArena, SimpleInferRow},
+    row::{Row, RowSema, Scoped, ScopedRow, Simple, SimpleClosedRow, SimpleRow},
     Evidence, FallibleTypeFold, TypeAlloc, TypeFoldable,
 };
 
-impl<'ctx> From<OrderedRowXorRow<InArena<'ctx>>> for (Row<InArena<'ctx>>, Row<InArena<'ctx>>) {
-    fn from(val: OrderedRowXorRow<InArena<'ctx>>) -> Self {
+impl<'ctx, Sema: RowSema> From<OrderedRowXorRow<InArena<'ctx>, Sema>>
+    for (Row<InArena<'ctx>, Sema>, Row<InArena<'ctx>, Sema>)
+{
+    fn from(val: OrderedRowXorRow<InArena<'ctx>, Sema>) -> Self {
         match val {
             OrderedRowXorRow::ClosedOpen(row, var) => (Row::Closed(row), Row::Open(var)),
             OrderedRowXorRow::OpenOpen { min, max } => (Row::Open(min), Row::Open(max)),
         }
     }
 }
-impl<'ctx> TryFrom<(Row<InArena<'ctx>>, Row<InArena<'ctx>>)> for OrderedRowXorRow<InArena<'ctx>> {
+impl<'ctx> TryFrom<(SimpleInferRow<'ctx>, SimpleInferRow<'ctx>)>
+    for OrderedRowXorRow<InArena<'ctx>, Simple>
+{
     type Error = (
         SimpleClosedRow<InArena<'ctx>>,
         SimpleClosedRow<InArena<'ctx>>,
@@ -84,22 +88,42 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for CombineInto<A> {
 ///
 ///  2. We can store at most one closed row. Two closed rows is considered invalid, unlike if we
 ///     stored a `(Row<'ctx, TV>, Row<'ctx, TV>)`).
-#[derive(Hash, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OrderedRowXorRow<A: TypeAlloc, Closed = SimpleClosedRow<A>> {
-    ClosedOpen(Closed, A::TypeVar),
-    OpenOpen { min: A::TypeVar, max: A::TypeVar },
+#[derive(Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OrderedRowXorRow<A: TypeAlloc, Sema: RowSema> {
+    ClosedOpen(Sema::Closed<A>, Sema::Open<A>),
+    OpenOpen {
+        min: Sema::Open<A>,
+        max: Sema::Open<A>,
+    },
 }
-impl<A: TypeAlloc, Closed> Copy for OrderedRowXorRow<A, Closed>
+impl<A: TypeAlloc, Sema: RowSema> Clone for OrderedRowXorRow<A, Sema>
+where
+    Sema::Open<A>: Clone,
+    Sema::Closed<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            OrderedRowXorRow::ClosedOpen(closed, open) => {
+                Self::ClosedOpen(closed.clone(), open.clone())
+            }
+            OrderedRowXorRow::OpenOpen { min, max } => Self::OpenOpen {
+                min: min.clone(),
+                max: max.clone(),
+            },
+        }
+    }
+}
+impl<A: TypeAlloc, Sema: RowSema> Copy for OrderedRowXorRow<A, Sema>
 where
     A: Clone,
-    A::TypeVar: Copy,
-    Closed: Copy,
+    Sema::Open<A>: Copy,
+    Sema::Closed<A>: Copy,
 {
 }
-impl<A: TypeAlloc> OrderedRowXorRow<A> {
-    pub(crate) fn with_open_open(l: A::TypeVar, r: A::TypeVar) -> Self
+impl<A: TypeAlloc, Sema: RowSema> OrderedRowXorRow<A, Sema> {
+    pub(crate) fn with_open_open(l: Sema::Open<A>, r: Sema::Open<A>) -> Self
     where
-        A::TypeVar: Ord,
+        Sema::Open<A>: Ord,
     {
         debug_assert!(l != r, "Expected l != r in OpenOpen variant");
         if l < r {
@@ -109,9 +133,9 @@ impl<A: TypeAlloc> OrderedRowXorRow<A> {
         }
     }
 }
-impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<A> {
+impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<A, Simple> {
     type Alloc = A;
-    type Out<B: TypeAlloc> = (Row<B>, Row<B>);
+    type Out<B: TypeAlloc> = (SimpleRow<B>, SimpleRow<B>);
 
     fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
         self,
@@ -120,50 +144,125 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<
         Ok(match self {
             OrderedRowXorRow::ClosedOpen(row, tv) => (
                 Row::Closed(row.try_fold_with(fold)?),
-                fold.try_fold_row_var(tv)?,
+                fold.try_fold_simple_row_var(tv)?,
             ),
-            OrderedRowXorRow::OpenOpen { min, max } => {
-                (fold.try_fold_row_var(min)?, fold.try_fold_row_var(max)?)
-            }
+            OrderedRowXorRow::OpenOpen { min, max } => (
+                fold.try_fold_simple_row_var(min)?,
+                fold.try_fold_simple_row_var(max)?,
+            ),
+        })
+    }
+}
+impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<A, Scoped> {
+    type Alloc = A;
+    type Out<B: TypeAlloc> = (ScopedRow<B>, ScopedRow<B>);
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::Out>, F::Error> {
+        Ok(match self {
+            OrderedRowXorRow::ClosedOpen(row, tv) => (
+                Row::Closed(row.try_fold_with(fold)?),
+                fold.try_fold_scoped_row_var(tv)?,
+            ),
+            OrderedRowXorRow::OpenOpen { min, max } => (
+                fold.try_fold_scoped_row_var(min)?,
+                fold.try_fold_scoped_row_var(max)?,
+            ),
         })
     }
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ClosedGoal<A: TypeAlloc, Closed = SimpleClosedRow<A>> {
-    pub(crate) goal: Closed,
-    pub(crate) min: A::TypeVar,
-    pub(crate) max: A::TypeVar,
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ClosedGoal<A: TypeAlloc, Sema: RowSema> {
+    pub(crate) goal: Sema::Closed<A>,
+    pub(crate) min: Sema::Open<A>,
+    pub(crate) max: Sema::Open<A>,
 }
-impl<A: TypeAlloc, Closed> Copy for ClosedGoal<A, Closed>
+impl<A: TypeAlloc, Sema: RowSema> Clone for ClosedGoal<A, Sema>
+where
+    Sema::Closed<A>: Clone,
+    Sema::Open<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            goal: self.goal.clone(),
+            min: self.min.clone(),
+            max: self.max.clone(),
+        }
+    }
+}
+impl<A: TypeAlloc, Sema: RowSema> Copy for ClosedGoal<A, Sema>
 where
     A: Clone,
-    Closed: Copy,
-    A::TypeVar: Copy,
+    Sema::Closed<A>: Copy,
+    Sema::Open<A>: Copy,
 {
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct OpenGoal<A: TypeAlloc> {
-    pub(crate) goal: A::TypeVar,
-    pub(crate) orxr: OrderedRowXorRow<A>,
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct OpenGoal<A: TypeAlloc, Sema: RowSema> {
+    pub(crate) goal: Sema::Open<A>,
+    pub(crate) orxr: OrderedRowXorRow<A, Sema>,
 }
-impl<A: TypeAlloc> Copy for OpenGoal<A>
+impl<A: TypeAlloc, Sema: RowSema> Clone for OpenGoal<A, Sema>
 where
     A: Clone,
-    A::TypeVar: Copy,
-    OrderedRowXorRow<A>: Copy,
+    Sema::Open<A>: Clone,
+    OrderedRowXorRow<A, Sema>: Clone,
 {
+    fn clone(&self) -> Self {
+        Self {
+            goal: self.goal.clone(),
+            orxr: self.orxr.clone(),
+        }
+    }
+}
+impl<A: TypeAlloc, Sema: RowSema> Copy for OpenGoal<A, Sema>
+where
+    A: Clone,
+    Sema::Open<A>: Copy,
+    OrderedRowXorRow<A, Sema>: Copy,
+{
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Operatives<A: TypeAlloc> {
+    OpenOpen {
+        left: <Scoped as RowSema>::Open<A>,
+        right: <Scoped as RowSema>::Open<A>,
+    },
+    OpenClosed {
+        left: <Scoped as RowSema>::Open<A>,
+        right: <Scoped as RowSema>::Closed<A>,
+    },
+    ClosedOpen {
+        left: <Scoped as RowSema>::Closed<A>,
+        right: <Scoped as RowSema>::Open<A>,
+    },
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ScopedOpenGoal<A: TypeAlloc> {
+    pub(crate) goal: <Scoped as RowSema>::Open<A>,
+    pub(crate) ops: Operatives<A>,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ScopedRowEquation<A: TypeAlloc> {
+    ClosedGoal(ClosedGoal<A, Scoped>),
+    OpenGoal(ScopedOpenGoal<A>),
 }
 
 pub(crate) enum UnsolvedRowEquation<A: TypeAlloc> {
-    ClosedGoal(ClosedGoal<A>),
-    OpenGoal(OpenGoal<A>),
+    ClosedGoal(ClosedGoal<A, Simple>),
+    OpenGoal(OpenGoal<A, Simple>),
 }
 impl<A: TypeAlloc> Clone for UnsolvedRowEquation<A>
 where
-    OpenGoal<A>: Clone,
-    ClosedGoal<A>: Clone,
+    OpenGoal<A, Simple>: Clone,
+    ClosedGoal<A, Simple>: Clone,
 {
     fn clone(&self) -> Self {
         match self {
@@ -174,14 +273,14 @@ where
 }
 impl<A: TypeAlloc> Copy for UnsolvedRowEquation<A>
 where
-    OpenGoal<A>: Copy,
-    ClosedGoal<A>: Copy,
+    OpenGoal<A, Simple>: Copy,
+    ClosedGoal<A, Simple>: Copy,
 {
 }
 impl<A: TypeAlloc> PartialEq for UnsolvedRowEquation<A>
 where
-    OpenGoal<A>: PartialEq,
-    ClosedGoal<A>: PartialEq,
+    OpenGoal<A, Simple>: PartialEq,
+    ClosedGoal<A, Simple>: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -193,15 +292,15 @@ where
 }
 impl<A: TypeAlloc> Eq for UnsolvedRowEquation<A>
 where
-    OpenGoal<A>: Eq,
-    ClosedGoal<A>: Eq,
+    OpenGoal<A, Simple>: Eq,
+    ClosedGoal<A, Simple>: Eq,
 {
 }
 
 impl<A: TypeAlloc> PartialOrd for UnsolvedRowEquation<A>
 where
-    OpenGoal<A>: PartialOrd,
-    ClosedGoal<A>: PartialOrd,
+    OpenGoal<A, Simple>: PartialOrd,
+    ClosedGoal<A, Simple>: PartialOrd,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
@@ -222,8 +321,8 @@ where
 }
 impl<A: TypeAlloc> Ord for UnsolvedRowEquation<A>
 where
-    OpenGoal<A>: Ord,
-    ClosedGoal<A>: Ord,
+    OpenGoal<A, Simple>: Ord,
+    ClosedGoal<A, Simple>: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {

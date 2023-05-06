@@ -1,5 +1,5 @@
 use aiahr_core::ident::Ident;
-use pretty::{docs, DocAllocator, Pretty};
+use pretty::{docs, DocAllocator};
 use salsa::DebugWithDb;
 
 use std::cmp::Ordering;
@@ -12,7 +12,7 @@ use std::slice::Iter;
 
 use crate::PrettyType;
 
-use super::{alloc::MkTy, AccessTy, FallibleTypeFold, InDb, Ty, TypeAlloc, TypeFoldable, TypeKind};
+use super::{alloc::MkTy, AccessTy, FallibleTypeFold, InDb, Ty, TypeAlloc, TypeFoldable};
 
 /// A label of a row field
 pub type RowLabel = Ident;
@@ -25,35 +25,98 @@ pub type RowLabel = Ident;
 /// 1. fields and values are the same length
 /// 2. The field at index i is the key for the type at index i in values
 /// 3. fields is sorted lexographically
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
+#[derive(Debug)]
 pub(crate) struct ClosedRow<A: TypeAlloc = InDb> {
     pub fields: A::RowFields,
     pub values: A::RowValues,
 }
-impl<A: TypeAlloc + Copy> Copy for ClosedRow<A>
+impl<A: TypeAlloc> PartialEq for ClosedRow<A>
+where
+    A::RowFields: PartialEq,
+    A::RowValues: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.fields == other.fields && self.values == other.values
+    }
+}
+impl<A: TypeAlloc> Eq for ClosedRow<A>
+where
+    A::RowFields: Eq,
+    A::RowValues: Eq,
+{
+}
+impl<A: TypeAlloc> PartialOrd for ClosedRow<A>
+where
+    A::RowFields: PartialOrd,
+    A::RowValues: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.fields
+            .partial_cmp(&other.fields)
+            .and_then(|field_cmp| {
+                self.values
+                    .partial_cmp(&other.values)
+                    .map(|val_cmp| field_cmp.then(val_cmp))
+            })
+    }
+}
+impl<A: TypeAlloc> Ord for ClosedRow<A>
+where
+    A::RowFields: Ord,
+    A::RowValues: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.fields
+            .cmp(&other.fields)
+            .then(self.values.cmp(&other.values))
+    }
+}
+impl<A: TypeAlloc> Clone for ClosedRow<A>
+where
+    A::RowFields: Clone,
+    A::RowValues: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            fields: self.fields.clone(),
+            values: self.values.clone(),
+        }
+    }
+}
+impl<A: TypeAlloc + Clone> Copy for ClosedRow<A>
 where
     A::RowFields: Copy,
     A::RowValues: Copy,
 {
 }
+impl<A: TypeAlloc> Hash for ClosedRow<A>
+where
+    A::RowFields: Hash,
+    A::RowValues: Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.fields.hash(state);
+        self.values.hash(state);
+    }
+}
 impl<A: TypeAlloc> ClosedRow<A> {
-    fn is_empty<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> bool {
+    fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool {
         acc.row_fields(&self.fields).is_empty()
     }
 
     #[allow(clippy::len_without_is_empty)]
-    fn len<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> usize {
+    fn len<'a>(&self, acc: &impl AccessTy<'a, A>) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
         acc.row_fields(&self.fields).len()
     }
 }
 
-impl<A, Db> PrettyType<Db, A> for ClosedRow<A>
+impl<A, Db, Ann> PrettyType<Db, A, Ann> for ClosedRow<A>
 where
     A: TypeAlloc,
     Db: ?Sized + crate::Db,
 {
-    fn pretty<'a, 'b, D, Ann>(
+    fn pretty<'a, 'b, D>(
         &self,
         a: &'a D,
         db: &Db,
@@ -111,7 +174,7 @@ where
     fn _merge_rows<'a, B, F>(
         &self,
         right: &Self,
-        acc: &dyn AccessTy<'a, A>,
+        acc: &impl AccessTy<'a, A>,
         mut handle_overlap: F,
     ) -> ControlFlow<B, RowInternals<A>>
     where
@@ -197,26 +260,6 @@ where
 
         ControlFlow::Continue((fields.into_boxed_slice(), values.into_boxed_slice()))
     }
-
-    /// Union together two rows, whenever rows contain overlapping keys both will be included in
-    /// the output in `self, right` order.
-    pub fn _union<'a>(&self, right: &Self, acc: &dyn AccessTy<'a, A>) -> RowInternals<A>
-    where
-        A: 'a,
-    {
-        let control_flow: ControlFlow<Infallible, RowInternals<A>> =
-            self._merge_rows(right, acc, |overlap| {
-                overlap.fields.extend(overlap.left_fields);
-                overlap.fields.extend(overlap.right_fields);
-                overlap.values.extend(overlap.left_values);
-                overlap.values.extend(overlap.right_values);
-                ControlFlow::Continue(())
-            });
-        match control_flow {
-            ControlFlow::Continue(row_internals) => row_internals,
-            ControlFlow::Break(_) => unreachable!(),
-        }
-    }
 }
 
 impl<Db> DebugWithDb<Db> for ClosedRow<InDb>
@@ -259,35 +302,103 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for ClosedRow<A> {
     }
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
+// This is a visibility trick.
+// We need `NewRow` to be public because it appears in a public type and we use it in tc.
+// However we do not want other people to be able to implement it.
+// So we give it a supertrait that is marked public but lives in a private module
+mod new_row {
+    use super::{ScopedClosedRow, SimpleClosedRow};
+    use crate::TypeAlloc;
+
+    pub trait SealNewRow {}
+    impl<A: TypeAlloc> SealNewRow for ScopedClosedRow<A> {}
+    impl<A: TypeAlloc> SealNewRow for SimpleClosedRow<A> {}
+}
+
+pub trait NewRow<A: TypeAlloc>: new_row::SealNewRow {
+    fn new(fields: A::RowFields, values: A::RowValues) -> Self;
+}
+
+pub trait RowOps<'a, A: TypeAlloc> {
+    fn is_empty(&self, acc: &impl AccessTy<'a, A>) -> bool;
+    fn len(&self, acc: &impl AccessTy<'a, A>) -> usize;
+    fn fields(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel];
+    fn values(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>];
+}
+
+#[derive(Debug)]
 pub struct SimpleClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
 
-impl<A: TypeAlloc> SimpleClosedRow<A> {
-    pub(crate) fn new(fields: A::RowFields, values: A::RowValues) -> Self {
+impl<A: TypeAlloc> PartialEq for SimpleClosedRow<A>
+where
+    ClosedRow<A>: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<A: TypeAlloc> Eq for SimpleClosedRow<A> where ClosedRow<A>: Eq {}
+impl<A: TypeAlloc> PartialOrd for SimpleClosedRow<A>
+where
+    ClosedRow<A>: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+impl<A: TypeAlloc> Ord for SimpleClosedRow<A>
+where
+    ClosedRow<A>: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+impl<A: TypeAlloc> Clone for SimpleClosedRow<A>
+where
+    ClosedRow<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<A: TypeAlloc> Hash for SimpleClosedRow<A>
+where
+    ClosedRow<A>: Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+impl<A: TypeAlloc> NewRow<A> for SimpleClosedRow<A> {
+    fn new(fields: <A as TypeAlloc>::RowFields, values: <A as TypeAlloc>::RowValues) -> Self {
         Self(ClosedRow { fields, values })
     }
+}
 
-    pub fn is_empty<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> bool {
+impl<'a, A: TypeAlloc> RowOps<'a, A> for SimpleClosedRow<A> {
+    fn is_empty(&self, acc: &impl AccessTy<'a, A>) -> bool {
         self.0.is_empty(acc)
     }
 
-    pub fn fields<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> &'a [RowLabel] {
+    fn fields(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel] {
         acc.row_fields(&self.0.fields)
     }
 
-    pub fn values<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> &'a [Ty<A>] {
+    fn values(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>] {
         acc.row_values(&self.0.values)
     }
 
-    #[allow(clippy::len_without_is_empty)]
-    pub fn len<'a>(&self, acc: &(impl ?Sized + AccessTy<'a, A>)) -> usize {
+    fn len(&self, acc: &impl AccessTy<'a, A>) -> usize {
         self.0.len(acc)
     }
+}
 
+impl<A: TypeAlloc> SimpleClosedRow<A> {
     pub fn _disjoint_union<'a, E>(
         &self,
         right: &Self,
-        acc: &dyn AccessTy<'a, A>,
+        acc: &impl AccessTy<'a, A>,
         mk_err: impl Fn(&Self, &Self, &RowLabel) -> E,
     ) -> Result<RowInternals<A>, E>
     where
@@ -306,7 +417,11 @@ impl<A: TypeAlloc> SimpleClosedRow<A> {
 }
 impl SimpleClosedRow<InDb> {
     /// Invariant: These rows have already been typed checked so we cannot fail at union.
-    pub fn disjoint_union(&self, acc: &dyn AccessTy<InDb>, right: &Self) -> RowInternals<InDb> {
+    pub fn disjoint_union<'a>(
+        &self,
+        acc: &impl AccessTy<'a, InDb>,
+        right: &Self,
+    ) -> RowInternals<InDb> {
         self._disjoint_union::<Infallible>(right, acc, |_, _, _| unreachable!())
             .unwrap()
     }
@@ -321,12 +436,12 @@ where
         DebugWithDb::fmt(&self.0, f, db, include_all_fields)
     }
 }
-impl<A, Db> PrettyType<Db, A> for SimpleClosedRow<A>
+impl<A, Db, Ann> PrettyType<Db, A, Ann> for SimpleClosedRow<A>
 where
     A: TypeAlloc,
     Db: ?Sized + crate::Db,
 {
-    fn pretty<'a, 'b, D, Ann>(
+    fn pretty<'a, 'b, D>(
         &self,
         allocator: &'a D,
         db: &Db,
@@ -351,13 +466,123 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for SimpleClosedRow<A
         fold: &mut F,
     ) -> Result<Self::Out<F::Out>, F::Error> {
         let (fields, values) = self.0.try_fold_with(fold)?;
-        Ok(fold.ctx().mk_simple_row(&fields, &values))
+        Ok(fold.ctx().mk_row(&fields, &values))
     }
 }
 
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
-pub struct ScopedClosedRow<A: TypeAlloc>(ClosedRow<A>);
+#[derive(Debug)]
+pub struct ScopedClosedRow<A: TypeAlloc>(pub(crate) ClosedRow<A>);
+
+impl<A: TypeAlloc> PartialEq for ScopedClosedRow<A>
+where
+    ClosedRow<A>: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<A: TypeAlloc> Eq for ScopedClosedRow<A> where ClosedRow<A>: Eq {}
+impl<A: TypeAlloc> PartialOrd for ScopedClosedRow<A>
+where
+    ClosedRow<A>: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+impl<A: TypeAlloc> Ord for ScopedClosedRow<A>
+where
+    ClosedRow<A>: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+impl<A: TypeAlloc> Clone for ScopedClosedRow<A>
+where
+    ClosedRow<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<A: TypeAlloc> Hash for ScopedClosedRow<A>
+where
+    ClosedRow<A>: Hash,
+{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<A: TypeAlloc> NewRow<A> for ScopedClosedRow<A> {
+    fn new(fields: <A as TypeAlloc>::RowFields, values: <A as TypeAlloc>::RowValues) -> Self {
+        Self(ClosedRow { fields, values })
+    }
+}
+
+impl<'a, A: TypeAlloc> RowOps<'a, A> for ScopedClosedRow<A> {
+    fn is_empty(&self, acc: &impl AccessTy<'a, A>) -> bool {
+        self.0.is_empty(acc)
+    }
+
+    fn len(&self, acc: &impl AccessTy<'a, A>) -> usize {
+        self.0.len(acc)
+    }
+
+    fn fields(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel] {
+        acc.row_fields(&self.0.fields)
+    }
+
+    fn values(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>] {
+        acc.row_values(&self.0.values)
+    }
+}
+
+impl<A: TypeAlloc> ScopedClosedRow<A> {
+    /// Union together two rows, whenever rows contain overlapping keys both will be included in
+    /// the output in `self, right` order.
+    pub fn _union<'a>(&self, right: &Self, acc: &impl AccessTy<'a, A>) -> RowInternals<A>
+    where
+        Ty<A>: Copy,
+        A: 'a,
+    {
+        let control_flow: ControlFlow<Infallible, RowInternals<A>> =
+            self.0._merge_rows(&right.0, acc, |overlap| {
+                overlap.fields.extend(overlap.left_fields);
+                overlap.fields.extend(overlap.right_fields);
+                overlap.values.extend(overlap.left_values);
+                overlap.values.extend(overlap.right_values);
+                ControlFlow::Continue(())
+            });
+        match control_flow {
+            ControlFlow::Continue(row_internals) => row_internals,
+            ControlFlow::Break(_) => unreachable!(),
+        }
+    }
+}
 impl<A: TypeAlloc + Copy> Copy for ScopedClosedRow<A> where ClosedRow<A>: Copy {}
+impl<A, Db, Ann> PrettyType<Db, A, Ann> for ScopedClosedRow<A>
+where
+    A: TypeAlloc,
+    Db: ?Sized + crate::Db,
+{
+    fn pretty<'a, 'b, D>(
+        &self,
+        allocator: &'a D,
+        db: &Db,
+        acc: &impl AccessTy<'b, A>,
+    ) -> pretty::DocBuilder<'a, D, Ann>
+    where
+        D: ?Sized + DocAllocator<'a, Ann>,
+        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
+        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
+        A: 'b,
+        Ann: 'a,
+    {
+        PrettyType::pretty(&self.0, allocator, db, acc)
+    }
+}
 impl<Db> DebugWithDb<Db> for ScopedClosedRow<InDb>
 where
     Db: ?Sized + crate::Db,
@@ -375,30 +600,60 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for ScopedClosedRow<A
         fold: &mut F,
     ) -> Result<Self::Out<F::Out>, F::Error> {
         let (fields, values) = self.0.try_fold_with(fold)?;
-        Ok(ScopedClosedRow(todo!()))
+        Ok(fold.ctx().mk_row(&fields, &values))
     }
+}
+
+mod seal_row_sema {
+    pub trait SealRowSema {}
+}
+use seal_row_sema::SealRowSema;
+
+pub trait RowSema: SealRowSema {
+    type Open<A: TypeAlloc>: PartialEq + Eq + PartialOrd + Ord + Hash + Clone + Debug;
+    type Closed<A: TypeAlloc>: PartialEq + Eq + PartialOrd + Ord + Hash + Clone;
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
+pub struct Scoped;
+impl SealRowSema for Scoped {}
+impl RowSema for Scoped {
+    type Open<A: TypeAlloc> = A::ScopedRowVar;
+    type Closed<A: TypeAlloc> = ScopedClosedRow<A>;
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
+pub struct Simple;
+impl SealRowSema for Simple {}
+impl RowSema for Simple {
+    type Open<A: TypeAlloc> = A::SimpleRowVar;
+    type Closed<A: TypeAlloc> = SimpleClosedRow<A>;
 }
 
 /// A row is our representaion of data, it maps fields to values.
 /// Rows come in two flavors: Open and Closed.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
-pub enum Row<A: TypeAlloc = InDb, Closed = SimpleClosedRow<A>> {
+pub enum Row<A: TypeAlloc = InDb, Sema: RowSema = Simple> {
     /// An open row is a polymorphic set of data. Used to allow generic row programming.
-    Open(A::TypeVar),
+    Open(Sema::Open<A>),
     /// A closed row is a concrete mapping from fields to values.
-    Closed(Closed),
+    Closed(Sema::Closed<A>),
 }
-impl<A: TypeAlloc, Closed> Copy for Row<A, Closed>
+pub type SimpleRow<A> = Row<A, Simple>;
+pub type ScopedRow<A> = Row<A, Scoped>;
+
+impl<A: TypeAlloc, Sema: RowSema + Clone> Copy for Row<A, Sema>
 where
     A: Clone,
-    A::TypeVar: Copy,
-    Closed: Copy,
+    Sema::Open<A>: Copy,
+    Sema::Closed<A>: Copy,
 {
 }
-impl<Db, Closed> DebugWithDb<Db> for Row<InDb, Closed>
+impl<Db, Sema: RowSema> DebugWithDb<Db> for Row<InDb, Sema>
 where
     Db: ?Sized + crate::Db,
-    Closed: DebugWithDb<Db>,
+    Sema::Open<InDb>: Debug,
+    Sema::Closed<InDb>: DebugWithDb<Db>,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
         match self {
@@ -408,12 +663,13 @@ where
     }
 }
 
-impl<Db, A: TypeAlloc, Closed> PrettyType<Db, A> for Row<A, Closed>
+impl<Db, A: TypeAlloc, Sema: RowSema, Ann> PrettyType<Db, A, Ann> for Row<A, Sema>
 where
     Db: ?Sized + crate::Db,
-    Closed: PrettyType<Db, A>,
+    Sema::Open<A>: Debug,
+    Sema::Closed<A>: PrettyType<Db, A, Ann>,
 {
-    fn pretty<'a, 'b, D, Ann>(
+    fn pretty<'a, 'b, D>(
         &self,
         allocator: &'a D,
         db: &Db,
@@ -422,27 +678,21 @@ where
     where
         D: ?Sized + DocAllocator<'a, Ann>,
         D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        A::TypeVar: Pretty<'a, D, Ann>,
+        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
         A: 'b,
         Ann: 'a,
     {
         match self {
-            Row::Open(tv) => pretty::Pretty::pretty(tv.clone(), allocator),
+            Row::Open(tv) => allocator.text(format!("{:?}", tv)),
             Row::Closed(row) => row.pretty(allocator, db, acc),
         }
     }
 }
 
-impl<A: TypeAlloc> Row<A> {
-    pub fn to_ty<I: MkTy<A>>(self, ctx: &I) -> Ty<A> {
-        match self {
-            Row::Open(var) => ctx.mk_ty(TypeKind::VarTy(var)),
-            Row::Closed(row) => ctx.mk_ty(TypeKind::RowTy(row)),
-        }
-    }
-}
-
-impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for Row<A> {
+impl<'ctx, A> TypeFoldable<'ctx> for Row<A>
+where
+    A: TypeAlloc + Clone + 'ctx,
+{
     type Alloc = A;
     type Out<B: TypeAlloc> = Row<B>;
 
@@ -451,7 +701,25 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for Row<A> {
         fold: &mut F,
     ) -> Result<Self::Out<F::Out>, F::Error> {
         match self {
-            Row::Open(var) => fold.try_fold_row_var(var),
+            Row::Open(var) => fold.try_fold_simple_row_var(var),
+            Row::Closed(crow) => crow.try_fold_with(fold).map(Row::Closed),
+        }
+    }
+}
+
+impl<'ctx, A> TypeFoldable<'ctx> for Row<A, Scoped>
+where
+    A: TypeAlloc + Clone + 'ctx,
+{
+    type Alloc = A;
+    type Out<B: TypeAlloc> = Row<B, Scoped>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::Out>, F::Error> {
+        match self {
+            Row::Open(var) => fold.try_fold_scoped_row_var(var),
             Row::Closed(crow) => crow.try_fold_with(fold).map(Row::Closed),
         }
     }

@@ -1,3 +1,8 @@
+use crate::{
+    alloc::{ScopedRowVarOf, SimpleRowVarOf},
+    row::{ScopedRow, SimpleRow},
+};
+
 use super::{
     alloc::{AccessTy, MkTy, TypeAlloc, TypeVarOf},
     row::Row,
@@ -53,8 +58,15 @@ pub trait FallibleTypeFold<'access>: Sized {
 
     fn try_fold_var(&mut self, var: TypeVarOf<Self::In>) -> Result<Ty<Self::Out>, Self::Error>;
 
-    fn try_fold_row_var(&mut self, var: TypeVarOf<Self::In>)
-        -> Result<Row<Self::Out>, Self::Error>;
+    fn try_fold_simple_row_var(
+        &mut self,
+        var: SimpleRowVarOf<Self::In>,
+    ) -> Result<SimpleRow<Self::Out>, Self::Error>;
+
+    fn try_fold_scoped_row_var(
+        &mut self,
+        var: ScopedRowVarOf<Self::In>,
+    ) -> Result<ScopedRow<Self::Out>, Self::Error>;
 }
 
 pub trait FallibleEndoTypeFold<'access>: Sized {
@@ -76,10 +88,17 @@ pub trait FallibleEndoTypeFold<'access>: Sized {
         Ok(self.endo_ctx().mk_ty(TypeKind::VarTy(var)))
     }
 
-    fn try_endofold_row_var(
+    fn try_endofold_simple_row_var(
         &mut self,
-        var: TypeVarOf<Self::Alloc>,
-    ) -> Result<Row<Self::Alloc>, Self::Error> {
+        var: SimpleRowVarOf<Self::Alloc>,
+    ) -> Result<SimpleRow<Self::Alloc>, Self::Error> {
+        Ok(Row::Open(var))
+    }
+
+    fn try_endofold_scoped_row_var(
+        &mut self,
+        var: ScopedRowVarOf<Self::Alloc>,
+    ) -> Result<ScopedRow<Self::Alloc>, Self::Error> {
         Ok(Row::Open(var))
     }
 }
@@ -107,15 +126,22 @@ where
         self.try_endofold_var(var)
     }
 
-    fn try_fold_row_var(
-        &mut self,
-        var: TypeVarOf<Self::In>,
-    ) -> Result<Row<Self::Out>, Self::Error> {
-        self.try_endofold_row_var(var)
-    }
-
     fn try_fold_ty(&mut self, ty: Ty<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
         self.try_endofold_ty(ty)
+    }
+
+    fn try_fold_simple_row_var(
+        &mut self,
+        var: SimpleRowVarOf<Self::In>,
+    ) -> Result<Row<Self::Out>, Self::Error> {
+        self.try_endofold_simple_row_var(var)
+    }
+
+    fn try_fold_scoped_row_var(
+        &mut self,
+        var: ScopedRowVarOf<Self::In>,
+    ) -> Result<ScopedRow<Self::Out>, Self::Error> {
+        self.try_endofold_scoped_row_var(var)
     }
 }
 

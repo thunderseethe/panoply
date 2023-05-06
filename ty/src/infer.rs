@@ -1,12 +1,19 @@
 //! Implementation details that are specific to type inference.
 //! These are kept in their own module because they should not be used outside of the type checking module.
-use std::{convert::Infallible, fmt, ops::Deref};
+use std::{
+    convert::Infallible,
+    fmt::{self, Debug},
+    ops::Deref,
+};
 
 use ena::unify::{EqUnifyValue, UnifyKey, UnifyValue};
 use pretty::DocAllocator;
 
 use crate::{
-    row::{ClosedRow, Row, RowInternals, RowLabel, SimpleClosedRow},
+    row::{
+        ClosedRow, Row, RowInternals, RowLabel, ScopedClosedRow, ScopedRow, SimpleClosedRow,
+        SimpleRow,
+    },
     Ty, TypeKind,
 };
 
@@ -19,6 +26,36 @@ pub struct TcVarToUnifierError {
     index: u32,
 }
 
+mod seal_unifier_kind {
+    pub trait SealUnifierKind {}
+}
+use seal_unifier_kind::SealUnifierKind;
+
+pub trait UnifierKind: SealUnifierKind + Copy + Clone + std::fmt::Debug + PartialEq {
+    type UnifyValue<'ctx>: UnifyValue;
+}
+/// Kind of TcUnifierVar that is mapped to a type
+#[derive(Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct TypeK;
+impl SealUnifierKind for TypeK {}
+impl UnifierKind for TypeK {
+    type UnifyValue<'ctx> = InferTy<'ctx>;
+}
+/// Kind of TcUnifierVar that is mapped to a simple row
+#[derive(Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct SimpleRowK;
+impl SealUnifierKind for SimpleRowK {}
+impl UnifierKind for SimpleRowK {
+    type UnifyValue<'ctx> = SimpleClosedRow<InArena<'ctx>>;
+}
+/// Kind of TcUnifierVar that is mapped to a scoped row
+#[derive(Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct ScopedRowK;
+impl SealUnifierKind for ScopedRowK {}
+impl UnifierKind for ScopedRowK {
+    type UnifyValue<'ctx> = ScopedClosedRow<InArena<'ctx>>;
+}
+
 /// A unifier variable.
 /// These are produced during the type checking process and MUST NOT persist outside the type
 /// checker. They may not appear in the AST once type checking is completed and are removed by
@@ -26,23 +63,27 @@ pub struct TcVarToUnifierError {
 /// Conversely to the untouchable TcVar, these are "touchable" and will be modified by the type
 /// checker.
 #[derive(Default, Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct TcUnifierVar<'ctx> {
+pub struct TcUnifierVar<'ctx, Kind: UnifierKind = TypeK> {
     id: u32,
-    _marker: std::marker::PhantomData<&'ctx ()>,
+    _marker: std::marker::PhantomData<&'ctx Kind>,
 }
-impl<'ctx> fmt::Debug for TcUnifierVar<'ctx> {
+impl<'ctx, Kind: UnifierKind> fmt::Debug for TcUnifierVar<'ctx, Kind> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("TcUnifierVar").field(&self.id).finish()
+        let kind = std::any::type_name::<Kind>();
+        f.debug_tuple(&format!("TcUnifierVar<{kind}>"))
+            .field(&self.id)
+            .finish()
     }
 }
-impl<'ctx> From<Infallible> for TcUnifierVar<'ctx> {
+impl<'ctx, Kind: UnifierKind> From<Infallible> for TcUnifierVar<'ctx, Kind> {
     fn from(_: Infallible) -> Self {
         unreachable!()
     }
 }
 
-impl<'a, 'ctx, A, D> pretty::Pretty<'a, D, A> for TcUnifierVar<'ctx>
+impl<'a, 'ctx, A, D, Kind> pretty::Pretty<'a, D, A> for TcUnifierVar<'ctx, Kind>
 where
+    Kind: UnifierKind,
     A: 'a,
     D: ?Sized + DocAllocator<'a, A>,
 {
@@ -51,8 +92,8 @@ where
     }
 }
 
-impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
-    type Value = Option<InferTy<'ctx>>;
+impl<'ctx, Kind: UnifierKind + Debug> UnifyKey for TcUnifierVar<'ctx, Kind> {
+    type Value = Option<Kind::UnifyValue<'ctx>>;
 
     fn index(&self) -> u32 {
         self.id
@@ -66,7 +107,7 @@ impl<'ctx> UnifyKey for TcUnifierVar<'ctx> {
     }
 
     fn tag() -> &'static str {
-        "TcUnifierVar"
+        "TcUnifierVar<Type>"
     }
 }
 
@@ -79,7 +120,7 @@ impl<'ctx> EqUnifyValue for Ty<InArena<'ctx>> {}
 pub(crate) mod arena {
     use crate::{
         alloc::IteratorSorted,
-        row::{RowLabel, SimpleClosedRow},
+        row::{NewRow, RowLabel},
         AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
     };
     use aiahr_core::memory::{
@@ -88,7 +129,7 @@ pub(crate) mod arena {
     };
     use bumpalo::Bump;
 
-    use super::TcUnifierVar;
+    use super::{ScopedRowK, SimpleRowK, TcUnifierVar, TypeK};
 
     pub struct TyCtx<'ctx> {
         tys: SyncInterner<'ctx, TypeKind<InArena<'ctx>>, Bump>,
@@ -116,7 +157,11 @@ pub(crate) mod arena {
 
         type RowValues = RefHandle<'ctx, [Ty<Self>]>;
 
-        type TypeVar = TcUnifierVar<'ctx>;
+        type TypeVar = TcUnifierVar<'ctx, TypeK>;
+
+        type SimpleRowVar = TcUnifierVar<'ctx, SimpleRowK>;
+
+        type ScopedRowVar = TcUnifierVar<'ctx, ScopedRowK>;
     }
 
     impl<'ctx> TyCtx<'ctx> {
@@ -142,11 +187,11 @@ pub(crate) mod arena {
             self.db.ident_str(label)
         }
 
-        fn mk_simple_row(
+        fn mk_row<R: NewRow<InArena<'ctx>>>(
             &self,
             fields: &[RowLabel],
             values: &[Ty<InArena<'ctx>>],
-        ) -> SimpleClosedRow<InArena<'ctx>> {
+        ) -> R {
             debug_assert!(
                 fields.len() == values.len(),
                 "Expected row fields and valuse to be the same length"
@@ -155,7 +200,7 @@ pub(crate) mod arena {
                 fields.iter().considered_sorted(),
                 "Expected row fields to be sorted"
             );
-            SimpleClosedRow::new(
+            R::new(
                 self.row_fields.intern_by_ref(fields),
                 self.row_values.intern_by_ref(values),
             )
@@ -214,43 +259,21 @@ impl<'ctx> fmt::Debug for TypeKind<InArena<'ctx>> {
 }
 
 impl<'ctx> Ty<InArena<'ctx>> {
-    pub fn try_as_prod_row(self) -> Result<Row<InArena<'ctx>>, Self> {
-        match self.deref() {
-            TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
-            _ => Err(self),
-        }
-    }
-
-    pub fn try_as_sum_row(self) -> Result<Row<InArena<'ctx>>, Self> {
-        match self.deref() {
-            TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
-            _ => Err(self),
-        }
-    }
-
     pub fn try_as_fn_ty(self) -> Result<(Self, Self), Self> {
         match self.deref() {
             TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
             _ => Err(self),
         }
     }
-
-    pub fn try_to_row(&self) -> Result<Row<InArena<'ctx>>, Self> {
-        match self.deref() {
-            TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
-            TypeKind::VarTy(var) => Ok(Row::Open(*var)),
-            _ => Err(*self),
-        }
-    }
 }
 
 impl<'ctx> EqUnifyValue for SimpleClosedRow<InArena<'ctx>> {}
+impl<'ctx> EqUnifyValue for ScopedClosedRow<InArena<'ctx>> {}
 
-pub type InferRow<'ctx> = Row<InArena<'ctx>>;
+pub type SimpleInferRow<'ctx> = SimpleRow<InArena<'ctx>>;
+pub type ScopedInferRow<'ctx> = ScopedRow<InArena<'ctx>>;
 
-impl<'ctx> UnifyValue for InferRow<'ctx> {
+impl<'ctx> UnifyValue for SimpleInferRow<'ctx> {
     type Error = (Self, Self);
 
     fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {
@@ -291,6 +314,22 @@ impl<'ctx> ClosedRow<InArena<'ctx>> {
             values.push(*value);
         }
         (fields.into_boxed_slice(), values.into_boxed_slice())
+    }
+}
+impl<'ctx> ScopedClosedRow<InArena<'ctx>> {
+    pub fn union(self, right: &Self) -> RowInternals<InArena<'ctx>> {
+        self._union(right, &())
+    }
+
+    /// Checks if we can attempt to unify two rows.
+    /// If two rows have different lenghts or different field labels we know they cannot unify so
+    /// we don't need to attempt the more expensive unification on their row values.
+    pub fn is_unifiable(self, right: Self) -> bool {
+        self.0.fields == right.0.fields
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&RowLabel, &Ty<InArena<'ctx>>)> {
+        self.0.fields.iter().zip(self.0.values.iter())
     }
 }
 impl<'ctx> SimpleClosedRow<InArena<'ctx>> {
@@ -346,7 +385,7 @@ mod tests {
         //let ctx: TyCtx<'_> = TyCtx::new(&db, &arena);
 
         let int = db.mk_ty(IntTy);
-        let row = db.mk_simple_row(
+        let row = db.mk_row(
             &[db.mk_label("x"), db.mk_label("y"), db.mk_label("z")],
             &[int, int, int],
         );

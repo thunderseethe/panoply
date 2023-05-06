@@ -7,9 +7,9 @@ use aiahr_core::{
     span::Span,
 };
 use aiahr_ty::{
-    infer::{InArena, InferRow, InferTy, UnifierToTcVarError},
-    row::{RowLabel, SimpleClosedRow},
-    PrettyType, TypeVarOf,
+    infer::{InArena, InferTy, ScopedInferRow, SimpleInferRow, UnifierToTcVarError},
+    row::{Row, RowLabel, ScopedClosedRow, SimpleClosedRow},
+    PrettyType, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
 };
 
 use pretty::{docs, DocAllocator};
@@ -20,20 +20,60 @@ pub(crate) enum TypeCheckError<'ctx> {
     /// A variable we expected to exist with a type, did not
     VarNotDefined(VarId),
     TypeMismatch(InferTy<'ctx>, InferTy<'ctx>),
-    OccursCheckFailed(TypeVarOf<InArena<'ctx>>, InferTy<'ctx>),
+    TypeOccursCheckFailed(TypeVarOf<InArena<'ctx>>, InferTy<'ctx>),
+    DataRowOccursCheckFailed(
+        SimpleRowVarOf<InArena<'ctx>>,
+        SimpleClosedRow<InArena<'ctx>>,
+    ),
+    EffectRowOccursCheckFailed(
+        ScopedRowVarOf<InArena<'ctx>>,
+        ScopedClosedRow<InArena<'ctx>>,
+    ),
     UnifierToTcVar(UnifierToTcVarError),
     RowsNotDisjoint(
         SimpleClosedRow<InArena<'ctx>>,
         SimpleClosedRow<InArena<'ctx>>,
         RowLabel,
     ),
-    RowsNotEqual(InferRow<'ctx>, InferRow<'ctx>),
+    DataRowsNotEqual(SimpleInferRow<'ctx>, SimpleInferRow<'ctx>),
+    EffectRowsNotEqual(ScopedInferRow<'ctx>, ScopedInferRow<'ctx>),
     UndefinedEffectSignature(SimpleClosedRow<InArena<'ctx>>),
     UndefinedEffect(Ident),
     UnsolvedHandle {
-        handler: TypeVarOf<InArena<'ctx>>,
-        eff: TypeVarOf<InArena<'ctx>>,
+        handler: SimpleRowVarOf<InArena<'ctx>>,
+        eff: ScopedRowVarOf<InArena<'ctx>>,
     },
+}
+
+impl<'ctx>
+    From<(
+        SimpleClosedRow<InArena<'ctx>>,
+        SimpleClosedRow<InArena<'ctx>>,
+    )> for TypeCheckError<'ctx>
+{
+    fn from(
+        (left, right): (
+            SimpleClosedRow<InArena<'ctx>>,
+            SimpleClosedRow<InArena<'ctx>>,
+        ),
+    ) -> Self {
+        Self::DataRowsNotEqual(Row::Closed(left), Row::Closed(right))
+    }
+}
+impl<'ctx>
+    From<(
+        ScopedClosedRow<InArena<'ctx>>,
+        ScopedClosedRow<InArena<'ctx>>,
+    )> for TypeCheckError<'ctx>
+{
+    fn from(
+        (left, right): (
+            ScopedClosedRow<InArena<'ctx>>,
+            ScopedClosedRow<InArena<'ctx>>,
+        ),
+    ) -> Self {
+        Self::EffectRowsNotEqual(Row::Closed(left), Row::Closed(right))
+    }
 }
 
 pub(crate) fn into_diag(
@@ -69,7 +109,7 @@ pub(crate) fn into_diag(
                 principal: Citation { span, message },
             }
         }
-        TypeCheckError::OccursCheckFailed(var, ty) => {
+        TypeCheckError::TypeOccursCheckFailed(var, ty) => {
             let doc = d
                 .intersperse(
                     [
@@ -84,7 +124,45 @@ pub(crate) fn into_diag(
             let mut message = String::new();
             doc.render_fmt(width, &mut message).unwrap();
             TypeCheckDiagnostic {
-                name: "Infinite Type",
+                name: "Cyclic Type",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::DataRowOccursCheckFailed(var, row) => {
+            let doc = d
+                .intersperse(
+                    [
+                        d.text("cycle detected for row variable"),
+                        pretty::Pretty::pretty(var, &d),
+                        d.text("with inferred row"),
+                        row.pretty(&d, db.as_ty_db(), &()),
+                    ],
+                    d.space(),
+                )
+                .into_doc();
+            let mut message = String::new();
+            doc.render_fmt(width, &mut message).unwrap();
+            TypeCheckDiagnostic {
+                name: "Cyclic Data Row",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::EffectRowOccursCheckFailed(var, row) => {
+            let message = d
+                .intersperse(
+                    [
+                        d.text("cycle detected for row variable"),
+                        pretty::Pretty::pretty(var, &d),
+                        d.text("with inferred row"),
+                        row.pretty(&d, db.as_ty_db(), &()),
+                    ],
+                    d.space(),
+                )
+                .into_doc()
+                .pretty(width)
+                .to_string();
+            TypeCheckDiagnostic {
+                name: "Cyclic Effect Row",
                 principal: Citation { span, message },
             }
         }
@@ -107,20 +185,37 @@ pub(crate) fn into_diag(
                 principal: Citation { span, message },
             }
         }
-        TypeCheckError::RowsNotEqual(left, right) => {
-            let doc = d
-                .text("expected rows to be equal")
+        TypeCheckError::DataRowsNotEqual(left, right) => {
+            let message = d
+                .text("expected data rows to be equal")
                 .append(d.hardline())
                 .append(
                     left.pretty(&d, db.as_ty_db(), &())
                         .append(d.hardline())
                         .append(right.pretty(&d, db.as_ty_db(), &()))
                         .nest(2),
-                );
-            let mut message = String::new();
-            doc.render_fmt(width, &mut message).unwrap();
+                )
+                .pretty(width)
+                .to_string();
             TypeCheckDiagnostic {
-                name: "Rows Mismatch",
+                name: "Data Rows Mismatch",
+                principal: Citation { span, message },
+            }
+        }
+        TypeCheckError::EffectRowsNotEqual(left, right) => {
+            let message = d
+                .text("expected effect rows to be equal")
+                .append(d.hardline())
+                .append(
+                    left.pretty(&d, db.as_ty_db(), &())
+                        .append(d.hardline())
+                        .append(right.pretty(&d, db.as_ty_db(), &()))
+                        .nest(2),
+                )
+                .pretty(width)
+                .to_string();
+            TypeCheckDiagnostic {
+                name: "Effect Rows Mismatch",
                 principal: Citation { span, message },
             }
         }

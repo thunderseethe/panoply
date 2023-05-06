@@ -190,7 +190,7 @@ pub(crate) fn desugar_effect_defn(
                             bound: vec![],
                             constrs: vec![],
                             // TODO: We probably want to allow operations to throw effects?
-                            eff: Row::Closed(db.empty_simple_row()),
+                            eff: Row::Closed(db.empty_row()),
                             ty,
                         },
                     )
@@ -450,7 +450,7 @@ impl<'a> DesugarCtx<'a> {
                 fields
                     .as_ref()
                     .map(|row| self.ds_row(row))
-                    .unwrap_or(Row::Closed(self.db.as_ty_db().empty_simple_row())),
+                    .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
             )),
             cst::Type::Function {
                 domain, codomain, ..

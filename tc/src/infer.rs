@@ -3,7 +3,10 @@ use aiahr_core::{
     diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, modules::Module, span::Span,
 };
 use aiahr_ty::{
-    infer::{InArena, InferRow, InferTy, TcUnifierVar},
+    infer::{
+        InArena, InferTy, ScopedInferRow, ScopedRowK, SimpleInferRow, SimpleRowK, TcUnifierVar,
+        TypeK,
+    },
     row::*,
     TypeKind::*,
     *,
@@ -12,28 +15,33 @@ use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
 use rustc_hash::FxHashMap;
 use salsa::DebugWithDb;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, ops::Deref};
 
 use crate::{
     diagnostic::{into_diag, TypeCheckError},
     folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
     type_scheme_of,
-    unsolved_row::{ClosedGoal, OpenGoal, OrderedRowXorRow, UnsolvedRowEquation},
+    unsolved_row::{
+        ClosedGoal, OpenGoal, Operatives, OrderedRowXorRow, ScopedOpenGoal, ScopedRowEquation,
+        UnsolvedRowEquation,
+    },
     Db, EffectInfo, Evidence, TyScheme,
 };
 
-struct RowCombination<'infer> {
-    left: InferRow<'infer>,
-    right: InferRow<'infer>,
-    goal: InferRow<'infer>,
+struct RowCombination<Row> {
+    left: Row,
+    right: Row,
+    goal: Row,
 }
+type SimpleRowCombination<'infer> = RowCombination<SimpleRow<InArena<'infer>>>;
+type ScopedRowCombination<'infer> = RowCombination<ScopedRow<InArena<'infer>>>;
 
 /// Constraints that the type of a product `handler` that handles effect `eff`
 struct HandlesConstraint<'infer> {
     /// Product type that should be a handler
-    handler: InferRow<'infer>,
+    handler: SimpleInferRow<'infer>,
     /// Effect that is handled by `handler`
-    eff: InferRow<'infer>,
+    eff: ScopedInferRow<'infer>,
     /// The return type of the `handle` construct
     ret: InferTy<'infer>,
 }
@@ -45,8 +53,14 @@ struct HandlesConstraint<'infer> {
 pub struct Constraints<'infer> {
     /// Each pair of types that should unify with each other
     tys: Vec<(InferTy<'infer>, InferTy<'infer>, Span)>,
-    /// Sets of row combinations predicates that must hold
-    rows: Vec<(RowCombination<'infer>, Span)>,
+    /// Sets of data row combinations predicates that must hold
+    data_rows: Vec<(SimpleRowCombination<'infer>, Span)>,
+    /// Sets of data row equalities that must hold
+    data_eq: Vec<(SimpleInferRow<'infer>, SimpleInferRow<'infer>, Span)>,
+    /// Sets of effect row combinations predicates that must hold
+    effect_rows: Vec<(ScopedRowCombination<'infer>, Span)>,
+    /// Sets of effect row equalities that must hold
+    effect_eq: Vec<(ScopedInferRow<'infer>, ScopedInferRow<'infer>, Span)>,
     /// Set of handle constraints to connect handler product terms to their effect rows
     handles: Vec<(HandlesConstraint<'infer>, Span)>,
 }
@@ -56,20 +70,50 @@ impl<'infer> Constraints<'infer> {
         self.tys.push((left, right, span))
     }
 
-    fn add_row_combine(
+    fn add_data_row_combine(
         &mut self,
-        left: InferRow<'infer>,
-        right: InferRow<'infer>,
-        goal: InferRow<'infer>,
+        left: SimpleInferRow<'infer>,
+        right: SimpleInferRow<'infer>,
+        goal: SimpleInferRow<'infer>,
         span: Span,
     ) {
-        self.rows.push((RowCombination { left, right, goal }, span))
+        self.data_rows
+            .push((RowCombination { left, right, goal }, span))
+    }
+
+    fn add_data_row_eq(
+        &mut self,
+        left: SimpleInferRow<'infer>,
+        right: SimpleInferRow<'infer>,
+        span: Span,
+    ) {
+        self.data_eq.push((left, right, span))
+    }
+
+    fn add_effect_row_combine(
+        &mut self,
+        left: ScopedInferRow<'infer>,
+        right: ScopedInferRow<'infer>,
+        goal: ScopedInferRow<'infer>,
+        span: Span,
+    ) {
+        self.effect_rows
+            .push((RowCombination { left, right, goal }, span))
+    }
+
+    fn add_effect_row_eq(
+        &mut self,
+        left: ScopedInferRow<'infer>,
+        right: ScopedInferRow<'infer>,
+        span: Span,
+    ) {
+        self.effect_eq.push((left, right, span));
     }
 
     fn add_handles(
         &mut self,
-        handler: InferRow<'infer>,
-        eff: InferRow<'infer>,
+        handler: SimpleInferRow<'infer>,
+        eff: ScopedInferRow<'infer>,
         ret: InferTy<'infer>,
         span: Span,
     ) {
@@ -86,6 +130,7 @@ pub(crate) trait InferState {
     type Storage<'infer>;
 }
 
+#[derive(Default)]
 pub(crate) struct GenerationStorage<'infer> {
     pub(crate) var_tys: FxHashMap<VarId, InferTy<'infer>>,
     pub(crate) term_tys: FxHashMap<Idx<Term<VarId>>, InferResult<'infer>>,
@@ -93,20 +138,26 @@ pub(crate) struct GenerationStorage<'infer> {
 impl InferState for Generation {
     type Storage<'infer> = GenerationStorage<'infer>;
 }
+
+#[derive(Default)]
+pub(crate) struct SolutionStorage<'infer> {
+    pub(crate) data_eqns: BTreeSet<UnsolvedRowEquation<InArena<'infer>>>,
+    pub(crate) eff_eqns: BTreeSet<ScopedRowEquation<InArena<'infer>>>,
+}
 impl InferState for Solution {
-    type Storage<'infer> = BTreeSet<UnsolvedRowEquation<InArena<'infer>>>;
+    type Storage<'infer> = SolutionStorage<'infer>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TyChkRes<A: TypeAlloc> {
     pub ty: Ty<A>,
-    pub eff: Row<A>,
+    pub eff: ScopedRow<A>,
 }
 impl<A: TypeAlloc> Copy for TyChkRes<A>
 where
     A: Clone,
     Ty<A>: Copy,
-    Row<A>: Copy,
+    ScopedRow<A>: Copy,
 {
 }
 impl<Db> DebugWithDb<Db> for TyChkRes<InDb>
@@ -143,7 +194,7 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for TyChkRes<A> {
 type InferResult<'infer> = TyChkRes<InArena<'infer>>;
 
 impl<'infer> InferResult<'infer> {
-    fn new(ty: InferTy<'infer>, eff: InferRow<'infer>) -> Self {
+    fn new(ty: InferTy<'infer>, eff: ScopedInferRow<'infer>) -> Self {
         Self { ty, eff }
     }
     fn with_ty(self, ty: InferTy<'infer>) -> Self {
@@ -179,7 +230,9 @@ pub(crate) struct InferCtx<'a, 'infer, I, State: InferState = Generation> {
     /// Store types for local variables.
     local_env: FxHashMap<VarId, InferTy<'infer>>,
     /// Mapping from unification variables to their types (if any).
-    unifiers: InPlaceUnificationTable<TcUnifierVar<'infer>>,
+    ty_unifiers: InPlaceUnificationTable<TcUnifierVar<'infer>>,
+    data_row_unifiers: InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
+    eff_row_unifiers: InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
     /// Constraints that have to be true for this inference context.
     constraints: Constraints<'infer>,
     /// Errors that arise during type checking
@@ -203,8 +256,8 @@ impl<'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx<'_, '
         self.ctx.mk_label(label)
     }
 
-    fn mk_simple_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> SimpleClosedRow<A> {
-        self.ctx.mk_simple_row(fields, values)
+    fn mk_row<R: NewRow<A>>(&self, fields: &[RowLabel], values: &[Ty<A>]) -> R {
+        self.ctx.mk_row(fields, values)
     }
 }
 
@@ -236,7 +289,9 @@ where
     ) -> Self {
         Self {
             local_env: FxHashMap::default(),
-            unifiers: InPlaceUnificationTable::default(),
+            ty_unifiers: InPlaceUnificationTable::default(),
+            data_row_unifiers: InPlaceUnificationTable::default(),
+            eff_row_unifiers: InPlaceUnificationTable::default(),
             errors: vec![],
             constraints: Constraints::default(),
             ctx,
@@ -296,15 +351,15 @@ where
                 self._check(eff_info, *body, expected.with_ty(body_ty));
                 self.local_env.remove(arg);
             }
-            (Label { .. }, ProdTy(row)) => {
+            (Label { .. }, ProdTy(Row::Closed(row))) => {
                 // A label can check against a product, if it checks against the product's internal
                 // type
-                self._check(eff_info, term, expected.with_ty(row.to_ty(self)))
+                self._check(eff_info, term, expected.with_ty(self.mk_ty(RowTy(row))))
             }
-            (Label { .. }, SumTy(row)) => {
+            (Label { .. }, SumTy(Row::Closed(row))) => {
                 // A label can check against a sum, if it checks against the sum's internal
                 // type
-                self._check(eff_info, term, expected.with_ty(row.to_ty(self)))
+                self._check(eff_info, term, expected.with_ty(self.mk_ty(RowTy(row))))
             }
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
@@ -338,15 +393,15 @@ where
                 )
             }
             (Unit, ProdTy(Row::Closed(closed))) if closed.is_empty(self) => {
-                self.constraints.add_ty_eq(
-                    expected.eff.to_ty(self),
-                    Row::Closed(self.empty_simple_row()).to_ty(self),
+                self.constraints.add_effect_row_eq(
+                    expected.eff,
+                    Row::Closed(self.empty_row()),
                     current_span(),
-                )
+                );
             }
-            (Int(_), IntTy) => self.constraints.add_ty_eq(
-                expected.eff.to_ty(self),
-                Row::Closed(self.empty_simple_row()).to_ty(self),
+            (Int(_), IntTy) => self.constraints.add_effect_row_eq(
+                expected.eff,
+                Row::Closed(self.empty_row()),
                 current_span(),
             ),
             (Unlabel { label, term }, _) => {
@@ -370,14 +425,14 @@ where
 
                 let span = current_span();
                 // Check our expected effect is a combination of each components effects
-                self.constraints.add_row_combine(
+                self.constraints.add_effect_row_combine(
                     left_infer.eff,
                     right_infer.eff,
                     expected.eff,
                     span,
                 );
                 self.constraints
-                    .add_row_combine(left_row, right_row, row, span);
+                    .add_data_row_combine(left_row, right_row, row, span);
             }
             (Branch { left, right }, FunTy(arg, ret)) => {
                 let arg_row = self.equate_as_sum_row(arg, current_span);
@@ -391,14 +446,14 @@ where
                 let right_row = self.equate_as_sum_row(right_arg, current_span);
 
                 let span = current_span();
-                self.constraints.add_row_combine(
+                self.constraints.add_effect_row_combine(
                     left_infer.eff,
                     right_infer.eff,
                     expected.eff,
                     span,
                 );
                 self.constraints
-                    .add_row_combine(left_row, right_row, arg_row, span);
+                    .add_data_row_combine(left_row, right_row, arg_row, span);
                 // All branch return types must be equal
                 self.constraints.add_ty_eq(left_ret, ret, current_span());
                 self.constraints.add_ty_eq(right_ret, ret, current_span());
@@ -414,18 +469,23 @@ where
             (Project { direction, term }, ProdTy(row)) => {
                 let term_infer = self._infer(eff_info, *term);
                 let term_row = self.equate_as_prod_row(term_infer.ty, current_span);
-                let unbound_row = self.fresh_row();
+                let unbound_row = self.fresh_simple_row();
 
-                self.row_eq_constraint(expected.eff, term_infer.eff, current_span());
+                self.constraints
+                    .add_effect_row_eq(expected.eff, term_infer.eff, current_span());
                 match direction {
-                    Direction::Left => {
-                        self.constraints
-                            .add_row_combine(row, unbound_row, term_row, current_span())
-                    }
-                    Direction::Right => {
-                        self.constraints
-                            .add_row_combine(unbound_row, row, term_row, current_span())
-                    }
+                    Direction::Left => self.constraints.add_data_row_combine(
+                        row,
+                        unbound_row,
+                        term_row,
+                        current_span(),
+                    ),
+                    Direction::Right => self.constraints.add_data_row_combine(
+                        unbound_row,
+                        row,
+                        term_row,
+                        current_span(),
+                    ),
                 };
             }
             (Inject { .. }, RowTy(row)) => {
@@ -439,18 +499,23 @@ where
             (Inject { direction, term }, SumTy(row)) => {
                 let term_infer = self._infer(eff_info, *term);
                 let term_row = self.equate_as_prod_row(term_infer.ty, current_span);
-                let unbound_row = self.fresh_row();
+                let unbound_row = self.fresh_simple_row();
 
-                self.row_eq_constraint(expected.eff, term_infer.eff, current_span());
+                self.constraints
+                    .add_effect_row_eq(expected.eff, term_infer.eff, current_span());
                 match direction {
-                    Direction::Left => {
-                        self.constraints
-                            .add_row_combine(term_row, unbound_row, row, current_span())
-                    }
-                    Direction::Right => {
-                        self.constraints
-                            .add_row_combine(unbound_row, term_row, row, current_span())
-                    }
+                    Direction::Left => self.constraints.add_data_row_combine(
+                        term_row,
+                        unbound_row,
+                        row,
+                        current_span(),
+                    ),
+                    Direction::Right => self.constraints.add_data_row_combine(
+                        unbound_row,
+                        term_row,
+                        row,
+                        current_span(),
+                    ),
                 };
             }
             (Item(term_name), _) => {
@@ -458,7 +523,8 @@ where
                     type_scheme_of(self.db.as_tc_db(), *term_name).ty_scheme(self.db.as_tc_db());
                 let span = current_span();
                 let ty_chk = self.instantiate(scheme, span);
-                self.row_eq_constraint(ty_chk.eff, expected.eff, span);
+                self.constraints
+                    .add_effect_row_eq(ty_chk.eff, expected.eff, span);
                 self.constraints.add_ty_eq(ty_chk.ty, expected.ty, span);
             }
             // Bucket case for when we need to check a rule against a type but no case applies
@@ -468,20 +534,27 @@ where
                 let inferred = self._infer(eff_info, term);
                 self.constraints
                     .add_ty_eq(expected.ty, inferred.ty, current_span());
-                self.row_eq_constraint(expected.eff, inferred.eff, current_span());
+                self.constraints
+                    .add_effect_row_eq(expected.eff, inferred.eff, current_span());
             }
         }
     }
 
-    /// Create a unique unbound row variable
-    fn fresh_row(&mut self) -> InferRow<'infer> {
-        let uv = self.unifiers.new_key(None);
+    /// Create a unique unbound simple row variable
+    fn fresh_simple_row(&mut self) -> SimpleInferRow<'infer> {
+        let uv = self.data_row_unifiers.new_key(None);
+        Row::Open(uv)
+    }
+
+    /// Create a unique unbound scoped row variable
+    fn fresh_scoped_row(&mut self) -> ScopedInferRow<'infer> {
+        let uv = self.eff_row_unifiers.new_key(None);
         Row::Open(uv)
     }
 
     /// Create a unique unbound type variable
     fn fresh_var(&mut self) -> InferTy<'infer> {
-        let uv = self.unifiers.new_key(None);
+        let uv = self.ty_unifiers.new_key(None);
         self.mk_ty(VarTy(uv))
     }
 
@@ -511,7 +584,7 @@ where
             Abstraction { arg, body } => {
                 let arg_ty = self.fresh_var();
                 let body_ty = self.fresh_var();
-                let eff = self.fresh_row();
+                let eff = self.fresh_scoped_row();
 
                 self.state.var_tys.insert(*arg, arg_ty);
                 self.local_env.insert(*arg, arg_ty);
@@ -531,19 +604,23 @@ where
                 // for arg and ret type.
                 let (arg_ty, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
 
-                let arg_eff = self.fresh_row();
+                let arg_eff = self.fresh_scoped_row();
                 self._check(eff_info, *arg, InferResult::new(arg_ty, arg_eff));
 
-                let eff = self.fresh_row();
-                self.constraints
-                    .add_row_combine(fun_infer.eff, arg_eff, eff, current_span());
+                let eff = self.fresh_scoped_row();
+                self.constraints.add_effect_row_combine(
+                    fun_infer.eff,
+                    arg_eff,
+                    eff,
+                    current_span(),
+                );
                 InferResult::new(ret_ty, eff)
             }
             // If the variable is in environemnt return it's type, otherwise return an error.
             Variable(var) => {
                 if let Some(ty) = self.local_env.get(var).cloned() {
                     self.state.var_tys.insert(*var, ty);
-                    InferResult::new(ty, Row::Closed(self.empty_simple_row()))
+                    InferResult::new(ty, Row::Closed(self.empty_row()))
                 } else {
                     self.errors.push(into_diag(
                         self.db,
@@ -552,7 +629,7 @@ where
                     ));
                     let err_ty = self.mk_ty(ErrorTy);
                     self.state.var_tys.insert(*var, err_ty);
-                    InferResult::new(err_ty, Row::Closed(self.empty_simple_row()))
+                    InferResult::new(err_ty, Row::Closed(self.empty_row()))
                 }
             }
             Label { label, term } => {
@@ -576,7 +653,7 @@ where
                     // reporting
                     _ => {
                         let out_ty = self.fresh_var();
-                        let row_ty = self.mk_ty(RowTy(self.mk_simple_row(&[field], &[out_ty])));
+                        let row_ty = self.single_row_ty(field, out_ty);
                         self.constraints.add_ty_eq(row_ty, ty, current_span());
                         out_ty
                     }
@@ -584,16 +661,16 @@ where
             }
             Unit => {
                 // Represent unit by an empty product type
-                let unit = Row::Closed(self.empty_simple_row());
-                InferResult::new(self.mk_ty(ProdTy(unit)), unit)
+                let unit = Row::Closed(self.empty_row());
+                InferResult::new(self.mk_ty(ProdTy(unit)), Row::Closed(self.empty_row()))
             }
             Concat { left, right } => {
-                let left_row = self.fresh_row();
-                let left_eff = self.fresh_row();
-                let right_row = self.fresh_row();
-                let right_eff = self.fresh_row();
-                let out_row = self.fresh_row();
-                let out_eff = self.fresh_row();
+                let left_row = self.fresh_simple_row();
+                let left_eff = self.fresh_scoped_row();
+                let right_row = self.fresh_simple_row();
+                let right_eff = self.fresh_scoped_row();
+                let out_row = self.fresh_simple_row();
+                let out_eff = self.fresh_scoped_row();
 
                 let left_ty = self.mk_ty(ProdTy(left_row));
                 let right_ty = self.mk_ty(ProdTy(right_row));
@@ -603,19 +680,19 @@ where
 
                 let span = current_span();
                 self.constraints
-                    .add_row_combine(left_eff, right_eff, out_eff, span);
+                    .add_effect_row_combine(left_eff, right_eff, out_eff, span);
                 self.constraints
-                    .add_row_combine(left_row, right_row, out_row, span);
+                    .add_data_row_combine(left_row, right_row, out_row, span);
 
                 InferResult::new(self.mk_ty(ProdTy(out_row)), out_eff)
             }
             Branch { left, right } => {
-                let left_row = self.fresh_row();
-                let left_eff = self.fresh_row();
-                let right_row = self.fresh_row();
-                let right_eff = self.fresh_row();
-                let out_row = self.fresh_row();
-                let out_eff = self.fresh_row();
+                let left_row = self.fresh_simple_row();
+                let left_eff = self.fresh_scoped_row();
+                let right_row = self.fresh_simple_row();
+                let right_eff = self.fresh_scoped_row();
+                let out_row = self.fresh_simple_row();
+                let out_eff = self.fresh_scoped_row();
 
                 let ret_ty = self.fresh_var();
 
@@ -627,9 +704,9 @@ where
 
                 let span = current_span();
                 self.constraints
-                    .add_row_combine(left_eff, right_eff, out_eff, span);
+                    .add_effect_row_combine(left_eff, right_eff, out_eff, span);
                 self.constraints
-                    .add_row_combine(left_row, right_row, out_row, span);
+                    .add_data_row_combine(left_row, right_row, out_row, span);
 
                 InferResult::new(
                     self.mk_ty(FunTy(self.mk_ty(SumTy(out_row)), ret_ty)),
@@ -637,23 +714,23 @@ where
                 )
             }
             Project { direction, term } => {
-                let big_row = self.fresh_row();
-                let small_row = self.fresh_row();
+                let big_row = self.fresh_simple_row();
+                let small_row = self.fresh_simple_row();
                 // In a projection one of the row variables will be unbound
-                let unbound_row = self.fresh_row();
+                let unbound_row = self.fresh_simple_row();
 
-                let eff = self.fresh_row();
+                let eff = self.fresh_scoped_row();
                 let term_ty = self.mk_ty(ProdTy(big_row));
                 self._check(eff_info, *term, InferResult::new(term_ty, eff));
 
                 match direction {
-                    Direction::Left => self.constraints.add_row_combine(
+                    Direction::Left => self.constraints.add_data_row_combine(
                         small_row,
                         unbound_row,
                         big_row,
                         current_span(),
                     ),
-                    Direction::Right => self.constraints.add_row_combine(
+                    Direction::Right => self.constraints.add_data_row_combine(
                         unbound_row,
                         small_row,
                         big_row,
@@ -664,22 +741,22 @@ where
                 InferResult::new(self.mk_ty(ProdTy(small_row)), eff)
             }
             Inject { direction, term } => {
-                let big_row = self.fresh_row();
-                let small_row = self.fresh_row();
+                let big_row = self.fresh_simple_row();
+                let small_row = self.fresh_simple_row();
 
-                let unbound_row = self.fresh_row();
-                let eff = self.fresh_row();
+                let unbound_row = self.fresh_simple_row();
+                let eff = self.fresh_scoped_row();
                 let term_ty = self.mk_ty(SumTy(small_row));
                 self._check(eff_info, *term, InferResult::new(term_ty, eff));
 
                 match direction {
-                    Direction::Left => self.constraints.add_row_combine(
+                    Direction::Left => self.constraints.add_data_row_combine(
                         small_row,
                         unbound_row,
                         big_row,
                         current_span(),
                     ),
-                    Direction::Right => self.constraints.add_row_combine(
+                    Direction::Right => self.constraints.add_data_row_combine(
                         unbound_row,
                         small_row,
                         big_row,
@@ -694,9 +771,9 @@ where
 
                 InferResult::new(
                     sig.ty,
-                    Row::Closed(self.single_simple_row(
+                    Row::Closed(self.single_row(
                         eff_info.effect_name(op_name.effect(self.db.as_core_db())),
-                        self.mk_ty(ProdTy(Row::Closed(self.empty_simple_row()))),
+                        self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
                     )),
                 )
             }
@@ -709,36 +786,36 @@ where
                 } = self._infer(eff_info, *body);
 
                 // Ensure there is a return clause in the handler
-                let ret_row = self.mk_simple_row(
+                let ret_row = self.mk_row(
                     &[self.mk_label("return")],
                     &[self.mk_ty(FunTy(body_ty, ret_ty))],
                 );
-                let eff_sig_row = self.fresh_row();
-                let handler_row = self.fresh_row();
+                let eff_sig_row = self.fresh_simple_row();
+                let handler_row = self.fresh_simple_row();
 
                 // Our handler should be an effect signature plus a return clause
-                self.constraints.add_row_combine(
+                self.constraints.add_data_row_combine(
                     Row::Closed(ret_row),
                     eff_sig_row,
                     handler_row,
                     current_span(),
                 );
 
-                let handler_eff = self.fresh_row();
+                let handler_eff = self.fresh_scoped_row();
                 self._check(
                     eff_info,
                     *handler,
                     InferResult::new(self.mk_ty(ProdTy(handler_row)), handler_eff),
                 );
 
-                let handled_eff = self.fresh_row();
+                let handled_eff = self.fresh_scoped_row();
                 // Mark handler with the effect that it handles
                 self.state.term_tys.insert(
                     *handler,
                     InferResult::new(self.mk_ty(ProdTy(handler_row)), handled_eff),
                 );
 
-                let out_eff = self.fresh_row();
+                let out_eff = self.fresh_scoped_row();
 
                 // We just want to match the signature against our effects, we don't need to
                 // include the return clause.
@@ -747,21 +824,19 @@ where
 
                 // Handle removes an effect so our out_eff should be whatever body_eff was minus
                 // our handled effect
-                self.constraints
-                    .add_row_combine(out_eff, handled_eff, body_eff, current_span());
+                self.constraints.add_effect_row_combine(
+                    out_eff,
+                    handled_eff,
+                    body_eff,
+                    current_span(),
+                );
 
                 InferResult::new(ret_ty, out_eff)
             }
-            Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_simple_row())),
+            Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_row())),
             Annotated { ty, term } => {
-                let eff = self.fresh_row();
-                let mut inst = Instantiate {
-                    db: self.db,
-                    ctx: self.ctx,
-                    // TODO: Collect all unifiers from the ast ahead of time to infer a scheme.
-                    unifiers: vec![],
-                };
-                // TODO: We should possibly extract an effect from this
+                let eff = self.fresh_scoped_row();
+                let mut inst = Instantiate::new(self.db, self.ctx); // TODO: We should possibly extract an effect from this
                 let infer_ty = ty.try_fold_with(&mut inst).unwrap();
                 let res = InferResult::new(infer_ty, eff);
                 self._check(eff_info, *term, res);
@@ -781,17 +856,19 @@ where
         let mut inst = Instantiate {
             db: self.db,
             ctx: self.ctx,
-            unifiers: ty_scheme
+            ty_unifiers: ty_scheme
                 .bound
                 .into_iter()
-                .map(|_| self.unifiers.new_key(None))
+                .map(|_| self.ty_unifiers.new_key(None))
                 .collect(),
+            datarow_unifiers: vec![],
+            effrow_unifiers: vec![],
         };
         for ev in ty_scheme.constrs {
             match ev.try_fold_with(&mut inst).unwrap() {
-                Evidence::Row { left, right, goal } => {
-                    self.constraints.add_row_combine(left, right, goal, span)
-                }
+                Evidence::Row { left, right, goal } => self
+                    .constraints
+                    .add_data_row_combine(left, right, goal, span),
             }
         }
         InferResult::new(
@@ -821,30 +898,42 @@ where
         &mut self,
         ty: InferTy<'infer>,
         span: impl FnOnce() -> Span,
-    ) -> InferRow<'infer> {
-        ty.try_as_prod_row().unwrap_or_else(|ty| {
-            let unifier = self.unifiers.new_key(None);
-            self.constraints
-                .add_ty_eq(self.mk_ty(VarTy(unifier)), ty, span());
-            Row::Open(unifier)
-        })
+    ) -> SimpleInferRow<'infer> {
+        match ty.deref() {
+            TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Row::Closed(*row),
+            TypeKind::ProdTy(Row::Open(var)) => Row::Open(*var),
+            _ => {
+                let unifier = self.data_row_unifiers.new_key(None);
+                self.constraints
+                    .add_ty_eq(self.mk_ty(ProdTy(Row::Open(unifier))), ty, span());
+                Row::Open(unifier)
+            }
+        }
     }
     pub(crate) fn equate_as_sum_row(
         &mut self,
         ty: InferTy<'infer>,
         span: impl FnOnce() -> Span,
-    ) -> InferRow<'infer> {
-        ty.try_as_sum_row().unwrap_or_else(|ty| {
-            let unifier = self.unifiers.new_key(None);
-            self.constraints
-                .add_ty_eq(self.mk_ty(VarTy(unifier)), ty, span());
-            Row::Open(unifier)
-        })
+    ) -> SimpleInferRow<'infer> {
+        match ty.deref() {
+            TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Row::Closed(*row),
+            TypeKind::SumTy(Row::Open(var)) => Row::Open(*var),
+            _ => {
+                let unifier = self.data_row_unifiers.new_key(None);
+                self.constraints
+                    .add_ty_eq(self.mk_ty(SumTy(Row::Open(unifier))), ty, span());
+                Row::Open(unifier)
+            }
+        }
     }
 
-    fn row_eq_constraint(&mut self, left: InferRow<'infer>, right: InferRow<'infer>, span: Span) {
-        self.constraints
-            .add_ty_eq(left.to_ty(self), right.to_ty(self), span)
+    fn row_eq_constraint(
+        &mut self,
+        left: SimpleInferRow<'infer>,
+        right: SimpleInferRow<'infer>,
+        span: Span,
+    ) {
+        self.constraints.add_data_row_eq(left, right, span)
     }
 }
 
@@ -860,14 +949,16 @@ where
             prior.state,
             Self {
                 local_env: prior.local_env,
-                unifiers: prior.unifiers,
+                ty_unifiers: prior.ty_unifiers,
+                data_row_unifiers: prior.data_row_unifiers,
+                eff_row_unifiers: prior.eff_row_unifiers,
                 errors: prior.errors,
                 constraints: prior.constraints,
                 ctx: prior.ctx,
                 db: prior.db,
                 module: prior.module,
                 ast: prior.ast,
-                state: BTreeSet::new(),
+                state: SolutionStorage::default(),
                 _marker: std::marker::PhantomData,
             },
         )
@@ -879,7 +970,9 @@ where
         mut self,
         eff_info: &E,
     ) -> (
-        InPlaceUnificationTable<TcUnifierVar<'infer>>,
+        InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
+        InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
+        InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
         <Solution as InferState>::Storage<'infer>,
         Vec<TypeCheckDiagnostic>,
     )
@@ -892,8 +985,8 @@ where
                 .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
-        for (RowCombination { left, right, goal }, span) in constraints.rows {
-            self.unify_row_combine(left, right, goal)
+        for (RowCombination { left, right, goal }, span) in constraints.data_rows {
+            self.unify_data_row_combine(left, right, goal)
                 .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
@@ -902,7 +995,13 @@ where
                 .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
-        (self.unifiers, self.state, self.errors)
+        (
+            self.ty_unifiers,
+            self.data_row_unifiers,
+            self.eff_row_unifiers,
+            self.state,
+            self.errors,
+        )
     }
 
     /// Apply the current partial substitution to a type, removing as many unifiers as possible
@@ -910,12 +1009,14 @@ where
     fn normalize_ty(&mut self, ty: InferTy<'infer>) -> InferTy<'infer> {
         match *ty {
             VarTy(var) => self
-                .unifiers
+                .ty_unifiers
                 .probe_value(var)
                 .map(|val| {
                     val.try_fold_with(&mut Normalize {
                         ctx: self.ctx,
-                        unifiers: &mut self.unifiers,
+                        ty_unifiers: &mut self.ty_unifiers,
+                        datarow_unifiers: &mut self.data_row_unifiers,
+                        effrow_unifiers: &mut self.eff_row_unifiers,
                     })
                     .unwrap()
                 })
@@ -923,49 +1024,180 @@ where
             _ => ty
                 .try_fold_with(&mut Normalize {
                     ctx: self.ctx,
-                    unifiers: &mut self.unifiers,
+                    ty_unifiers: &mut self.ty_unifiers,
+                    datarow_unifiers: &mut self.data_row_unifiers,
+                    effrow_unifiers: &mut self.eff_row_unifiers,
                 })
                 .unwrap(),
         }
     }
 
-    fn normalize_row(&mut self, row: InferRow<'infer>) -> InferRow<'infer> {
+    fn normalize_data_row(&mut self, row: SimpleInferRow<'infer>) -> SimpleInferRow<'infer> {
         match row {
             Row::Open(var) => self
-                .unifiers
+                .data_row_unifiers
                 .probe_value(var)
-                .map(|ty| {
-                    ty.try_fold_with(&mut Normalize {
+                .map(|row| {
+                    row.try_fold_with(&mut Normalize {
                         ctx: self.ctx,
-                        unifiers: &mut self.unifiers,
+                        ty_unifiers: &mut self.ty_unifiers,
+                        datarow_unifiers: &mut self.data_row_unifiers,
+                        effrow_unifiers: &mut self.eff_row_unifiers,
                     })
+                    .map(Row::Closed)
                     .unwrap()
-                    .try_to_row()
-                    .expect("Kind mismatch: Row unifier was mapped to a type")
                 })
                 .unwrap_or_else(|| Row::Open(var)),
             Row::Closed(row) => Row::Closed(
                 row.try_fold_with(&mut Normalize {
                     ctx: self.ctx,
-                    unifiers: &mut self.unifiers,
+                    ty_unifiers: &mut self.ty_unifiers,
+                    datarow_unifiers: &mut self.data_row_unifiers,
+                    effrow_unifiers: &mut self.eff_row_unifiers,
                 })
                 .unwrap(),
             ),
         }
     }
 
+    fn normalize_eff_row(&mut self, row: ScopedInferRow<'infer>) -> ScopedInferRow<'infer> {
+        match row {
+            Row::Open(var) => self
+                .eff_row_unifiers
+                .probe_value(var)
+                .map(|row| {
+                    row.try_fold_with(&mut Normalize {
+                        ctx: self.ctx,
+                        ty_unifiers: &mut self.ty_unifiers,
+                        datarow_unifiers: &mut self.data_row_unifiers,
+                        effrow_unifiers: &mut self.eff_row_unifiers,
+                    })
+                    .map(Row::Closed)
+                    .unwrap()
+                })
+                .unwrap_or_else(|| Row::Open(var)),
+            Row::Closed(row) => Row::Closed(
+                row.try_fold_with(&mut Normalize {
+                    ctx: self.ctx,
+                    ty_unifiers: &mut self.ty_unifiers,
+                    datarow_unifiers: &mut self.data_row_unifiers,
+                    effrow_unifiers: &mut self.eff_row_unifiers,
+                })
+                .unwrap(),
+            ),
+        }
+    }
+
+    fn dispatch_solved_eff_eqs(
+        &mut self,
+        var: ScopedRowVarOf<InArena<'infer>>,
+        row: ScopedClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let mut combos: Vec<RowCombination<ScopedInferRow<'infer>>> = vec![];
+        self.state.eff_eqns = std::mem::take(&mut self.state.eff_eqns)
+            .into_iter()
+            .filter_map(|eq| match eq {
+                ScopedRowEquation::ClosedGoal(closed) if closed.min == var => {
+                    combos.push(RowCombination {
+                        left: Row::Closed(row),
+                        right: Row::Open(closed.max),
+                        goal: Row::Closed(closed.goal),
+                    });
+                    None
+                }
+                ScopedRowEquation::ClosedGoal(closed) if closed.max == var => {
+                    combos.push(RowCombination {
+                        left: Row::Open(closed.min),
+                        right: Row::Closed(row),
+                        goal: Row::Closed(closed.goal),
+                    });
+                    None
+                }
+                // Inert return the equation as is
+                ScopedRowEquation::ClosedGoal(_) => Some(eq),
+                ScopedRowEquation::OpenGoal(open) if open.goal == var => match open.ops {
+                    Operatives::OpenOpen { left, right } => {
+                        Some(ScopedRowEquation::ClosedGoal(ClosedGoal {
+                            goal: row,
+                            min: left,
+                            max: right,
+                        }))
+                    }
+                    Operatives::OpenClosed { left, right } => {
+                        combos.push(RowCombination {
+                            left: Row::Open(left),
+                            right: Row::Closed(right),
+                            goal: Row::Closed(row),
+                        });
+                        None
+                    }
+                    Operatives::ClosedOpen { left, right } => {
+                        combos.push(RowCombination {
+                            left: Row::Closed(left),
+                            right: Row::Open(right),
+                            goal: Row::Closed(row),
+                        });
+                        None
+                    }
+                },
+                ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                    goal,
+                    ops: Operatives::OpenOpen { left, right },
+                }) if left == var => Some(ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                    goal,
+                    ops: Operatives::ClosedOpen { left: row, right },
+                })),
+                ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                    goal,
+                    ops: Operatives::OpenOpen { left, right },
+                }) if right == var => Some(ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                    goal,
+                    ops: Operatives::OpenClosed { left, right: row },
+                })),
+                ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                    goal,
+                    ops: Operatives::OpenClosed { left, right },
+                }) if left == var => {
+                    combos.push(RowCombination {
+                        left: Row::Closed(row),
+                        right: Row::Closed(right),
+                        goal: Row::Open(goal),
+                    });
+                    None
+                }
+                ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                    goal,
+                    ops: Operatives::ClosedOpen { left, right },
+                }) if right == var => {
+                    combos.push(RowCombination {
+                        left: Row::Closed(left),
+                        right: Row::Closed(row),
+                        goal: Row::Open(goal),
+                    });
+                    None
+                }
+                ScopedRowEquation::OpenGoal(_) => Some(eq),
+            })
+            .collect();
+        for combo in combos {
+            self.unify_eff_row_combine(combo.left, combo.right, combo.goal)?;
+        }
+        Ok(())
+    }
+
     /// Dispatch any equations that become solved when we learn a variable is equal to a row.
     /// Solved equations are removed from the set and any equalities they produce are unified.
-    fn dispatch_solved_eqs(
+    fn dispatch_solved_data_eqs(
         &mut self,
-        var: TypeVarOf<InArena<'infer>>,
+        var: SimpleRowVarOf<InArena<'infer>>,
         row: SimpleClosedRow<InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>> {
         // We want any unifications we do as a byproduct of this to see the updated state so we
         // save them here until we've finished our intial removals from state
         let mut combos = vec![];
-        self.state = self
+        self.state.data_eqns = self
             .state
+            .data_eqns
             .iter()
             .filter_map(|eq| match eq {
                 UnsolvedRowEquation::ClosedGoal(cand) if cand.min == var => {
@@ -1035,7 +1267,7 @@ where
 
         // Now we can perform our unifications against our new state
         for RowCombination { left, right, goal } in combos {
-            self.unify_row_combine(left, right, goal)?;
+            self.unify_data_row_combine(left, right, goal)?;
         }
         Ok(())
     }
@@ -1051,24 +1283,20 @@ where
     ) -> Result<(), TypeCheckError<'infer>> {
         let ty_ = ty
             .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
-            .map_err(|var| TypeCheckError::OccursCheckFailed(var, ty))?;
-        // If we're unifying a variable and a row check if this solves any exisiting equations
-        if let RowTy(row) = *ty_ {
-            self.dispatch_solved_eqs(var, row)?;
-        }
-        self.unifiers
+            .map_err(|var| TypeCheckError::TypeOccursCheckFailed(var, ty))?;
+        self.ty_unifiers
             .unify_var_value(var, Some(ty_))
             .map_err(|e| e.into())
     }
 
-    fn unify_simplerow_simplerow(
+    fn unify_datarow_datarow(
         &mut self,
         left: SimpleClosedRow<InArena<'infer>>,
         right: SimpleClosedRow<InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>> {
         // If our row labels aren't equal the types cannot be equal
         if !left.is_unifiable(right) {
-            return Err(TypeCheckError::RowsNotEqual(
+            return Err(TypeCheckError::DataRowsNotEqual(
                 Row::Closed(left),
                 Row::Closed(right),
             ));
@@ -1094,7 +1322,7 @@ where
             // Instead of unifiying either variable as a value of the other, we need to record that
             // the two key's equivalence classes must be the same.
             (VarTy(left_var), VarTy(right_var)) => self
-                .unifiers
+                .ty_unifiers
                 .unify_var_var(left_var, right_var)
                 .map_err(|e| e.into()),
 
@@ -1103,27 +1331,21 @@ where
             (VarTy(var), _) => self.unify_var_ty(var, right),
 
             // Coerce a product into a row
-            (RowTy(_), ProdTy(right)) => self.unify_ty_ty(left, right.to_ty(self)),
-            (ProdTy(left), RowTy(_)) => self.unify_ty_ty(left.to_ty(self), right),
+            (RowTy(left), ProdTy(right)) => self.unify_datarow_eq(Row::Closed(left), right),
+            (ProdTy(left), RowTy(right)) => self.unify_datarow_eq(left, Row::Closed(right)),
 
             // Coerce a sum into a row
-            (RowTy(_), SumTy(right)) => self.unify_ty_ty(left, right.to_ty(self)),
-            (SumTy(left), RowTy(_)) => self.unify_ty_ty(left.to_ty(self), right),
+            (RowTy(left), SumTy(right)) => self.unify_datarow_eq(Row::Closed(left), right),
+            (SumTy(left), RowTy(right)) => self.unify_datarow_eq(left, Row::Closed(right)),
 
             // Decompose compound types
             (FunTy(left_arg, left_ret), FunTy(right_arg, right_ret)) => {
                 self.unify_ty_ty_normalized(left_arg, right_arg)?;
                 self.unify_ty_ty_normalized(left_ret, right_ret)
             }
-            (RowTy(left_row), RowTy(right_row)) => {
-                self.unify_simplerow_simplerow(left_row, right_row)
-            }
-            (ProdTy(left), ProdTy(right)) => {
-                self.unify_ty_ty_normalized(left.to_ty(self), right.to_ty(self))
-            }
-            (SumTy(left), SumTy(right)) => {
-                self.unify_ty_ty_normalized(left.to_ty(self), right.to_ty(self))
-            }
+            (RowTy(left_row), RowTy(right_row)) => self.unify_datarow_datarow(left_row, right_row),
+            (ProdTy(left), ProdTy(right)) => self.unify_datarow_eq(left, right),
+            (SumTy(left), SumTy(right)) => self.unify_datarow_eq(left, right),
             // Discharge equal types
             (IntTy, IntTy) => Ok(()),
 
@@ -1162,17 +1384,258 @@ where
         self.unify_ty_ty_normalized(normal_left, normal_right)
     }
 
-    fn unify_row_combine(
+    fn unify_datarow_eq(
         &mut self,
-        left: InferRow<'infer>,
-        right: InferRow<'infer>,
-        goal: InferRow<'infer>,
+        left: SimpleInferRow<'infer>,
+        right: SimpleInferRow<'infer>,
     ) -> Result<(), TypeCheckError<'infer>> {
-        let goal = self.normalize_row(goal);
-        let left = self.normalize_row(left);
-        let right = self.normalize_row(right);
+        match (left, right) {
+            (Row::Open(l_var), Row::Open(r_var)) => {
+                self.data_row_unifiers.unify_var_var(l_var, r_var)?
+            }
+            (Row::Open(var), Row::Closed(row)) | (Row::Closed(row), Row::Open(var)) => {
+                self.unify_rowvar_datarow(var, row)?
+            }
+            (Row::Closed(left_row), Row::Closed(right_row)) => {
+                if left_row.len(self) != right_row.len(self) {
+                    return Err(TypeCheckError::DataRowsNotEqual(
+                        Row::Closed(left_row),
+                        Row::Closed(right_row),
+                    ));
+                }
+                for ((left_field, left_value), (right_field, right_value)) in
+                    left_row.iter().zip(right_row.iter())
+                {
+                    debug_assert_eq!(left_field, right_field);
+                    self.unify_ty_ty(*left_value, *right_value)?;
+                }
+            }
+        };
+        Ok(())
+    }
 
-        //println!("Row Combine\n\t{:?}\n\t{:?}\n\t{:?}", left, right, goal);
+    fn unify_rowvar_datarow(
+        &mut self,
+        var: TcUnifierVar<'infer, SimpleRowK>,
+        row: SimpleClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let row_ = row
+            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
+            .map_err(|var| TypeCheckError::DataRowOccursCheckFailed(var, row))?;
+        self.dispatch_solved_data_eqs(var, row)?;
+        self.data_row_unifiers
+            .unify_var_value(var, Some(row_))
+            .map_err(|err| TypeCheckError::DataRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1)))
+    }
+
+    fn unify_rowvar_effrow(
+        &mut self,
+        var: TcUnifierVar<'infer, ScopedRowK>,
+        row: ScopedClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let row_ = row
+            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
+            .map_err(|var| TypeCheckError::EffectRowOccursCheckFailed(var, row))?;
+        self.dispatch_solved_eff_eqs(var, row)?;
+        self.eff_row_unifiers
+            .unify_var_value(var, Some(row_))
+            .map_err(|err| {
+                TypeCheckError::EffectRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1))
+            })
+    }
+
+    fn unify_eff_row_combine(
+        &mut self,
+        left: ScopedInferRow<'infer>,
+        right: ScopedInferRow<'infer>,
+        goal: ScopedInferRow<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let goal = self.normalize_eff_row(goal);
+        let left = self.normalize_eff_row(left);
+        let right = self.normalize_eff_row(right);
+
+        match goal {
+            Row::Open(goal_var) => match (left, right) {
+                (Row::Closed(left), Row::Closed(right)) => {
+                    let (fields, values) = left.union(&right);
+                    let row = self.mk_row(&fields, &values);
+                    self.unify_rowvar_effrow(goal_var, row)?;
+                }
+                (Row::Open(left_var), Row::Closed(right_row)) => {
+                    self.state
+                        .eff_eqns
+                        .iter()
+                        .find_map(|eqn| match eqn {
+                            ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                                goal,
+                                ops: Operatives::OpenClosed { left, right },
+                            }) if (goal == &goal_var
+                                && (left == &left_var || right.is_unifiable(right_row)))
+                                || (left == &left_var && right.is_unifiable(right_row)) =>
+                            {
+                                Some((*left, *right, *goal))
+                            }
+                            _ => None,
+                        })
+                        .map(|(left, right, goal)| {
+                            self.eff_row_unifiers.unify_var_var(goal, goal_var)?;
+                            self.eff_row_unifiers.unify_var_var(left, left_var)?;
+                            self.unify_effrow_effrow(right, right_row)
+                        })
+                        .unwrap_or_else(|| {
+                            self.state.eff_eqns.insert(ScopedRowEquation::OpenGoal(
+                                ScopedOpenGoal {
+                                    goal: goal_var,
+                                    ops: Operatives::OpenClosed {
+                                        left: left_var,
+                                        right: right_row,
+                                    },
+                                },
+                            ));
+                            Ok(())
+                        })?;
+                }
+                (Row::Closed(left_row), Row::Open(right_var)) => {
+                    self.state
+                        .eff_eqns
+                        .iter()
+                        .find_map(|eqn| match eqn {
+                            ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                                goal,
+                                ops: Operatives::ClosedOpen { left, right },
+                            }) if (goal == &goal_var
+                                && (right == &right_var || left.is_unifiable(left_row)))
+                                || (right == &right_var && left.is_unifiable(left_row)) =>
+                            {
+                                Some((*left, *right, *goal))
+                            }
+                            _ => None,
+                        })
+                        .map(|(left, right, goal)| {
+                            self.eff_row_unifiers.unify_var_var(goal, goal_var)?;
+                            self.eff_row_unifiers.unify_var_var(right, right_var)?;
+                            self.unify_effrow_effrow(left, left_row)
+                        })
+                        .unwrap_or_else(|| {
+                            self.state.eff_eqns.insert(ScopedRowEquation::OpenGoal(
+                                ScopedOpenGoal {
+                                    goal: goal_var,
+                                    ops: Operatives::ClosedOpen {
+                                        left: left_row,
+                                        right: right_var,
+                                    },
+                                },
+                            ));
+                            Ok(())
+                        })?;
+                }
+                (Row::Open(left_var), Row::Open(right_var)) => {
+                    self.state
+                        .eff_eqns
+                        .iter()
+                        .find_map(|eqn| match eqn {
+                            ScopedRowEquation::OpenGoal(ScopedOpenGoal {
+                                goal,
+                                ops: Operatives::OpenOpen { left, right },
+                            }) if (goal == &goal_var
+                                && (left == &left_var || right == &right_var))
+                                || (left == &left_var && right == &right_var) =>
+                            {
+                                Some((*left, *right, *goal))
+                            }
+                            _ => None,
+                        })
+                        .map(|(left, right, goal)| {
+                            self.eff_row_unifiers.unify_var_var(left, left_var)?;
+                            self.eff_row_unifiers.unify_var_var(right, right_var)?;
+                            self.eff_row_unifiers.unify_var_var(goal, goal_var)
+                        })
+                        .unwrap_or_else(|| {
+                            self.state.eff_eqns.insert(ScopedRowEquation::OpenGoal(
+                                ScopedOpenGoal {
+                                    goal: goal_var,
+                                    ops: Operatives::OpenOpen {
+                                        left: left_var,
+                                        right: right_var,
+                                    },
+                                },
+                            ));
+                            Ok(())
+                        })?;
+                }
+            },
+            Row::Closed(goal) => match (left, right) {
+                (Row::Open(left), Row::Open(right)) => {
+                    self.state
+                        .eff_eqns
+                        .iter()
+                        .find_map(|eqn| match eqn {
+                            ScopedRowEquation::ClosedGoal(closed)
+                                if (closed.goal.is_unifiable(goal)
+                                    && (closed.min == left || closed.max == right))
+                                    || (closed.min == left && closed.max == right) =>
+                            {
+                                Some((closed.min, closed.max, closed.goal))
+                            }
+                            _ => None,
+                        })
+                        .map(|(left_var, right_var, goal_row)| {
+                            self.eff_row_unifiers.unify_var_var(left_var, left)?;
+                            self.eff_row_unifiers.unify_var_var(right_var, right)?;
+                            self.unify_effrow_effrow(goal_row, goal)
+                        })
+                        .unwrap_or_else(|| {
+                            self.state
+                                .eff_eqns
+                                .insert(ScopedRowEquation::ClosedGoal(ClosedGoal {
+                                    goal,
+                                    min: left,
+                                    max: right,
+                                }));
+                            Ok(())
+                        })?;
+                }
+                (Row::Open(_), Row::Closed(_)) => todo!("solve"),
+                (Row::Closed(_), Row::Open(_)) => todo!("solve"),
+                (Row::Closed(left), Row::Closed(right)) => {
+                    let (fields, values) = left.union(&right);
+                    let row = self.mk_row(&fields, &values);
+                    self.unify_effrow_effrow(goal, row)?;
+                }
+            },
+        };
+        Ok(())
+    }
+
+    fn unify_effrow_effrow(
+        &mut self,
+        left: ScopedClosedRow<InArena<'infer>>,
+        right: ScopedClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        if !left.is_unifiable(right) {
+            return Err(TypeCheckError::EffectRowsNotEqual(
+                Row::Closed(left),
+                Row::Closed(right),
+            ));
+        }
+
+        for (left_ty, right_ty) in left.values(self).iter().zip(right.values(self).iter()) {
+            self.unify_ty_ty(*left_ty, *right_ty)?;
+        }
+
+        Ok(())
+    }
+
+    fn unify_data_row_combine(
+        &mut self,
+        left: SimpleInferRow<'infer>,
+        right: SimpleInferRow<'infer>,
+        goal: SimpleInferRow<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let goal = self.normalize_data_row(goal);
+        let left = self.normalize_data_row(left);
+        let right = self.normalize_data_row(right);
+
         match goal {
             Row::Open(goal_var) => match (left, right) {
                 // With only one open variable we can solve
@@ -1180,11 +1643,12 @@ where
                     let (fields, values) = left.disjoint_union(&right).map_err(|err| {
                         TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
                     })?;
-                    let row = self.mk_ty(RowTy(self.mk_simple_row(&fields, &values)));
-                    self.unify_var_ty(goal_var, row)
+                    let row = self.mk_row(&fields, &values);
+                    self.unify_rowvar_datarow(goal_var, row)
                 }
                 (Row::Open(left_var), Row::Closed(right_row)) => self
                     .state
+                    .data_eqns
                     .iter()
                     .find_map(|eq| match eq {
                         UnsolvedRowEquation::OpenGoal(OpenGoal {
@@ -1204,19 +1668,22 @@ where
                         _ => None,
                     })
                     .map(|(goal, closed, open)| {
-                        self.unifiers.unify_var_var(goal, goal_var)?;
-                        self.unifiers.unify_var_var(open, left_var)?;
-                        self.unify_simplerow_simplerow(closed, right_row)
+                        self.data_row_unifiers.unify_var_var(goal, goal_var)?;
+                        self.data_row_unifiers.unify_var_var(open, left_var)?;
+                        self.unify_datarow_datarow(closed, right_row)
                     })
                     .unwrap_or_else(|| {
-                        self.state.insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal: goal_var,
-                            orxr: OrderedRowXorRow::ClosedOpen(right_row, left_var),
-                        }));
+                        self.state
+                            .data_eqns
+                            .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                goal: goal_var,
+                                orxr: OrderedRowXorRow::ClosedOpen(right_row, left_var),
+                            }));
                         Ok(())
                     }),
                 (Row::Closed(left_row), Row::Open(right_var)) => self
                     .state
+                    .data_eqns
                     .iter()
                     .find_map(|eq| match eq {
                         UnsolvedRowEquation::OpenGoal(OpenGoal {
@@ -1230,14 +1697,16 @@ where
                         _ => None,
                     })
                     .map(|(closed, open)| {
-                        self.unifiers.unify_var_var(open, right_var)?;
-                        self.unify_simplerow_simplerow(closed, left_row)
+                        self.data_row_unifiers.unify_var_var(open, right_var)?;
+                        self.unify_datarow_datarow(closed, left_row)
                     })
                     .unwrap_or_else(|| {
-                        self.state.insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal: goal_var,
-                            orxr: OrderedRowXorRow::ClosedOpen(left_row, right_var),
-                        }));
+                        self.state
+                            .data_eqns
+                            .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                goal: goal_var,
+                                orxr: OrderedRowXorRow::ClosedOpen(left_row, right_var),
+                            }));
                         Ok(())
                     }),
                 (Row::Open(left_var), Row::Open(right_var)) => {
@@ -1247,6 +1716,7 @@ where
                         (right_var, left_var)
                     };
                     self.state
+                        .data_eqns
                         .iter()
                         .find_map(|eq| match eq {
                             UnsolvedRowEquation::OpenGoal(OpenGoal {
@@ -1260,16 +1730,18 @@ where
                             _ => None,
                         })
                         .map(|(left, right, goal)| {
-                            self.unifiers.unify_var_var(*left, left_var)?;
-                            self.unifiers.unify_var_var(*right, right_var)?;
-                            self.unifiers.unify_var_var(*goal, goal_var)?;
+                            self.data_row_unifiers.unify_var_var(*left, left_var)?;
+                            self.data_row_unifiers.unify_var_var(*right, right_var)?;
+                            self.data_row_unifiers.unify_var_var(*goal, goal_var)?;
                             Ok(())
                         })
                         .unwrap_or_else(|| {
-                            self.state.insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal: goal_var,
-                                orxr: OrderedRowXorRow::with_open_open(left_var, right_var),
-                            }));
+                            self.state
+                                .data_eqns
+                                .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                    goal: goal_var,
+                                    orxr: OrderedRowXorRow::with_open_open(left_var, right_var),
+                                }));
                             Ok(())
                         })
                 }
@@ -1280,26 +1752,25 @@ where
                     let (fields, values) = left_row.disjoint_union(&right_row).map_err(|err| {
                         TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
                     })?;
-                    let row = self.mk_simple_row(&fields, &values);
-                    self.unify_simplerow_simplerow(goal_row, row)
+                    let row = self.mk_row(&fields, &values);
+                    self.unify_datarow_datarow(goal_row, row)
                 }
                 // With one open row we solve that row
                 (Row::Open(left_var), Row::Closed(right_row)) => {
                     let (fields, values) = goal_row.difference(right_row);
-                    let row = self.mk_simple_row(&fields, &values);
+                    let row = self.mk_row(&fields, &values);
                     let (fields, values) = goal_row.difference(row);
-                    let right_goal_row = self.mk_simple_row(&fields, &values);
-                    self.unify_simplerow_simplerow(right_row, right_goal_row)?;
-                    self.unify_var_ty(left_var, self.mk_ty(RowTy(row)))
+                    let right_goal_row = self.mk_row(&fields, &values);
+                    self.unify_datarow_datarow(right_row, right_goal_row)?;
+                    self.unify_rowvar_datarow(left_var, row)
                 }
                 (Row::Closed(left_row), Row::Open(right_var)) => {
                     let (fields, values) = goal_row.difference(left_row);
-                    let row = self.mk_simple_row(&fields, &values);
+                    let row = self.mk_row(&fields, &values);
                     let (fields, values) = goal_row.difference(row);
-                    let left_goal_row = self.mk_simple_row(&fields, &values);
-                    self.unify_simplerow_simplerow(left_row, left_goal_row)
-                        .unwrap();
-                    self.unify_var_ty(right_var, self.mk_ty(RowTy(row)))
+                    let left_goal_row = self.mk_row(&fields, &values);
+                    self.unify_datarow_datarow(left_row, left_goal_row).unwrap();
+                    self.unify_rowvar_datarow(right_var, row)
                 }
                 // We can't unify this case as is, we need more information.
                 // And our goal is closed so we can't set it to pending
@@ -1309,13 +1780,14 @@ where
                     } else {
                         (right_var, left_var)
                     };
-                    let is_unifiable = |cand: &ClosedGoal<InArena<'infer>>| {
+                    let is_unifiable = |cand: &ClosedGoal<InArena<'infer>, Simple>| {
                         // If any two components are equal we should unify
                         (cand.goal.is_unifiable(goal_row)
                             && (cand.min == min_var || cand.max == max_var))
                             || (cand.min == min_var && cand.max == max_var)
                     };
                     self.state
+                        .data_eqns
                         .iter()
                         .find_map(|eq| match eq {
                             UnsolvedRowEquation::ClosedGoal(cand) if is_unifiable(cand) => {
@@ -1330,22 +1802,21 @@ where
                             _ => None,
                         })
                         .map(|(min, max, goal)| {
-                            self.unifiers.unify_var_var(min_var, min)?;
-                            self.unifiers.unify_var_var(max_var, max)?;
+                            self.data_row_unifiers.unify_var_var(min_var, min)?;
+                            self.data_row_unifiers.unify_var_var(max_var, max)?;
                             match goal {
-                                Row::Open(var) => {
-                                    self.unify_var_ty(var, self.mk_ty(RowTy(goal_row)))
-                                }
-                                Row::Closed(row) => self.unify_simplerow_simplerow(row, goal_row),
+                                Row::Open(var) => self.unify_rowvar_datarow(var, goal_row),
+                                Row::Closed(row) => self.unify_datarow_datarow(row, goal_row),
                             }
                         })
                         .unwrap_or_else(|| {
-                            self.state
-                                .insert(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
+                            self.state.data_eqns.insert(UnsolvedRowEquation::ClosedGoal(
+                                ClosedGoal {
                                     goal: goal_row,
                                     min: left_var,
                                     max: right_var,
-                                }));
+                                },
+                            ));
                             Ok(())
                         })
                 }
@@ -1356,15 +1827,15 @@ where
     fn lookup_effect_and_unify<E>(
         &mut self,
         eff_info: &E,
-        handler: InferRow<'infer>,
-        eff: InferRow<'infer>,
+        handler: SimpleInferRow<'infer>,
+        eff: ScopedInferRow<'infer>,
         ret: InferTy<'infer>,
     ) -> Result<(), TypeCheckError<'infer>>
     where
         E: ?Sized + EffectInfo,
     {
-        let normal_handler = self.normalize_row(handler);
-        let normal_eff = self.normalize_row(eff);
+        let normal_handler = self.normalize_data_row(handler);
+        let normal_eff = self.normalize_eff_row(eff);
         let normal_ret = self.normalize_ty(ret);
 
         println!(
@@ -1401,11 +1872,13 @@ where
                     let mut inst = Instantiate {
                         db: ctx.db,
                         ctx: ctx.ctx,
-                        unifiers: scheme
+                        ty_unifiers: scheme
                             .bound
                             .into_iter()
-                            .map(|_| ctx.unifiers.new_key(None))
+                            .map(|_| ctx.ty_unifiers.new_key(None))
                             .collect(),
+                        datarow_unifiers: vec![],
+                        effrow_unifiers: vec![],
                     };
 
                     // Transform our scheme ty into the type a handler should have
@@ -1425,7 +1898,7 @@ where
                     for constrs in scheme.constrs {
                         match constrs.try_fold_with(&mut inst).unwrap() {
                             Evidence::Row { left, right, goal } => {
-                                ctx.unify_row_combine(left, right, goal)?
+                                ctx.unify_data_row_combine(left, right, goal)?
                             }
                         }
                     }
@@ -1461,9 +1934,9 @@ where
                 // We succesfully unified the handler against it's expected signature.
                 // That means we can unify our eff_var against our effect
                 let name = eff_info.effect_name(eff_name);
-                let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_simple_row(&[], &[]))));
-                let eff_row = self.mk_simple_row(&[name], &[unit_ty]);
-                self.unify_var_ty(eff_var, self.mk_ty(RowTy(eff_row)))
+                let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
+                let eff_row = self.mk_row(&[name], &[unit_ty]);
+                self.unify_rowvar_effrow(eff_var, eff_row)
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
@@ -1503,17 +1976,19 @@ where
                         let mut inst = Instantiate {
                             db: self.db,
                             ctx: self.ctx,
-                            unifiers: scheme
+                            ty_unifiers: scheme
                                 .bound
                                 .into_iter()
-                                .map(|_| self.unifiers.new_key(None))
+                                .map(|_| self.ty_unifiers.new_key(None))
                                 .collect(),
+                            datarow_unifiers: vec![],
+                            effrow_unifiers: vec![],
                         };
 
                         for constr in scheme.constrs {
                             match constr.try_fold_with(&mut inst).unwrap() {
                                 Evidence::Row { left, right, goal } => {
-                                    self.unify_row_combine(left, right, goal)?
+                                    self.unify_data_row_combine(left, right, goal)?
                                 }
                             }
                         }
@@ -1528,7 +2003,7 @@ where
                     .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
 
                 let member_row = self.construct_simple_row(members_sig);
-                self.unify_var_ty(handler_var, self.mk_ty(RowTy(member_row)))
+                self.unify_rowvar_datarow(handler_var, member_row)
             }
             // We didn't learn enough info to solve our handle term, this is an error
             (Row::Open(handler_var), Row::Open(eff_var)) => Err(TypeCheckError::UnsolvedHandle {

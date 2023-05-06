@@ -1,7 +1,7 @@
 use aiahr_core::ident::Ident;
 
 use crate::{
-    row::{RowLabel, SimpleClosedRow},
+    row::{NewRow, RowLabel, SimpleClosedRow},
     Ty, TypeKind,
 };
 use std::cmp::Ordering;
@@ -24,28 +24,33 @@ pub trait TypeAlloc<TK = TypeKind<Self>> {
     type TypeData: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
     type RowFields: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
     type RowValues: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
+
     type TypeVar: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
+    type SimpleRowVar: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
+    type ScopedRowVar: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
 }
 
 pub type TypeVarOf<A> = <A as TypeAlloc>::TypeVar;
+pub type SimpleRowVarOf<A> = <A as TypeAlloc>::SimpleRowVar;
+pub type ScopedRowVarOf<A> = <A as TypeAlloc>::ScopedRowVar;
 
 /// A trait for allocators that can make types and related data types.
 pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
     fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A>;
     fn mk_label(&self, label: &str) -> RowLabel;
-    fn mk_simple_row(&self, fields: &[RowLabel], values: &[Ty<A>]) -> SimpleClosedRow<A>;
+    fn mk_row<R: NewRow<A>>(&self, fields: &[RowLabel], values: &[Ty<A>]) -> R;
 
-    fn empty_simple_row(&self) -> SimpleClosedRow<A> {
-        self.mk_simple_row(&[], &[])
+    fn empty_row<R: NewRow<A>>(&self) -> R {
+        self.mk_row(&[], &[])
     }
     fn empty_row_ty(&self) -> Ty<A> {
-        self.mk_ty(TypeKind::RowTy(self.empty_simple_row()))
+        self.mk_ty(TypeKind::RowTy(self.empty_row()))
     }
-    fn single_simple_row(&self, label: Ident, value: Ty<A>) -> SimpleClosedRow<A> {
-        self.mk_simple_row(&[label], &[value])
+    fn single_row<R: NewRow<A>>(&self, label: Ident, value: Ty<A>) -> R {
+        self.mk_row(&[label], &[value])
     }
     fn single_row_ty(&self, label: Ident, value: Ty<A>) -> Ty<A> {
-        self.mk_ty(TypeKind::RowTy(self.single_simple_row(label, value)))
+        self.mk_ty(TypeKind::RowTy(self.single_row(label, value)))
     }
 
     fn construct_simple_row(&self, mut row: Vec<(RowLabel, Ty<A>)>) -> SimpleClosedRow<A> {
@@ -58,7 +63,7 @@ pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
             values.push(v);
         }
 
-        self.mk_simple_row(&fields, &values)
+        self.mk_row(&fields, &values)
     }
 }
 
@@ -109,7 +114,6 @@ impl<I: Iterator> IteratorSorted for I {
 
 pub mod db {
     use crate::alloc::IteratorSorted;
-    use crate::row::SimpleClosedRow;
     use aiahr_core::{id::TyVarId, ident::Ident};
 
     use crate::{row::RowLabel, MkTy, Ty, TypeKind};
@@ -146,6 +150,10 @@ pub mod db {
         type RowValues = RowValues;
 
         type TypeVar = TyVarId;
+
+        type SimpleRowVar = TyVarId;
+
+        type ScopedRowVar = TyVarId;
     }
     impl Copy for InDb
     where
@@ -168,11 +176,15 @@ pub mod db {
             self.ident_str(label)
         }
 
-        fn mk_simple_row(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> SimpleClosedRow<InDb> {
+        fn mk_row<R: crate::row::NewRow<InDb>>(
+            &self,
+            fields: &[RowLabel],
+            values: &[Ty<InDb>],
+        ) -> R {
             debug_assert_eq!(fields.len(), values.len());
             debug_assert!(fields.iter().considered_sorted());
 
-            SimpleClosedRow::new(
+            R::new(
                 RowFields::new(self.as_ty_db(), fields.to_vec()),
                 RowValues::new(self.as_ty_db(), values.to_vec()),
             )

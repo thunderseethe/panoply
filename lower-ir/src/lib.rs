@@ -344,8 +344,7 @@ mod tests {
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            forall (4: Type) (5: Type) (0: Type) (2: Type) (1: Type) .
-              fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>)
+            forall (0: Type) . fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>)
               (ir_var<1>[3][0](ir_var<2>[0](ir_var<3>)(ir_var<4>)))"#]];
         expect.assert_eq(&pretty_ir)
     }

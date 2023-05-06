@@ -8,7 +8,7 @@ use aiahr_ir::{
 };
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
-    row::{Row, SimpleClosedRow},
+    row::{Row, RowOps, SimpleClosedRow},
     AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
 };
 use la_arena::Idx;
@@ -474,7 +474,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
         // Since we type-checked successfully we know nothing refers to that variable and we can use
         // whatever row type for it.
-        let unit_row = self.db.mk_simple_row(&[], &[]);
+        let unit_row = self.db.empty_row();
 
         let mut solved_ev = term_rows
             .into_iter()
