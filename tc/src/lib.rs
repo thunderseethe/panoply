@@ -608,8 +608,8 @@ mod tests {
                     goal: Row::Open(b)
                 },
                 Evidence::Row {
-                    left: Row::Closed(closed),
-                    right: Row::Open(_),
+                    left: Row::Open(_),
+                    right: Row::Closed(closed),
                     goal: Row::Open(a)
                 }
             ] => {

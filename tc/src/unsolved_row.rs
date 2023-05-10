@@ -2,56 +2,33 @@
 use std::cmp::Ordering;
 
 use aiahr_ty::{
-    infer::{InArena, SimpleInferRow},
-    row::{Row, RowSema, Scoped, ScopedRow, Simple, SimpleClosedRow, SimpleRow},
+    infer::InArena,
+    row::{Row, RowSema, Simple},
     Evidence, FallibleTypeFold, TypeAlloc, TypeFoldable,
 };
 
-impl<'ctx, Sema: RowSema> From<OrderedRowXorRow<InArena<'ctx>, Sema>>
-    for (Row<InArena<'ctx>, Sema>, Row<InArena<'ctx>, Sema>)
-{
-    fn from(val: OrderedRowXorRow<InArena<'ctx>, Sema>) -> Self {
-        match val {
-            OrderedRowXorRow::ClosedOpen(row, var) => (Row::Closed(row), Row::Open(var)),
-            OrderedRowXorRow::OpenOpen { min, max } => (Row::Open(min), Row::Open(max)),
-        }
-    }
-}
-impl<'ctx> TryFrom<(SimpleInferRow<'ctx>, SimpleInferRow<'ctx>)>
-    for OrderedRowXorRow<InArena<'ctx>, Simple>
-{
-    type Error = (
-        SimpleClosedRow<InArena<'ctx>>,
-        SimpleClosedRow<InArena<'ctx>>,
-    );
-
-    fn try_from(value: (Row<InArena<'ctx>>, Row<InArena<'ctx>>)) -> Result<Self, Self::Error> {
-        match value {
-            (Row::Open(l), Row::Open(r)) => Ok(Self::with_open_open(l, r)),
-            (Row::Open(tv), Row::Closed(row)) | (Row::Closed(row), Row::Open(tv)) => {
-                Ok(Self::ClosedOpen(row, tv))
-            }
-            (Row::Closed(l), Row::Closed(r)) => Err((l, r)),
-        }
-    }
-}
-impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>>> for Evidence<InArena<'ctx>> {
-    fn from(eq: UnsolvedRowEquation<InArena<'ctx>>) -> Self {
+impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>, Simple>> for Evidence<InArena<'ctx>> {
+    fn from(eq: UnsolvedRowEquation<InArena<'ctx>, Simple>) -> Self {
         match eq {
             UnsolvedRowEquation::ClosedGoal(cand) => Evidence::Row {
-                left: Row::Open(cand.min),
-                right: Row::Open(cand.max),
+                left: Row::Open(cand.left),
+                right: Row::Open(cand.right),
                 goal: Row::Closed(cand.goal),
             },
-            UnsolvedRowEquation::OpenGoal(cand) => match cand.orxr {
-                OrderedRowXorRow::ClosedOpen(closed, open) => Evidence::Row {
-                    left: Row::Closed(closed),
-                    right: Row::Open(open),
+            UnsolvedRowEquation::OpenGoal(cand) => match cand.ops {
+                Operatives::OpenOpen { left, right } => Evidence::Row {
+                    left: Row::Open(left),
+                    right: Row::Open(right),
                     goal: Row::Open(cand.goal),
                 },
-                OrderedRowXorRow::OpenOpen { min, max } => Evidence::Row {
-                    left: Row::Open(min),
-                    right: Row::Open(max),
+                Operatives::OpenClosed { left, right } => Evidence::Row {
+                    left: Row::Open(left),
+                    right: Row::Closed(right),
+                    goal: Row::Open(cand.goal),
+                },
+                Operatives::ClosedOpen { left, right } => Evidence::Row {
+                    left: Row::Closed(left),
+                    right: Row::Open(right),
                     goal: Row::Open(cand.goal),
                 },
             },
@@ -81,104 +58,11 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for CombineInto<A> {
     }
 }
 
-/// TODO: WIP Name
-/// What we want to capture here is two fold:
-///  1. Row components are ordered in a standard way so comparison is easy (we don't have to check
-///     any permutations)
-///
-///  2. We can store at most one closed row. Two closed rows is considered invalid, unlike if we
-///     stored a `(Row<'ctx, TV>, Row<'ctx, TV>)`).
-#[derive(Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OrderedRowXorRow<A: TypeAlloc, Sema: RowSema> {
-    ClosedOpen(Sema::Closed<A>, Sema::Open<A>),
-    OpenOpen {
-        min: Sema::Open<A>,
-        max: Sema::Open<A>,
-    },
-}
-impl<A: TypeAlloc, Sema: RowSema> Clone for OrderedRowXorRow<A, Sema>
-where
-    Sema::Open<A>: Clone,
-    Sema::Closed<A>: Clone,
-{
-    fn clone(&self) -> Self {
-        match self {
-            OrderedRowXorRow::ClosedOpen(closed, open) => {
-                Self::ClosedOpen(closed.clone(), open.clone())
-            }
-            OrderedRowXorRow::OpenOpen { min, max } => Self::OpenOpen {
-                min: min.clone(),
-                max: max.clone(),
-            },
-        }
-    }
-}
-impl<A: TypeAlloc, Sema: RowSema> Copy for OrderedRowXorRow<A, Sema>
-where
-    A: Clone,
-    Sema::Open<A>: Copy,
-    Sema::Closed<A>: Copy,
-{
-}
-impl<A: TypeAlloc, Sema: RowSema> OrderedRowXorRow<A, Sema> {
-    pub(crate) fn with_open_open(l: Sema::Open<A>, r: Sema::Open<A>) -> Self
-    where
-        Sema::Open<A>: Ord,
-    {
-        debug_assert!(l != r, "Expected l != r in OpenOpen variant");
-        if l < r {
-            Self::OpenOpen { min: l, max: r }
-        } else {
-            Self::OpenOpen { min: r, max: l }
-        }
-    }
-}
-impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<A, Simple> {
-    type Alloc = A;
-    type Out<B: TypeAlloc> = (SimpleRow<B>, SimpleRow<B>);
-
-    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::Out>, F::Error> {
-        Ok(match self {
-            OrderedRowXorRow::ClosedOpen(row, tv) => (
-                Row::Closed(row.try_fold_with(fold)?),
-                fold.try_fold_simple_row_var(tv)?,
-            ),
-            OrderedRowXorRow::OpenOpen { min, max } => (
-                fold.try_fold_simple_row_var(min)?,
-                fold.try_fold_simple_row_var(max)?,
-            ),
-        })
-    }
-}
-impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for OrderedRowXorRow<A, Scoped> {
-    type Alloc = A;
-    type Out<B: TypeAlloc> = (ScopedRow<B>, ScopedRow<B>);
-
-    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::Out>, F::Error> {
-        Ok(match self {
-            OrderedRowXorRow::ClosedOpen(row, tv) => (
-                Row::Closed(row.try_fold_with(fold)?),
-                fold.try_fold_scoped_row_var(tv)?,
-            ),
-            OrderedRowXorRow::OpenOpen { min, max } => (
-                fold.try_fold_scoped_row_var(min)?,
-                fold.try_fold_scoped_row_var(max)?,
-            ),
-        })
-    }
-}
-
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ClosedGoal<A: TypeAlloc, Sema: RowSema> {
     pub(crate) goal: Sema::Closed<A>,
-    pub(crate) min: Sema::Open<A>,
-    pub(crate) max: Sema::Open<A>,
+    pub(crate) left: Sema::Open<A>,
+    pub(crate) right: Sema::Open<A>,
 }
 impl<A: TypeAlloc, Sema: RowSema> Clone for ClosedGoal<A, Sema>
 where
@@ -188,8 +72,8 @@ where
     fn clone(&self) -> Self {
         Self {
             goal: self.goal.clone(),
-            min: self.min.clone(),
-            max: self.max.clone(),
+            left: self.left.clone(),
+            right: self.right.clone(),
         }
     }
 }
@@ -202,67 +86,81 @@ where
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Operatives<A: TypeAlloc, Sema: RowSema> {
+    OpenOpen {
+        left: Sema::Open<A>,
+        right: Sema::Open<A>,
+    },
+    OpenClosed {
+        left: Sema::Open<A>,
+        right: Sema::Closed<A>,
+    },
+    ClosedOpen {
+        left: Sema::Closed<A>,
+        right: Sema::Open<A>,
+    },
+}
+impl<A: TypeAlloc, Sema: RowSema> Clone for Operatives<A, Sema>
+where
+    Sema::Open<A>: Clone,
+    Sema::Closed<A>: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Operatives::OpenOpen { left, right } => Operatives::OpenOpen {
+                left: left.clone(),
+                right: right.clone(),
+            },
+            Operatives::OpenClosed { left, right } => Operatives::OpenClosed {
+                left: left.clone(),
+                right: right.clone(),
+            },
+            Operatives::ClosedOpen { left, right } => Operatives::ClosedOpen {
+                left: left.clone(),
+                right: right.clone(),
+            },
+        }
+    }
+}
+impl<A: TypeAlloc, Sema: RowSema> Copy for Operatives<A, Sema>
+where
+    Sema::Open<A>: Copy,
+    Sema::Closed<A>: Copy,
+{
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct OpenGoal<A: TypeAlloc, Sema: RowSema> {
     pub(crate) goal: Sema::Open<A>,
-    pub(crate) orxr: OrderedRowXorRow<A, Sema>,
+    pub(crate) ops: Operatives<A, Sema>,
 }
 impl<A: TypeAlloc, Sema: RowSema> Clone for OpenGoal<A, Sema>
 where
-    A: Clone,
     Sema::Open<A>: Clone,
-    OrderedRowXorRow<A, Sema>: Clone,
+    Sema::Closed<A>: Clone,
 {
     fn clone(&self) -> Self {
         Self {
             goal: self.goal.clone(),
-            orxr: self.orxr.clone(),
+            ops: self.ops.clone(),
         }
     }
 }
 impl<A: TypeAlloc, Sema: RowSema> Copy for OpenGoal<A, Sema>
 where
-    A: Clone,
     Sema::Open<A>: Copy,
-    OrderedRowXorRow<A, Sema>: Copy,
+    Sema::Closed<A>: Copy,
 {
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Operatives<A: TypeAlloc> {
-    OpenOpen {
-        left: <Scoped as RowSema>::Open<A>,
-        right: <Scoped as RowSema>::Open<A>,
-    },
-    OpenClosed {
-        left: <Scoped as RowSema>::Open<A>,
-        right: <Scoped as RowSema>::Closed<A>,
-    },
-    ClosedOpen {
-        left: <Scoped as RowSema>::Closed<A>,
-        right: <Scoped as RowSema>::Open<A>,
-    },
+pub(crate) enum UnsolvedRowEquation<A: TypeAlloc, Sema: RowSema> {
+    ClosedGoal(ClosedGoal<A, Sema>),
+    OpenGoal(OpenGoal<A, Sema>),
 }
-
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ScopedOpenGoal<A: TypeAlloc> {
-    pub(crate) goal: <Scoped as RowSema>::Open<A>,
-    pub(crate) ops: Operatives<A>,
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum ScopedRowEquation<A: TypeAlloc> {
-    ClosedGoal(ClosedGoal<A, Scoped>),
-    OpenGoal(ScopedOpenGoal<A>),
-}
-
-pub(crate) enum UnsolvedRowEquation<A: TypeAlloc> {
-    ClosedGoal(ClosedGoal<A, Simple>),
-    OpenGoal(OpenGoal<A, Simple>),
-}
-impl<A: TypeAlloc> Clone for UnsolvedRowEquation<A>
+impl<A: TypeAlloc, Sema: RowSema> Clone for UnsolvedRowEquation<A, Sema>
 where
-    OpenGoal<A, Simple>: Clone,
-    ClosedGoal<A, Simple>: Clone,
+    OpenGoal<A, Sema>: Clone,
+    ClosedGoal<A, Sema>: Clone,
 {
     fn clone(&self) -> Self {
         match self {
@@ -271,16 +169,17 @@ where
         }
     }
 }
-impl<A: TypeAlloc> Copy for UnsolvedRowEquation<A>
+impl<A: TypeAlloc, Sema: RowSema> Copy for UnsolvedRowEquation<A, Sema>
 where
-    OpenGoal<A, Simple>: Copy,
-    ClosedGoal<A, Simple>: Copy,
+    A: Clone,
+    ClosedGoal<A, Sema>: Copy,
+    OpenGoal<A, Sema>: Copy,
 {
 }
-impl<A: TypeAlloc> PartialEq for UnsolvedRowEquation<A>
+impl<A: TypeAlloc, Sema: RowSema> PartialEq for UnsolvedRowEquation<A, Sema>
 where
-    OpenGoal<A, Simple>: PartialEq,
-    ClosedGoal<A, Simple>: PartialEq,
+    OpenGoal<A, Sema>: PartialEq,
+    ClosedGoal<A, Sema>: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -290,17 +189,17 @@ where
         }
     }
 }
-impl<A: TypeAlloc> Eq for UnsolvedRowEquation<A>
+impl<A: TypeAlloc, Sema: RowSema> Eq for UnsolvedRowEquation<A, Sema>
 where
-    OpenGoal<A, Simple>: Eq,
-    ClosedGoal<A, Simple>: Eq,
+    OpenGoal<A, Sema>: Eq,
+    ClosedGoal<A, Sema>: Eq,
 {
 }
 
-impl<A: TypeAlloc> PartialOrd for UnsolvedRowEquation<A>
+impl<A: TypeAlloc, Sema: RowSema> PartialOrd for UnsolvedRowEquation<A, Sema>
 where
-    OpenGoal<A, Simple>: PartialOrd,
-    ClosedGoal<A, Simple>: PartialOrd,
+    OpenGoal<A, Sema>: PartialOrd,
+    ClosedGoal<A, Sema>: PartialOrd,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
@@ -319,10 +218,10 @@ where
         }
     }
 }
-impl<A: TypeAlloc> Ord for UnsolvedRowEquation<A>
+impl<A: TypeAlloc, Sema: RowSema> Ord for UnsolvedRowEquation<A, Sema>
 where
-    OpenGoal<A, Simple>: Ord,
-    ClosedGoal<A, Simple>: Ord,
+    OpenGoal<A, Sema>: Ord,
+    ClosedGoal<A, Sema>: Ord,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {

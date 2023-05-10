@@ -345,7 +345,7 @@ mod tests {
 
         let expect = expect![[r#"
             forall (0: Type) . fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>)
-              (ir_var<1>[3][0](ir_var<2>[0](ir_var<3>)(ir_var<4>)))"#]];
+              (ir_var<2>[3][0](ir_var<1>[0](ir_var<3>)(ir_var<4>)))"#]];
         expect.assert_eq(&pretty_ir)
     }
 }
