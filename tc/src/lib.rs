@@ -332,7 +332,6 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
-
     use std::path::PathBuf;
 
     use aiahr_ast::{Direction, Term::*};
@@ -679,7 +678,7 @@ mod tests {
         })
     }
 
-    //#[test]
+    #[test]
     fn test_tc_eff_operation_infers_correct_effect() {
         let db = TestDatabase::default();
         let content = r#"
@@ -720,7 +719,7 @@ f = State.get({})
         });
     }
 
-    //#[test]
+    #[test]
     fn test_tc_eff_handler_removes_correct_effect() {
         let db = TestDatabase::default();
         let content = r#"

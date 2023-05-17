@@ -25,10 +25,21 @@ pub type RowLabel = Ident;
 /// 1. fields and values are the same length
 /// 2. The field at index i is the key for the type at index i in values
 /// 3. fields is sorted lexographically
-#[derive(Debug)]
 pub(crate) struct ClosedRow<A: TypeAlloc = InDb> {
     pub fields: A::RowFields,
     pub values: A::RowValues,
+}
+impl<A: TypeAlloc> Debug for ClosedRow<A>
+where
+    A::RowFields: Debug,
+    A::RowValues: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClosedRow")
+            .field("fields", &self.fields)
+            .field("values", &self.values)
+            .finish()
+    }
 }
 impl<A: TypeAlloc> PartialEq for ClosedRow<A>
 where
@@ -319,16 +330,24 @@ pub trait NewRow<A: TypeAlloc>: new_row::SealNewRow {
     fn new(fields: A::RowFields, values: A::RowValues) -> Self;
 }
 
-pub trait RowOps<'a, A: TypeAlloc> {
-    fn is_empty(&self, acc: &impl AccessTy<'a, A>) -> bool;
-    fn len(&self, acc: &impl AccessTy<'a, A>) -> usize;
-    fn fields(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel];
-    fn values(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>];
+pub trait RowOps<A: TypeAlloc> {
+    fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool;
+    fn len<'a>(&self, acc: &impl AccessTy<'a, A>) -> usize;
+    fn fields<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel];
+    fn values<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>];
 }
 
-#[derive(Debug)]
 pub struct SimpleClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
 
+impl<A: TypeAlloc> Debug for SimpleClosedRow<A>
+where
+    A::RowFields: Debug,
+    A::RowValues: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl<A: TypeAlloc> PartialEq for SimpleClosedRow<A>
 where
     ClosedRow<A>: PartialEq,
@@ -376,20 +395,20 @@ impl<A: TypeAlloc> NewRow<A> for SimpleClosedRow<A> {
     }
 }
 
-impl<'a, A: TypeAlloc> RowOps<'a, A> for SimpleClosedRow<A> {
-    fn is_empty(&self, acc: &impl AccessTy<'a, A>) -> bool {
+impl<A: TypeAlloc> RowOps<A> for SimpleClosedRow<A> {
+    fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool {
         self.0.is_empty(acc)
     }
 
-    fn fields(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel] {
+    fn fields<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel] {
         acc.row_fields(&self.0.fields)
     }
 
-    fn values(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>] {
+    fn values<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>] {
         acc.row_values(&self.0.values)
     }
 
-    fn len(&self, acc: &impl AccessTy<'a, A>) -> usize {
+    fn len<'a>(&self, acc: &impl AccessTy<'a, A>) -> usize {
         self.0.len(acc)
     }
 }
@@ -470,9 +489,17 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for SimpleClosedRow<A
     }
 }
 
-#[derive(Debug)]
 pub struct ScopedClosedRow<A: TypeAlloc>(pub(crate) ClosedRow<A>);
 
+impl<A: TypeAlloc> Debug for ScopedClosedRow<A>
+where
+    A::RowFields: Debug,
+    A::RowValues: Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl<A: TypeAlloc> PartialEq for ScopedClosedRow<A>
 where
     ClosedRow<A>: PartialEq,
@@ -521,20 +548,20 @@ impl<A: TypeAlloc> NewRow<A> for ScopedClosedRow<A> {
     }
 }
 
-impl<'a, A: TypeAlloc> RowOps<'a, A> for ScopedClosedRow<A> {
-    fn is_empty(&self, acc: &impl AccessTy<'a, A>) -> bool {
+impl<A: TypeAlloc> RowOps<A> for ScopedClosedRow<A> {
+    fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool {
         self.0.is_empty(acc)
     }
 
-    fn len(&self, acc: &impl AccessTy<'a, A>) -> usize {
+    fn len<'a>(&self, acc: &impl AccessTy<'a, A>) -> usize {
         self.0.len(acc)
     }
 
-    fn fields(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel] {
+    fn fields<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel] {
         acc.row_fields(&self.0.fields)
     }
 
-    fn values(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>] {
+    fn values<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>] {
         acc.row_values(&self.0.values)
     }
 }
@@ -611,7 +638,14 @@ use seal_row_sema::SealRowSema;
 
 pub trait RowSema: SealRowSema {
     type Open<A: TypeAlloc>: PartialEq + Eq + PartialOrd + Ord + Hash + Clone + Debug;
-    type Closed<A: TypeAlloc>: PartialEq + Eq + PartialOrd + Ord + Hash + Clone;
+    type Closed<A: TypeAlloc>: PartialEq
+        + Eq
+        + PartialOrd
+        + Ord
+        + Hash
+        + Clone
+        + NewRow<A>
+        + RowOps<A>;
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]

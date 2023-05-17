@@ -7,7 +7,9 @@ use aiahr_core::{
     span::Span,
 };
 use aiahr_ty::{
-    infer::{InArena, InferTy, ScopedInferRow, SimpleInferRow, UnifierToTcVarError},
+    infer::{
+        InArena, InferTy, RowsNotDisjoint, ScopedInferRow, SimpleInferRow, UnifierToTcVarError,
+    },
     row::{Row, RowLabel, ScopedClosedRow, SimpleClosedRow},
     PrettyType, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
 };
@@ -45,6 +47,11 @@ pub(crate) enum TypeCheckError<'ctx> {
     },
 }
 
+impl From<Infallible> for TypeCheckError<'_> {
+    fn from(_: Infallible) -> Self {
+        unreachable!()
+    }
+}
 impl<'ctx>
     From<(
         SimpleClosedRow<InArena<'ctx>>,
@@ -73,6 +80,22 @@ impl<'ctx>
         ),
     ) -> Self {
         Self::EffectRowsNotEqual(Row::Closed(left), Row::Closed(right))
+    }
+}
+impl<'ctx> From<RowsNotDisjoint<'ctx>> for TypeCheckError<'ctx> {
+    fn from(value: RowsNotDisjoint<'ctx>) -> Self {
+        TypeCheckError::RowsNotDisjoint(value.left, value.right, value.label)
+    }
+}
+
+impl<'ty> From<UnifierToTcVarError> for TypeCheckError<'ty> {
+    fn from(err: UnifierToTcVarError) -> Self {
+        Self::UnifierToTcVar(err)
+    }
+}
+impl<'ctx> From<(InferTy<'ctx>, InferTy<'ctx>)> for TypeCheckError<'ctx> {
+    fn from((left, right): (InferTy<'ctx>, InferTy<'ctx>)) -> Self {
+        TypeCheckError::TypeMismatch(left, right)
     }
 }
 
@@ -264,21 +287,5 @@ pub(crate) fn into_diag(
                 message: format!("undefined variable v<{}>", var.0),
             },
         },
-    }
-}
-
-impl<'ty> From<Infallible> for TypeCheckError<'ty> {
-    fn from(_never: Infallible) -> Self {
-        panic!("Function with Infallible parameter was called.")
-    }
-}
-impl<'ty> From<UnifierToTcVarError> for TypeCheckError<'ty> {
-    fn from(err: UnifierToTcVarError) -> Self {
-        Self::UnifierToTcVar(err)
-    }
-}
-impl<'ctx> From<(InferTy<'ctx>, InferTy<'ctx>)> for TypeCheckError<'ctx> {
-    fn from((left, right): (InferTy<'ctx>, InferTy<'ctx>)) -> Self {
-        TypeCheckError::TypeMismatch(left, right)
     }
 }

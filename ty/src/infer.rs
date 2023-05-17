@@ -1,6 +1,7 @@
 //! Implementation details that are specific to type inference.
 //! These are kept in their own module because they should not be used outside of the type checking module.
 use std::{
+    cmp::Ordering,
     convert::Infallible,
     fmt::{self, Debug},
     ops::Deref,
@@ -316,6 +317,47 @@ impl<'ctx> ClosedRow<InArena<'ctx>> {
         (fields.into_boxed_slice(), values.into_boxed_slice())
     }
 }
+
+// TODO: Replace with std::slice::group_by once stable.
+struct GroupBy<'a, T: 'a, P> {
+    slice: &'a [T],
+    predicate: P,
+}
+
+impl<'a, T: 'a, P> GroupBy<'a, T, P>
+where
+    P: FnMut(&'a T, &'a T) -> bool,
+{
+    fn new(slice: &'a [T], predicate: P) -> Self {
+        Self { slice, predicate }
+    }
+}
+impl<'a, T, P> Iterator for GroupBy<'a, T, P>
+where
+    P: FnMut(&'a T, &'a T) -> bool,
+{
+    type Item = &'a [T];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.slice.is_empty() {
+            None
+        } else {
+            let mut len = 1;
+            let mut iter = self.slice.windows(2);
+            while let Some([l, r]) = iter.next() {
+                if (self.predicate)(l, r) {
+                    len += 1
+                } else {
+                    break;
+                }
+            }
+            let (head, tail) = self.slice.split_at(len);
+            self.slice = tail;
+            Some(head)
+        }
+    }
+}
+
 impl<'ctx> ScopedClosedRow<InArena<'ctx>> {
     pub fn union(self, right: &Self) -> RowInternals<InArena<'ctx>> {
         self._union(right, &())
@@ -330,6 +372,58 @@ impl<'ctx> ScopedClosedRow<InArena<'ctx>> {
 
     pub fn iter(&self) -> impl Iterator<Item = (&RowLabel, &Ty<InArena<'ctx>>)> {
         self.0.fields.iter().zip(self.0.values.iter())
+    }
+
+    pub fn difference<'a>(
+        &'a self,
+        sub: &Self,
+        mut handle_overlap: impl for<'g> FnMut(
+            &'g [(&'a RowLabel, &'a Ty<InArena<'ctx>>)],
+            usize,
+        ) -> &'g [(&'a RowLabel, &'a Ty<InArena<'ctx>>)],
+    ) -> RowInternals<InArena<'ctx>> {
+        //TODO: Avoid allocating vecs here.
+        //Maybe not worth since we'll have to allocate vecs per group anyways? and this lets us do
+        //all our work in slices.
+        let goal_vec = self.iter().collect::<Vec<_>>();
+        let mut goal_groups = GroupBy::new(&goal_vec, |a, b| a.0 == b.0);
+        let sub_vec = sub.iter().collect::<Vec<_>>();
+        let sub_groups = GroupBy::new(&sub_vec, |a, b| a.0 == b.0);
+
+        let (mut fields, mut values) = (vec![], vec![]);
+
+        for sub_group in sub_groups {
+            for goal_group in goal_groups.by_ref() {
+                match goal_group[0].0.cmp(sub_group[0].0) {
+                    Ordering::Less => {
+                        fields.extend(goal_group.iter().map(|(field, _)| **field));
+                        values.extend(goal_group.iter().map(|(_, value)| **value));
+                    }
+                    Ordering::Equal => {
+                        let right_group = handle_overlap(goal_group, sub_group.len());
+                        fields.extend(right_group.iter().map(|(field, _)| **field));
+                        values.extend(right_group.iter().map(|(_, value)| **value));
+                        break;
+                    }
+                    Ordering::Greater => {
+                        unreachable!(
+                            "ICE: Sub scoped row contained field(s) goal scoped row did not"
+                        )
+                    }
+                }
+            }
+        }
+
+        // Append any remaining goal groups, they cannot appear in the sub row.
+        for goal_group in goal_groups {
+            fields.extend(goal_group.iter().map(|(field, _)| **field));
+            values.extend(goal_group.iter().map(|(_, value)| **value));
+        }
+
+        fields.shrink_to_fit();
+        values.shrink_to_fit();
+
+        (fields.into_boxed_slice(), values.into_boxed_slice())
     }
 }
 impl<'ctx> SimpleClosedRow<InArena<'ctx>> {

@@ -4,8 +4,8 @@ use aiahr_core::{
 };
 use aiahr_ty::{
     infer::{
-        InArena, InferTy, ScopedInferRow, ScopedRowK, SimpleInferRow, SimpleRowK, TcUnifierVar,
-        TypeK,
+        InArena, InferTy, RowsNotDisjoint, ScopedInferRow, ScopedRowK, SimpleInferRow, SimpleRowK,
+        TcUnifierVar, TypeK,
     },
     row::*,
     TypeKind::*,
@@ -15,7 +15,7 @@ use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
 use rustc_hash::FxHashMap;
 use salsa::DebugWithDb;
-use std::{collections::BTreeSet, ops::Deref};
+use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
 
 use crate::{
     diagnostic::{into_diag, TypeCheckError},
@@ -985,10 +985,26 @@ where
         let row_ = row
             .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
             .map_err(|var| TypeCheckError::DataRowOccursCheckFailed(var, row))?;
-        self.dispatch_solved_data_eqs(var, row)?;
+        self.dispatch_solved::<Simple>(var, row)?;
         self.data_row_unifiers
             .unify_var_value(var, Some(row_))
             .map_err(|err| TypeCheckError::DataRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1)))
+    }
+}
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, SimpleRowK>, SimpleInferRow<'infer>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        left: TcUnifierVar<'infer, SimpleRowK>,
+        right: SimpleInferRow<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        match right {
+            Row::Open(var) => self.unify(left, var),
+            Row::Closed(row) => self.unify(left, row),
+        }
     }
 }
 impl<'infer, I> Unify<'infer, SimpleInferRow<'infer>, SimpleClosedRow<InArena<'infer>>>
@@ -1005,41 +1021,6 @@ where
             Row::Open(var) => self.unify(var, right),
             Row::Closed(row) => self.unify(row, right),
         }
-    }
-}
-
-impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, TcUnifierVar<'infer, ScopedRowK>>
-    for InferCtx<'_, 'infer, I, Solution>
-{
-    fn unify(
-        &mut self,
-        left: TcUnifierVar<'infer, ScopedRowK>,
-        right: TcUnifierVar<'infer, ScopedRowK>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        self.eff_row_unifiers
-            .unify_var_var(left, right)
-            .map_err(From::from)
-    }
-}
-impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, ScopedClosedRow<InArena<'infer>>>
-    for InferCtx<'_, 'infer, I, Solution>
-where
-    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
-{
-    fn unify(
-        &mut self,
-        var: TcUnifierVar<'infer, ScopedRowK>,
-        row: ScopedClosedRow<InArena<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let row_ = row
-            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
-            .map_err(|var| TypeCheckError::EffectRowOccursCheckFailed(var, row))?;
-        self.dispatch_solved_eff_eqs(var, row)?;
-        self.eff_row_unifiers
-            .unify_var_value(var, Some(row_))
-            .map_err(|err| {
-                TypeCheckError::EffectRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1))
-            })
     }
 }
 impl<'infer, I> Unify<'infer, SimpleClosedRow<InArena<'infer>>, SimpleClosedRow<InArena<'infer>>>
@@ -1083,6 +1064,56 @@ where
     }
 }
 
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, TcUnifierVar<'infer, ScopedRowK>>
+    for InferCtx<'_, 'infer, I, Solution>
+{
+    fn unify(
+        &mut self,
+        left: TcUnifierVar<'infer, ScopedRowK>,
+        right: TcUnifierVar<'infer, ScopedRowK>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        self.eff_row_unifiers
+            .unify_var_var(left, right)
+            .map_err(From::from)
+    }
+}
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, ScopedClosedRow<InArena<'infer>>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        var: TcUnifierVar<'infer, ScopedRowK>,
+        row: ScopedClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        let row_ = row
+            .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
+            .map_err(|var| TypeCheckError::EffectRowOccursCheckFailed(var, row))?;
+        self.dispatch_solved::<Scoped>(var, row)?;
+        self.eff_row_unifiers
+            .unify_var_value(var, Some(row_))
+            .map_err(|err| {
+                TypeCheckError::EffectRowsNotEqual(Row::Closed(err.0), Row::Closed(err.1))
+            })
+    }
+}
+impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, ScopedInferRow<'infer>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        left: TcUnifierVar<'infer, ScopedRowK>,
+        right: ScopedInferRow<'infer>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        match right {
+            Row::Open(var) => self.unify(left, var),
+            Row::Closed(row) => self.unify(left, row),
+        }
+    }
+}
 impl<'infer, I> Unify<'infer, ScopedClosedRow<InArena<'infer>>, ScopedClosedRow<InArena<'infer>>>
     for InferCtx<'_, 'infer, I, Solution>
 where
@@ -1102,6 +1133,22 @@ where
         }
 
         Ok(())
+    }
+}
+impl<'infer, I> Unify<'infer, ScopedInferRow<'infer>, ScopedClosedRow<InArena<'infer>>>
+    for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
+{
+    fn unify(
+        &mut self,
+        left: ScopedInferRow<'infer>,
+        right: ScopedClosedRow<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>> {
+        match left {
+            Row::Open(var) => self.unify(var, right),
+            Row::Closed(row) => self.unify(row, right),
+        }
     }
 }
 impl<'infer, I> Unify<'infer, ScopedInferRow<'infer>, ScopedInferRow<'infer>>
@@ -1193,6 +1240,393 @@ where
     }
 }
 
+trait RowTheory: RowSema + Sized {
+    type Error<'ctx>;
+
+    fn combine<'ctx>(
+        left: &Self::Closed<InArena<'ctx>>,
+        right: &Self::Closed<InArena<'ctx>>,
+    ) -> Result<RowInternals<InArena<'ctx>>, Self::Error<'ctx>>;
+
+    fn diff_left<'ctx>(
+        goal: &Self::Closed<InArena<'ctx>>,
+        left: &Self::Closed<InArena<'ctx>>,
+    ) -> RowInternals<InArena<'ctx>>;
+
+    fn diff_right<'ctx>(
+        goal: &Self::Closed<InArena<'ctx>>,
+        right: &Self::Closed<InArena<'ctx>>,
+    ) -> RowInternals<InArena<'ctx>>;
+
+    fn match_eqn<'ctx>(
+        eqn: &UnsolvedRowEquation<InArena<'ctx>, Self>,
+        rows: RowCombination<Row<InArena<'ctx>, Self>>,
+    ) -> Option<RowCombination<Row<InArena<'ctx>, Self>>>;
+}
+
+impl RowTheory for Simple {
+    type Error<'ctx> = RowsNotDisjoint<'ctx>;
+
+    fn combine<'ctx>(
+        left: &Self::Closed<InArena<'ctx>>,
+        right: &Self::Closed<InArena<'ctx>>,
+    ) -> Result<RowInternals<InArena<'ctx>>, Self::Error<'ctx>> {
+        left.disjoint_union(right)
+    }
+
+    fn diff_left<'ctx>(
+        goal: &Self::Closed<InArena<'ctx>>,
+        left: &Self::Closed<InArena<'ctx>>,
+    ) -> RowInternals<InArena<'ctx>> {
+        goal.difference(*left)
+    }
+
+    fn diff_right<'ctx>(
+        goal: &Self::Closed<InArena<'ctx>>,
+        right: &Self::Closed<InArena<'ctx>>,
+    ) -> RowInternals<InArena<'ctx>> {
+        goal.difference(*right)
+    }
+
+    fn match_eqn<'ctx>(
+        eqn: &UnsolvedRowEquation<InArena<'ctx>, Self>,
+        rows: RowCombination<Row<InArena<'ctx>, Self>>,
+    ) -> Option<RowCombination<Row<InArena<'ctx>, Self>>> {
+        match eqn {
+            UnsolvedRowEquation::ClosedGoal(cand) => match rows {
+                RowCombination {
+                    left: Row::Open(left),
+                    right: Row::Open(right),
+                    goal: Row::Closed(goal),
+                } if (cand.goal.is_unifiable(goal)
+                    && (cand.left == left || cand.right == right))
+                    || (cand.left == left && cand.right == right) =>
+                {
+                    Some(RowCombination {
+                        left: Row::Open(cand.left),
+                        right: Row::Open(cand.right),
+                        goal: Row::Closed(cand.goal),
+                    })
+                }
+                RowCombination {
+                    left: Row::Open(left),
+                    right: Row::Open(right),
+                    goal: Row::Closed(goal),
+                } if (cand.goal.is_unifiable(goal)
+                    && (cand.left == right || cand.right == left))
+                    || (cand.left == right && cand.right == left) =>
+                {
+                    Some(RowCombination {
+                        left: Row::Open(cand.right),
+                        right: Row::Open(cand.left),
+                        goal: Row::Closed(cand.goal),
+                    })
+                }
+                _ => None,
+            },
+            UnsolvedRowEquation::OpenGoal(OpenGoal {
+                goal,
+                ops: Operatives::OpenOpen { left, right },
+            }) => match rows {
+                RowCombination {
+                    left: Row::Open(left_var),
+                    right: Row::Open(right_var),
+                    goal: Row::Open(goal_var),
+                } if (*goal == goal_var && (*left == left_var || *right == right_var))
+                    || (*left == left_var && *right == right_var) =>
+                {
+                    Some(RowCombination {
+                        left: Row::Open(*left),
+                        right: Row::Open(*right),
+                        goal: Row::Open(*goal),
+                    })
+                }
+                RowCombination {
+                    left: Row::Open(left_var),
+                    right: Row::Open(right_var),
+                    goal: Row::Open(goal_var),
+                } if (*goal == goal_var && (*left == right_var || *right == left_var))
+                    || (*left == right_var && *right == left_var) =>
+                {
+                    Some(RowCombination {
+                        left: Row::Open(*right),
+                        right: Row::Open(*left),
+                        goal: Row::Open(*goal),
+                    })
+                }
+                _ => None,
+            },
+            UnsolvedRowEquation::OpenGoal(OpenGoal {
+                goal,
+                ops: Operatives::ClosedOpen { left, right },
+            }) => {
+                match rows {
+                    // Forward row combinations
+                    RowCombination {
+                        left: Row::Closed(left_row),
+                        right: Row::Open(right_var),
+                        goal: Row::Open(goal_var),
+                    } if (left.is_unifiable(left_row)
+                        && (*right == right_var || *goal == goal_var))
+                        || (*right == right_var && *goal == goal_var) =>
+                    {
+                        Some(RowCombination {
+                            left: Row::Closed(*left),
+                            right: Row::Open(*right),
+                            goal: Row::Open(*goal),
+                        })
+                    }
+                    // Reverse row combinations
+                    RowCombination {
+                        left: Row::Open(left_var),
+                        right: Row::Closed(right_row),
+                        goal: Row::Open(goal_var),
+                    } if (left.is_unifiable(right_row)
+                        && (*goal == goal_var || *right == left_var))
+                        || (*goal == goal_var && *right == left_var) =>
+                    {
+                        Some(RowCombination {
+                            left: Row::Open(*right),
+                            right: Row::Closed(*left),
+                            goal: Row::Open(*goal),
+                        })
+                    }
+                    // We didn't find a match
+                    _ => None,
+                }
+            }
+            UnsolvedRowEquation::OpenGoal(OpenGoal {
+                goal,
+                ops: Operatives::OpenClosed { left, right },
+            }) => {
+                match rows {
+                    // Forward row combinations
+                    RowCombination {
+                        left: Row::Open(left_var),
+                        right: Row::Closed(right_row),
+                        goal: Row::Open(goal_var),
+                    } if (right.is_unifiable(right_row)
+                        && (*left == left_var || *goal == goal_var))
+                        || (*left == left_var && *goal == goal_var) =>
+                    {
+                        Some(RowCombination {
+                            left: Row::Open(*left),
+                            right: Row::Closed(*right),
+                            goal: Row::Open(*goal),
+                        })
+                    }
+                    // Reverse row combinations
+                    RowCombination {
+                        left: Row::Closed(left_row),
+                        right: Row::Open(right_var),
+                        goal: Row::Open(goal_var),
+                    } if (right.is_unifiable(left_row)
+                        && (*left == right_var || *goal == goal_var))
+                        || (*left == right_var && *goal == goal_var) =>
+                    {
+                        Some(RowCombination {
+                            left: Row::Closed(*right),
+                            right: Row::Open(*left),
+                            goal: Row::Open(*goal),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+
+impl RowTheory for Scoped {
+    type Error<'ctx> = Infallible;
+
+    fn combine<'ctx>(
+        left: &Self::Closed<InArena<'ctx>>,
+        right: &Self::Closed<InArena<'ctx>>,
+    ) -> Result<RowInternals<InArena<'ctx>>, Self::Error<'ctx>> {
+        Ok(left.union(right))
+    }
+
+    fn diff_left<'ctx>(
+        goal: &Self::Closed<InArena<'ctx>>,
+        left: &Self::Closed<InArena<'ctx>>,
+    ) -> RowInternals<InArena<'ctx>> {
+        goal.difference(left, |goal, left_count| &goal[left_count..])
+    }
+
+    fn diff_right<'ctx>(
+        goal: &Self::Closed<InArena<'ctx>>,
+        right: &Self::Closed<InArena<'ctx>>,
+    ) -> RowInternals<InArena<'ctx>> {
+        goal.difference(right, |goal, right_count| {
+            println!("goal slice: {:?}", goal);
+            println!("right cont: {:?}", right_count);
+            let res = &goal[0..(goal.len() - right_count)];
+            println!("outcome: {:?}", res);
+            res
+        })
+    }
+
+    fn match_eqn<'ctx>(
+        eqn: &UnsolvedRowEquation<InArena<'ctx>, Self>,
+        rows: RowCombination<Row<InArena<'ctx>, Self>>,
+    ) -> Option<RowCombination<Row<InArena<'ctx>, Self>>> {
+        match eqn {
+            UnsolvedRowEquation::ClosedGoal(cand) => {
+                let row_combo = || RowCombination {
+                    left: Row::Open(cand.left),
+                    right: Row::Open(cand.right),
+                    goal: Row::Closed(cand.goal),
+                };
+                match rows {
+                    RowCombination {
+                        left: Row::Open(left),
+                        right: Row::Open(right),
+                        goal: Row::Closed(goal),
+                    } if (cand.goal.is_unifiable(goal)
+                        && (cand.left == left || cand.right == right))
+                        || (cand.left == left && cand.right == right) =>
+                    {
+                        Some(row_combo())
+                    }
+                    _ => None,
+                }
+            }
+            UnsolvedRowEquation::OpenGoal(OpenGoal { goal, ops }) => match ops {
+                Operatives::OpenOpen { left, right } => match rows {
+                    RowCombination {
+                        left: Row::Open(left_var),
+                        right: Row::Open(right_var),
+                        goal: Row::Open(goal_var),
+                    } if (*goal == goal_var && (*left == left_var || *right == right_var))
+                        || (*left == left_var && *right == right_var) =>
+                    {
+                        Some(RowCombination {
+                            left: Row::Open(*left),
+                            right: Row::Open(*right),
+                            goal: Row::Open(*goal),
+                        })
+                    }
+                    _ => None,
+                },
+                Operatives::OpenClosed { left, right } => match rows {
+                    RowCombination {
+                        left: Row::Open(left_var),
+                        right: Row::Closed(right_row),
+                        goal: Row::Open(goal_var),
+                    } if (right.is_unifiable(right_row)
+                        && (*left == left_var || *goal == goal_var))
+                        || (*left == left_var && *goal == goal_var) =>
+                    {
+                        Some(RowCombination {
+                            left: Row::Open(*left),
+                            right: Row::Closed(*right),
+                            goal: Row::Open(*goal),
+                        })
+                    }
+                    _ => None,
+                },
+                Operatives::ClosedOpen { left, right } => match rows {
+                    RowCombination {
+                        left: Row::Closed(left_row),
+                        right: Row::Open(right_var),
+                        goal: Row::Open(goal_var),
+                    } if (left.is_unifiable(left_row)
+                        && (*right == right_var || *goal == goal_var))
+                        || (*right == right_var && *goal == goal_var) =>
+                    {
+                        Some(RowCombination {
+                            left: Row::Closed(*left),
+                            right: Row::Open(*right),
+                            goal: Row::Open(*goal),
+                        })
+                    }
+                    _ => None,
+                },
+            },
+        }
+    }
+}
+
+trait RowEquationSolver<'ctx, Sema: RowSema>:
+    Unify<'ctx, Sema::Open<InArena<'ctx>>, Sema::Closed<InArena<'ctx>>>
+    + Unify<'ctx, Row<InArena<'ctx>, Sema>, Sema::Closed<InArena<'ctx>>>
+    + Unify<'ctx, Row<InArena<'ctx>, Sema>, Row<InArena<'ctx>, Sema>>
+{
+    fn equations(&self) -> &BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
+    fn equations_mut(&mut self) -> &mut BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
+
+    fn with_equations<F>(&mut self, fun: F)
+    where
+        F: FnOnce(
+            BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>,
+        ) -> BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
+
+    fn normalize_row(&mut self, row: Row<InArena<'ctx>, Sema>) -> Row<InArena<'ctx>, Sema>;
+}
+impl<'infer, I> RowEquationSolver<'infer, Simple> for InferCtx<'_, 'infer, I, Solution>
+where
+    I: AccessTy<'infer, InArena<'infer>> + MkTy<InArena<'infer>>,
+{
+    fn equations(&self) -> &BTreeSet<UnsolvedRowEquation<InArena<'infer>, Simple>> {
+        &self.state.data_eqns
+    }
+
+    fn equations_mut(&mut self) -> &mut BTreeSet<UnsolvedRowEquation<InArena<'infer>, Simple>> {
+        &mut self.state.data_eqns
+    }
+
+    fn with_equations<F>(&mut self, fun: F)
+    where
+        F: FnOnce(
+            BTreeSet<UnsolvedRowEquation<InArena<'infer>, Simple>>,
+        ) -> BTreeSet<UnsolvedRowEquation<InArena<'infer>, Simple>>,
+    {
+        self.state.data_eqns = fun(std::mem::take(&mut self.state.data_eqns));
+    }
+
+    fn normalize_row(&mut self, row: Row<InArena<'infer>, Simple>) -> Row<InArena<'infer>, Simple> {
+        row.try_fold_with(&mut Normalize {
+            ctx: self.ctx,
+            ty_unifiers: &mut self.ty_unifiers,
+            datarow_unifiers: &mut self.data_row_unifiers,
+            effrow_unifiers: &mut self.eff_row_unifiers,
+        })
+        .unwrap()
+    }
+}
+impl<'infer, I> RowEquationSolver<'infer, Scoped> for InferCtx<'_, 'infer, I, Solution>
+where
+    I: AccessTy<'infer, InArena<'infer>> + MkTy<InArena<'infer>>,
+{
+    fn equations(&self) -> &BTreeSet<UnsolvedRowEquation<InArena<'infer>, Scoped>> {
+        &self.state.eff_eqns
+    }
+
+    fn equations_mut(&mut self) -> &mut BTreeSet<UnsolvedRowEquation<InArena<'infer>, Scoped>> {
+        &mut self.state.eff_eqns
+    }
+
+    fn with_equations<F>(&mut self, fun: F)
+    where
+        F: FnOnce(
+            BTreeSet<UnsolvedRowEquation<InArena<'infer>, Scoped>>,
+        ) -> BTreeSet<UnsolvedRowEquation<InArena<'infer>, Scoped>>,
+    {
+        self.state.eff_eqns = fun(std::mem::take(&mut self.state.eff_eqns));
+    }
+
+    fn normalize_row(&mut self, row: Row<InArena<'infer>, Scoped>) -> Row<InArena<'infer>, Scoped> {
+        row.try_fold_with(&mut Normalize {
+            ctx: self.ctx,
+            ty_unifiers: &mut self.ty_unifiers,
+            datarow_unifiers: &mut self.data_row_unifiers,
+            effrow_unifiers: &mut self.eff_row_unifiers,
+        })
+        .unwrap()
+    }
+}
+
 impl<'a, 'infer, I> InferCtx<'a, 'infer, I, Solution>
 where
     I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
@@ -1242,7 +1676,17 @@ where
                 .unwrap_or_default();
         }
         for (RowCombination { left, right, goal }, span) in constraints.data_rows {
-            self.unify_data_row_combine(left, right, goal)
+            self.unify_row_combine(left, right, goal)
+                .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
+                .unwrap_or_default();
+        }
+        for (left, right, span) in constraints.effect_eq {
+            self.unify(left, right)
+                .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
+                .unwrap_or_default();
+        }
+        for (RowCombination { left, right, goal }, span) in constraints.effect_rows {
+            self.unify_row_combine(left, right, goal)
                 .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
@@ -1344,599 +1788,199 @@ where
         }
     }
 
-    fn dispatch_solved_eff_eqs(
+    fn dispatch_solved<Sema: RowTheory>(
         &mut self,
-        var: ScopedRowVarOf<InArena<'infer>>,
-        row: ScopedClosedRow<InArena<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let mut combos: Vec<RowCombination<ScopedInferRow<'infer>>> = vec![];
-        self.state.eff_eqns = std::mem::take(&mut self.state.eff_eqns)
-            .into_iter()
-            .filter_map(|eq| match eq {
-                UnsolvedRowEquation::ClosedGoal(closed) if closed.left == var => {
-                    combos.push(RowCombination {
-                        left: Row::Closed(row),
-                        right: Row::Open(closed.right),
-                        goal: Row::Closed(closed.goal),
-                    });
-                    None
-                }
-                UnsolvedRowEquation::ClosedGoal(closed) if closed.right == var => {
-                    combos.push(RowCombination {
-                        left: Row::Open(closed.left),
-                        right: Row::Closed(row),
-                        goal: Row::Closed(closed.goal),
-                    });
-                    None
-                }
-                // Inert return the equation as is
-                UnsolvedRowEquation::ClosedGoal(_) => Some(eq),
-                UnsolvedRowEquation::OpenGoal(open) if open.goal == var => match open.ops {
-                    Operatives::OpenOpen { left, right } => {
-                        Some(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
-                            goal: row,
-                            left,
-                            right,
-                        }))
-                    }
-                    Operatives::OpenClosed { left, right } => {
+        var: Sema::Open<InArena<'infer>>,
+        row: Sema::Closed<InArena<'infer>>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        TypeCheckError<'infer>: From<Sema::Error<'infer>>,
+        Self: RowEquationSolver<'infer, Sema>,
+        Sema: Ord + Clone,
+        Sema::Closed<InArena<'infer>>: Copy + std::fmt::Debug,
+    {
+        let mut combos: Vec<RowCombination<Row<InArena<'infer>, Sema>>> = vec![];
+        self.with_equations(|eqns| {
+            eqns.into_iter()
+                .filter_map(|eqn| match eqn {
+                    UnsolvedRowEquation::ClosedGoal(cand) if cand.left == var => {
                         combos.push(RowCombination {
-                            left: Row::Open(left),
-                            right: Row::Closed(right),
-                            goal: Row::Closed(row),
+                            left: Row::Closed(row),
+                            right: Row::Open(cand.right),
+                            goal: Row::Closed(cand.goal),
                         });
                         None
                     }
-                    Operatives::ClosedOpen { left, right } => {
+                    UnsolvedRowEquation::ClosedGoal(cand) if cand.right == var => {
+                        combos.push(RowCombination {
+                            left: Row::Open(cand.left),
+                            right: Row::Closed(row),
+                            goal: Row::Closed(cand.goal),
+                        });
+                        None
+                    }
+                    UnsolvedRowEquation::OpenGoal(cand) if cand.goal == var => match cand.ops {
+                        Operatives::OpenOpen { left, right } => {
+                            Some(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
+                                goal: row,
+                                left,
+                                right,
+                            }))
+                        }
+                        Operatives::OpenClosed { left, right } => {
+                            combos.push(RowCombination {
+                                left: Row::Open(left),
+                                right: Row::Closed(right),
+                                goal: Row::Closed(row),
+                            });
+                            None
+                        }
+                        Operatives::ClosedOpen { left, right } => {
+                            combos.push(RowCombination {
+                                left: Row::Closed(left),
+                                right: Row::Open(right),
+                                goal: Row::Closed(row),
+                            });
+                            None
+                        }
+                    },
+                    UnsolvedRowEquation::OpenGoal(OpenGoal {
+                        goal,
+                        ops: Operatives::OpenOpen { left, right },
+                    }) if left == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                        goal,
+                        ops: Operatives::ClosedOpen { left: row, right },
+                    })),
+                    UnsolvedRowEquation::OpenGoal(OpenGoal {
+                        goal,
+                        ops: Operatives::OpenOpen { left, right },
+                    }) if right == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
+                        goal,
+                        ops: Operatives::OpenClosed { left, right: row },
+                    })),
+                    UnsolvedRowEquation::OpenGoal(OpenGoal {
+                        goal,
+                        ops: Operatives::ClosedOpen { left, right },
+                    }) if right == var => {
                         combos.push(RowCombination {
                             left: Row::Closed(left),
-                            right: Row::Open(right),
-                            goal: Row::Closed(row),
+                            right: Row::Closed(row),
+                            goal: Row::Open(goal),
                         });
                         None
                     }
-                },
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::OpenOpen { left, right },
-                }) if left == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::ClosedOpen { left: row, right },
-                })),
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::OpenOpen { left, right },
-                }) if right == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::OpenClosed { left, right: row },
-                })),
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::OpenClosed { left, right },
-                }) if left == var => {
-                    combos.push(RowCombination {
-                        left: Row::Closed(row),
-                        right: Row::Closed(right),
-                        goal: Row::Open(goal),
-                    });
-                    None
-                }
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::ClosedOpen { left, right },
-                }) if right == var => {
-                    combos.push(RowCombination {
-                        left: Row::Closed(left),
-                        right: Row::Closed(row),
-                        goal: Row::Open(goal),
-                    });
-                    None
-                }
-                UnsolvedRowEquation::OpenGoal(_) => Some(eq),
-            })
-            .collect();
-        for combo in combos {
-            self.unify_eff_row_combine(combo.left, combo.right, combo.goal)?;
-        }
-        Ok(())
-    }
-
-    /// Dispatch any equations that become solved when we learn a variable is equal to a row.
-    /// Solved equations are removed from the set and any equalities they produce are unified.
-    fn dispatch_solved_data_eqs(
-        &mut self,
-        var: SimpleRowVarOf<InArena<'infer>>,
-        row: SimpleClosedRow<InArena<'infer>>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        // We want any unifications we do as a byproduct of this to see the updated state so we
-        // save them here until we've finished our intial removals from state
-        let mut combos = vec![];
-        self.state.data_eqns = self
-            .state
-            .data_eqns
-            .iter()
-            .filter_map(|eq| match eq {
-                UnsolvedRowEquation::ClosedGoal(cand) if cand.left == var => {
-                    combos.push(RowCombination {
-                        left: Row::Closed(row),
-                        right: Row::Open(cand.right),
-                        goal: Row::Closed(cand.goal),
-                    });
-                    None
-                }
-                UnsolvedRowEquation::ClosedGoal(cand) if cand.right == var => {
-                    combos.push(RowCombination {
-                        left: Row::Closed(row),
-                        right: Row::Open(cand.left),
-                        goal: Row::Closed(cand.goal),
-                    });
-                    None
-                }
-                UnsolvedRowEquation::OpenGoal(cand) if cand.goal == var => match cand.ops {
-                    Operatives::OpenOpen { left, right } => {
-                        Some(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
-                            goal: row,
-                            left,
-                            right,
-                        }))
-                    }
-                    Operatives::OpenClosed { left, right } => {
+                    UnsolvedRowEquation::OpenGoal(OpenGoal {
+                        goal,
+                        ops: Operatives::OpenClosed { left, right },
+                    }) if left == var => {
                         combos.push(RowCombination {
-                            left: Row::Open(left),
+                            left: Row::Closed(row),
                             right: Row::Closed(right),
-                            goal: Row::Closed(row),
+                            goal: Row::Open(goal),
                         });
                         None
                     }
-                    Operatives::ClosedOpen { left, right } => {
-                        combos.push(RowCombination {
-                            left: Row::Closed(left),
-                            right: Row::Open(right),
-                            goal: Row::Closed(row),
-                        });
-                        None
-                    }
-                },
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::ClosedOpen { left, right },
-                }) if *right == var => {
-                    combos.push(RowCombination {
-                        left: Row::Closed(*left),
-                        right: Row::Closed(row),
-                        goal: Row::Open(*goal),
-                    });
-                    None
-                }
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::OpenClosed { left, right },
-                }) if *left == var => {
-                    combos.push(RowCombination {
-                        left: Row::Closed(row),
-                        right: Row::Closed(*right),
-                        goal: Row::Open(*goal),
-                    });
-                    None
-                }
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::OpenOpen { left, right },
-                }) if *left == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal: *goal,
-                    ops: Operatives::ClosedOpen {
-                        left: row,
-                        right: *right,
-                    },
-                })),
-                UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal,
-                    ops: Operatives::OpenOpen { left, right },
-                }) if *right == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                    goal: *goal,
-                    ops: Operatives::OpenClosed {
-                        left: *left,
-                        right: row,
-                    },
-                })),
-                eq => Some(*eq),
-            })
-            .collect::<BTreeSet<_>>();
+                    eqn => Some(eqn),
+                })
+                .collect()
+        });
 
-        // Now we can perform our unifications against our new state
         for RowCombination { left, right, goal } in combos {
-            self.unify_data_row_combine(left, right, goal)?;
+            self.unify_row_combine(left, right, goal)?;
         }
         Ok(())
     }
 
-    fn unify_eff_row_combine(
+    fn unify_row_combine<Sema>(
         &mut self,
-        left: ScopedInferRow<'infer>,
-        right: ScopedInferRow<'infer>,
-        goal: ScopedInferRow<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let goal = self.normalize_eff_row(goal);
-        let left = self.normalize_eff_row(left);
-        let right = self.normalize_eff_row(right);
+        unnorm_left: Row<InArena<'infer>, Sema>,
+        unnorm_right: Row<InArena<'infer>, Sema>,
+        unnorm_goal: Row<InArena<'infer>, Sema>,
+    ) -> Result<(), TypeCheckError<'infer>>
+    where
+        TypeCheckError<'infer>: From<Sema::Error<'infer>>,
+        Self: RowEquationSolver<'infer, Sema>,
+        Sema: RowTheory + Ord + Clone,
+        Sema::Closed<InArena<'infer>>: std::fmt::Debug,
+    {
+        let left = self.normalize_row(unnorm_left);
+        let right = self.normalize_row(unnorm_right);
+        let goal = self.normalize_row(unnorm_goal);
 
-        match goal {
-            Row::Open(goal_var) => match (left, right) {
-                (Row::Closed(left), Row::Closed(right)) => {
-                    let (fields, values) = left.union(&right);
-                    let row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&fields, &values);
-                    self.unify(goal_var, row)?;
-                }
-                (Row::Open(left_var), Row::Closed(right_row)) => {
-                    self.state
-                        .eff_eqns
-                        .iter()
-                        .find_map(|eqn| match eqn {
-                            UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal,
-                                ops: Operatives::OpenClosed { left, right },
-                            }) if (goal == &goal_var
-                                && (left == &left_var || right.is_unifiable(right_row)))
-                                || (left == &left_var && right.is_unifiable(right_row)) =>
-                            {
-                                Some((*left, *right, *goal))
+        match (left, right, goal) {
+            (Row::Closed(left), Row::Closed(right), goal) => {
+                let (fields, values) = Sema::combine(&left, &right)?;
+                let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
+                self.unify(goal, row)?;
+            }
+            (Row::Closed(left), Row::Open(right), Row::Closed(goal)) => {
+                let (fields, values) = Sema::diff_left(&goal, &left);
+                let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
+                println!(
+                    "LEFT:\n\tgoal:{:?}\n\tsub:{:?}\n\tresult:{:?}",
+                    goal, left, row
+                );
+                self.unify(right, row)?;
+            }
+            (Row::Open(left), Row::Closed(right), Row::Closed(goal)) => {
+                let (fields, values) = Sema::diff_right(&goal, &right);
+                let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
+                println!(
+                    "RIGHT:\n\tgoal: {:?}\n\tsub:{:?}\n\tresult:{:?}",
+                    goal, right, row
+                );
+                self.unify(left, row)?;
+            }
+            (left, right, goal) => {
+                let unifiable_equation = self.equations().iter().find_map(|eqn| {
+                    Sema::match_eqn(
+                        eqn,
+                        RowCombination {
+                            left: left.clone(),
+                            right: right.clone(),
+                            goal: goal.clone(),
+                        },
+                    )
+                });
+                match unifiable_equation {
+                    Some(row_combo) => {
+                        self.unify(left, row_combo.left)?;
+                        self.unify(right, row_combo.right)?;
+                        self.unify(goal, row_combo.goal)?;
+                    }
+                    None => {
+                        self.equations_mut().insert(match (left, right, goal) {
+                            (Row::Open(left), Row::Open(right), Row::Open(goal)) => {
+                                UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                    goal,
+                                    ops: Operatives::OpenOpen { left, right },
+                                })
                             }
-                            _ => None,
-                        })
-                        .map(|(left, right, goal)| {
-                            self.unify(goal, goal_var)?;
-                            self.unify(left, left_var)?;
-                            self.unify(right, right_row)
-                        })
-                        .unwrap_or_else(|| {
-                            self.state
-                                .eff_eqns
-                                .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                    goal: goal_var,
-                                    ops: Operatives::OpenClosed {
-                                        left: left_var,
-                                        right: right_row,
-                                    },
-                                }));
-                            Ok(())
-                        })?;
-                }
-                (Row::Closed(left_row), Row::Open(right_var)) => {
-                    self.state
-                        .eff_eqns
-                        .iter()
-                        .find_map(|eqn| match eqn {
-                            UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal,
-                                ops: Operatives::ClosedOpen { left, right },
-                            }) if (goal == &goal_var
-                                && (right == &right_var || left.is_unifiable(left_row)))
-                                || (right == &right_var && left.is_unifiable(left_row)) =>
-                            {
-                                Some((*left, *right, *goal))
+                            (Row::Open(left), Row::Closed(right), Row::Open(goal)) => {
+                                UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                    goal,
+                                    ops: Operatives::OpenClosed { left, right },
+                                })
                             }
-                            _ => None,
-                        })
-                        .map(|(left, right, goal)| {
-                            self.unify(goal, goal_var)?;
-                            self.unify(right, right_var)?;
-                            self.unify(left, left_row)
-                        })
-                        .unwrap_or_else(|| {
-                            self.state
-                                .eff_eqns
-                                .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                    goal: goal_var,
-                                    ops: Operatives::ClosedOpen {
-                                        left: left_row,
-                                        right: right_var,
-                                    },
-                                }));
-                            Ok(())
-                        })?;
-                }
-                (Row::Open(left_var), Row::Open(right_var)) => {
-                    self.state
-                        .eff_eqns
-                        .iter()
-                        .find_map(|eqn| match eqn {
-                            UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal,
-                                ops: Operatives::OpenOpen { left, right },
-                            }) if (goal == &goal_var
-                                && (left == &left_var || right == &right_var))
-                                || (left == &left_var && right == &right_var) =>
-                            {
-                                Some((*left, *right, *goal))
+                            (Row::Closed(left), Row::Open(right), Row::Open(goal)) => {
+                                UnsolvedRowEquation::OpenGoal(OpenGoal {
+                                    goal,
+                                    ops: Operatives::ClosedOpen { left, right },
+                                })
                             }
-                            _ => None,
-                        })
-                        .map(|(left, right, goal)| {
-                            self.unify(left, left_var)?;
-                            self.unify(right, right_var)?;
-                            self.unify(goal, goal_var)
-                        })
-                        .unwrap_or_else(|| {
-                            self.state
-                                .eff_eqns
-                                .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                    goal: goal_var,
-                                    ops: Operatives::OpenOpen {
-                                        left: left_var,
-                                        right: right_var,
-                                    },
-                                }));
-                            Ok(())
-                        })?;
-                }
-            },
-            Row::Closed(goal) => match (left, right) {
-                (Row::Open(left), Row::Open(right)) => {
-                    self.state
-                        .eff_eqns
-                        .iter()
-                        .find_map(|eqn| match eqn {
-                            UnsolvedRowEquation::ClosedGoal(closed)
-                                if (closed.goal.is_unifiable(goal)
-                                    && (closed.left == left || closed.right == right))
-                                    || (closed.left == left && closed.right == right) =>
-                            {
-                                Some((closed.left, closed.right, closed.goal))
+                            (Row::Open(left), Row::Open(right), Row::Closed(goal)) => {
+                                UnsolvedRowEquation::ClosedGoal(ClosedGoal { goal, left, right })
                             }
-                            _ => None,
-                        })
-                        .map(|(left_var, right_var, goal_row)| {
-                            self.unify(left_var, left)?;
-                            self.unify(right_var, right)?;
-                            self.unify(goal_row, goal)
-                        })
-                        .unwrap_or_else(|| {
-                            self.state.eff_eqns.insert(UnsolvedRowEquation::ClosedGoal(
-                                ClosedGoal { goal, left, right },
-                            ));
-                            Ok(())
-                        })?;
+                            (Row::Open(_), Row::Closed(_), Row::Closed(_))
+                            | (Row::Closed(_), Row::Closed(_), Row::Open(_))
+                            | (Row::Closed(_), Row::Open(_), Row::Closed(_))
+                            | (Row::Closed(_), Row::Closed(_), Row::Closed(_)) => unreachable!(),
+                        });
+                    }
                 }
-                (Row::Open(_), Row::Closed(_)) => todo!("solve"),
-                (Row::Closed(_), Row::Open(_)) => todo!("solve"),
-                (Row::Closed(left), Row::Closed(right)) => {
-                    let (fields, values) = left.union(&right);
-                    let row = self.mk_row(&fields, &values);
-                    self.unify(goal, row)?;
-                }
-            },
-        };
-        Ok(())
-    }
-
-    fn unify_data_row_combine(
-        &mut self,
-        left: SimpleInferRow<'infer>,
-        right: SimpleInferRow<'infer>,
-        goal: SimpleInferRow<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>> {
-        let goal = self.normalize_data_row(goal);
-        let left = self.normalize_data_row(left);
-        let right = self.normalize_data_row(right);
-
-        match goal {
-            Row::Open(goal_var) => match (left, right) {
-                // With only one open variable we can solve
-                (Row::Closed(left), Row::Closed(right)) => {
-                    let (fields, values) = left.disjoint_union(&right).map_err(|err| {
-                        TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
-                    })?;
-                    let row: SimpleClosedRow<InArena<'infer>> = self.mk_row(&fields, &values);
-                    self.unify(goal_var, row)
-                }
-                (Row::Open(left_var), Row::Closed(right_row)) => self
-                    .state
-                    .data_eqns
-                    .iter()
-                    .find_map(|eq| match eq {
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            ops: Operatives::ClosedOpen { left, right },
-                        }) if (goal_var.eq(goal)
-                            && (right_row.is_unifiable(*left) || left_var.eq(right)))
-                            || (right_row.is_unifiable(*left) && left_var.eq(right)) =>
-                        {
-                            Some((*left, *right, *goal))
-                        }
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            ops: Operatives::OpenClosed { left, right },
-                        }) if (goal_var.eq(goal)
-                            && (right_row.is_unifiable(*right) || left_var.eq(left)))
-                            || (right_row.is_unifiable(*right) && left_var.eq(left)) =>
-                        {
-                            Some((*right, *left, *goal))
-                        }
-                        _ => None,
-                    })
-                    .map(|(row, var, goal)| {
-                        self.unify(goal, goal_var)?;
-                        self.unify(var, left_var)?;
-                        self.unify(row, right_row)
-                    })
-                    .unwrap_or_else(|| {
-                        self.state
-                            .data_eqns
-                            .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal: goal_var,
-                                ops: Operatives::OpenClosed {
-                                    left: left_var,
-                                    right: right_row,
-                                },
-                            }));
-                        Ok(())
-                    }),
-                (Row::Closed(left_row), Row::Open(right_var)) => self
-                    .state
-                    .data_eqns
-                    .iter()
-                    .find_map(|eq| match eq {
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            ops: Operatives::ClosedOpen { left, right },
-                        }) if (*goal == goal_var
-                            && (*right == right_var || left.is_unifiable(left_row)))
-                            || (*right == right_var && left.is_unifiable(left_row)) =>
-                        {
-                            Some((*left, *right, *goal))
-                        }
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            ops: Operatives::OpenClosed { left, right },
-                        }) if (*goal == goal_var
-                            && (*left == right_var || right.is_unifiable(left_row)))
-                            || (*left == right_var && right.is_unifiable(left_row)) =>
-                        {
-                            Some((*right, *left, *goal))
-                        }
-                        _ => None,
-                    })
-                    .map(|(closed, open, goal)| {
-                        self.unify(open, right_var)?;
-                        self.unify(closed, left_row)?;
-                        self.unify(goal, goal_var)
-                    })
-                    .unwrap_or_else(|| {
-                        self.state
-                            .data_eqns
-                            .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal: goal_var,
-                                ops: Operatives::ClosedOpen {
-                                    left: left_row,
-                                    right: right_var,
-                                },
-                            }));
-                        Ok(())
-                    }),
-                (Row::Open(left_var), Row::Open(right_var)) => self
-                    .state
-                    .data_eqns
-                    .iter()
-                    .find_map(|eq| match eq {
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            ops: Operatives::OpenOpen { left, right },
-                        }) if (*goal == goal_var && (*left == left_var || *right == right_var))
-                            || (*left == left_var && *right == right_var) =>
-                        {
-                            Some((*left, *right, *goal))
-                        }
-                        UnsolvedRowEquation::OpenGoal(OpenGoal {
-                            goal,
-                            ops: Operatives::OpenOpen { left, right },
-                        }) if (*goal == goal_var && (*right == left_var || *left == right_var))
-                            || (*right == left_var && *left == right_var) =>
-                        {
-                            Some((*left, *right, *goal))
-                        }
-                        _ => None,
-                    })
-                    .map(|(left, right, goal)| {
-                        self.unify(left, left_var)?;
-                        self.unify(right, right_var)?;
-                        self.unify(goal, goal_var)
-                    })
-                    .unwrap_or_else(|| {
-                        self.state
-                            .data_eqns
-                            .insert(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal: goal_var,
-                                ops: Operatives::OpenOpen {
-                                    left: left_var,
-                                    right: right_var,
-                                },
-                            }));
-                        Ok(())
-                    }),
-            },
-            Row::Closed(goal_row) => match (left, right) {
-                // Our rows are all closed, we just need to check they are equal and discharge them
-                (Row::Closed(left_row), Row::Closed(right_row)) => {
-                    let (fields, values) = left_row.disjoint_union(&right_row).map_err(|err| {
-                        TypeCheckError::RowsNotDisjoint(err.left, err.right, err.label)
-                    })?;
-                    let row = self.mk_row(&fields, &values);
-                    self.unify(goal_row, row)
-                }
-                // With one open row we solve that row
-                (Row::Open(left_var), Row::Closed(right_row)) => {
-                    let (fields, values) = goal_row.difference(right_row);
-                    let row = self.mk_row(&fields, &values);
-                    let (fields, values) = goal_row.difference(row);
-                    let right_goal_row = self.mk_row(&fields, &values);
-                    self.unify(right_row, right_goal_row)?;
-                    self.unify(left_var, row)
-                }
-                (Row::Closed(left_row), Row::Open(right_var)) => {
-                    let (fields, values) = goal_row.difference(left_row);
-                    let row = self.mk_row(&fields, &values);
-                    let (fields, values) = goal_row.difference(row);
-                    let left_goal_row = self.mk_row(&fields, &values);
-                    self.unify(left_row, left_goal_row).unwrap();
-                    self.unify(right_var, row)
-                }
-                // We can't unify this case as is, we need more information.
-                // And our goal is closed so we can't set it to pending
-                (Row::Open(left_var), Row::Open(right_var)) => {
-                    self.state
-                        .data_eqns
-                        .iter()
-                        .find_map(|eq| match eq {
-                            UnsolvedRowEquation::ClosedGoal(cand)
-                                if (cand.goal.is_unifiable(goal_row)
-                                    && (cand.left == left_var || cand.right == right_var))
-                                    || (cand.left == left_var && cand.right == right_var) =>
-                            {
-                                Some((cand.left, cand.right, Row::<InArena<'_>>::Closed(cand.goal)))
-                            }
-                            UnsolvedRowEquation::ClosedGoal(cand)
-                                if (cand.goal.is_unifiable(goal_row)
-                                    && (cand.left == right_var || cand.right == left_var))
-                                    || (cand.left == right_var && cand.right == left_var) =>
-                            {
-                                Some((cand.right, cand.left, Row::<InArena<'_>>::Closed(cand.goal)))
-                            }
-                            UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal,
-                                ops: Operatives::OpenOpen { left, right }, //orxr: OrderedRowXorRow::OpenOpen { min, max },
-                            }) if left_var.eq(left) && right_var.eq(right) => {
-                                Some((*left, *right, Row::<InArena<'_>>::Open(*goal)))
-                            }
-                            UnsolvedRowEquation::OpenGoal(OpenGoal {
-                                goal,
-                                ops: Operatives::OpenOpen { left, right }, //orxr: OrderedRowXorRow::OpenOpen { min, max },
-                            }) if left_var.eq(right) && right_var.eq(left) => {
-                                Some((*right, *left, Row::<InArena<'_>>::Open(*goal)))
-                            }
-                            _ => None,
-                        })
-                        .map(|(left, right, goal)| {
-                            self.unify(left_var, left)?;
-                            self.unify(right_var, right)?;
-                            self.unify(goal, goal_row)
-                            /*match goal {
-                                Row::Open(var) => self.unify(var, goal_row),
-                                Row::Closed(row) => self.unify(row, goal_row),
-                            }*/
-                        })
-                        .unwrap_or_else(|| {
-                            self.state.data_eqns.insert(UnsolvedRowEquation::ClosedGoal(
-                                ClosedGoal {
-                                    goal: goal_row,
-                                    left: left_var,
-                                    right: right_var,
-                                },
-                            ));
-                            Ok(())
-                        })
-                }
-            },
+            }
         }
+        Ok(())
     }
 
     fn lookup_effect_and_unify<E>(
@@ -2012,7 +2056,7 @@ where
                     for constrs in scheme.constrs {
                         match constrs.try_fold_with(&mut inst).unwrap() {
                             Evidence::Row { left, right, goal } => {
-                                ctx.unify_data_row_combine(left, right, goal)?
+                                ctx.unify_row_combine(left, right, goal)?
                             }
                         }
                     }
@@ -2102,7 +2146,7 @@ where
                         for constr in scheme.constrs {
                             match constr.try_fold_with(&mut inst).unwrap() {
                                 Evidence::Row { left, right, goal } => {
-                                    self.unify_data_row_combine(left, right, goal)?
+                                    self.unify_row_combine(left, right, goal)?
                                 }
                             }
                         }
