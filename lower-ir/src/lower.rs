@@ -8,11 +8,10 @@ use aiahr_ir::{
 };
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
-    row::{Row, RowOps, SimpleClosedRow},
+    row::{Row, RowOps, Scoped, ScopedClosedRow, ScopedRow, Simple, SimpleClosedRow, SimpleRow},
     AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
 };
 use la_arena::Idx;
-use rustc_hash::FxHashSet;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv, SolvedRowEv},
@@ -24,7 +23,7 @@ use crate::{
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_prod_ty<'a, A: ?Sized + AccessTy<'a, InDb>>(db: &A, ty: Ty) -> Row {
+fn expect_prod_ty<'a, A: ?Sized + AccessTy<'a, InDb>>(db: &A, ty: Ty) -> Row<Simple> {
     ty.try_as_prod_row(db).unwrap_or_else(|_| unreachable!())
 }
 
@@ -32,7 +31,7 @@ fn expect_prod_ty<'a, A: ?Sized + AccessTy<'a, InDb>>(db: &A, ty: Ty) -> Row {
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_sum_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row {
+fn expect_sum_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row<Simple> {
     ty.try_as_sum_row(db).unwrap_or_else(|_| unreachable!())
 }
 
@@ -42,7 +41,7 @@ fn expect_sum_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row {
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
 /// this operation would fail.
-fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row {
+fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row<Simple> {
     ty.try_as_fn_ty(db)
         .and_then(|(arg, _)| arg.try_as_sum_row(db))
         .unwrap_or_else(|_| unreachable!())
@@ -105,32 +104,21 @@ impl<'a, S> LowerCtx<'a, '_, S> {
 impl<'a, S> LowerCtx<'a, '_, S> {
     pub(crate) fn lower_scheme(&mut self, scheme: &TyScheme) -> IrTy {
         let ir_ty = self.lower_ty(scheme.ty);
-        let mut row_kinds = FxHashSet::default();
+
         // Add parameter to type for each constraint
         let constrs_ty = scheme.constrs.iter().rfold(ir_ty, |ty, constr| {
-            match constr {
-                Evidence::Row { left, right, goal } => {
-                    if let Row::Open(ty_var) = left {
-                        row_kinds.insert(ty_var);
-                    }
-                    if let Row::Open(ty_var) = right {
-                        row_kinds.insert(ty_var);
-                    }
-                    if let Row::Open(ty_var) = goal {
-                        row_kinds.insert(ty_var);
-                    }
-                }
-            };
             let arg = self.row_evidence_ir_ty(constr);
             self.mk_ir_ty(IrTyKind::FunTy(arg, ty))
         });
         // Add each type variable around type
-        scheme.bound.iter().rfold(constrs_ty, |ty, ty_var| {
+        scheme.bound_ty.iter().rfold(constrs_ty, |ty, ty_var| {
             let ir_ty_var_id = self.tyvar_conv.convert(*ty_var);
             let var = IrVarTy {
                 var: ir_ty_var_id,
-                kind: if row_kinds.contains(&ty_var) {
-                    Kind::Row
+                kind: if scheme.bound_data_row.contains(ty_var) {
+                    Kind::SimpleRow
+                } else if scheme.bound_eff_row.contains(ty_var) {
+                    Kind::ScopedRow
                 } else {
                     Kind::Type
                 },
@@ -160,7 +148,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 let var = self.tyvar_conv.convert(*row_var);
                 self.mk_ir_ty(IrTyKind::VarTy(IrVarTy {
                     var,
-                    kind: Kind::Row,
+                    kind: Kind::SimpleRow,
                 }))
             }
             TypeKind::ProdTy(Row::Closed(row)) => {
@@ -182,15 +170,49 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         }
     }
 
+    fn scoped_row_evidence_ir(
+        &mut self,
+        left: ScopedClosedRow,
+        right: ScopedClosedRow,
+        goal: ScopedClosedRow,
+    ) -> Ir {
+        let (left_prod, _left_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(left));
+        let (right_prod, _right_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(right));
+        let (goal_prod, _goal_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(goal));
+
+        let _branch_tyvar = IrVarTy {
+            var: self.tyvar_conv.generate(),
+            kind: Kind::Type,
+        };
+        let left_var_id = self.var_conv.generate();
+        let right_var_id = self.var_conv.generate();
+        let goal_var_id = self.var_conv.generate();
+
+        let _left_prod_var = IrVar {
+            var: left_var_id,
+            ty: left_prod,
+        };
+        let _right_prod_var = IrVar {
+            var: right_var_id,
+            ty: right_prod,
+        };
+        let _goal_prod_var = IrVar {
+            var: goal_var_id,
+            ty: goal_prod,
+        };
+
+        todo!("Implement witness of scoped row evidence")
+    }
+
     fn row_evidence_ir(
         &mut self,
         left: SimpleClosedRow,
         right: SimpleClosedRow,
         goal: SimpleClosedRow,
     ) -> Ir {
-        let (left_prod, left_coprod) = self.row_ir_tys(&Row::Closed(left));
-        let (right_prod, right_coprod) = self.row_ir_tys(&Row::Closed(right));
-        let (goal_prod, goal_coprod) = self.row_ir_tys(&Row::Closed(goal));
+        let (left_prod, left_coprod) = self.row_ir_tys(&SimpleRow::Closed(left));
+        let (right_prod, right_coprod) = self.row_ir_tys(&SimpleRow::Closed(right));
+        let (goal_prod, goal_coprod) = self.row_ir_tys(&SimpleRow::Closed(goal));
 
         let branch_tyvar = IrVarTy {
             var: self.tyvar_conv.generate(),
@@ -382,13 +404,37 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         ]))
     }
 
-    fn row_ir_tys(&mut self, row: &Row) -> (IrTy, IrTy) {
+    fn scoped_row_ir_tys(&mut self, row: &Row<Scoped>) -> (IrTy, IrTy) {
         match row {
             Row::Open(row_var) => {
                 let var = self.tyvar_conv.convert(*row_var);
                 let var = self.mk_ir_ty(VarTy(IrVarTy {
                     var,
-                    kind: Kind::Row,
+                    kind: Kind::ScopedRow,
+                }));
+                (var, var)
+            }
+            Row::Closed(row) => {
+                let elems = row
+                    .values(&self.db)
+                    .iter()
+                    .map(|ty| self.lower_ty(*ty))
+                    .collect::<Vec<_>>();
+                (
+                    self.mk_prod_ty(elems.as_slice()),
+                    self.mk_coprod_ty(elems.as_slice()),
+                )
+            }
+        }
+    }
+
+    fn row_ir_tys(&mut self, row: &Row<Simple>) -> (IrTy, IrTy) {
+        match row {
+            Row::Open(row_var) => {
+                let var = self.tyvar_conv.convert(*row_var);
+                let var = self.mk_ir_ty(VarTy(IrVarTy {
+                    var,
+                    kind: Kind::SimpleRow,
                 }));
                 (var, var)
             }
@@ -407,39 +453,45 @@ impl<'a, S> LowerCtx<'a, '_, S> {
     }
 
     fn row_evidence_ir_ty(&mut self, ev: &Evidence) -> IrTy {
-        match ev {
-            Evidence::Row { left, right, goal } => {
-                let (left_prod, left_coprod) = self.row_ir_tys(left);
-                let (right_prod, right_coprod) = self.row_ir_tys(right);
-                let (goal_prod, goal_coprod) = self.row_ir_tys(goal);
+        let ((left_prod, left_coprod), (right_prod, right_coprod), (goal_prod, goal_coprod)) =
+            match ev {
+                Evidence::DataRow { left, right, goal } => (
+                    self.row_ir_tys(left),
+                    self.row_ir_tys(right),
+                    self.row_ir_tys(goal),
+                ),
+                Evidence::EffRow { left, right, goal } => (
+                    self.scoped_row_ir_tys(left),
+                    self.scoped_row_ir_tys(right),
+                    self.scoped_row_ir_tys(goal),
+                ),
+            };
 
-                let branch_var = IrVarTy {
-                    var: self.tyvar_conv.generate(),
-                    kind: Kind::Type,
-                };
-                let branch_var_ty = self.mk_ir_ty(VarTy(branch_var));
+        let branch_var = IrVarTy {
+            var: self.tyvar_conv.generate(),
+            kind: Kind::Type,
+        };
+        let branch_var_ty = self.mk_ir_ty(VarTy(branch_var));
 
-                self.mk_prod_ty(&[
-                    self.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
-                    self.mk_ir_ty(ForallTy(
-                        branch_var,
-                        self.mk_binary_fun_ty(
-                            FunTy(left_coprod, branch_var_ty),
-                            FunTy(right_coprod, branch_var_ty),
-                            FunTy(goal_coprod, branch_var_ty),
-                        ),
-                    )),
-                    self.mk_prod_ty(&[
-                        self.mk_ir_ty(FunTy(goal_prod, left_prod)),
-                        self.mk_ir_ty(FunTy(left_coprod, goal_coprod)),
-                    ]),
-                    self.mk_prod_ty(&[
-                        self.mk_ir_ty(FunTy(goal_prod, right_prod)),
-                        self.mk_ir_ty(FunTy(right_coprod, goal_coprod)),
-                    ]),
-                ])
-            }
-        }
+        self.mk_prod_ty(&[
+            self.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
+            self.mk_ir_ty(ForallTy(
+                branch_var,
+                self.mk_binary_fun_ty(
+                    FunTy(left_coprod, branch_var_ty),
+                    FunTy(right_coprod, branch_var_ty),
+                    FunTy(goal_coprod, branch_var_ty),
+                ),
+            )),
+            self.mk_prod_ty(&[
+                self.mk_ir_ty(FunTy(goal_prod, left_prod)),
+                self.mk_ir_ty(FunTy(left_coprod, goal_coprod)),
+            ]),
+            self.mk_prod_ty(&[
+                self.mk_ir_ty(FunTy(goal_prod, right_prod)),
+                self.mk_ir_ty(FunTy(right_coprod, goal_coprod)),
+            ]),
+        ])
     }
 }
 
@@ -620,7 +672,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let goal_row = expect_prod_ty(&self.db, self.lookup_term(term).ty);
                 let left_row = expect_prod_ty(&self.db, self.lookup_term(*left).ty);
                 let right_row = expect_prod_ty(&self.db, self.lookup_term(*right).ty);
-                let ev = Evidence::Row {
+                let ev = Evidence::DataRow {
                     left: left_row,
                     right: right_row,
                     goal: goal_row,
@@ -638,7 +690,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let right_row = expect_branch_ty(&self.db, self.lookup_term(*right).ty);
                 let goal_row = expect_branch_ty(&self.db, self.lookup_term(term).ty);
 
-                let param = self.ev_map[&(Evidence::Row {
+                let param = self.ev_map[&(Evidence::DataRow {
                     left: left_row,
                     right: right_row,
                     goal: goal_row,
@@ -657,7 +709,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let goal = expect_prod_ty(&self.db, self.lookup_term(*subterm).ty);
                 let other = expect_prod_ty(&self.db, self.lookup_term(term).ty);
 
-                let param = self.ev_map[&PartialEv { goal, other }];
+                let param = self.ev_map[&PartialEv::Data { goal, other }];
                 let idx = match direction {
                     Direction::Left => 2,
                     Direction::Right => 3,
@@ -676,7 +728,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let goal = expect_sum_ty(&self.db, self.lookup_term(term).ty);
                 let other = expect_sum_ty(&self.db, self.lookup_term(*subterm).ty);
 
-                let param = self.ev_map[&PartialEv { other, goal }];
+                let param = self.ev_map[&PartialEv::Data { other, goal }];
                 let idx = match direction {
                     Direction::Left => 2,
                     Direction::Right => 3,

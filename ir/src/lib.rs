@@ -119,7 +119,8 @@ impl<T> P<T> {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Kind {
     Type,
-    Row,
+    SimpleRow,
+    ScopedRow,
 }
 
 /// An ir type variable and it's kind
@@ -286,7 +287,8 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVarTy {
             .append(allocator.space())
             .append(allocator.text(match self.kind {
                 Kind::Type => "Type",
-                Kind::Row => "Row",
+                Kind::SimpleRow => "SimpleRow",
+                Kind::ScopedRow => "ScopedRow",
             }))
             .parens()
     }

@@ -1,3 +1,5 @@
+use crate::row::{Scoped, Simple};
+
 use super::{row::Row, FallibleTypeFold, InDb, TypeAlloc, TypeFoldable};
 use salsa::DebugWithDb;
 
@@ -10,16 +12,22 @@ use salsa::DebugWithDb;
 /// taht the evidence is true.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Evidence<A: TypeAlloc = InDb> {
-    Row {
-        left: Row<A>,
-        right: Row<A>,
-        goal: Row<A>,
+    DataRow {
+        left: Row<Simple, A>,
+        right: Row<Simple, A>,
+        goal: Row<Simple, A>,
+    },
+    EffRow {
+        left: Row<Scoped, A>,
+        right: Row<Scoped, A>,
+        goal: Row<Scoped, A>,
     },
 }
 impl<A: TypeAlloc> Copy for Evidence<A>
 where
     A: Clone,
-    Row<A>: Copy,
+    Row<Simple, A>: Copy,
+    Row<Scoped, A>: Copy,
 {
 }
 
@@ -34,8 +42,14 @@ where
         _include_all_fields: bool,
     ) -> std::fmt::Result {
         match self {
-            Evidence::Row { left, right, goal } => f
-                .debug_struct("Evidence::Row")
+            Evidence::DataRow { left, right, goal } => f
+                .debug_struct("Evidence::DataRow")
+                .field("left", &left.debug(db))
+                .field("right", &right.debug(db))
+                .field("goal", &goal.debug(db))
+                .finish(),
+            Evidence::EffRow { left, right, goal } => f
+                .debug_struct("Evidence::EffRow")
                 .field("left", &left.debug(db))
                 .field("right", &right.debug(db))
                 .field("goal", &goal.debug(db))
@@ -53,7 +67,12 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for Evidence<A> {
         fold: &mut F,
     ) -> Result<Self::Out<F::Out>, F::Error> {
         match self {
-            Evidence::Row { left, right, goal } => Ok(Evidence::Row {
+            Evidence::DataRow { left, right, goal } => Ok(Evidence::DataRow {
+                left: left.try_fold_with(fold)?,
+                right: right.try_fold_with(fold)?,
+                goal: goal.try_fold_with(fold)?,
+            }),
+            Evidence::EffRow { left, right, goal } => Ok(Evidence::EffRow {
                 left: left.try_fold_with(fold)?,
                 right: right.try_fold_with(fold)?,
                 goal: goal.try_fold_with(fold)?,

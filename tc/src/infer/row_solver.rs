@@ -41,8 +41,8 @@ pub(super) trait RowTheory: RowSema + Sized {
 
     fn match_eqn<'ctx>(
         eqn: &UnsolvedRowEquation<InArena<'ctx>, Self>,
-        rows: RowCombination<Row<InArena<'ctx>, Self>>,
-    ) -> Option<RowCombination<Row<InArena<'ctx>, Self>>>;
+        rows: RowCombination<Row<Self, InArena<'ctx>>>,
+    ) -> Option<RowCombination<Row<Self, InArena<'ctx>>>>;
 }
 
 impl RowTheory for Simple {
@@ -71,8 +71,8 @@ impl RowTheory for Simple {
 
     fn match_eqn<'ctx>(
         eqn: &UnsolvedRowEquation<InArena<'ctx>, Self>,
-        rows: RowCombination<Row<InArena<'ctx>, Self>>,
-    ) -> Option<RowCombination<Row<InArena<'ctx>, Self>>> {
+        rows: RowCombination<Row<Self, InArena<'ctx>>>,
+    ) -> Option<RowCombination<Row<Self, InArena<'ctx>>>> {
         match eqn {
             UnsolvedRowEquation::ClosedGoal(cand) => match rows {
                 RowCombination {
@@ -250,8 +250,8 @@ impl RowTheory for Scoped {
 
     fn match_eqn<'ctx>(
         eqn: &UnsolvedRowEquation<InArena<'ctx>, Self>,
-        rows: RowCombination<Row<InArena<'ctx>, Self>>,
-    ) -> Option<RowCombination<Row<InArena<'ctx>, Self>>> {
+        rows: RowCombination<Row<Self, InArena<'ctx>>>,
+    ) -> Option<RowCombination<Row<Self, InArena<'ctx>>>> {
         match eqn {
             UnsolvedRowEquation::ClosedGoal(cand) => {
                 let row_combo = || RowCombination {
@@ -331,8 +331,8 @@ impl RowTheory for Scoped {
 
 pub(super) trait RowEquationSolver<'ctx, Sema: RowSema>:
     Unify<'ctx, Sema::Open<InArena<'ctx>>, Sema::Closed<InArena<'ctx>>>
-    + Unify<'ctx, Row<InArena<'ctx>, Sema>, Sema::Closed<InArena<'ctx>>>
-    + Unify<'ctx, Row<InArena<'ctx>, Sema>, Row<InArena<'ctx>, Sema>>
+    + Unify<'ctx, Row<Sema, InArena<'ctx>>, Sema::Closed<InArena<'ctx>>>
+    + Unify<'ctx, Row<Sema, InArena<'ctx>>, Row<Sema, InArena<'ctx>>>
 {
     fn equations(&self) -> &BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
     fn equations_mut(&mut self) -> &mut BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
@@ -343,7 +343,7 @@ pub(super) trait RowEquationSolver<'ctx, Sema: RowSema>:
             BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>,
         ) -> BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
 
-    fn normalize_row(&mut self, row: Row<InArena<'ctx>, Sema>) -> Row<InArena<'ctx>, Sema>;
+    fn normalize_row(&mut self, row: Row<Sema, InArena<'ctx>>) -> Row<Sema, InArena<'ctx>>;
 }
 impl<'infer, I> RowEquationSolver<'infer, Simple> for InferCtx<'_, 'infer, I, Solution>
 where
@@ -366,7 +366,7 @@ where
         self.state.data_eqns = fun(std::mem::take(&mut self.state.data_eqns));
     }
 
-    fn normalize_row(&mut self, row: Row<InArena<'infer>, Simple>) -> Row<InArena<'infer>, Simple> {
+    fn normalize_row(&mut self, row: Row<Simple, InArena<'infer>>) -> Row<Simple, InArena<'infer>> {
         row.try_fold_with(&mut Normalize {
             ctx: self.ctx,
             ty_unifiers: &mut self.ty_unifiers,
@@ -397,7 +397,7 @@ where
         self.state.eff_eqns = fun(std::mem::take(&mut self.state.eff_eqns));
     }
 
-    fn normalize_row(&mut self, row: Row<InArena<'infer>, Scoped>) -> Row<InArena<'infer>, Scoped> {
+    fn normalize_row(&mut self, row: Row<Scoped, InArena<'infer>>) -> Row<Scoped, InArena<'infer>> {
         row.try_fold_with(&mut Normalize {
             ctx: self.ctx,
             ty_unifiers: &mut self.ty_unifiers,

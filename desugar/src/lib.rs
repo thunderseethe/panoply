@@ -18,7 +18,10 @@ use aiahr_cst::{
     Field,
 };
 use aiahr_nameres::{NameResEffect, NameResTerm};
-use aiahr_ty::{row::Row, Evidence, MkTy, Ty, TyScheme, TypeKind};
+use aiahr_ty::{
+    row::{Row, Simple},
+    Evidence, MkTy, Ty, TyScheme, TypeKind,
+};
 use ast::{AstEffect, AstTerm};
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
@@ -187,7 +190,9 @@ pub(crate) fn desugar_effect_defn(
                     (
                         op.name.value,
                         TyScheme {
-                            bound: vec![],
+                            bound_ty: vec![],
+                            bound_data_row: vec![],
+                            bound_eff_row: vec![],
                             constrs: vec![],
                             // TODO: We probably want to allow operations to throw effects?
                             eff: Row::Closed(db.empty_row()),
@@ -417,7 +422,7 @@ impl<'a> DesugarCtx<'a> {
     fn ds_row(
         &mut self,
         row: &cst::Row<TyVarId, Field<SpanOf<Ident>, Idx<cst::Type<TyVarId>>>>,
-    ) -> Row {
+    ) -> Row<Simple> {
         match row {
             cst::Row::Concrete(closed) => Row::Closed(
                 self.db.as_ty_db().construct_simple_row(
@@ -462,7 +467,7 @@ impl<'a> DesugarCtx<'a> {
         }
     }
 
-    fn ds_row_atom(&mut self, row_atom: &cst::RowAtom<TyVarId>) -> Row {
+    fn ds_row_atom(&mut self, row_atom: &cst::RowAtom<TyVarId>) -> Row<Simple> {
         match row_atom {
             cst::RowAtom::Concrete { fields, .. } => Row::Closed(
                 self.db.as_ty_db().construct_simple_row(
@@ -489,7 +494,7 @@ impl<'a> DesugarCtx<'a> {
                 qual.constraints
                     .elements()
                     .map(|constr| match constr {
-                        cst::Constraint::RowSum { lhs, rhs, goal, .. } => Evidence::Row {
+                        cst::Constraint::RowSum { lhs, rhs, goal, .. } => Evidence::DataRow {
                             left: self.ds_row_atom(lhs),
                             right: self.ds_row_atom(rhs),
                             goal: self.ds_row_atom(goal),
@@ -501,7 +506,9 @@ impl<'a> DesugarCtx<'a> {
         let ty = self.ds_type(nst.type_);
         let eff = Row::Open(self.ty_vars.push(true));
         TyScheme {
-            bound,
+            bound_ty: bound,
+            bound_data_row: vec![],
+            bound_eff_row: vec![],
             constrs,
             eff,
             ty,

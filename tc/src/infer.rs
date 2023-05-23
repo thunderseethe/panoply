@@ -843,7 +843,7 @@ where
             db: self.db,
             ctx: self.ctx,
             ty_unifiers: ty_scheme
-                .bound
+                .bound_ty
                 .into_iter()
                 .map(|_| self.ty_unifiers.new_key(None))
                 .collect(),
@@ -852,9 +852,12 @@ where
         };
         for ev in ty_scheme.constrs {
             match ev.try_fold_with(&mut inst).unwrap() {
-                Evidence::Row { left, right, goal } => self
+                Evidence::DataRow { left, right, goal } => self
                     .constraints
                     .add_data_row_combine(left, right, goal, span),
+                Evidence::EffRow { left, right, goal } => self
+                    .constraints
+                    .add_effect_row_combine(left, right, goal, span),
             }
         }
         InferResult::new(
@@ -1036,7 +1039,7 @@ where
         Sema: Ord + Clone,
         Sema::Closed<InArena<'infer>>: Copy + std::fmt::Debug,
     {
-        let mut combos: Vec<RowCombination<Row<InArena<'infer>, Sema>>> = vec![];
+        let mut combos: Vec<RowCombination<Row<Sema, InArena<'infer>>>> = vec![];
         self.with_equations(|eqns| {
             eqns.into_iter()
                 .filter_map(|eqn| match eqn {
@@ -1130,9 +1133,9 @@ where
 
     fn unify_row_combine<Sema>(
         &mut self,
-        unnorm_left: Row<InArena<'infer>, Sema>,
-        unnorm_right: Row<InArena<'infer>, Sema>,
-        unnorm_goal: Row<InArena<'infer>, Sema>,
+        unnorm_left: Row<Sema, InArena<'infer>>,
+        unnorm_right: Row<Sema, InArena<'infer>>,
+        unnorm_goal: Row<Sema, InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>>
     where
         TypeCheckError<'infer>: From<Sema::Error<'infer>>,
@@ -1269,7 +1272,7 @@ where
                         db: ctx.db,
                         ctx: ctx.ctx,
                         ty_unifiers: scheme
-                            .bound
+                            .bound_ty
                             .into_iter()
                             .map(|_| ctx.ty_unifiers.new_key(None))
                             .collect(),
@@ -1292,7 +1295,10 @@ where
                     // unified as many fresh variables into handler field variables as possible.
                     for constrs in scheme.constrs {
                         match constrs.try_fold_with(&mut inst).unwrap() {
-                            Evidence::Row { left, right, goal } => {
+                            Evidence::DataRow { left, right, goal } => {
+                                ctx.unify_row_combine(left, right, goal)?
+                            }
+                            Evidence::EffRow { left, right, goal } => {
                                 ctx.unify_row_combine(left, right, goal)?
                             }
                         }
@@ -1372,7 +1378,7 @@ where
                             db: self.db,
                             ctx: self.ctx,
                             ty_unifiers: scheme
-                                .bound
+                                .bound_ty
                                 .into_iter()
                                 .map(|_| self.ty_unifiers.new_key(None))
                                 .collect(),
@@ -1382,7 +1388,10 @@ where
 
                         for constr in scheme.constrs {
                             match constr.try_fold_with(&mut inst).unwrap() {
-                                Evidence::Row { left, right, goal } => {
+                                Evidence::DataRow { left, right, goal } => {
+                                    self.unify_row_combine(left, right, goal)?
+                                }
+                                Evidence::EffRow { left, right, goal } => {
                                     self.unify_row_combine(left, right, goal)?
                                 }
                             }

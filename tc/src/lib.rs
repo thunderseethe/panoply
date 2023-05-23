@@ -227,8 +227,20 @@ where
         .collect();
 
     let scheme = TyScheme {
-        bound: zonker
+        bound_ty: zonker
             .free_vars
+            .into_iter()
+            .enumerate()
+            .map(|(i, _)| TyVarId::from_raw(i))
+            .collect(),
+        bound_data_row: zonker
+            .free_data_rows
+            .into_iter()
+            .enumerate()
+            .map(|(i, _)| TyVarId::from_raw(i))
+            .collect(),
+        bound_eff_row: zonker
+            .free_eff_rows
             .into_iter()
             .enumerate()
             .map(|(i, _)| TyVarId::from_raw(i))
@@ -601,12 +613,12 @@ mod tests {
         let ty = assert_vec_matches!(
             scheme.constrs,
             [
-                Evidence::Row {
+                Evidence::DataRow {
                     left: Row::Open(_),
                     right: Row::Open(_),
                     goal: Row::Open(b)
                 },
-                Evidence::Row {
+                Evidence::DataRow {
                     left: Row::Open(_),
                     right: Row::Closed(closed),
                     goal: Row::Open(a)
@@ -657,7 +669,7 @@ mod tests {
 
         assert_vec_matches!(
             scheme.constrs,
-            [Evidence::Row {
+            [Evidence::DataRow {
                 left: Row::Closed(closed),
                 right: Row::Open(_),
                 goal: Row::Open(_),

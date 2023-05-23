@@ -91,23 +91,23 @@ impl RowSema for Simple {
 /// immutable. To extend a closed row you must combine it with another row producing the extension
 /// as the result.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
-pub enum Row<A: TypeAlloc = InDb, Sema: RowSema = Simple> {
+pub enum Row<Sema: RowSema, A: TypeAlloc = InDb> {
     /// An open row is a polymorphic set of data. Used to allow generic row programming.
     Open(Sema::Open<A>),
     /// A closed row is a concrete mapping from fields to values.
     Closed(Sema::Closed<A>),
 }
-pub type SimpleRow<A> = Row<A, Simple>;
-pub type ScopedRow<A> = Row<A, Scoped>;
+pub type SimpleRow<A> = Row<Simple, A>;
+pub type ScopedRow<A> = Row<Scoped, A>;
 
-impl<A: TypeAlloc, Sema: RowSema + Clone> Copy for Row<A, Sema>
+impl<A: TypeAlloc, Sema: RowSema + Clone> Copy for Row<Sema, A>
 where
     A: Clone,
     Sema::Open<A>: Copy,
     Sema::Closed<A>: Copy,
 {
 }
-impl<Db, Sema: RowSema> DebugWithDb<Db> for Row<InDb, Sema>
+impl<Db, Sema: RowSema> DebugWithDb<Db> for Row<Sema, InDb>
 where
     Db: ?Sized + crate::Db,
     Sema::Open<InDb>: Debug,
@@ -121,7 +121,7 @@ where
     }
 }
 
-impl<Db, A: TypeAlloc, Sema: RowSema, Ann> PrettyType<Db, A, Ann> for Row<A, Sema>
+impl<Db, A: TypeAlloc, Sema: RowSema, Ann> PrettyType<Db, A, Ann> for Row<Sema, A>
 where
     Db: ?Sized + crate::Db,
     Sema::Open<A>: Debug,
@@ -147,12 +147,12 @@ where
     }
 }
 
-impl<'ctx, A> TypeFoldable<'ctx> for Row<A>
+impl<'ctx, A> TypeFoldable<'ctx> for Row<Simple, A>
 where
     A: TypeAlloc + Clone + 'ctx,
 {
     type Alloc = A;
-    type Out<B: TypeAlloc> = Row<B>;
+    type Out<B: TypeAlloc> = Row<Simple, B>;
 
     fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
         self,
@@ -165,12 +165,12 @@ where
     }
 }
 
-impl<'ctx, A> TypeFoldable<'ctx> for Row<A, Scoped>
+impl<'ctx, A> TypeFoldable<'ctx> for Row<Scoped, A>
 where
     A: TypeAlloc + Clone + 'ctx,
 {
     type Alloc = A;
-    type Out<B: TypeAlloc> = Row<B, Scoped>;
+    type Out<B: TypeAlloc> = Row<Scoped, B>;
 
     fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
         self,

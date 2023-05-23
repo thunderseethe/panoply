@@ -91,8 +91,8 @@ pub(crate) mod normalize {
 
     use aiahr_ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK},
-        row::Row,
-        FallibleEndoTypeFold, SimpleRowVarOf, TypeFoldable, TypeVarOf,
+        row::{Row, ScopedRow, SimpleRow},
+        FallibleEndoTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
     };
     use ena::unify::InPlaceUnificationTable;
 
@@ -135,7 +135,7 @@ pub(crate) mod normalize {
         fn try_endofold_simple_row_var(
             &mut self,
             var: SimpleRowVarOf<Self::Alloc>,
-        ) -> Result<Row<Self::Alloc>, Self::Error> {
+        ) -> Result<SimpleRow<Self::Alloc>, Self::Error> {
             match self.datarow_unifiers.probe_value(var) {
                 Some(row) => row.try_fold_with(self).map(Row::Closed),
                 _ => Ok(Row::Open(var)),
@@ -144,8 +144,8 @@ pub(crate) mod normalize {
 
         fn try_endofold_scoped_row_var(
             &mut self,
-            var: aiahr_ty::ScopedRowVarOf<Self::Alloc>,
-        ) -> Result<aiahr_ty::row::ScopedRow<Self::Alloc>, Self::Error> {
+            var: ScopedRowVarOf<Self::Alloc>,
+        ) -> Result<ScopedRow<Self::Alloc>, Self::Error> {
             match self.effrow_unifiers.probe_value(var) {
                 Some(row) => row.try_fold_with(self).map(Row::Closed),
                 _ => Ok(Row::Open(var)),
@@ -158,7 +158,7 @@ pub(crate) mod instantiate {
 
     use aiahr_ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TcVarToUnifierError, TypeK},
-        row::Row,
+        row::{Row, ScopedRow, SimpleRow},
         FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
     };
 
@@ -215,14 +215,14 @@ pub(crate) mod instantiate {
         fn try_fold_simple_row_var(
             &mut self,
             var: SimpleRowVarOf<InDb>,
-        ) -> Result<Row<Self::Out>, Self::Error> {
+        ) -> Result<SimpleRow<Self::Out>, Self::Error> {
             Ok(Row::Open(self.datarow_unifiers[var.0]))
         }
 
         fn try_fold_scoped_row_var(
             &mut self,
             var: ScopedRowVarOf<Self::In>,
-        ) -> Result<aiahr_ty::row::ScopedRow<Self::Out>, Self::Error> {
+        ) -> Result<ScopedRow<Self::Out>, Self::Error> {
             Ok(Row::Open(self.effrow_unifiers[var.0]))
         }
     }
@@ -232,7 +232,7 @@ pub(crate) mod zonker {
     use aiahr_core::id::{Id, TyVarId};
     use aiahr_ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK, UnifierToTcVarError},
-        row::Row,
+        row::{Row, ScopedRow, SimpleRow},
         FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
     };
     use ena::unify::InPlaceUnificationTable;
@@ -337,7 +337,7 @@ pub(crate) mod zonker {
         fn try_fold_simple_row_var(
             &mut self,
             var: SimpleRowVarOf<Self::In>,
-        ) -> Result<Row<Self::Out>, Self::Error> {
+        ) -> Result<SimpleRow<Self::Out>, Self::Error> {
             match self.datarow_unifiers.probe_value(var) {
                 Some(row) => row.try_fold_with(self).map(Row::Closed),
                 _ => {
@@ -350,7 +350,7 @@ pub(crate) mod zonker {
         fn try_fold_scoped_row_var(
             &mut self,
             var: ScopedRowVarOf<Self::In>,
-        ) -> Result<aiahr_ty::row::ScopedRow<Self::Out>, Self::Error> {
+        ) -> Result<ScopedRow<Self::Out>, Self::Error> {
             match self.effrow_unifiers.probe_value(var) {
                 Some(row) => row.try_fold_with(self).map(Row::Closed),
                 _ => {

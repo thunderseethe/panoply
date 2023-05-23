@@ -1,15 +1,25 @@
 use std::ops::Index;
 
 use aiahr_ir::IrVar;
-use aiahr_ty::row::SimpleClosedRow;
+use aiahr_ty::row::{Scoped, Simple, SimpleClosedRow};
 use aiahr_ty::{row::Row, Evidence, InDb};
 
 use rustc_hash::FxHashMap;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Hash, Debug)]
-pub(crate) struct PartialEv {
-    pub(crate) other: Row,
-    pub(crate) goal: Row,
+pub(crate) enum PartialEv {
+    Data {
+        other: Row<Simple>,
+        goal: Row<Simple>,
+    },
+    ScopedLeft {
+        left: Row<Scoped>,
+        goal: Row<Scoped>,
+    },
+    ScopedRight {
+        right: Row<Scoped>,
+        goal: Row<Scoped>,
+    },
 }
 impl Copy for PartialEv where InDb: Copy {}
 
@@ -35,17 +45,33 @@ impl EvidenceMap {
             });
 
         match &ev {
-            Evidence::Row { left, right, goal } => {
+            Evidence::DataRow { left, right, goal } => {
                 self.partial_map.insert(
-                    PartialEv {
+                    PartialEv::Data {
                         other: *left,
                         goal: *goal,
                     },
                     idx,
                 );
                 self.partial_map.insert(
-                    PartialEv {
+                    PartialEv::Data {
                         other: *right,
+                        goal: *goal,
+                    },
+                    idx,
+                );
+            }
+            Evidence::EffRow { left, right, goal } => {
+                self.partial_map.insert(
+                    PartialEv::ScopedLeft {
+                        left: *left,
+                        goal: *goal,
+                    },
+                    idx,
+                );
+                self.partial_map.insert(
+                    PartialEv::ScopedRight {
+                        right: *right,
                         goal: *goal,
                     },
                     idx,
@@ -85,7 +111,7 @@ pub(crate) struct SolvedRowEv {
 }
 impl From<SolvedRowEv> for Evidence {
     fn from(val: SolvedRowEv) -> Self {
-        Evidence::Row {
+        Evidence::DataRow {
             left: Row::Closed(val.left),
             right: Row::Closed(val.right),
             goal: Row::Closed(val.goal),

@@ -238,7 +238,7 @@ pub fn lower(
         .rfold(body, |body, arg| Ir::new(Abs(arg, P::new(body))));
 
     // Finally wrap our term in any type variables it needs to bind
-    scheme.bound.iter().rfold(body, |acc, ty_var| {
+    scheme.bound_ty.iter().rfold(body, |acc, ty_var| {
         Ir::new(TyAbs(
             IrVarTy {
                 var: tyvar_conv.convert(*ty_var),

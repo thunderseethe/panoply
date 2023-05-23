@@ -133,7 +133,7 @@ where
     fn try_fold_simple_row_var(
         &mut self,
         var: SimpleRowVarOf<Self::In>,
-    ) -> Result<Row<Self::Out>, Self::Error> {
+    ) -> Result<SimpleRow<Self::Out>, Self::Error> {
         self.try_endofold_simple_row_var(var)
     }
 

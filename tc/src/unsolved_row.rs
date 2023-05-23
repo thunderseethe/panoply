@@ -118,23 +118,23 @@ where
 impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>, Simple>> for Evidence<InArena<'ctx>> {
     fn from(eq: UnsolvedRowEquation<InArena<'ctx>, Simple>) -> Self {
         match eq {
-            UnsolvedRowEquation::ClosedGoal(cand) => Evidence::Row {
+            UnsolvedRowEquation::ClosedGoal(cand) => Evidence::DataRow {
                 left: Row::Open(cand.left),
                 right: Row::Open(cand.right),
                 goal: Row::Closed(cand.goal),
             },
             UnsolvedRowEquation::OpenGoal(cand) => match cand.ops {
-                Operatives::OpenOpen { left, right } => Evidence::Row {
+                Operatives::OpenOpen { left, right } => Evidence::DataRow {
                     left: Row::Open(left),
                     right: Row::Open(right),
                     goal: Row::Open(cand.goal),
                 },
-                Operatives::OpenClosed { left, right } => Evidence::Row {
+                Operatives::OpenClosed { left, right } => Evidence::DataRow {
                     left: Row::Open(left),
                     right: Row::Closed(right),
                     goal: Row::Open(cand.goal),
                 },
-                Operatives::ClosedOpen { left, right } => Evidence::Row {
+                Operatives::ClosedOpen { left, right } => Evidence::DataRow {
                     left: Row::Closed(left),
                     right: Row::Open(right),
                     goal: Row::Open(cand.goal),

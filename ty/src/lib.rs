@@ -15,7 +15,7 @@ pub use evidence::Evidence;
 
 mod fold;
 use self::fold::DefaultFold;
-use self::row::ScopedRow;
+use self::row::{ScopedRow, Simple, SimpleRow};
 pub use fold::{FallibleEndoTypeFold, FallibleTypeFold, TypeFoldable};
 
 pub mod row;
@@ -80,7 +80,7 @@ impl Ty<InDb> {
     pub fn try_as_prod_row<'a>(
         self,
         db: &(impl ?Sized + AccessTy<'a, InDb>),
-    ) -> Result<Row<InDb>, Self> {
+    ) -> Result<SimpleRow<InDb>, Self> {
         match db.kind(&self) {
             TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
             TypeKind::ProdTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
@@ -91,7 +91,7 @@ impl Ty<InDb> {
     pub fn try_as_sum_row<'a>(
         self,
         db: &(impl ?Sized + AccessTy<'a, InDb>),
-    ) -> Result<Row<InDb>, Self> {
+    ) -> Result<SimpleRow<InDb>, Self> {
         match db.kind(&self) {
             TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
             TypeKind::SumTy(Row::Open(var)) | TypeKind::VarTy(var) => Ok(Row::Open(*var)),
@@ -138,16 +138,16 @@ pub enum TypeKind<A: TypeAlloc = InDb> {
     /// A function type
     FunTy(Ty<A>, Ty<A>),
     /// A product type. This is purely a wrapper type to coerce a row type to be a product.
-    ProdTy(Row<A>),
+    ProdTy(Row<Simple, A>),
     /// A sum type. This is purely a wrapper type to coerce a row type to be a sum.
-    SumTy(Row<A>),
+    SumTy(Row<Simple, A>),
 }
 impl<A: TypeAlloc> Copy for TypeKind<A>
 where
     A: Clone,
     A::TypeVar: Copy,
     SimpleClosedRow<A>: Copy,
-    Row<A>: Copy,
+    Row<Simple, A>: Copy,
     Ty<A>: Copy,
 {
 }
@@ -201,11 +201,11 @@ where
                 fold.ctx().mk_ty(TypeKind::<F::Out>::RowTy(row_))
             }
             TypeKind::ProdTy(ref row) => {
-                let row_: Row<F::Out> = row.clone().try_fold_with(fold)?;
+                let row_ = row.clone().try_fold_with(fold)?;
                 fold.ctx().mk_ty(TypeKind::ProdTy(row_))
             }
             TypeKind::SumTy(ref row) => {
-                let row_: Row<F::Out> = row.clone().try_fold_with(fold)?;
+                let row_ = row.clone().try_fold_with(fold)?;
                 fold.ctx().mk_ty(TypeKind::SumTy(row_))
             }
         })
@@ -294,7 +294,9 @@ where
 /// the monomorphic type. They may also assert constraints on the bound type variables.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TyScheme<A: TypeAlloc = InDb> {
-    pub bound: Vec<A::TypeVar>,
+    pub bound_ty: Vec<A::TypeVar>,
+    pub bound_data_row: Vec<A::SimpleRowVar>,
+    pub bound_eff_row: Vec<A::ScopedRowVar>,
     pub constrs: Vec<Evidence<A>>,
     pub eff: ScopedRow<A>,
     pub ty: Ty<A>,
@@ -305,7 +307,7 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
         f.debug_struct("TyScheme")
-            .field("bound", &self.bound)
+            .field("bound", &self.bound_ty)
             .field("constrs", &self.constrs)
             .field("eff", &self.eff.debug(db))
             .field("ty", &self.ty.debug(db))

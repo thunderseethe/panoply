@@ -1,5 +1,5 @@
 use super::*;
-pub struct ScopedClosedRow<A: TypeAlloc>(pub(crate) ClosedRow<A>);
+pub struct ScopedClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
 
 impl<A: TypeAlloc> Debug for ScopedClosedRow<A>
 where
@@ -43,6 +43,7 @@ where
         Self(self.0.clone())
     }
 }
+impl<A: TypeAlloc> Copy for ScopedClosedRow<A> where ClosedRow<A>: Copy {}
 impl<A: TypeAlloc> Hash for ScopedClosedRow<A>
 where
     ClosedRow<A>: Hash,
@@ -98,7 +99,6 @@ impl<A: TypeAlloc> ScopedClosedRow<A> {
         }
     }
 }
-impl<A: TypeAlloc + Copy> Copy for ScopedClosedRow<A> where ClosedRow<A>: Copy {}
 impl<A, Db, Ann> PrettyType<Db, A, Ann> for ScopedClosedRow<A>
 where
     A: TypeAlloc,
