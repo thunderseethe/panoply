@@ -293,34 +293,22 @@ where
     }
     /// This is the entrypoint to the bidirectional type checker. Since our language uses
     /// damnas-milner type inference we will always begin type checking with a call to infer.
-    pub(crate) fn infer<E>(
+    pub(crate) fn infer(
         mut self,
-        eff_info: &E,
         term: Idx<Term<VarId>>,
     ) -> (
         InferCtx<'a, 'infer, I, Solution>,
         <Generation as InferState>::Storage<'infer>,
         InferResult<'infer>,
-    )
-    where
-        E: ?Sized + EffectInfo,
-    {
-        let res = self._infer(eff_info, term);
+    ) {
+        let res = self._infer(term);
         let (var_tys, infer_ctx) = InferCtx::with_generation(self);
         (infer_ctx, var_tys, res)
     }
 
     /// Check a term against a given type.
     /// This method pairs with _infer to form a bidirectional type checker
-    fn _check<E>(
-        &mut self,
-        //var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
-        eff_info: &E,
-        term: Idx<Term<VarId>>,
-        expected: InferResult<'infer>,
-    ) where
-        E: ?Sized + EffectInfo,
-    {
+    fn _check(&mut self, term: Idx<Term<VarId>>, expected: InferResult<'infer>) {
         use TypeKind::*;
         self.state.term_tys.insert(term, expected);
         let current_span = || {
@@ -334,18 +322,18 @@ where
                 // Check an abstraction against a function type by checking the body checks against
                 // the function return type with the function argument type in scope.
                 self.local_env.insert(*arg, arg_ty);
-                self._check(eff_info, *body, expected.with_ty(body_ty));
+                self._check(*body, expected.with_ty(body_ty));
                 self.local_env.remove(arg);
             }
             (Label { .. }, ProdTy(Row::Closed(row))) => {
                 // A label can check against a product, if it checks against the product's internal
                 // type
-                self._check(eff_info, term, expected.with_ty(self.mk_ty(RowTy(row))))
+                self._check(term, expected.with_ty(self.mk_ty(RowTy(row))))
             }
             (Label { .. }, SumTy(Row::Closed(row))) => {
                 // A label can check against a sum, if it checks against the sum's internal
                 // type
-                self._check(eff_info, term, expected.with_ty(self.mk_ty(RowTy(row))))
+                self._check(term, expected.with_ty(self.mk_ty(RowTy(row))))
             }
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
@@ -369,7 +357,6 @@ where
                 // If this is a singleton row with the right label check it's value type matches
                 // our term type
                 self._check(
-                    eff_info,
                     *term,
                     expected.with_ty(
                         *row.values(self)
@@ -392,21 +379,17 @@ where
             ),
             (Unlabel { label, term }, _) => {
                 let expected_ty = self.single_row_ty(*label, expected.ty);
-                self._check(eff_info, *term, expected.with_ty(expected_ty))
+                self._check(*term, expected.with_ty(expected_ty))
             }
             (Concat { .. }, RowTy(row)) => {
                 // Coerece a row type into a product and re-check.
-                self._check(
-                    eff_info,
-                    term,
-                    expected.with_ty(self.mk_ty(ProdTy(Row::Closed(row)))),
-                );
+                self._check(term, expected.with_ty(self.mk_ty(ProdTy(Row::Closed(row)))));
             }
             (Concat { left, right }, ProdTy(row)) => {
-                let left_infer = self._infer(eff_info, *left);
+                let left_infer = self._infer(*left);
                 let left_row = self.equate_as_prod_row(left_infer.ty, current_span);
 
-                let right_infer = self._infer(eff_info, *right);
+                let right_infer = self._infer(*right);
                 let right_row = self.equate_as_prod_row(right_infer.ty, current_span);
 
                 let span = current_span();
@@ -423,11 +406,11 @@ where
             (Branch { left, right }, FunTy(arg, ret)) => {
                 let arg_row = self.equate_as_sum_row(arg, current_span);
 
-                let left_infer = self._infer(eff_info, *left);
+                let left_infer = self._infer(*left);
                 let (left_arg, left_ret) = self.equate_as_fn_ty(left_infer.ty, current_span);
                 let left_row = self.equate_as_sum_row(left_arg, current_span);
 
-                let right_infer = self._infer(eff_info, *right);
+                let right_infer = self._infer(*right);
                 let (right_arg, right_ret) = self.equate_as_fn_ty(right_infer.ty, current_span);
                 let right_row = self.equate_as_sum_row(right_arg, current_span);
 
@@ -446,14 +429,10 @@ where
             }
             (Project { .. }, RowTy(row)) => {
                 // Coerce row into a product and re-check.
-                self._check(
-                    eff_info,
-                    term,
-                    expected.with_ty(self.mk_ty(ProdTy(Row::Closed(row)))),
-                );
+                self._check(term, expected.with_ty(self.mk_ty(ProdTy(Row::Closed(row)))));
             }
             (Project { direction, term }, ProdTy(row)) => {
-                let term_infer = self._infer(eff_info, *term);
+                let term_infer = self._infer(*term);
                 let term_row = self.equate_as_prod_row(term_infer.ty, current_span);
                 let unbound_row = self.fresh_simple_row();
 
@@ -476,14 +455,10 @@ where
             }
             (Inject { .. }, RowTy(row)) => {
                 // Coerce a row into a sum and re-check.
-                self._check(
-                    eff_info,
-                    term,
-                    expected.with_ty(self.mk_ty(SumTy(Row::Closed(row)))),
-                );
+                self._check(term, expected.with_ty(self.mk_ty(SumTy(Row::Closed(row)))));
             }
             (Inject { direction, term }, SumTy(row)) => {
-                let term_infer = self._infer(eff_info, *term);
+                let term_infer = self._infer(*term);
                 let term_row = self.equate_as_prod_row(term_infer.ty, current_span);
                 let unbound_row = self.fresh_simple_row();
 
@@ -517,7 +492,7 @@ where
             (_, _) => {
                 // Infer a type for our term and check that the expected type is equal to the
                 // inferred type.
-                let inferred = self._infer(eff_info, term);
+                let inferred = self._infer(term);
                 self.constraints
                     .add_ty_eq(expected.ty, inferred.ty, current_span());
                 self.constraints
@@ -546,15 +521,7 @@ where
 
     /// Infer a type for a term
     /// This method pairs with check to form a bidirectional type checker
-    fn _infer<E>(
-        &mut self,
-        //var_tys: &mut FxHashMap<VarId, InferTy<'infer>>,
-        eff_info: &E,
-        term: Idx<Term<VarId>>,
-    ) -> InferResult<'infer>
-    where
-        E: ?Sized + EffectInfo,
-    {
+    fn _infer(&mut self, term: Idx<Term<VarId>>) -> InferResult<'infer> {
         let current_span = || {
             *self.ast.span_of(term).unwrap_or_else(|| {
                 panic!(
@@ -574,7 +541,7 @@ where
 
                 self.state.var_tys.insert(*arg, arg_ty);
                 self.local_env.insert(*arg, arg_ty);
-                self._check(eff_info, *body, InferResult::new(body_ty, eff));
+                self._check(*body, InferResult::new(body_ty, eff));
                 self.local_env.remove(arg);
 
                 InferResult::new(self.mk_ty(TypeKind::FunTy(arg_ty, body_ty)), eff)
@@ -585,13 +552,13 @@ where
             // We then check the arg of the application against the arg type of the function type
             // The resulting type of this application is the function result type.
             Application { func, arg } => {
-                let fun_infer = self._infer(eff_info, *func);
+                let fun_infer = self._infer(*func);
                 // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
                 // for arg and ret type.
                 let (arg_ty, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
 
                 let arg_eff = self.fresh_scoped_row();
-                self._check(eff_info, *arg, InferResult::new(arg_ty, arg_eff));
+                self._check(*arg, InferResult::new(arg_ty, arg_eff));
 
                 let eff = self.fresh_scoped_row();
                 self.constraints.add_effect_row_combine(
@@ -619,11 +586,11 @@ where
                 }
             }
             Label { label, term } => {
-                let infer = self._infer(eff_info, *term);
+                let infer = self._infer(*term);
                 infer.map_ty(|ty| self.single_row_ty(*label, ty))
             }
             Unlabel { label, term } => {
-                let term_infer = self._infer(eff_info, *term);
+                let term_infer = self._infer(*term);
                 let field = *label;
                 term_infer.map_ty(|ty| match *ty {
                     // If our output type is already a singleton row of without a label, use it
@@ -661,8 +628,8 @@ where
                 let left_ty = self.mk_ty(ProdTy(left_row));
                 let right_ty = self.mk_ty(ProdTy(right_row));
 
-                self._check(eff_info, *left, InferResult::new(left_ty, left_eff));
-                self._check(eff_info, *right, InferResult::new(right_ty, right_eff));
+                self._check(*left, InferResult::new(left_ty, left_eff));
+                self._check(*right, InferResult::new(right_ty, right_eff));
 
                 let span = current_span();
                 self.constraints
@@ -685,8 +652,8 @@ where
                 let left_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret_ty));
                 let right_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret_ty));
 
-                self._check(eff_info, *left, InferResult::new(left_ty, left_eff));
-                self._check(eff_info, *right, InferResult::new(right_ty, right_eff));
+                self._check(*left, InferResult::new(left_ty, left_eff));
+                self._check(*right, InferResult::new(right_ty, right_eff));
 
                 let span = current_span();
                 self.constraints
@@ -707,7 +674,7 @@ where
 
                 let eff = self.fresh_scoped_row();
                 let term_ty = self.mk_ty(ProdTy(big_row));
-                self._check(eff_info, *term, InferResult::new(term_ty, eff));
+                self._check(*term, InferResult::new(term_ty, eff));
 
                 match direction {
                     Direction::Left => self.constraints.add_data_row_combine(
@@ -733,7 +700,7 @@ where
                 let unbound_row = self.fresh_simple_row();
                 let eff = self.fresh_scoped_row();
                 let term_ty = self.mk_ty(SumTy(small_row));
-                self._check(eff_info, *term, InferResult::new(term_ty, eff));
+                self._check(*term, InferResult::new(term_ty, eff));
 
                 match direction {
                     Direction::Left => self.constraints.add_data_row_combine(
@@ -753,12 +720,12 @@ where
                 InferResult::new(self.mk_ty(SumTy(big_row)), eff)
             }
             Operation(op_name) => {
-                let sig = self.instantiate(eff_info.effect_member_sig(*op_name), current_span());
+                let sig = self.instantiate(self.db.effect_member_sig(*op_name), current_span());
 
                 InferResult::new(
                     sig.ty,
                     Row::Closed(self.single_row(
-                        eff_info.effect_name(op_name.effect(self.db.as_core_db())),
+                        self.db.effect_name(op_name.effect(self.db.as_core_db())),
                         self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
                     )),
                 )
@@ -769,7 +736,7 @@ where
                 let TyChkRes {
                     ty: body_ty,
                     eff: body_eff,
-                } = self._infer(eff_info, *body);
+                } = self._infer(*body);
 
                 // Ensure there is a return clause in the handler
                 let ret_row = self.mk_row(
@@ -789,7 +756,6 @@ where
 
                 let handler_eff = self.fresh_scoped_row();
                 self._check(
-                    eff_info,
                     *handler,
                     InferResult::new(self.mk_ty(ProdTy(handler_row)), handler_eff),
                 );
@@ -825,7 +791,7 @@ where
                 let mut inst = Instantiate::new(self.db, self.ctx); // TODO: We should possibly extract an effect from this
                 let infer_ty = ty.try_fold_with(&mut inst).unwrap();
                 let res = InferResult::new(infer_ty, eff);
-                self._check(eff_info, *term, res);
+                self._check(*term, res);
                 res
             }
             Item(term_name) => {
@@ -847,8 +813,16 @@ where
                 .into_iter()
                 .map(|_| self.ty_unifiers.new_key(None))
                 .collect(),
-            datarow_unifiers: vec![],
-            effrow_unifiers: vec![],
+            datarow_unifiers: ty_scheme
+                .bound_data_row
+                .into_iter()
+                .map(|_| self.data_row_unifiers.new_key(None))
+                .collect(),
+            effrow_unifiers: ty_scheme
+                .bound_eff_row
+                .into_iter()
+                .map(|_| self.eff_row_unifiers.new_key(None))
+                .collect(),
         };
         for ev in ty_scheme.constrs {
             match ev.try_fold_with(&mut inst).unwrap() {
@@ -946,19 +920,15 @@ where
 
     /// Solve a list of constraints to a mapping from unifiers to types.
     /// If there is no solution to the list of constraints we return a relevant error.
-    pub(crate) fn solve<E>(
+    pub(crate) fn solve(
         mut self,
-        eff_info: &E,
     ) -> (
         InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
         InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
         InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
         <Solution as InferState>::Storage<'infer>,
         Vec<TypeCheckDiagnostic>,
-    )
-    where
-        E: ?Sized + EffectInfo,
-    {
+    ) {
         let constraints = std::mem::take(&mut self.constraints);
         for (left, right, span) in constraints.tys {
             self.unify(left, right)
@@ -986,7 +956,7 @@ where
         // That way if a handler doesn't have a concrete row type yet, we know it's because it
         // won't have one ever and we can fail with a type error.
         for (HandlesConstraint { handler, eff, ret }, span) in constraints.handles {
-            self.lookup_effect_and_unify(eff_info, handler, eff, ret)
+            self.lookup_effect_and_unify(handler, eff, ret)
                 .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
                 .unwrap_or_default();
         }
@@ -1223,24 +1193,16 @@ where
         Ok(())
     }
 
-    fn lookup_effect_and_unify<E>(
+    fn lookup_effect_and_unify(
         &mut self,
-        eff_info: &E,
         handler: SimpleInferRow<'infer>,
         eff: ScopedInferRow<'infer>,
         ret: InferTy<'infer>,
-    ) -> Result<(), TypeCheckError<'infer>>
-    where
-        E: ?Sized + EffectInfo,
-    {
+    ) -> Result<(), TypeCheckError<'infer>> {
         let normal_handler = self.normalize_row(handler);
         let normal_eff = self.normalize_row(eff);
         let normal_ret = self.normalize_ty(ret);
 
-        println!(
-            "Lookup effect:\n\tHandler: {:?}\n\tEffect: {:?}\n\tRet: {:?}",
-            normal_handler, normal_eff, normal_ret
-        );
         let transform_to_cps_handler_ty = |ctx: &mut Self, ty: InferTy<'infer>| {
             // Transform our ty into the type a handler should have
             // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
@@ -1276,8 +1238,16 @@ where
                             .into_iter()
                             .map(|_| ctx.ty_unifiers.new_key(None))
                             .collect(),
-                        datarow_unifiers: vec![],
-                        effrow_unifiers: vec![],
+                        datarow_unifiers: scheme
+                            .bound_data_row
+                            .into_iter()
+                            .map(|_| ctx.data_row_unifiers.new_key(None))
+                            .collect(),
+                        effrow_unifiers: scheme
+                            .bound_eff_row
+                            .into_iter()
+                            .map(|_| ctx.eff_row_unifiers.new_key(None))
+                            .collect(),
                     };
 
                     // Transform our scheme ty into the type a handler should have
@@ -1311,16 +1281,18 @@ where
 
         match (normal_handler, normal_eff) {
             (Row::Closed(handler), Row::Open(eff_var)) => {
-                let eff_name = eff_info
+                let eff_name = self
+                    .db
                     .lookup_effect_by_member_names(self.module, handler.fields(self))
                     .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
-                let mut members_sig = eff_info
+                let mut members_sig = self
+                    .db
                     .effect_members(eff_name)
                     .iter()
                     .map(|eff_op_id| {
                         (
-                            eff_info.effect_member_name(*eff_op_id),
-                            eff_info.effect_member_sig(*eff_op_id),
+                            self.db.effect_member_name(*eff_op_id),
+                            self.db.effect_member_sig(*eff_op_id),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -1334,7 +1306,7 @@ where
 
                 // We succesfully unified the handler against it's expected signature.
                 // That means we can unify our eff_var against our effect
-                let name = eff_info.effect_name(eff_name);
+                let name = self.db.effect_name(eff_name);
                 let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
                 let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[unit_ty]);
                 self.unify(eff_var, eff_row)
@@ -1342,16 +1314,18 @@ where
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
                 let eff_ident = *eff.fields(self).first().unwrap();
-                let eff_name = eff_info
+                let eff_name = self
+                    .db
                     .lookup_effect_by_name(self.module, eff_ident)
                     .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
-                let mut members_sig = eff_info
+                let mut members_sig = self
+                    .db
                     .effect_members(eff_name)
                     .iter()
                     .map(|eff_op_id| {
                         (
-                            eff_info.effect_member_name(*eff_op_id),
-                            eff_info.effect_member_sig(*eff_op_id),
+                            self.db.effect_member_name(*eff_op_id),
+                            self.db.effect_member_sig(*eff_op_id),
                         )
                     })
                     .collect::<Vec<_>>();
@@ -1366,14 +1340,16 @@ where
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
                 let eff_ident = *eff.fields(self).first().unwrap();
-                let eff_name = eff_info
+                let eff_name = self
+                    .db
                     .lookup_effect_by_name(self.module, eff_ident)
                     .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
-                let members_sig = eff_info
+                let members_sig = self
+                    .db
                     .effect_members(eff_name)
                     .iter()
                     .map(|eff_op_id| {
-                        let scheme = eff_info.effect_member_sig(*eff_op_id);
+                        let scheme = self.db.effect_member_sig(*eff_op_id);
                         let mut inst = Instantiate {
                             db: self.db,
                             ctx: self.ctx,
@@ -1402,7 +1378,7 @@ where
                             scheme.ty.try_fold_with(&mut inst).unwrap(),
                         )?;
 
-                        Ok((eff_info.effect_member_name(*eff_op_id), member_ty))
+                        Ok((self.db.effect_member_name(*eff_op_id), member_ty))
                     })
                     .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
 

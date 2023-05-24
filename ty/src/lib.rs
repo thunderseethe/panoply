@@ -1,3 +1,4 @@
+use aiahr_core::id::TyVarId;
 use pretty::{docs, DocAllocator};
 use salsa::DebugWithDb;
 use std::fmt::{self, Debug};
@@ -15,7 +16,7 @@ pub use evidence::Evidence;
 
 mod fold;
 use self::fold::DefaultFold;
-use self::row::{ScopedRow, Simple, SimpleRow};
+use self::row::{RowOps, ScopedRow, Simple, SimpleRow};
 pub use fold::{FallibleEndoTypeFold, FallibleTypeFold, TypeFoldable};
 
 pub mod row;
@@ -107,6 +108,65 @@ impl Ty<InDb> {
             TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
             _ => Err(self),
         }
+    }
+
+    /// Iterate over all the type variables that are used in a row position
+    pub fn row_vars<'db>(&self, db: &'db dyn crate::Db) -> impl Iterator<Item = TyVarId> + 'db {
+        TyInDbDfs::new(db, *self).filter_map(|ty| match ty.0.kind(db) {
+            TypeKind::ProdTy(Row::Open(row_var)) | TypeKind::SumTy(Row::Open(row_var)) => {
+                Some(*row_var)
+            }
+            _ => None,
+        })
+    }
+}
+
+struct TyInDbDfs<'a, Db: ?Sized> {
+    db: &'a Db,
+    stack: Vec<Ty<InDb>>,
+}
+
+impl<'a, Db: ?Sized> TyInDbDfs<'a, Db> {
+    fn new(db: &'a Db, root: Ty<InDb>) -> Self {
+        Self {
+            db,
+            stack: vec![root],
+        }
+    }
+}
+impl<'a, DB> Iterator for TyInDbDfs<'a, DB>
+where
+    DB: ?Sized + crate::Db,
+{
+    type Item = Ty<InDb>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.stack.pop().map(|ty| {
+            match ty.0.kind(self.db.as_ty_db()) {
+                TypeKind::ErrorTy => {}
+                TypeKind::IntTy => {}
+                TypeKind::VarTy(_) => {}
+                TypeKind::RowTy(row) => {
+                    self.stack.extend_from_slice(row.values(&self.db));
+                }
+                TypeKind::FunTy(arg, ret) => {
+                    self.stack.extend([arg, ret]);
+                }
+                TypeKind::ProdTy(row) => match row {
+                    Row::Open(_) => {}
+                    Row::Closed(row) => {
+                        self.stack.extend_from_slice(row.values(&self.db));
+                    }
+                },
+                TypeKind::SumTy(row) => match row {
+                    Row::Open(_) => {}
+                    Row::Closed(row) => {
+                        self.stack.extend_from_slice(row.values(&self.db));
+                    }
+                },
+            };
+            ty
+        })
     }
 }
 

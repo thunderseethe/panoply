@@ -145,7 +145,7 @@ pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedIt
         });
 
     let (var_to_tys, terms_to_tys, ty_scheme, diags) =
-        type_check(db, db, module, term.data(db.as_ast_db()));
+        type_check(db, module, term.data(db.as_ast_db()));
 
     for diag in diags {
         AiahrcErrors::push(db, diag.into())
@@ -160,40 +160,30 @@ type TypeCheckOutput = (
     Vec<TypeCheckDiagnostic>,
 );
 
-pub fn type_check<E>(
-    db: &dyn crate::Db,
-    eff_info: &E,
-    module: Module,
-    ast: &Ast<VarId>,
-) -> TypeCheckOutput
-where
-    E: ?Sized + EffectInfo,
-{
+pub fn type_check(db: &dyn crate::Db, module: Module, ast: &Ast<VarId>) -> TypeCheckOutput {
     let arena = Bump::new();
     let infer_ctx = TyCtx::new(db.as_ty_db(), &arena);
-    tc_term(db, &infer_ctx, eff_info, module, ast)
+    tc_term(db, &infer_ctx, module, ast)
 }
 
-fn tc_term<'ty, 'infer, 's, 'eff, II, E>(
+fn tc_term<'ty, 'infer, 's, 'eff, II>(
     db: &dyn crate::Db,
     infer_ctx: &II,
-    eff_info: &E,
     module: Module,
     ast: &Ast<VarId>,
 ) -> TypeCheckOutput
 where
     II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
-    E: ?Sized + EffectInfo,
 {
     let term = ast.root();
     let infer = InferCtx::new(db, infer_ctx, module, ast);
 
     // Infer types for all our variables and the root term.
-    let (infer, gen_storage, result) = infer.infer(eff_info, term);
+    let (infer, gen_storage, result) = infer.infer(term);
 
     // Solve constraints into the unifiers mapping.
     let (mut ty_unifiers, mut data_row_unifiers, mut eff_row_unifiers, unsolved_eqs, errors) =
-        infer.solve(eff_info);
+        infer.solve();
 
     //print_root_unifiers(&mut unifiers);
     // Zonk the variable -> type mapping and the root term type.
@@ -364,7 +354,7 @@ mod tests {
     use assert_matches::assert_matches;
     use salsa::AsId;
 
-    use crate::{test_utils::DummyEff, Evidence};
+    use crate::Evidence;
     use crate::{type_check, type_scheme_of};
 
     macro_rules! assert_matches_unit_ty {
@@ -418,7 +408,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -442,7 +432,7 @@ mod tests {
             )
         });
 
-        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, dummy_mod(), &untyped_ast);
 
         assert_matches!(
             errors[0],
@@ -462,7 +452,7 @@ mod tests {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -487,7 +477,7 @@ mod tests {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
 
-        let (var_to_tys, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (var_to_tys, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -522,7 +512,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -566,7 +556,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -608,7 +598,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
 
         let ty = assert_vec_matches!(
             scheme.constrs,
@@ -665,7 +655,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
@@ -780,7 +770,7 @@ f = with {
         let db = TestDatabase::default();
         let untyped_ast = AstBuilder::with_builder(&db, |_| Variable(VarId(0)));
 
-        let (_, _, _, errors) = type_check(&db, &DummyEff(&db), dummy_mod(), &untyped_ast);
+        let (_, _, _, errors) = type_check(&db, dummy_mod(), &untyped_ast);
 
         assert_matches!(
             &errors[0],

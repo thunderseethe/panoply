@@ -24,7 +24,7 @@ use aiahr_ty::{
 };
 use ast::{AstEffect, AstTerm};
 use la_arena::{Arena, Idx};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::AsId;
 
 #[salsa::jar(db = Db)]
@@ -486,7 +486,8 @@ impl<'a> DesugarCtx<'a> {
             .quantifiers
             .iter()
             .map(|quant| quant.var.value)
-            .collect();
+            .collect::<FxHashSet<_>>();
+        let mut data_row_bound = FxHashSet::default();
         let constrs = nst
             .qualifiers
             .as_ref()
@@ -494,23 +495,37 @@ impl<'a> DesugarCtx<'a> {
                 qual.constraints
                     .elements()
                     .map(|constr| match constr {
-                        cst::Constraint::RowSum { lhs, rhs, goal, .. } => Evidence::DataRow {
-                            left: self.ds_row_atom(lhs),
-                            right: self.ds_row_atom(rhs),
-                            goal: self.ds_row_atom(goal),
-                        },
+                        cst::Constraint::RowSum { lhs, rhs, goal, .. } => {
+                            let left = self.ds_row_atom(lhs);
+                            if let Row::Open(row_var) = &left {
+                                data_row_bound.insert(*row_var);
+                            }
+                            let right = self.ds_row_atom(rhs);
+                            if let Row::Open(row_var) = &right {
+                                data_row_bound.insert(*row_var);
+                            }
+                            let goal = self.ds_row_atom(goal);
+                            if let Row::Open(row_var) = &goal {
+                                data_row_bound.insert(*row_var);
+                            }
+                            Evidence::DataRow { left, right, goal }
+                        }
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or(vec![]);
         let ty = self.ds_type(nst.type_);
-        let eff = Row::Open(self.ty_vars.push(true));
+        data_row_bound.extend(ty.row_vars(self.db.as_ty_db()));
+
+        let eff = self.ty_vars.push(true);
+
         TyScheme {
-            bound_ty: bound,
-            bound_data_row: vec![],
-            bound_eff_row: vec![],
+            bound_ty: bound.difference(&data_row_bound).copied().collect(),
+            bound_data_row: data_row_bound.into_iter().collect(),
+            // We currently don't have syntax for effects so we just bind the generated effect
+            bound_eff_row: vec![eff],
             constrs,
-            eff,
+            eff: Row::Open(eff),
             ty,
         }
     }
