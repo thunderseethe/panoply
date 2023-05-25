@@ -12,7 +12,7 @@ use aiahr_core::{
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use la_arena::Idx;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use aiahr_ty::{
     infer::{InArena, TcUnifierVar, TyCtx},
@@ -30,6 +30,8 @@ use folds::zonker::Zonker;
 
 mod infer;
 pub use infer::TyChkRes;
+
+use self::infer::Wrapper;
 
 /// Information we need about effects during type checking
 pub trait EffectInfo {
@@ -125,6 +127,10 @@ pub struct TypedItem {
     pub var_to_tys: FxHashMap<VarId, Ty<InDb>>,
     #[return_ref]
     pub term_to_tys: FxHashMap<Idx<ast::Term<VarId>>, TyChkRes<InDb>>,
+    #[return_ref]
+    pub required_evidence: FxHashSet<Evidence<InDb>>,
+    #[return_ref]
+    pub item_to_wrappers: FxHashMap<Idx<ast::Term<VarId>>, Wrapper<InDb>>,
     pub ty_scheme: TyScheme,
 }
 
@@ -144,23 +150,32 @@ pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedIt
             )
         });
 
-    let (var_to_tys, terms_to_tys, ty_scheme, diags) =
-        type_check(db, module, term.data(db.as_ast_db()));
+    let ty_chk_out = type_check(db, module, term.data(db.as_ast_db()));
 
-    for diag in diags {
+    for diag in ty_chk_out.diags {
         AiahrcErrors::push(db, diag.into())
     }
-    TypedItem::new(db, term_name, var_to_tys, terms_to_tys, ty_scheme)
+    TypedItem::new(
+        db,
+        term_name,
+        ty_chk_out.var_tys,
+        ty_chk_out.term_tys,
+        ty_chk_out.required_ev,
+        ty_chk_out.item_wrappers,
+        ty_chk_out.scheme,
+    )
 }
 
-type TypeCheckOutput = (
-    FxHashMap<VarId, Ty<InDb>>,
-    FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
-    TyScheme,
-    Vec<TypeCheckDiagnostic>,
-);
+pub(crate) struct TypeCheckOutput {
+    var_tys: FxHashMap<VarId, Ty<InDb>>,
+    term_tys: FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
+    required_ev: FxHashSet<Evidence<InDb>>,
+    item_wrappers: FxHashMap<Idx<Term<VarId>>, Wrapper<InDb>>,
+    scheme: TyScheme,
+    diags: Vec<TypeCheckDiagnostic>,
+}
 
-pub fn type_check(db: &dyn crate::Db, module: Module, ast: &Ast<VarId>) -> TypeCheckOutput {
+pub(crate) fn type_check(db: &dyn crate::Db, module: Module, ast: &Ast<VarId>) -> TypeCheckOutput {
     let arena = Bump::new();
     let infer_ctx = TyCtx::new(db.as_ty_db(), &arena);
     tc_term(db, &infer_ctx, module, ast)
@@ -198,17 +213,20 @@ where
     };
     let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
 
-    let zonked_var_tys = gen_storage
-        .var_tys
-        .into_iter()
-        .map(|(var, ty)| (var, ty.try_fold_with(&mut zonker).unwrap()))
-        .collect::<FxHashMap<_, _>>();
+    let zonked_var_tys = gen_storage.var_tys.try_fold_with(&mut zonker).unwrap();
 
-    let zonked_term_tys = gen_storage
-        .term_tys
+    let zonked_term_tys = gen_storage.term_tys.try_fold_with(&mut zonker).unwrap();
+
+    let zonked_item_wrappers = gen_storage
+        .item_wrappers
+        .try_fold_with(&mut zonker)
+        .unwrap();
+
+    let zonked_required_ev = gen_storage
+        .required_ev
         .into_iter()
-        .map(|(term, ty)| (term, ty.try_fold_with(&mut zonker).unwrap()))
-        .collect::<FxHashMap<_, _>>();
+        .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
+        .collect::<FxHashSet<_>>();
 
     let constrs = unsolved_eqs
         .data_eqns
@@ -239,7 +257,14 @@ where
         eff: zonked_infer.eff,
         ty: zonked_infer.ty,
     };
-    (zonked_var_tys, zonked_term_tys, scheme, errors)
+    TypeCheckOutput {
+        var_tys: zonked_var_tys,
+        term_tys: zonked_term_tys,
+        required_ev: zonked_required_ev,
+        item_wrappers: zonked_item_wrappers,
+        scheme,
+        diags: errors,
+    }
 }
 
 #[allow(dead_code)]
@@ -354,8 +379,8 @@ mod tests {
     use assert_matches::assert_matches;
     use salsa::AsId;
 
-    use crate::Evidence;
     use crate::{type_check, type_scheme_of};
+    use crate::{Evidence, TypeCheckOutput};
 
     macro_rules! assert_matches_unit_ty {
         ($db:expr, $term:expr) => {
@@ -408,11 +433,11 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
+        let ty_chk_out = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
-            db.kind(&scheme.ty),
+            db.kind(&ty_chk_out.scheme.ty),
             FunTy(arg, ret) => {
                 assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(a), VarTy(b)) => {
                     assert_eq!(a, b);
@@ -432,10 +457,10 @@ mod tests {
             )
         });
 
-        let (_, _, _, errors) = type_check(&db, dummy_mod(), &untyped_ast);
+        let ty_chk_out = type_check(&db, dummy_mod(), &untyped_ast);
 
         assert_matches!(
-            errors[0],
+            ty_chk_out.diags[0],
             // TODO: Figure out how to check these errors
             TypeCheckDiagnostic {
                 name: "Type Mismatch",
@@ -452,7 +477,7 @@ mod tests {
             builder.mk_abs(x, builder.mk_label("start", Variable(x)))
         });
 
-        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
+        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -477,15 +502,17 @@ mod tests {
             builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
         });
 
-        let (var_to_tys, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
+        let TypeCheckOutput {
+            var_tys, scheme, ..
+        } = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
-            var_to_tys.get(&VarId(0)).map(|ty| db.kind(ty)),
+            var_tys.get(&VarId(0)).map(|ty| db.kind(ty)),
             Some(&VarTy(TyVarId(0)))
         );
         assert_matches!(
-            var_to_tys.get(&VarId(1)).map(|ty| db.kind(ty)),
+            var_tys.get(&VarId(1)).map(|ty| db.kind(ty)),
             Some(&VarTy(TyVarId(1)))
         );
         assert_matches!(
@@ -512,7 +539,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
+        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -556,7 +583,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
+        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
 
         let db = &db;
         assert_matches!(
@@ -598,7 +625,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
+        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
 
         let ty = assert_vec_matches!(
             scheme.constrs,
@@ -655,7 +682,7 @@ mod tests {
             )
         });
 
-        let (_, _, scheme, _) = type_check(&db, dummy_mod(), &untyped_ast);
+        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
 
         assert_vec_matches!(
             scheme.constrs,
@@ -770,10 +797,10 @@ f = with {
         let db = TestDatabase::default();
         let untyped_ast = AstBuilder::with_builder(&db, |_| Variable(VarId(0)));
 
-        let (_, _, _, errors) = type_check(&db, dummy_mod(), &untyped_ast);
+        let TypeCheckOutput { diags, .. } = type_check(&db, dummy_mod(), &untyped_ast);
 
         assert_matches!(
-            &errors[0],
+            &diags[0],
             TypeCheckDiagnostic {
                 name: "Undefined Variable",
                 principal: _,

@@ -13,7 +13,7 @@ use aiahr_ty::{
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::DebugWithDb;
 use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
 
@@ -116,10 +116,39 @@ pub(crate) trait InferState {
     type Storage<'infer>;
 }
 
+#[derive(Eq, PartialEq, Debug)]
+pub struct Wrapper<A: TypeAlloc> {
+    tys: Vec<Ty<A>>,
+    data_rows: Vec<SimpleRow<A>>,
+    eff_rows: Vec<ScopedRow<A>>,
+    constrs: Vec<Evidence<A>>,
+}
+impl<'ctx, A: 'ctx + Clone + TypeAlloc> TypeFoldable<'ctx> for Wrapper<A> {
+    type Alloc = A;
+
+    type Out<B: TypeAlloc> = Wrapper<B>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::Out>, F::Error> {
+        Ok(Wrapper {
+            tys: self.tys.try_fold_with(fold)?,
+            data_rows: self.data_rows.try_fold_with(fold)?,
+            eff_rows: self.eff_rows.try_fold_with(fold)?,
+            constrs: self.constrs.try_fold_with(fold)?,
+        })
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct GenerationStorage<'infer> {
     pub(crate) var_tys: FxHashMap<VarId, InferTy<'infer>>,
     pub(crate) term_tys: FxHashMap<Idx<Term<VarId>>, InferResult<'infer>>,
+    /// We use `Idx<Term<VarId>>` here (instead of `TermName`) because we need a wrapper for each
+    /// individual use site of an item, and we may have multiple call sites for one item name.
+    pub(crate) item_wrappers: FxHashMap<Idx<Term<VarId>>, Wrapper<InArena<'infer>>>,
+    pub(crate) required_ev: FxHashSet<Evidence<InArena<'infer>>>,
 }
 impl InferState for Generation {
     type Storage<'infer> = GenerationStorage<'infer>;
@@ -200,7 +229,7 @@ impl<'infer> InferResult<'infer> {
 ///     1. Constraint generation
 ///     2. Unification
 /// During 1. we use a bidirectional type checker to walk our input AST and generate a set of
-/// constraints (and unification variables) that have to be true for the ast to type check. This
+/// constraints (and unification variables) that have to be true for the AST to type check. This
 /// stage also produces a mapping from variables in the AST to their types.
 ///
 /// Once we have this set of constraints we solve them via unification. Unification maintains a
@@ -287,6 +316,8 @@ where
             state: GenerationStorage {
                 var_tys: FxHashMap::default(),
                 term_tys: FxHashMap::default(),
+                required_ev: FxHashSet::default(),
+                item_wrappers: FxHashMap::default(),
             },
             _marker: std::marker::PhantomData,
         }
@@ -304,6 +335,34 @@ where
         let res = self._infer(term);
         let (var_tys, infer_ctx) = InferCtx::with_generation(self);
         (infer_ctx, var_tys, res)
+    }
+
+    fn add_effect_row_combine(
+        &mut self,
+        left: ScopedInferRow<'infer>,
+        right: ScopedInferRow<'infer>,
+        goal: ScopedInferRow<'infer>,
+        span: Span,
+    ) {
+        self.constraints
+            .add_effect_row_combine(left, right, goal, span);
+        self.state
+            .required_ev
+            .insert(Evidence::EffRow { left, right, goal });
+    }
+
+    fn add_data_row_combine(
+        &mut self,
+        left: SimpleInferRow<'infer>,
+        right: SimpleInferRow<'infer>,
+        goal: SimpleInferRow<'infer>,
+        span: Span,
+    ) {
+        self.constraints
+            .add_data_row_combine(left, right, goal, span);
+        self.state
+            .required_ev
+            .insert(Evidence::DataRow { left, right, goal });
     }
 
     /// Check a term against a given type.
@@ -394,14 +453,8 @@ where
 
                 let span = current_span();
                 // Check our expected effect is a combination of each components effects
-                self.constraints.add_effect_row_combine(
-                    left_infer.eff,
-                    right_infer.eff,
-                    expected.eff,
-                    span,
-                );
-                self.constraints
-                    .add_data_row_combine(left_row, right_row, row, span);
+                self.add_effect_row_combine(left_infer.eff, right_infer.eff, expected.eff, span);
+                self.add_data_row_combine(left_row, right_row, row, span);
             }
             (Branch { left, right }, FunTy(arg, ret)) => {
                 let arg_row = self.equate_as_sum_row(arg, current_span);
@@ -415,14 +468,8 @@ where
                 let right_row = self.equate_as_sum_row(right_arg, current_span);
 
                 let span = current_span();
-                self.constraints.add_effect_row_combine(
-                    left_infer.eff,
-                    right_infer.eff,
-                    expected.eff,
-                    span,
-                );
-                self.constraints
-                    .add_data_row_combine(left_row, right_row, arg_row, span);
+                self.add_effect_row_combine(left_infer.eff, right_infer.eff, expected.eff, span);
+                self.add_data_row_combine(left_row, right_row, arg_row, span);
                 // All branch return types must be equal
                 self.constraints.add_ty_eq(left_ret, ret, current_span());
                 self.constraints.add_ty_eq(right_ret, ret, current_span());
@@ -439,18 +486,12 @@ where
                 self.constraints
                     .add_effect_row_eq(expected.eff, term_infer.eff, current_span());
                 match direction {
-                    Direction::Left => self.constraints.add_data_row_combine(
-                        row,
-                        unbound_row,
-                        term_row,
-                        current_span(),
-                    ),
-                    Direction::Right => self.constraints.add_data_row_combine(
-                        unbound_row,
-                        row,
-                        term_row,
-                        current_span(),
-                    ),
+                    Direction::Left => {
+                        self.add_data_row_combine(row, unbound_row, term_row, current_span())
+                    }
+                    Direction::Right => {
+                        self.add_data_row_combine(unbound_row, row, term_row, current_span())
+                    }
                 };
             }
             (Inject { .. }, RowTy(row)) => {
@@ -465,25 +506,20 @@ where
                 self.constraints
                     .add_effect_row_eq(expected.eff, term_infer.eff, current_span());
                 match direction {
-                    Direction::Left => self.constraints.add_data_row_combine(
-                        term_row,
-                        unbound_row,
-                        row,
-                        current_span(),
-                    ),
-                    Direction::Right => self.constraints.add_data_row_combine(
-                        unbound_row,
-                        term_row,
-                        row,
-                        current_span(),
-                    ),
+                    Direction::Left => {
+                        self.add_data_row_combine(term_row, unbound_row, row, current_span())
+                    }
+                    Direction::Right => {
+                        self.add_data_row_combine(unbound_row, term_row, row, current_span())
+                    }
                 };
             }
             (Item(term_name), _) => {
                 let scheme =
                     type_scheme_of(self.db.as_tc_db(), *term_name).ty_scheme(self.db.as_tc_db());
                 let span = current_span();
-                let ty_chk = self.instantiate(scheme, span);
+                let (wrapper, ty_chk) = self.instantiate(scheme, span);
+                self.state.item_wrappers.insert(term, wrapper);
                 self.constraints
                     .add_effect_row_eq(ty_chk.eff, expected.eff, span);
                 self.constraints.add_ty_eq(ty_chk.ty, expected.ty, span);
@@ -561,12 +597,7 @@ where
                 self._check(*arg, InferResult::new(arg_ty, arg_eff));
 
                 let eff = self.fresh_scoped_row();
-                self.constraints.add_effect_row_combine(
-                    fun_infer.eff,
-                    arg_eff,
-                    eff,
-                    current_span(),
-                );
+                self.add_effect_row_combine(fun_infer.eff, arg_eff, eff, current_span());
                 InferResult::new(ret_ty, eff)
             }
             // If the variable is in environemnt return it's type, otherwise return an error.
@@ -632,10 +663,8 @@ where
                 self._check(*right, InferResult::new(right_ty, right_eff));
 
                 let span = current_span();
-                self.constraints
-                    .add_effect_row_combine(left_eff, right_eff, out_eff, span);
-                self.constraints
-                    .add_data_row_combine(left_row, right_row, out_row, span);
+                self.add_effect_row_combine(left_eff, right_eff, out_eff, span);
+                self.add_data_row_combine(left_row, right_row, out_row, span);
 
                 InferResult::new(self.mk_ty(ProdTy(out_row)), out_eff)
             }
@@ -656,10 +685,8 @@ where
                 self._check(*right, InferResult::new(right_ty, right_eff));
 
                 let span = current_span();
-                self.constraints
-                    .add_effect_row_combine(left_eff, right_eff, out_eff, span);
-                self.constraints
-                    .add_data_row_combine(left_row, right_row, out_row, span);
+                self.add_effect_row_combine(left_eff, right_eff, out_eff, span);
+                self.add_data_row_combine(left_row, right_row, out_row, span);
 
                 InferResult::new(
                     self.mk_ty(FunTy(self.mk_ty(SumTy(out_row)), ret_ty)),
@@ -677,18 +704,12 @@ where
                 self._check(*term, InferResult::new(term_ty, eff));
 
                 match direction {
-                    Direction::Left => self.constraints.add_data_row_combine(
-                        small_row,
-                        unbound_row,
-                        big_row,
-                        current_span(),
-                    ),
-                    Direction::Right => self.constraints.add_data_row_combine(
-                        unbound_row,
-                        small_row,
-                        big_row,
-                        current_span(),
-                    ),
+                    Direction::Left => {
+                        self.add_data_row_combine(small_row, unbound_row, big_row, current_span())
+                    }
+                    Direction::Right => {
+                        self.add_data_row_combine(unbound_row, small_row, big_row, current_span())
+                    }
                 };
 
                 InferResult::new(self.mk_ty(ProdTy(small_row)), eff)
@@ -703,24 +724,20 @@ where
                 self._check(*term, InferResult::new(term_ty, eff));
 
                 match direction {
-                    Direction::Left => self.constraints.add_data_row_combine(
-                        small_row,
-                        unbound_row,
-                        big_row,
-                        current_span(),
-                    ),
-                    Direction::Right => self.constraints.add_data_row_combine(
-                        unbound_row,
-                        small_row,
-                        big_row,
-                        current_span(),
-                    ),
+                    Direction::Left => {
+                        self.add_data_row_combine(small_row, unbound_row, big_row, current_span())
+                    }
+                    Direction::Right => {
+                        self.add_data_row_combine(unbound_row, small_row, big_row, current_span())
+                    }
                 };
 
                 InferResult::new(self.mk_ty(SumTy(big_row)), eff)
             }
             Operation(op_name) => {
-                let sig = self.instantiate(self.db.effect_member_sig(*op_name), current_span());
+                let (wrapper, sig) =
+                    self.instantiate(self.db.effect_member_sig(*op_name), current_span());
+                self.state.item_wrappers.insert(term, wrapper);
 
                 InferResult::new(
                     sig.ty,
@@ -747,7 +764,7 @@ where
                 let handler_row = self.fresh_simple_row();
 
                 // Our handler should be an effect signature plus a return clause
-                self.constraints.add_data_row_combine(
+                self.add_data_row_combine(
                     Row::Closed(ret_row),
                     eff_sig_row,
                     handler_row,
@@ -776,12 +793,7 @@ where
 
                 // Handle removes an effect so our out_eff should be whatever body_eff was minus
                 // our handled effect
-                self.constraints.add_effect_row_combine(
-                    out_eff,
-                    handled_eff,
-                    body_eff,
-                    current_span(),
-                );
+                self.add_effect_row_combine(out_eff, handled_eff, body_eff, current_span());
 
                 InferResult::new(ret_ty, out_eff)
             }
@@ -797,46 +809,75 @@ where
             Item(term_name) => {
                 let scheme =
                     type_scheme_of(self.db.as_tc_db(), *term_name).ty_scheme(self.db.as_tc_db());
-                self.instantiate(scheme, current_span())
+                let (wrapper, res) = self.instantiate(scheme, current_span());
+                self.state.item_wrappers.insert(term, wrapper);
+                res
             }
         };
         self.state.term_tys.insert(term, res);
         res
     }
 
-    fn instantiate(&mut self, ty_scheme: TyScheme, span: Span) -> InferResult<'infer> {
+    fn instantiate(
+        &mut self,
+        ty_scheme: TyScheme,
+        span: Span,
+    ) -> (Wrapper<InArena<'infer>>, InferResult<'infer>) {
+        let ty_unifiers = ty_scheme
+            .bound_ty
+            .into_iter()
+            .map(|_| self.ty_unifiers.new_key(None))
+            .collect();
+        let datarow_unifiers = ty_scheme
+            .bound_data_row
+            .into_iter()
+            .map(|_| self.data_row_unifiers.new_key(None))
+            .collect();
+        let effrow_unifiers = ty_scheme
+            .bound_eff_row
+            .into_iter()
+            .map(|_| self.eff_row_unifiers.new_key(None))
+            .collect();
         let mut inst = Instantiate {
             db: self.db,
             ctx: self.ctx,
-            ty_unifiers: ty_scheme
-                .bound_ty
-                .into_iter()
-                .map(|_| self.ty_unifiers.new_key(None))
-                .collect(),
-            datarow_unifiers: ty_scheme
-                .bound_data_row
-                .into_iter()
-                .map(|_| self.data_row_unifiers.new_key(None))
-                .collect(),
-            effrow_unifiers: ty_scheme
-                .bound_eff_row
-                .into_iter()
-                .map(|_| self.eff_row_unifiers.new_key(None))
-                .collect(),
+            ty_unifiers,
+            datarow_unifiers,
+            effrow_unifiers,
         };
-        for ev in ty_scheme.constrs {
-            match ev.try_fold_with(&mut inst).unwrap() {
-                Evidence::DataRow { left, right, goal } => self
-                    .constraints
-                    .add_data_row_combine(left, right, goal, span),
-                Evidence::EffRow { left, right, goal } => self
-                    .constraints
-                    .add_effect_row_combine(left, right, goal, span),
-            }
-        }
-        InferResult::new(
+        let constrs = ty_scheme
+            .constrs
+            .into_iter()
+            .map(|ev| {
+                let ev = ev.try_fold_with(&mut inst).unwrap();
+                match &ev {
+                    Evidence::DataRow { left, right, goal } => {
+                        self.add_data_row_combine(*left, *right, *goal, span)
+                    }
+                    Evidence::EffRow { left, right, goal } => {
+                        self.add_effect_row_combine(*left, *right, *goal, span)
+                    }
+                }
+                ev
+            })
+            .collect::<Vec<_>>();
+        let res = InferResult::new(
             ty_scheme.ty.try_fold_with(&mut inst).unwrap(),
             ty_scheme.eff.try_fold_with(&mut inst).unwrap(),
+        );
+
+        (
+            Wrapper {
+                tys: inst
+                    .ty_unifiers
+                    .into_iter()
+                    .map(|var| self.mk_ty(VarTy(var)))
+                    .collect(),
+                data_rows: inst.datarow_unifiers.into_iter().map(Row::Open).collect(),
+                eff_rows: inst.effrow_unifiers.into_iter().map(Row::Open).collect(),
+                constrs,
+            },
+            res,
         )
     }
 
