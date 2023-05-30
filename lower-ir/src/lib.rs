@@ -1,11 +1,11 @@
-use aiahr_ast::{Ast, AstModule, Term};
+use aiahr_ast::{Ast, AstModule, AstTerm, Term};
 use aiahr_core::{
     id::{EffectName, EffectOpName, TermName, VarId},
     ident::Ident,
     modules::Module,
 };
 use aiahr_ir::{Ir, IrKind::*, IrTy, IrTyKind, IrVarTy, Kind, MkIrTy, P};
-use aiahr_tc::EffectInfo;
+use aiahr_tc::{EffectInfo, TypedItem};
 use aiahr_ty::{InDb, Ty, TyScheme};
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
@@ -36,6 +36,7 @@ pub struct Jar(
     IrItem,
     lower_module,
     lower_item,
+    lower_impl,
     effect_handler_ir_ty,
 );
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_ir::Db {
@@ -92,14 +93,7 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
     let items = module
         .terms(ast_db)
         .iter()
-        .map(|term| {
-            let module = module.module(ast_db);
-            let name = term.name(db.as_ast_db());
-            let ast = term.data(db.as_ast_db());
-            let scheme = db.lookup_scheme(name);
-            let ir = lower(db, module, name, &scheme, ast);
-            IrItem::new(db, name, ir)
-        })
+        .map(|term| lower_impl(db, module, *term))
         .collect();
     IrModule::new(db, module.module(ast_db), items)
 }
@@ -121,10 +115,21 @@ fn lower_item(db: &dyn crate::Db, term_name: TermName) -> IrItem {
 }
 
 #[salsa::tracked]
+fn lower_impl(db: &dyn crate::Db, module: AstModule, term: AstTerm) -> IrItem {
+    let ast_db = db.as_ast_db();
+    let module = module.module(ast_db);
+    let name = term.name(ast_db);
+    let ast = term.data(ast_db);
+    let typed_item = db.type_scheme_of(name);
+    let ir = lower(db, module, name, typed_item, ast);
+    IrItem::new(db, name, ir)
+}
+
+#[salsa::tracked]
 fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> IrTy {
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
-    let bogus_item = TermName::from_id(salsa::Id::from_u32(u32::MAX));
+    let bogus_item = TermName::from_id(salsa::Id::from_u32(0u32));
     // TODO: Clean this up so we can access lower ty without requiring a full LowerCtx
     // TODO: Do we need to create a new tyvar_conv per scheme we lower?
     let mut lower_ctx = LowerCtx::new(
@@ -211,21 +216,22 @@ pub fn lower(
     db: &dyn crate::Db,
     module: Module,
     name: TermName,
-    scheme: &TyScheme,
+    typed_item: TypedItem,
     ast: &Ast<VarId>,
 ) -> Ir {
+    let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
+    let scheme = typed_item.ty_scheme(db.as_tc_db());
+
+    let required_evidence = typed_item.required_evidence(tc_db);
     let (mut lower_ctx, ev_locals, ev_params) = LowerCtx::new(
         db,
         &mut var_conv,
         &mut tyvar_conv,
         ItemSelector { module, item: name },
     )
-    .collect_evidence_params(
-        ast.view(ast.root()).row_ev_terms(ast.arena()),
-        scheme.constrs.iter(),
-    );
+    .collect_evidence_params2(required_evidence.iter());
 
     let body = lower_ctx.lower_term(ast, ast.tree);
     // Bind all unique solved row evidence to local variables at top of the term
@@ -237,7 +243,31 @@ pub fn lower(
         .into_iter()
         .rfold(body, |body, arg| Ir::new(Abs(arg, P::new(body))));
 
-    // Finally wrap our term in any type variables it needs to bind
+    // Finally wrap our term in any type/row variables it needs to bind
+    let body = scheme
+        .bound_data_row
+        .iter()
+        .rfold(body, |acc, simple_row_var| {
+            Ir::new(TyAbs(
+                IrVarTy {
+                    var: tyvar_conv.convert(*simple_row_var),
+                    kind: Kind::SimpleRow,
+                },
+                P::new(acc),
+            ))
+        });
+    let body = scheme
+        .bound_eff_row
+        .iter()
+        .rfold(body, |acc, scoped_row_var| {
+            Ir::new(TyAbs(
+                IrVarTy {
+                    var: tyvar_conv.convert(*scoped_row_var),
+                    kind: Kind::ScopedRow,
+                },
+                P::new(acc),
+            ))
+        });
     scheme.bound_ty.iter().rfold(body, |acc, ty_var| {
         Ir::new(TyAbs(
             IrVarTy {
@@ -260,7 +290,7 @@ mod tests {
     use aiahr_ir::Ir;
     use aiahr_parser::Db as ParserDb;
     use expect_test::expect;
-    use pretty::{BoxAllocator, BoxDoc, Doc, Pretty};
+    use pretty::{BoxAllocator, BoxDoc, Doc};
 
     #[derive(Default)]
     #[salsa::db(
@@ -282,7 +312,18 @@ mod tests {
     /// Lower a snippet and return the produced IR
     fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db Ir {
         let path = std::path::PathBuf::from("test.aiahr");
-        let mut contents = "main = ".to_string();
+        let mut contents = r#"
+effect State {
+    put : {} -> {},
+    get : {} -> {}
+}
+
+effect Reader {
+    ask : {} -> {}
+}
+
+main = "#
+            .to_string();
         contents.push_str(input);
         let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
         SourceFileSet::new(db, vec![file]);
@@ -303,8 +344,8 @@ mod tests {
         let ir = lower_snippet(&db, "|x| x");
 
         let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&BoxAllocator).into_doc(), 80).to_string();
-        let expect = expect!["forall (0: Type) . fun (ir_var<1>) (ir_var<1>)"];
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+        let expect = expect!["forall (T0: Type) . fun (ir_var<1>) (ir_var<1>)"];
         expect.assert_eq(&pretty_ir);
     }
 
@@ -315,24 +356,10 @@ mod tests {
         let ir = lower_snippet(&db, "|a| { x = a, y = a }");
 
         let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&BoxAllocator).into_doc(), 80).to_string();
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
         let expect = expect![[r#"
-            forall (0: Type) . let ir_var<1> = {fun (ir_var<2>, ir_var<3>) ({ir_var<2>,
-                                                                            ir_var<3>}),
-                                               forall (2: Type) .
-                                                 fun (ir_var<2>, ir_var<3>, ir_var<4>)
-                                                 (case ir_var<4> <fun (ir_var<5>)
-                                                                   (ir_var<2>(ir_var<5>))
-                                                                   fun (ir_var<5>)
-                                                                   (ir_var<3>(ir_var<5>))>),
-                                               {fun (ir_var<4>) (ir_var<4>[0]),
-                                               fun (ir_var<2>) (<0: ir_var<2>>)}, {
-                                                                                  fun (ir_var<4>)
-                                                                                  (ir_var<4>[1]),
-                                                                                  fun (ir_var<3>)
-                                                                                  (<1: ir_var<3>>)
-                                                                                  }};
-              fun (ir_var<6>) (ir_var<1>[0](ir_var<6>)(ir_var<6>))"#]];
+            forall (T1: Type) . fun (ir_var<1>, ir_var<2>, ir_var<3>)
+              (ir_var<2>[0](ir_var<3>)(ir_var<3>))"#]];
         expect.assert_eq(&pretty_ir);
     }
 
@@ -341,11 +368,43 @@ mod tests {
         let db = TestDatabase::default();
         let ir = lower_snippet(&db, "|m| |n| (m ,, n).x");
         let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&BoxAllocator).into_doc(), 80).to_string();
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            forall (0: Type) . fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>)
-              (ir_var<2>[3][0](ir_var<1>[0](ir_var<3>)(ir_var<4>)))"#]];
+            forall (T1: Type) (T1: SimpleRow) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) .
+              fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>, ir_var<5>)
+              (ir_var<3>[3][0](ir_var<2>[0](ir_var<4>)(ir_var<5>)))"#]];
         expect.assert_eq(&pretty_ir)
+    }
+
+    #[test]
+    fn lower_state_get() {
+        let db = TestDatabase::default();
+        let ir = lower_snippet(
+            &db,
+            r#"
+with {
+    put = |x| |k| {},
+    get = |x| |k| {},
+    return = |x| x,
+} do State.get({})"#,
+        );
+        let pretty_ir =
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+
+        let expect = expect![[r#"
+            forall (T4: Type) .
+              fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>, ir_var<5>, ir_var<6>)
+              (let ir_var<8> = (ir_var<6>[0](ir_var<4>[0](fun (ir_var<9>, ir_var<10>) ({
+                                                                                       }))(fun (ir_var<11>, ir_var<12>)
+                                 ({})))(fun (ir_var<13>) (ir_var<13>))){};
+               new_prompt(ir_var<7>){let ir_var<0> = ir_var<2>[0](ir_var<0>)({ir_var<7>,
+                                                                             ir_var<8>});
+                 prompt(ir_var<7>) { (ir_var<6>[3][0](ir_var<8>)){}(let ir_var<15> =
+                     ir_var<3>[3][0](ir_var<0>);
+                     fun (ir_var<14>) (yield(ir_var<15>[0]) {fun (ir_var<16>)
+                                         (ir_var<15>[1][1](ir_var<14>)(ir_var<16>))})({}))
+                     }})"#]];
+        expect.assert_eq(&pretty_ir);
     }
 }

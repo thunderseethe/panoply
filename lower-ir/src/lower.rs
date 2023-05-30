@@ -1,4 +1,4 @@
-use aiahr_ast::{Ast, Direction, RowTerm, RowTermView, Term};
+use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::{
     id::{IrTyVarId, IrVarId, TermName, TyVarId, VarId},
     modules::Module,
@@ -14,11 +14,10 @@ use aiahr_ty::{
 use la_arena::Idx;
 
 use crate::{
-    evidence::{EvidenceMap, PartialEv, SolvedRowEv},
+    evidence::{EvidenceMap, PartialEv},
     id_converter::IdConverter,
     IrEffectInfo,
 };
-
 /// Unwrap a type into it a product and return the product's row.
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if
@@ -170,6 +169,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         }
     }
 
+    #[allow(unused)]
     fn scoped_row_evidence_ir(
         &mut self,
         left: ScopedClosedRow,
@@ -204,6 +204,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         todo!("Implement witness of scoped row evidence")
     }
 
+    #[allow(unused)]
     fn row_evidence_ir(
         &mut self,
         left: SimpleClosedRow,
@@ -519,92 +520,14 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         }
     }
 
-    fn solved_row_ev(
-        &self,
-        term_rows: impl IntoIterator<Item = RowTermView<VarId>>,
-    ) -> Vec<SolvedRowEv> {
-        // This is used to fill in the unbound row for otherwise solved Project and Inject terms.
-        // Since we type-checked successfully we know nothing refers to that variable and we can use
-        // whatever row type for it.
-        let unit_row = self.db.empty_row();
-
-        let mut solved_ev = term_rows
-            .into_iter()
-            .filter_map(|row_view| match row_view.view {
-                RowTerm::Concat { left, right } => {
-                    let left_row = expect_prod_ty(&self.db, self.lookup_term(left).ty);
-                    let right_row = expect_prod_ty(&self.db, self.lookup_term(right).ty);
-                    let goal_row = expect_prod_ty(&self.db, self.lookup_term(row_view.parent).ty);
-
-                    match (left_row, right_row, goal_row) {
-                        (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
-                            Some(SolvedRowEv::new(left, right, goal))
-                        }
-                        _ => None,
-                    }
-                }
-                RowTerm::Branch { left, right } => {
-                    let left_row = expect_branch_ty(&self.db, self.lookup_term(left).ty);
-                    let right_row = expect_branch_ty(&self.db, self.lookup_term(right).ty);
-                    let goal_row = expect_branch_ty(&self.db, self.lookup_term(row_view.parent).ty);
-
-                    match (left_row, right_row, goal_row) {
-                        (Row::Closed(left), Row::Closed(right), Row::Closed(goal)) => {
-                            Some(SolvedRowEv::new(left, right, goal))
-                        }
-                        _ => None,
-                    }
-                }
-                RowTerm::Project { direction, term } => {
-                    let sub_row = expect_prod_ty(&self.db, self.lookup_term(term).ty);
-                    let goal_row = expect_prod_ty(&self.db, self.lookup_term(row_view.parent).ty);
-
-                    match (sub_row, goal_row) {
-                        (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
-                            Direction::Left => SolvedRowEv::new(sub, unit_row, goal),
-                            Direction::Right => SolvedRowEv::new(unit_row, sub, goal),
-                        }),
-                        _ => None,
-                    }
-                }
-                RowTerm::Inject { direction, term } => {
-                    let sub_row = expect_sum_ty(&self.db, self.lookup_term(term).ty);
-                    let goal_row = expect_sum_ty(&self.db, self.lookup_term(row_view.parent).ty);
-
-                    match (sub_row, goal_row) {
-                        (Row::Closed(sub), Row::Closed(goal)) => Some(match direction {
-                            Direction::Left => SolvedRowEv::new(sub, unit_row, goal),
-                            Direction::Right => SolvedRowEv::new(unit_row, sub, goal),
-                        }),
-                        _ => None,
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-        solved_ev.dedup();
-        solved_ev
-    }
-
-    pub(crate) fn collect_evidence_params<'ev>(
+    pub(crate) fn collect_evidence_params2<'ev>(
         mut self,
-        term_evs: impl IntoIterator<Item = RowTermView<VarId>>,
-        scheme_constrs: impl IntoIterator<Item = &'ev Evidence>,
+        ev_iter: impl Iterator<Item = &'ev Evidence>,
     ) -> LowerOutput<'a, 'b> {
-        let locals = self
-            .solved_row_ev(term_evs)
-            .into_iter()
-            .map(|solved| {
-                let ev = solved.into();
-                // We lower solved evidence so that during term lowering we can lookup any
-                // evidence and receive back a variable. The logic below handles whether that
-                // variable points to a concrete term or a top-level parameter.
-                let param = self.lower_evidence(&ev);
-                let ir = self.row_evidence_ir(solved.left, solved.right, solved.goal);
-                self.ev_map.insert(ev, param);
-                (param, ir)
-            })
-            .collect::<Vec<_>>();
-        let params = scheme_constrs
+        let mut evs = ev_iter.collect::<Vec<_>>();
+
+        evs.sort();
+        let params = evs
             .into_iter()
             .map(|ev| {
                 let param = self.lower_evidence(ev);
@@ -612,7 +535,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                 param
             })
             .collect::<Vec<_>>();
-        (LowerCtx::with_evidenceless(self), locals, params)
+
+        (LowerCtx::with_evidenceless(self), vec![], params)
     }
 
     fn lower_evidence(&mut self, ev: &Evidence) -> IrVar {
@@ -742,8 +666,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             }
             // Effect stuff
             Operation(op) => {
-                let (value_ty, _) = self
-                    .lookup_term(term)
+                let term_infer = self.lookup_term(term);
+                let (value_ty, _) = term_infer
                     .ty
                     .try_as_fn_ty(&self.db)
                     .unwrap_or_else(|_| unreachable!());
@@ -768,8 +692,19 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     ty: self.mk_ir_ty(IntTy),
                 };
 
+                let op_ty = self.db.effect_member_sig(*op);
+
+                let eff_ev = self.ev_map[&PartialEv::ScopedRight {
+                    right: op_ty.eff,
+                    goal: term_infer.eff,
+                }];
+                let prj = Ir::new(FieldProj(
+                    0,
+                    P::new(Ir::new(FieldProj(3, P::new(Ir::var(eff_ev))))),
+                ));
+                let eff_handler = Ir::app(prj, [Ir::var(self.evv_var)]);
+
                 let handler_index = self.db.effect_handler_op_index(*op);
-                let eff_index = self.db.effect_vector_index(eff);
                 Ir::app(
                     Ir::abss(
                         [handle_var, value_var],
@@ -787,47 +722,66 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                             )),
                         )),
                     ),
-                    [Ir::new(VectorGet(self.evv_var, eff_index))],
+                    [eff_handler],
                 )
             }
             Handle { handler, body } => {
                 let prompt_var = IrVar {
                     var: self.var_conv.generate(),
+                    // Figure out this type? Dynamically type it maybe
                     ty: self.mk_ir_ty(IntTy),
                 };
                 let handler_infer = self.lookup_term(*handler);
-                let eff_name = match handler_infer.eff {
-                    Row::Closed(eff_row) => {
-                        debug_assert!(eff_row.len(&self.db) == 1);
-                        eff_row.fields(&self.db)[0]
-                    }
+
+                let handler_row = match expect_prod_ty(&self.db, handler_infer.ty) {
+                    Row::Closed(row) => row,
                     Row::Open(_) => {
-                        unreachable!("Handler effect expect to be closed row, found row variable")
+                        panic!("ICE: Handler should be solved to closed row during type checking")
                     }
                 };
-                let eff_name = self
-                    .db
-                    .lookup_effect_by_name(self.current.module, eff_name)
-                    .expect("Invalid effect name should've been caught in type checking");
-                let eff_index = self.db.effect_vector_index(eff_name);
+                let ret_label = self.db.ident_str("return");
+                let ret_idx = handler_row
+                    .fields(&self.db)
+                    .binary_search(&ret_label)
+                    .unwrap_or_else(|_| {
+                        panic!("ICE: Type checked handler should contain 'return'")
+                    });
+                let handler_ret_ty = handler_row.values(&self.db)[ret_idx];
+                let handler_ret_row = self.db.single_row(ret_label, handler_ret_ty);
+                let handler_ev = self.ev_map[&PartialEv::Data {
+                    other: Row::Closed(handler_ret_row),
+                    goal: Row::Closed(handler_row),
+                }];
                 let handler_var = IrVar {
                     var: self.var_conv.generate(),
                     ty: self.lower_ty(handler_infer.ty),
                 };
+                let handler_prj_ret = Ir::app(
+                    Ir::field_proj(0, Ir::field_proj(3, Ir::var(handler_ev))),
+                    [Ir::var(handler_var)],
+                );
                 let handler_ir = self.lower_term(ast, *handler);
 
-                let ret_ty = self.lower_ty(self.lookup_term(term).ty);
+                let term_infer = self.lookup_term(term);
+                let ret_ty = self.lower_ty(term_infer.ty);
 
-                let body_ty = self.lower_ty(self.lookup_term(*body).ty);
-                let ret_index = self.db.effect_handler_return_index(eff_name);
-                let updated_evv = Ir::new(VectorSet(
-                    self.evv_var,
-                    eff_index,
-                    P::new(Ir::new(Struct(vec![
-                        P::new(Ir::var(prompt_var)),
-                        P::new(Ir::var(handler_var)),
-                    ]))),
-                ));
+                let body_infer = self.lookup_term(*body);
+                let body_ty = self.lower_ty(body_infer.ty);
+                let eff_ev = self.ev_map[&Evidence::EffRow {
+                    left: term_infer.eff,
+                    right: handler_infer.eff,
+                    goal: body_infer.eff,
+                }];
+                let updated_evv = Ir::app(
+                    Ir::new(FieldProj(0, P::new(Ir::var(eff_ev)))),
+                    [
+                        Ir::var(self.evv_var),
+                        Ir::new(Struct(vec![
+                            P::new(Ir::var(prompt_var)),
+                            P::new(Ir::var(handler_var)),
+                        ])),
+                    ],
+                );
                 let install_prompt = Ir::new(NewPrompt(
                     prompt_var,
                     P::new(Ir::local(
@@ -838,13 +792,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                         Ir::new(Prompt(
                             P::new(Ir::var(prompt_var)),
                             P::new(Ir::app(
-                                Ir::new(TyApp(
-                                    P::new(Ir::new(FieldProj(
-                                        ret_index,
-                                        P::new(Ir::var(handler_var)),
-                                    ))),
-                                    body_ty,
-                                )),
+                                Ir::new(TyApp(P::new(handler_prj_ret), body_ty)),
                                 [self.lower_term(ast, *body)],
                             )),
                         )),

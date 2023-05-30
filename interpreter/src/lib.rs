@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use std::ops::Deref;
-
 use aiahr_core::id::IrVarId;
 use aiahr_ir::{Ir, IrKind, IrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -56,12 +54,14 @@ where
     .brackets()
 }
 
-impl<'a, D, A: 'a> Pretty<'a, D, A> for &Value
-where
-    D: DocAllocator<'a, A> + 'a,
-    DocBuilder<'a, D, A>: Clone,
-{
-    fn pretty(self, a: &'a D) -> pretty::DocBuilder<'a, D, A> {
+impl Value {
+    pub fn pretty<'a, A, D, DB>(&self, db: &DB, a: &'a D) -> pretty::DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A> + 'a,
+        DocBuilder<'a, D, A>: Clone,
+        DB: ?Sized + aiahr_ir::Db,
+    {
         match self {
             Value::Int(i) => a.as_string(i),
             Value::Lam { env, arg, body } => docs![
@@ -71,11 +71,11 @@ where
                 arg,
                 "|",
                 a.line(),
-                body.deref().pretty(a).nest(2).align(),
+                body.pretty(db, a).nest(2).align(),
             ],
             Value::Tuple(vals) => a
                 .intersperse(
-                    vals.iter().map(|val| val.pretty(a)),
+                    vals.iter().map(|val| val.pretty(db, a)),
                     a.text(",").append(a.softline()),
                 )
                 .align()
@@ -85,7 +85,7 @@ where
                 .as_string(tag)
                 .append(a.text(":"))
                 .append(a.softline())
-                .append(val.deref())
+                .append(val.pretty(db, a))
                 .group()
                 .angles(),
             Value::Prompt(_) => todo!(),

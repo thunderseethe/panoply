@@ -6,7 +6,7 @@ use aiahr_interpreter::Machine;
 use aiahr_lower_ir::Db as LowerIrDb;
 use aiahr_parser::Db;
 use clap::Parser;
-use pretty::{BoxDoc, Pretty};
+use pretty::BoxDoc;
 
 fn main() -> eyre::Result<()> {
     let args = Args::parse();
@@ -29,14 +29,14 @@ fn main() -> eyre::Result<()> {
         }
     };
 
-    let doc: BoxDoc<'_, ()> = ir.item(&db).pretty(&pretty::BoxAllocator).into_doc();
+    let doc: BoxDoc<'_, ()> = ir.item(&db).pretty(&db, &pretty::BoxAllocator).into_doc();
     println!("{}", doc.deref().pretty(80));
 
     let mut interpreter = Machine::default();
     let value = interpreter.interpret(ir.item(&db).clone());
     println!("\n\nINTERPRETS INTO\n");
 
-    let doc: BoxDoc<'_, ()> = value.pretty(&pretty::BoxAllocator).into_doc();
+    let doc: BoxDoc<'_, ()> = value.pretty(&db, &pretty::BoxAllocator).into_doc();
     println!("{}", doc.deref().pretty(80));
 
     Ok(())

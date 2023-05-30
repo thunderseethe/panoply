@@ -25,10 +25,56 @@ pub enum IrTyKind {
     CoproductTy(Vec<IrTy>),
 }
 
+impl IrTyKind {
+    fn pretty<'a, D, DB, A>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A>,
+        DB: ?Sized + crate::Db,
+    {
+        match self {
+            IrTyKind::IntTy => a.text("Int"),
+            IrTyKind::EvidenceVectorTy => a.text("EvidenceVector"),
+            IrTyKind::VarTy(ty_var) => ty_var.pretty(a),
+            IrTyKind::FunTy(arg, ret) => arg
+                .pretty(db, a)
+                .append(a.softline())
+                .append(a.text("->"))
+                .append(a.softline())
+                .append(ret.pretty(db, a)),
+            IrTyKind::ForallTy(ty_var, ty) => a
+                .text("forall")
+                .append(a.space())
+                .append(ty_var.pretty(a))
+                .append(a.space())
+                .append(a.text("."))
+                .append(a.softline())
+                .append(ty.pretty(db, a)),
+            IrTyKind::ProductTy(tys) => a
+                .intersperse(tys.into_iter().map(|ty| ty.pretty(db, a)), ",")
+                .braces(),
+            IrTyKind::CoproductTy(tys) => a
+                .intersperse(tys.into_iter().map(|ty| ty.pretty(db, a)), ",")
+                .angles(),
+        }
+    }
+}
+
 #[salsa::interned]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct IrTy {
     pub kind: IrTyKind,
+}
+
+impl IrTy {
+    fn pretty<'a, D, DB, A>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A>,
+        DB: ?Sized + crate::Db,
+    {
+        self.kind(db.as_ir_db()).pretty(db, a)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -123,11 +169,35 @@ pub enum Kind {
     ScopedRow,
 }
 
+impl<'a, D, A> Pretty<'a, D, A> for &Kind
+where
+    A: 'a,
+    D: ?Sized + DocAllocator<'a, A>,
+{
+    fn pretty(self, a: &'a D) -> DocBuilder<'a, D, A> {
+        match self {
+            Kind::Type => a.text("Type"),
+            Kind::SimpleRow => a.text("SimpleRow"),
+            Kind::ScopedRow => a.text("ScopedRow"),
+        }
+    }
+}
+
 /// An ir type variable and it's kind
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct IrVarTy {
     pub var: IrTyVarId,
     pub kind: Kind,
+}
+
+impl<'a, D, A> Pretty<'a, D, A> for IrVarTy
+where
+    A: 'a,
+    D: ?Sized + DocAllocator<'a, A>,
+{
+    fn pretty(self, a: &'a D) -> DocBuilder<'a, D, A> {
+        docs![a, "T", a.as_string(self.var.0), ":", a.space(), &self.kind,].parens()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -219,6 +289,10 @@ impl Ir {
         Ir::new(App(P::new(Ir::new(Abs(var, P::new(body)))), P::new(value)))
     }
 
+    pub fn field_proj(indx: usize, target: Ir) -> Self {
+        Ir::new(FieldProj(indx, P::new(target)))
+    }
+
     pub fn unbound_vars(&self) -> impl Iterator<Item = IrVar> + '_ {
         self.unbound_vars_with_bound(FxHashSet::default())
     }
@@ -302,20 +376,26 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVar {
     }
 }
 
-impl<'a, A: 'a, D: DocAllocator<'a, A> + 'a> Pretty<'a, D, A> for &Ir
-where
-    DocBuilder<'a, D, A>: Clone,
-{
-    fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, A> {
-        self.kind.pretty(allocator)
+impl Ir {
+    pub fn pretty<'a, A, D, DB>(&self, db: &DB, allocator: &'a D) -> DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A>,
+        DocBuilder<'a, D, A>: Clone,
+        DB: ?Sized + crate::Db,
+    {
+        self.kind.pretty(db, allocator)
     }
 }
 
-impl<'a, A: 'a, D: DocAllocator<'a, A> + 'a> Pretty<'a, D, A> for &IrKind
-where
-    DocBuilder<'a, D, A>: Clone,
-{
-    fn pretty(self, arena: &'a D) -> pretty::DocBuilder<'a, D, A> {
+impl IrKind {
+    fn pretty<'a, D, A, DB>(&self, db: &DB, arena: &'a D) -> pretty::DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A>,
+        DocBuilder<'a, D, A>: Clone,
+        DB: ?Sized + crate::Db,
+    {
         fn gather_abs<'a>(vars: &mut Vec<IrVar>, kind: &'a IrKind) -> &'a IrKind {
             match kind {
                 Abs(arg, body) => {
@@ -353,7 +433,7 @@ where
                         .parens(),
                     arena.softline(),
                     "(",
-                    body.pretty(arena).align().nest(2),
+                    body.pretty(db, arena).align().nest(2),
                     ")",
                 ]
             }
@@ -368,15 +448,15 @@ where
                         arena.space(),
                         "=",
                         arena.softline(),
-                        arg.deref().pretty(arena).group().nest(2).align(),
+                        arg.deref().pretty(db, arena).group().nest(2).align(),
                         ";",
                         arena.line(),
-                        body.deref().pretty(arena).nest(2).align(),
+                        body.deref().pretty(db, arena).nest(2).align(),
                     ],
                     // Print application as normal
                     func => func
-                        .pretty(arena)
-                        .append(arg.deref().pretty(arena).parens()),
+                        .pretty(db, arena)
+                        .append(arg.deref().pretty(db, arena).parens()),
                 }
             }
             TyAbs(tyvar, body) => {
@@ -396,12 +476,12 @@ where
                     ]
                     .group(),
                     ".",
-                    arena.softline().append(body.pretty(arena)).nest(2)
+                    arena.softline().append(body.pretty(db, arena)).nest(2)
                 ]
             }
             Struct(elems) => arena
                 .intersperse(
-                    elems.iter().map(|elem| elem.deref().pretty(arena)),
+                    elems.iter().map(|elem| elem.deref().pretty(db, arena)),
                     arena.text(",").append(arena.softline()),
                 )
                 .enclose(arena.softline_(), arena.softline_())
@@ -410,14 +490,14 @@ where
                 .group(),
             FieldProj(idx, term) => term
                 .deref()
-                .pretty(arena)
+                .pretty(db, arena)
                 .append(arena.as_string(idx).brackets()),
             Tag(tag, term) => docs![
                 arena,
                 arena.as_string(tag),
                 arena.text(":"),
                 arena.space(),
-                term.deref()
+                term.pretty(db, arena)
             ]
             .angles()
             .group(),
@@ -425,32 +505,32 @@ where
                 arena,
                 "case",
                 arena.space(),
-                discr.deref(),
+                discr.pretty(db, arena),
                 arena.softline(),
                 arena
                     .intersperse(
-                        branches.iter().map(|b| b.deref().pretty(arena)),
+                        branches.iter().map(|b| b.deref().pretty(db, arena)),
                         arena.line()
                     )
                     .nest(2)
                     .angles()
                     .align()
             ],
-            TyApp(_, _) => todo!(),
+            TyApp(body, ty) => body.pretty(db, arena).parens().append(ty.pretty(db, arena)),
             NewPrompt(p_var, body) => docs![
                 arena,
                 "new_prompt",
                 p_var.pretty(arena).parens(),
-                body.deref().kind.pretty(arena).braces()
+                body.deref().kind.pretty(db, arena).braces()
             ],
             Prompt(marker, body) => docs![
                 arena,
                 "prompt",
-                marker.deref().kind.pretty(arena).parens(),
+                marker.deref().kind.pretty(db, arena).parens(),
                 arena.space(),
                 body.deref()
                     .kind
-                    .pretty(arena)
+                    .pretty(db, arena)
                     .group()
                     .enclose(arena.softline(), arena.softline())
                     .nest(2)
@@ -459,9 +539,9 @@ where
             Yield(marker, body) => docs![
                 arena,
                 "yield",
-                marker.deref().kind.pretty(arena).parens(),
+                marker.deref().kind.pretty(db, arena).parens(),
                 arena.space(),
-                body.deref().kind.pretty(arena).nest(2).braces()
+                body.deref().kind.pretty(db, arena).nest(2).braces()
             ],
             VectorSet(vec, idx, value) => docs![
                 arena,
@@ -470,7 +550,7 @@ where
                 arena.space(),
                 ":=",
                 arena.softline(),
-                &value.deref().kind,
+                value.pretty(db, arena),
             ],
             VectorGet(vec, idx) => docs![arena, vec, arena.as_string(idx).brackets()],
         }

@@ -118,12 +118,3 @@ impl From<SolvedRowEv> for Evidence {
         }
     }
 }
-impl SolvedRowEv {
-    pub(crate) fn new(
-        left: SimpleClosedRow,
-        right: SimpleClosedRow,
-        goal: SimpleClosedRow,
-    ) -> Self {
-        Self { goal, left, right }
-    }
-}
