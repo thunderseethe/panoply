@@ -374,22 +374,6 @@ impl Machine {
                 self.cur_frame.push(EvalCtx::YieldMarker { value });
                 InterpretResult::Step(marker)
             }
-            // Effect evidence vector operations
-            IrKind::VectorSet(evv, index, value) => {
-                self.cur_frame.push(EvalCtx::VectorSet { evv, index });
-                InterpretResult::Step(value)
-            }
-            IrKind::VectorGet(evv, index) => {
-                let vec = self.lookup_var(evv).unwrap_vector();
-                let val = vec.get(index).unwrap_or_else(|| {
-                    panic!(
-                        "Stuck: expected index {} to exist in vector but it did not",
-                        index
-                    )
-                });
-                // Remove this clone
-                self.unwind(val.clone())
-            }
             // Type applications
             // TODO: Handle type applications but they shouldn't show up in real runtime
             IrKind::TyAbs(_, body) => InterpretResult::Step(body),

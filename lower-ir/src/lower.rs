@@ -1,8 +1,5 @@
 use aiahr_ast::{Ast, Direction, Term};
-use aiahr_core::{
-    id::{IrTyVarId, IrVarId, TermName, TyVarId, VarId},
-    modules::Module,
-};
+use aiahr_core::id::{IrTyVarId, IrVarId, TermName, TyVarId, VarId};
 use aiahr_ir::{
     Ir, IrKind, IrKind::*, IrTy, IrTyKind, IrTyKind::*, IrVar, IrVarTy, Kind, MkIrTy, P,
 };
@@ -56,19 +53,13 @@ pub trait TermTys {
     fn lookup_term(&self, term_name: TermName, term: Idx<Term<VarId>>) -> TyChkRes<InDb>;
 }
 
-/// Selects an item based on it's module id and item id.
-pub(crate) struct ItemSelector {
-    pub(crate) module: Module,
-    pub(crate) item: TermName,
-}
-
 // TODO: Wip name
 pub(crate) struct Evidenceless;
 pub(crate) struct Evidentfull;
 
 pub(crate) struct LowerCtx<'a, 'b, State = Evidenceless> {
     db: &'a dyn crate::Db,
-    current: ItemSelector,
+    current: TermName,
     var_conv: &'b mut IdConverter<VarId, IrVarId>,
     tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
     ev_map: EvidenceMap,
@@ -92,11 +83,11 @@ impl<'a, 'b, S> MkIrTy for LowerCtx<'a, 'b, S> {
 
 impl<'a, S> LowerCtx<'a, '_, S> {
     fn lookup_term(&self, term: Idx<Term<VarId>>) -> TyChkRes<InDb> {
-        self.db.lookup_term(self.current.item, term)
+        self.db.lookup_term(self.current, term)
     }
 
     fn lookup_var(&self, var_id: VarId) -> Ty {
-        self.db.lookup_var(self.current.item, var_id)
+        self.db.lookup_var(self.current, var_id)
     }
 }
 
@@ -503,7 +494,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         db: &'a dyn crate::Db,
         var_conv: &'b mut IdConverter<VarId, IrVarId>,
         tyvar_conv: &'b mut IdConverter<TyVarId, IrTyVarId>,
-        current: ItemSelector,
+        current: TermName,
     ) -> Self {
         let evv_id = var_conv.generate();
         Self {
@@ -514,7 +505,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
             ev_map: EvidenceMap::default(),
             evv_var: IrVar {
                 var: evv_id,
-                ty: db.mk_ir_ty(EvidenceVectorTy),
+                // We start off with no effects by default.
+                ty: db.mk_prod_ty(&[]),
             },
             _marker: std::marker::PhantomData,
         }

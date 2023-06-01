@@ -14,8 +14,6 @@ pub(crate) mod id_converter;
 use id_converter::IdConverter;
 use salsa::AsId;
 
-use self::lower::ItemSelector;
-
 pub(crate) mod evidence;
 
 mod lower;
@@ -93,7 +91,7 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
     let items = module
         .terms(ast_db)
         .iter()
-        .map(|term| lower_impl(db, module, *term))
+        .map(|term| lower_impl(db, *term))
         .collect();
     IrModule::new(db, module.module(ast_db), items)
 }
@@ -115,13 +113,12 @@ fn lower_item(db: &dyn crate::Db, term_name: TermName) -> IrItem {
 }
 
 #[salsa::tracked]
-fn lower_impl(db: &dyn crate::Db, module: AstModule, term: AstTerm) -> IrItem {
+fn lower_impl(db: &dyn crate::Db, term: AstTerm) -> IrItem {
     let ast_db = db.as_ast_db();
-    let module = module.module(ast_db);
     let name = term.name(ast_db);
     let ast = term.data(ast_db);
     let typed_item = db.type_scheme_of(name);
-    let ir = lower(db, module, name, typed_item, ast);
+    let ir = lower(db, name, typed_item, ast);
     IrItem::new(db, name, ir)
 }
 
@@ -136,10 +133,7 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> IrTy {
         db.as_lower_ir_db(),
         &mut var_conv,
         &mut tyvar_conv,
-        ItemSelector {
-            module: effect.module(db.as_core_db()),
-            item: bogus_item,
-        },
+        bogus_item,
     );
 
     // TODO: Produce members in order so we don't have to sort or get names here.
@@ -212,26 +206,16 @@ where
 
 /// Lower an `Ast` into an `Ir`.
 /// TODO: Real documentation.
-pub fn lower(
-    db: &dyn crate::Db,
-    module: Module,
-    name: TermName,
-    typed_item: TypedItem,
-    ast: &Ast<VarId>,
-) -> Ir {
+pub fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<VarId>) -> Ir {
     let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
     let scheme = typed_item.ty_scheme(db.as_tc_db());
 
     let required_evidence = typed_item.required_evidence(tc_db);
-    let (mut lower_ctx, ev_locals, ev_params) = LowerCtx::new(
-        db,
-        &mut var_conv,
-        &mut tyvar_conv,
-        ItemSelector { module, item: name },
-    )
-    .collect_evidence_params(required_evidence.iter());
+    let (mut lower_ctx, ev_locals, ev_params) =
+        LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, name)
+            .collect_evidence_params(required_evidence.iter());
 
     let body = lower_ctx.lower_top_level(ast, ast.tree);
     // Bind all unique solved row evidence to local variables at top of the term

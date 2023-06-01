@@ -16,8 +16,6 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub enum IrTyKind {
     IntTy,
-    // TODO: Should this have a different name?
-    EvidenceVectorTy,
     VarTy(IrVarTy),
     FunTy(IrTy, IrTy),
     ForallTy(IrVarTy, IrTy),
@@ -34,7 +32,6 @@ impl IrTyKind {
     {
         match self {
             IrTyKind::IntTy => a.text("Int"),
-            IrTyKind::EvidenceVectorTy => a.text("EvidenceVector"),
             IrTyKind::VarTy(ty_var) => ty_var.pretty(a),
             IrTyKind::FunTy(arg, ret) => {
                 let mut arg_doc = arg.pretty(db, a);
@@ -237,9 +234,6 @@ pub enum IrKind<IR = P<Ir>> {
     Prompt(IR, IR),
     // Yield to a marker's prompt
     Yield(IR, IR),
-    // Set index in an effect vector to value.
-    VectorSet(IrVar, usize, IR),
-    VectorGet(IrVar, usize),
 }
 use IrKind::*;
 
@@ -332,7 +326,7 @@ impl Iterator for UnboundVars<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         self.stack.pop().and_then(|ir| match ir.kind() {
             Int(_) => self.next(),
-            Var(v) | VectorGet(v, _) => (!self.bound.contains(&v.var))
+            Var(v) => (!self.bound.contains(&v.var))
                 .then_some(*v)
                 .or_else(|| self.next()),
             Abs(v, body) | NewPrompt(v, body) => {
@@ -356,12 +350,6 @@ impl Iterator for UnboundVars<'_> {
                 self.stack.push(discr.deref());
                 self.stack.extend(branches.iter().map(|ir| ir.deref()));
                 self.next()
-            }
-            VectorSet(v, _, a) => {
-                self.stack.push(a.deref());
-                (!self.bound.contains(&v.var))
-                    .then_some(*v)
-                    .or_else(|| self.next())
             }
         })
     }
@@ -389,6 +377,7 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVar {
 }
 
 impl IrVar {
+    #[allow(dead_code)]
     fn pretty_with_ty<'a, D, A, DB>(&self, db: &DB, arena: &'a D) -> DocBuilder<'a, D, A>
     where
         A: 'a,
@@ -589,8 +578,6 @@ impl IrKind {
                 body.deref().kind.pretty(db, arena)
             ]
             .parens(),
-            VectorSet(_, _, _) => unimplemented!("Should not appear in IR"),
-            VectorGet(_, _) => unimplemented!("Should not appear in IR"),
         }
     }
 }
