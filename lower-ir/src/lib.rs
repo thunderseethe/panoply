@@ -231,9 +231,9 @@ pub fn lower(
         &mut tyvar_conv,
         ItemSelector { module, item: name },
     )
-    .collect_evidence_params2(required_evidence.iter());
+    .collect_evidence_params(required_evidence.iter());
 
-    let body = lower_ctx.lower_term(ast, ast.tree);
+    let body = lower_ctx.lower_top_level(ast, ast.tree);
     // Bind all unique solved row evidence to local variables at top of the term
     let body = ev_locals.into_iter().fold(body, |body, (ev_param, ev_ir)| {
         Ir::app(Ir::abss([ev_param], body), [ev_ir])
@@ -345,7 +345,7 @@ main = "#
 
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
-        let expect = expect!["forall (T0: Type) . fun (ir_var<1>) (ir_var<1>)"];
+        let expect = expect!["(forall [(T0: Type)] (fun [V0, V1] V1))"];
         expect.assert_eq(&pretty_ir);
     }
 
@@ -357,9 +357,7 @@ main = "#
 
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
-        let expect = expect![[r#"
-            forall (T1: Type) . fun (ir_var<1>, ir_var<2>, ir_var<3>)
-              (ir_var<2>[0](ir_var<3>)(ir_var<3>))"#]];
+        let expect = expect!["(forall [(T1: Type)] (fun [V1, V2, V0, V3] (V2[0] V3 V3)))"];
         expect.assert_eq(&pretty_ir);
     }
 
@@ -371,9 +369,8 @@ main = "#
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            forall (T1: Type) (T1: SimpleRow) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) .
-              fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>, ir_var<5>)
-              (ir_var<3>[3][0](ir_var<2>[0](ir_var<4>)(ir_var<5>)))"#]];
+            (forall [(T1: Type) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) (T7: SimpleRow)]
+            (fun [V1, V2, V3, V0, V4, V5] (V3[3][0] (V2[0] V4 V5))))"#]];
         expect.assert_eq(&pretty_ir)
     }
 
@@ -393,18 +390,12 @@ with {
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            forall (T4: Type) .
-              fun (ir_var<1>, ir_var<2>, ir_var<3>, ir_var<4>, ir_var<5>, ir_var<6>)
-              (let ir_var<8> = (ir_var<6>[0](ir_var<4>[0](fun (ir_var<9>, ir_var<10>) ({
-                                                                                       }))(fun (ir_var<11>, ir_var<12>)
-                                 ({})))(fun (ir_var<13>) (ir_var<13>))){};
-               new_prompt(ir_var<7>){let ir_var<0> = ir_var<2>[0](ir_var<0>)({ir_var<7>,
-                                                                             ir_var<8>});
-                 prompt(ir_var<7>) { (ir_var<6>[3][0](ir_var<8>)){}(let ir_var<15> =
-                     ir_var<3>[3][0](ir_var<0>);
-                     fun (ir_var<14>) (yield(ir_var<15>[0]) {fun (ir_var<16>)
-                                         (ir_var<15>[1][1](ir_var<14>)(ir_var<16>))})({}))
-                     }})"#]];
+            (forall [(T4: Type)] (fun [V1, V2, V3, V4, V5, V6, V0]
+                (let (V8 ((V6[0] (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {})) (fun [V13]
+                      V13)) @ {})) (new_prompt V7 (let (V0 (V2[0] V0 {V7, V8
+                          })) (prompt V7 (((V6[3][0] V8) @ {}) ((fun [V15, V14]
+                        (yieldV15[0] (fun [V16] (V15[1][1] V14 V16)))) (V3[3][0] V0) {
+                        }))))))))"#]];
         expect.assert_eq(&pretty_ir);
     }
 }

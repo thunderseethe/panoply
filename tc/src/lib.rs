@@ -234,6 +234,8 @@ where
         .map(|eq| Evidence::from(eq).try_fold_with(&mut zonker).unwrap())
         .collect();
 
+    let ty_var_len = zonker.free_vars.len();
+    let data_row_len = zonker.free_data_rows.len();
     let scheme = TyScheme {
         bound_ty: zonker
             .free_vars
@@ -245,13 +247,13 @@ where
             .free_data_rows
             .into_iter()
             .enumerate()
-            .map(|(i, _)| TyVarId::from_raw(i))
+            .map(|(i, _)| TyVarId::from_raw(i + ty_var_len))
             .collect(),
         bound_eff_row: zonker
             .free_eff_rows
             .into_iter()
             .enumerate()
-            .map(|(i, _)| TyVarId::from_raw(i))
+            .map(|(i, _)| TyVarId::from_raw(i + ty_var_len + data_row_len))
             .collect(),
         constrs,
         eff: zonked_infer.eff,

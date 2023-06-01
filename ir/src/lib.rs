@@ -36,12 +36,17 @@ impl IrTyKind {
             IrTyKind::IntTy => a.text("Int"),
             IrTyKind::EvidenceVectorTy => a.text("EvidenceVector"),
             IrTyKind::VarTy(ty_var) => ty_var.pretty(a),
-            IrTyKind::FunTy(arg, ret) => arg
-                .pretty(db, a)
-                .append(a.softline())
-                .append(a.text("->"))
-                .append(a.softline())
-                .append(ret.pretty(db, a)),
+            IrTyKind::FunTy(arg, ret) => {
+                let mut arg_doc = arg.pretty(db, a);
+                if let IrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
+                    arg_doc = arg_doc.parens();
+                }
+                arg_doc
+                    .append(a.softline())
+                    .append(a.text("->"))
+                    .append(a.softline())
+                    .append(ret.pretty(db, a))
+            }
             IrTyKind::ForallTy(ty_var, ty) => a
                 .text("forall")
                 .append(a.space())
@@ -196,6 +201,15 @@ where
     D: ?Sized + DocAllocator<'a, A>,
 {
     fn pretty(self, a: &'a D) -> DocBuilder<'a, D, A> {
+        docs![a, "T", a.as_string(self.var.0)]
+    }
+}
+impl IrVarTy {
+    fn pretty_with_kind<'a, D, A>(self, a: &'a D) -> DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A>,
+    {
         docs![a, "T", a.as_string(self.var.0), ":", a.space(), &self.kind,].parens()
     }
 }
@@ -370,9 +384,24 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVarTy {
 
 impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVar {
     fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, A> {
+        arena.text("V").append(arena.text(self.var.0.to_string()))
+    }
+}
+
+impl IrVar {
+    fn pretty_with_ty<'a, D, A, DB>(&self, db: &DB, arena: &'a D) -> DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A>,
+        DB: ?Sized + crate::Db,
+    {
         arena
-            .text("ir_var")
-            .append(arena.text(self.var.0.to_string()).angles())
+            .text("V")
+            .append(arena.text(self.var.0.to_string()))
+            .append(arena.as_string(":"))
+            .append(arena.space())
+            .append(self.ty.pretty(db, arena))
+            .parens()
     }
 }
 
@@ -414,6 +443,15 @@ impl IrKind {
                 _ => kind,
             }
         }
+        fn gather_app<'a>(vars: &mut Vec<&'a IrKind>, kind: &'a IrKind) -> &'a IrKind {
+            match kind {
+                App(func, arg) => {
+                    vars.push(&arg.deref().kind);
+                    gather_app(vars, &func.deref().kind)
+                }
+                ir => ir,
+            }
+        }
         match self {
             Int(i) => i.to_string().pretty(arena),
             Var(v) => v.pretty(arena),
@@ -429,13 +467,11 @@ impl IrKind {
                             vars.into_iter().map(|v| v.pretty(arena)),
                             arena.text(",").append(arena.space()),
                         )
-                        .group()
-                        .parens(),
+                        .brackets(),
                     arena.softline(),
-                    "(",
-                    body.pretty(db, arena).align().nest(2),
-                    ")",
+                    body.pretty(db, arena).nest(2),
                 ]
+                .parens()
             }
             App(func, arg) => {
                 match &func.deref().kind {
@@ -444,19 +480,28 @@ impl IrKind {
                         arena,
                         "let",
                         arena.space(),
-                        var,
+                        var.pretty(arena)
+                            .append(arena.space())
+                            .append(arg.deref().pretty(db, arena).nest(2))
+                            .parens()
+                            .group()
+                            .nest(2),
                         arena.space(),
-                        "=",
-                        arena.softline(),
-                        arg.deref().pretty(db, arena).group().nest(2).align(),
-                        ";",
-                        arena.line(),
-                        body.deref().pretty(db, arena).nest(2).align(),
-                    ],
+                        body.deref().pretty(db, arena).group().nest(2),
+                    ]
+                    .parens(),
                     // Print application as normal
-                    func => func
-                        .pretty(db, arena)
-                        .append(arg.deref().pretty(db, arena).parens()),
+                    func => {
+                        let mut args = vec![&arg.deref().kind];
+                        let func = gather_app(&mut args, func);
+                        func.pretty(db, arena)
+                            .append(arena.space())
+                            .append(arena.intersperse(
+                                args.into_iter().rev().map(|arg| arg.pretty(db, arena)),
+                                arena.space(),
+                            ))
+                            .parens()
+                    }
                 }
             }
             TyAbs(tyvar, body) => {
@@ -464,29 +509,26 @@ impl IrKind {
                 let body = gather_ty_abs(&mut tyvars, &body.deref().kind);
                 docs![
                     arena,
-                    docs![
-                        arena,
-                        "forall",
-                        arena.space(),
-                        arena.intersperse(
-                            tyvars.into_iter().map(|tv| tv.pretty(arena)),
+                    "forall",
+                    arena.space(),
+                    arena
+                        .intersperse(
+                            tyvars.into_iter().map(|tv| tv.pretty_with_kind(arena)),
                             arena.space()
-                        ),
-                        arena.space(),
-                    ]
-                    .group(),
-                    ".",
-                    arena.softline().append(body.pretty(db, arena)).nest(2)
+                        )
+                        .brackets(),
+                    arena.softline(),
+                    body.pretty(db, arena).nest(4),
                 ]
+                .parens()
             }
             Struct(elems) => arena
                 .intersperse(
                     elems.iter().map(|elem| elem.deref().pretty(db, arena)),
-                    arena.text(",").append(arena.softline()),
+                    arena.text(",").append(arena.space()),
                 )
                 .enclose(arena.softline_(), arena.softline_())
                 .braces()
-                .align()
                 .group(),
             FieldProj(idx, term) => term
                 .deref()
@@ -497,62 +539,58 @@ impl IrKind {
                 arena.as_string(tag),
                 arena.text(":"),
                 arena.space(),
-                term.pretty(db, arena)
+                term.pretty(db, arena).nest(2)
             ]
-            .angles()
-            .group(),
+            .angles(),
             Case(discr, branches) => docs![
                 arena,
                 "case",
                 arena.space(),
-                discr.pretty(db, arena),
-                arena.softline(),
+                discr.pretty(db, arena).nest(2).group(),
+                arena.space(),
                 arena
                     .intersperse(
                         branches.iter().map(|b| b.deref().pretty(db, arena)),
-                        arena.line()
+                        arena.space()
                     )
                     .nest(2)
-                    .angles()
-                    .align()
-            ],
-            TyApp(body, ty) => body.pretty(db, arena).parens().append(ty.pretty(db, arena)),
+            ]
+            .parens(),
+            TyApp(body, ty) => body
+                .pretty(db, arena)
+                .append(arena.space())
+                .append(arena.as_string("@"))
+                .append(arena.space())
+                .append(ty.pretty(db, arena))
+                .parens(),
             NewPrompt(p_var, body) => docs![
                 arena,
                 "new_prompt",
-                p_var.pretty(arena).parens(),
-                body.deref().kind.pretty(db, arena).braces()
-            ],
+                arena.space(),
+                p_var.pretty(arena),
+                arena.space(),
+                body.deref().kind.pretty(db, arena).nest(2)
+            ]
+            .parens(),
             Prompt(marker, body) => docs![
                 arena,
                 "prompt",
-                marker.deref().kind.pretty(db, arena).parens(),
                 arena.space(),
-                body.deref()
-                    .kind
-                    .pretty(db, arena)
-                    .group()
-                    .enclose(arena.softline(), arena.softline())
-                    .nest(2)
-                    .braces(),
-            ],
+                marker.deref().pretty(db, arena),
+                arena.space(),
+                body.deref().pretty(db, arena)
+            ]
+            .parens(),
             Yield(marker, body) => docs![
                 arena,
                 "yield",
-                marker.deref().kind.pretty(db, arena).parens(),
+                marker.deref().kind.pretty(db, arena),
                 arena.space(),
-                body.deref().kind.pretty(db, arena).nest(2).braces()
-            ],
-            VectorSet(vec, idx, value) => docs![
-                arena,
-                vec,
-                arena.as_string(idx).brackets(),
-                arena.space(),
-                ":=",
-                arena.softline(),
-                value.pretty(db, arena),
-            ],
-            VectorGet(vec, idx) => docs![arena, vec, arena.as_string(idx).brackets()],
+                body.deref().kind.pretty(db, arena)
+            ]
+            .parens(),
+            VectorSet(_, _, _) => unimplemented!("Should not appear in IR"),
+            VectorGet(_, _) => unimplemented!("Should not appear in IR"),
         }
     }
 }

@@ -520,7 +520,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         }
     }
 
-    pub(crate) fn collect_evidence_params2<'ev>(
+    pub(crate) fn collect_evidence_params<'ev>(
         mut self,
         ev_iter: impl Iterator<Item = &'ev Evidence>,
     ) -> LowerOutput<'a, 'b> {
@@ -562,7 +562,12 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         }
     }
 
-    pub(crate) fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> Ir {
+    pub(crate) fn lower_top_level(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> Ir {
+        let ir = self.lower_term(ast, term);
+        Ir::abss([self.evv_var], ir)
+    }
+
+    fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> Ir {
         use Term::*;
         match ast.view(term) {
             Unit => Ir::new(Struct(vec![])),
