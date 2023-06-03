@@ -447,48 +447,76 @@ impl IrKind {
             Abs(arg, body) => {
                 let mut vars = vec![*arg];
                 let body = gather_abs(&mut vars, &body.deref().kind);
-                docs![
-                    arena,
-                    "fun",
-                    arena.space(),
+                let param_single = arena.space().append(
                     arena
                         .intersperse(
-                            vars.into_iter().map(|v| v.pretty(arena)),
+                            vars.iter().map(|v| v.pretty(arena)),
                             arena.text(",").append(arena.space()),
                         )
                         .brackets(),
-                    arena.softline(),
-                    body.pretty(db, arena).nest(2),
+                );
+                let param_multi = arena
+                    .hardline()
+                    .append(
+                        arena
+                            .intersperse(
+                                vars.iter().map(|v| v.pretty(arena)),
+                                arena.hardline().append(","),
+                            )
+                            .brackets(),
+                    )
+                    .nest(2);
+
+                docs![
+                    arena,
+                    "fun",
+                    param_multi.flat_alt(param_single).group(),
+                    arena.line().append(body.pretty(db, arena)).nest(2).group(),
                 ]
                 .parens()
             }
             App(func, arg) => {
                 match &func.deref().kind {
                     // If we see App(Abs(_, _), _) print this as a let binding
-                    Abs(var, body) => docs![
-                        arena,
-                        "let",
-                        arena.space(),
-                        var.pretty(arena)
+                    Abs(var, body) => {
+                        let bind = var
+                            .pretty(arena)
                             .append(arena.space())
-                            .append(arg.deref().pretty(db, arena).nest(2))
-                            .parens()
-                            .group()
-                            .nest(2),
-                        arena.space(),
-                        body.deref().pretty(db, arena).group().nest(2),
-                    ]
-                    .parens(),
+                            .append(arg.deref().pretty(db, arena))
+                            .parens();
+                        docs![
+                            arena,
+                            "let",
+                            arena.line().append(bind).nest(2).group(),
+                            arena
+                                .line()
+                                .append(body.deref().pretty(db, arena))
+                                .nest(2)
+                                .group()
+                        ]
+                        .parens()
+                    }
                     // Print application as normal
                     func => {
                         let mut args = vec![&arg.deref().kind];
                         let func = gather_app(&mut args, func);
                         func.pretty(db, arena)
-                            .append(arena.space())
-                            .append(arena.intersperse(
-                                args.into_iter().rev().map(|arg| arg.pretty(db, arena)),
-                                arena.space(),
-                            ))
+                            .append(
+                                arena
+                                    .line()
+                                    .append(
+                                        arena
+                                            .intersperse(
+                                                args.into_iter()
+                                                    .rev()
+                                                    .map(|arg| arg.pretty(db, arena)),
+                                                arena.line(),
+                                            )
+                                            .align(),
+                                    )
+                                    .nest(2)
+                                    .group(),
+                            )
                             .parens()
                     }
                 }
@@ -496,20 +524,20 @@ impl IrKind {
             TyAbs(tyvar, body) => {
                 let mut tyvars = vec![*tyvar];
                 let body = gather_ty_abs(&mut tyvars, &body.deref().kind);
-                docs![
-                    arena,
-                    "forall",
-                    arena.space(),
-                    arena
-                        .intersperse(
-                            tyvars.into_iter().map(|tv| tv.pretty_with_kind(arena)),
-                            arena.space()
-                        )
-                        .brackets(),
-                    arena.softline(),
-                    body.pretty(db, arena).nest(4),
-                ]
-                .parens()
+                let params = arena
+                    .softline()
+                    .append(
+                        arena
+                            .intersperse(
+                                tyvars.iter().map(|tv| tv.pretty_with_kind(arena)),
+                                arena.space(),
+                            )
+                            .align()
+                            .brackets(),
+                    )
+                    .nest(2);
+                let body_doc = arena.softline().append(body.pretty(db, arena)).nest(2);
+                docs![arena, "forall", params.group(), body_doc.group()].parens()
             }
             Struct(elems) => arena
                 .intersperse(
@@ -537,12 +565,10 @@ impl IrKind {
                 arena.space(),
                 discr.pretty(db, arena).nest(2).group(),
                 arena.space(),
-                arena
-                    .intersperse(
-                        branches.iter().map(|b| b.deref().pretty(db, arena)),
-                        arena.space()
-                    )
-                    .nest(2)
+                arena.intersperse(
+                    branches.iter().map(|b| b.deref().pretty(db, arena)),
+                    arena.space()
+                )
             ]
             .parens(),
             TyApp(body, ty) => body
@@ -556,28 +582,41 @@ impl IrKind {
                 arena,
                 "new_prompt",
                 arena.space(),
-                p_var.pretty(arena),
-                arena.space(),
-                body.deref().kind.pretty(db, arena).nest(2)
-            ]
-            .parens(),
-            Prompt(marker, body) => docs![
-                arena,
-                "prompt",
-                arena.space(),
-                marker.deref().pretty(db, arena),
-                arena.space(),
-                body.deref().pretty(db, arena)
-            ]
-            .parens(),
-            Yield(marker, body) => docs![
-                arena,
-                "yield",
-                marker.deref().kind.pretty(db, arena),
+                p_var.pretty(arena).brackets(),
                 arena.space(),
                 body.deref().kind.pretty(db, arena)
             ]
             .parens(),
+            Prompt(marker, body) => arena
+                .as_string("prompt")
+                .append(
+                    arena
+                        .softline()
+                        .append(marker.deref().pretty(db, arena))
+                        .nest(2),
+                )
+                .append(
+                    arena
+                        .softline()
+                        .append(body.deref().pretty(db, arena))
+                        .nest(2),
+                )
+                .parens(),
+            Yield(marker, body) => arena
+                .as_string("yield")
+                .append(
+                    arena
+                        .softline()
+                        .append(marker.deref().kind.pretty(db, arena))
+                        .nest(2),
+                )
+                .append(
+                    arena
+                        .softline()
+                        .append(body.deref().kind.pretty(db, arena))
+                        .nest(2),
+                )
+                .parens(),
         }
     }
 }
