@@ -10,6 +10,24 @@ pub(super) struct RowCombination<Row> {
 pub(super) type SimpleRowCombination<'infer> = RowCombination<SimpleRow<InArena<'infer>>>;
 pub(super) type ScopedRowCombination<'infer> = RowCombination<ScopedRow<InArena<'infer>>>;
 
+pub(super) trait IntoTypeCheckerError<'ctx> {
+    fn into_tychk_err<I: MkTy<InArena<'ctx>>>(self, ctx: &I) -> TypeCheckError<'ctx>;
+}
+
+impl<'ctx> IntoTypeCheckerError<'ctx> for RowsNotDisjoint<'ctx, InferTy<'ctx>> {
+    fn into_tychk_err<I: MkTy<InArena<'ctx>>>(self, ctx: &I) -> TypeCheckError<'ctx> {
+        let left = ctx.mk_row(self.left.0, self.left.1);
+        let right = ctx.mk_row(self.right.0, self.right.1);
+        TypeCheckError::RowsNotDisjoint(left, right, self.label)
+    }
+}
+
+impl<'ctx> IntoTypeCheckerError<'ctx> for Infallible {
+    fn into_tychk_err<I: MkTy<InArena<'ctx>>>(self, _ctx: &I) -> TypeCheckError<'ctx> {
+        unreachable!()
+    }
+}
+
 /// RowTheory defines how we solve rows during unification
 /// All our row predicates take the form of `left ⊙ right ~ goal`.
 /// To solve such predicates we need to be able to calculate 3 things about our rows:
@@ -22,7 +40,7 @@ pub(super) type ScopedRowCombination<'infer> = RowCombination<ScopedRow<InArena<
 /// an unsolved row equation. This is used to detech when we shouldn't add a new unsolved row
 /// equation but simply unify against an existing one in our unsolved set.
 pub(super) trait RowTheory: RowSema + Sized {
-    type Error<'ctx>;
+    type Error<'ctx>: IntoTypeCheckerError<'ctx>;
 
     fn combine<'ctx>(
         left: &Self::Closed<InArena<'ctx>>,
@@ -46,13 +64,21 @@ pub(super) trait RowTheory: RowSema + Sized {
 }
 
 impl RowTheory for Simple {
-    type Error<'ctx> = RowsNotDisjoint<'ctx>;
+    type Error<'ctx> = RowsNotDisjoint<'ctx, Ty<InArena<'ctx>>>;
 
     fn combine<'ctx>(
         left: &Self::Closed<InArena<'ctx>>,
         right: &Self::Closed<InArena<'ctx>>,
     ) -> Result<RowInternals<InArena<'ctx>>, Self::Error<'ctx>> {
-        left.disjoint_union(right)
+        let left_fields = left.fields(&());
+        let left_values = left.values(&());
+        let right_fields = right.fields(&());
+        let right_values = right.values(&());
+
+        SimpleClosedRow::<InArena<'ctx>>::merge_rowlikes(
+            (left_fields, left_values),
+            (right_fields, right_values),
+        )
     }
 
     fn diff_left<'ctx>(
@@ -225,27 +251,40 @@ impl RowTheory for Scoped {
         left: &Self::Closed<InArena<'ctx>>,
         right: &Self::Closed<InArena<'ctx>>,
     ) -> Result<RowInternals<InArena<'ctx>>, Self::Error<'ctx>> {
-        Ok(left.union(right))
+        let left_fields = left.fields(&());
+        let left_values = left.values(&());
+        let right_fields = right.fields(&());
+        let right_values = right.values(&());
+
+        Ok(ScopedClosedRow::<InArena<'ctx>>::merge_rowlikes(
+            (left_fields, left_values),
+            (right_fields, right_values),
+        ))
     }
 
     fn diff_left<'ctx>(
         goal: &Self::Closed<InArena<'ctx>>,
         left: &Self::Closed<InArena<'ctx>>,
     ) -> RowInternals<InArena<'ctx>> {
-        goal.difference(left, |goal, left_count| &goal[left_count..])
+        let goal_fields = goal.fields(&());
+        let goal_values = goal.values(&());
+        ScopedClosedRow::<InArena<'ctx>>::diff_left_rowlikes(
+            (goal_fields, goal_values),
+            left.fields(&()),
+        )
     }
 
     fn diff_right<'ctx>(
         goal: &Self::Closed<InArena<'ctx>>,
         right: &Self::Closed<InArena<'ctx>>,
     ) -> RowInternals<InArena<'ctx>> {
-        goal.difference(right, |goal, right_count| {
-            println!("goal slice: {:?}", goal);
-            println!("right cont: {:?}", right_count);
-            let res = &goal[0..(goal.len() - right_count)];
-            println!("outcome: {:?}", res);
-            res
-        })
+        let goal_fields = goal.fields(&());
+        let goal_values = goal.values(&());
+
+        ScopedClosedRow::<InArena<'ctx>>::diff_right_rowlikes(
+            (goal_fields, goal_values),
+            right.fields(&()),
+        )
     }
 
     fn match_eqn<'ctx>(

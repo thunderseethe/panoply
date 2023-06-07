@@ -167,11 +167,11 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         right: ScopedClosedRow,
         goal: ScopedClosedRow,
     ) -> Ir {
-        let (left_prod, _left_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(left));
-        let (right_prod, _right_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(right));
-        let (goal_prod, _goal_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(goal));
+        let (left_prod, left_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(left));
+        let (right_prod, right_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(right));
+        let (goal_prod, goal_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(goal));
 
-        let _branch_tyvar = IrVarTy {
+        let branch_tyvar = IrVarTy {
             var: self.tyvar_conv.generate(),
             kind: Kind::Type,
         };
@@ -179,24 +179,100 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         let right_var_id = self.var_conv.generate();
         let goal_var_id = self.var_conv.generate();
 
-        let _left_prod_var = IrVar {
+        let left_prod_var = IrVar {
             var: left_var_id,
             ty: left_prod,
         };
-        let _right_prod_var = IrVar {
+        let right_prod_var = IrVar {
             var: right_var_id,
             ty: right_prod,
         };
-        let _goal_prod_var = IrVar {
+        let goal_prod_var = IrVar {
             var: goal_var_id,
             ty: goal_prod,
         };
+
+        #[derive(Clone, Copy)]
+        enum Indx {
+            Left(usize, Ty<InDb>),
+            Right(usize, Ty<InDb>),
+        }
+
+        let left_indxs = left
+            .values(&self.db)
+            .iter()
+            .enumerate()
+            .map(|(indx, ty)| Indx::Left(indx, *ty))
+            .collect::<Vec<_>>();
+        let right_indxs = right
+            .values(&self.db)
+            .iter()
+            .enumerate()
+            .map(|(indx, ty)| Indx::Right(indx, *ty))
+            .collect::<Vec<_>>();
+
+        let (_, indxs) = ScopedClosedRow::<InDb>::merge_rowlikes(
+            (left.fields(&self.db), &left_indxs),
+            (right.fields(&self.db), &right_indxs),
+        );
+
+        let concat = Ir::abss(
+            [left_prod_var, right_prod_var],
+            Ir::new(Struct(
+                indxs
+                    .iter()
+                    .map(|indx| {
+                        P::new(match indx {
+                            Indx::Left(l, _) => Ir::field_proj(*l, Ir::var(left_prod_var)),
+                            Indx::Right(r, _) => Ir::field_proj(*r, Ir::var(right_prod_var)),
+                        })
+                    })
+                    .collect(),
+            )),
+        );
+
+        let branch_var_ty = self.mk_ir_ty(IrTyKind::VarTy(branch_tyvar));
+        let left_coprod_var = IrVar {
+            var: left_var_id,
+            ty: self
+                .db
+                .mk_ir_ty(IrTyKind::FunTy(left_coprod, branch_var_ty)),
+        };
+        let right_coprod_var = IrVar {
+            var: right_var_id,
+            ty: self
+                .db
+                .mk_ir_ty(IrTyKind::FunTy(right_coprod, branch_var_ty)),
+        };
+        let goal_coprod_var = IrVar {
+            var: goal_var_id,
+            ty: goal_coprod,
+        };
+        let case_var = self.var_conv.generate();
+        let branch = TyAbs(
+            branch_tyvar,
+            Ir::abss(
+                [left_coprod_var, right_coprod_var],
+                Ir::case_on_var(
+                    goal_coprod_var,
+                    indxs.iter().map(|indx| match indx {
+                        Indx::Left(l, ty) => {
+                            let ty = self.lower_ty(*ty);
+                            //TODO: Generate case variable
+                            //TODO: Inj the type
+                            Ir::abss([], todo!())
+                        }
+                        Indx::Right(r, ty) => todo!(),
+                    }),
+                ),
+            ),
+        );
 
         todo!("Implement witness of scoped row evidence")
     }
 
     #[allow(unused)]
-    fn row_evidence_ir(
+    fn simple_row_evidence_ir(
         &mut self,
         left: SimpleClosedRow,
         right: SimpleClosedRow,

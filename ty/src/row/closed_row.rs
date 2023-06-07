@@ -160,114 +160,114 @@ where
     }
 }
 
-struct HandleOverlapState<'a, A: TypeAlloc> {
-    fields: &'a mut Vec<Ident>,
-    values: &'a mut Vec<Ty<A>>,
-    overlap_label: Ident,
-    left_fields: Vec<Ident>,
-    left_values: Vec<Ty<A>>,
-    right_fields: Vec<Ident>,
-    right_values: Vec<Ty<A>>,
+/// Holds information needed to resolve an overlap during row merging.
+pub(crate) struct HandleOverlapState<'a, V> {
+    pub(crate) fields: &'a mut Vec<Ident>,
+    pub(crate) values: &'a mut Vec<V>,
+    pub(crate) overlap_label: Ident,
+    pub(crate) left_fields: Vec<Ident>,
+    pub(crate) left_values: Vec<V>,
+    pub(crate) right_fields: Vec<Ident>,
+    pub(crate) right_values: Vec<V>,
 }
+
+/// A thing that is like a row, it is a sorted series of fields and series of values. But is not
+/// precisely a row, a mapping from fields to types.
+pub type RowLike<V> = (Box<[RowLabel]>, Box<[V]>);
 
 /// Internal representation of a row.
 /// Sometimes we need this to pass values that will become a row
 /// around before we're able to intern them into a row.
-pub type RowInternals<A> = (Box<[RowLabel]>, Box<[Ty<A>]>);
+pub type RowInternals<A> = RowLike<Ty<A>>;
 
-impl<A: TypeAlloc> ClosedRow<A>
+/// Merge two row like things, this is merge sorting left and right rows into one big
+/// row.
+/// `handler_overlap` is called to determine what to do when both rows contain the same label
+pub(crate) fn merge_rowlikes<B, F, V>(
+    (left_fields, left_values): (&[RowLabel], &[V]),
+    (right_fields, right_values): (&[RowLabel], &[V]),
+    mut handle_overlap: F,
+) -> ControlFlow<B, RowLike<V>>
 where
-    Ty<A>: Copy,
+    V: Copy,
+    F: FnMut(HandleOverlapState<'_, V>) -> ControlFlow<B>,
 {
-    fn _merge_rows<'a, B, F>(
-        &self,
-        right: &Self,
-        acc: &impl AccessTy<'a, A>,
-        mut handle_overlap: F,
-    ) -> ControlFlow<B, RowInternals<A>>
-    where
-        A: 'a,
-        F: FnMut(HandleOverlapState<'_, A>) -> ControlFlow<B>,
-    {
-        let goal_len = self.len(acc) + right.len(acc);
-        let mut left_fields = acc.row_fields(&self.fields).iter().peekable();
-        let mut left_values = acc.row_values(&self.values).iter();
-        let mut right_fields = acc.row_fields(&right.fields).iter().peekable();
-        let mut right_values = acc.row_values(&right.values).iter();
+    let goal_len = left_fields.len() + right_fields.len();
+    let mut left_fields = left_fields.iter().peekable();
+    let mut left_values = left_values.iter();
+    let mut right_fields = right_fields.iter().peekable();
+    let mut right_values = right_values.iter();
+    let (mut fields, mut values): (Vec<RowLabel>, Vec<V>) =
+        (Vec::with_capacity(goal_len), Vec::with_capacity(goal_len));
 
-        let (mut fields, mut values): (Vec<RowLabel>, Vec<Ty<A>>) =
-            (Vec::with_capacity(goal_len), Vec::with_capacity(goal_len));
-
-        loop {
-            match (left_fields.peek(), right_fields.peek()) {
-                (Some(left_lbl), Some(right_lbl)) => {
-                    // This ensures we don't use Handle::ord on accident
-                    match left_lbl.cmp(right_lbl) {
-                        // Push left
-                        Ordering::Less => {
-                            fields.push(*left_fields.next().unwrap());
-                            values.push(*left_values.next().unwrap());
-                        }
-                        // When two rows are equal we may have a sequence of jkkkkkj
-                        Ordering::Equal => {
-                            let func =
-                                |lbl: Ident,
-                                 fields: &mut Peekable<Iter<Ident>>,
-                                 values: &mut Iter<Ty<A>>| {
-                                    let mut overlap_fields = vec![*fields.next().unwrap()];
-                                    let mut overlap_values = vec![*values.next().unwrap()];
-                                    while let Some(peek) = fields.peek() {
-                                        if **peek != lbl {
-                                            break;
-                                        }
-                                        overlap_fields.push(*fields.next().unwrap());
-                                        overlap_values.push(*values.next().unwrap());
-                                    }
-                                    (overlap_fields, overlap_values)
-                                };
-                            let left_lbl = **left_lbl;
-                            let (left_overlap_fields, left_overlap_values) =
-                                func(left_lbl, &mut left_fields, &mut left_values);
-                            let (right_overlap_fields, right_overlap_values) =
-                                func(**right_lbl, &mut right_fields, &mut right_values);
-                            handle_overlap(HandleOverlapState {
-                                fields: &mut fields,
-                                values: &mut values,
-                                overlap_label: left_lbl,
-                                left_fields: left_overlap_fields,
-                                left_values: left_overlap_values,
-                                right_fields: right_overlap_fields,
-                                right_values: right_overlap_values,
-                            })?
-                        }
-                        // Push right
-                        Ordering::Greater => {
-                            fields.push(*right_fields.next().unwrap());
-                            values.push(*right_values.next().unwrap());
-                        }
+    loop {
+        match (left_fields.peek(), right_fields.peek()) {
+            (Some(left_lbl), Some(right_lbl)) => {
+                // This ensures we don't use Handle::ord on accident
+                match left_lbl.cmp(right_lbl) {
+                    // Push left
+                    Ordering::Less => {
+                        fields.push(*left_fields.next().unwrap());
+                        values.push(*left_values.next().unwrap());
+                    }
+                    // When two rows are equal we may have a sequence of jkkkkkj
+                    Ordering::Equal => {
+                        let func = |lbl: Ident,
+                                    fields: &mut Peekable<Iter<Ident>>,
+                                    values: &mut Iter<V>| {
+                            let mut overlap_fields = vec![*fields.next().unwrap()];
+                            let mut overlap_values = vec![*values.next().unwrap()];
+                            while let Some(peek) = fields.peek() {
+                                if **peek != lbl {
+                                    break;
+                                }
+                                overlap_fields.push(*fields.next().unwrap());
+                                overlap_values.push(*values.next().unwrap());
+                            }
+                            (overlap_fields, overlap_values)
+                        };
+                        let left_lbl = **left_lbl;
+                        let (left_overlap_fields, left_overlap_values) =
+                            func(left_lbl, &mut left_fields, &mut left_values);
+                        let (right_overlap_fields, right_overlap_values) =
+                            func(**right_lbl, &mut right_fields, &mut right_values);
+                        handle_overlap(HandleOverlapState {
+                            fields: &mut fields,
+                            values: &mut values,
+                            overlap_label: left_lbl,
+                            left_fields: left_overlap_fields,
+                            left_values: left_overlap_values,
+                            right_fields: right_overlap_fields,
+                            right_values: right_overlap_values,
+                        })?
+                    }
+                    // Push right
+                    Ordering::Greater => {
+                        fields.push(*right_fields.next().unwrap());
+                        values.push(*right_values.next().unwrap());
                     }
                 }
-                // Right row bigger than left
-                (None, Some(_)) => {
-                    fields.extend(right_fields);
-                    values.extend(right_values.cloned());
-                    break;
-                }
-                // Left row bigger than right
-                (Some(_), None) => {
-                    fields.extend(left_fields);
-                    values.extend(left_values.cloned());
-                    break;
-                }
-                (None, None) => break,
             }
+            // Right row bigger than left
+            (None, Some(_)) => {
+                fields.extend(right_fields);
+                values.extend(right_values.cloned());
+                break;
+            }
+            // Left row bigger than right
+            (Some(_), None) => {
+                fields.extend(left_fields);
+                values.extend(left_values.cloned());
+                break;
+            }
+            (None, None) => break,
         }
-
-        fields.shrink_to_fit();
-        values.shrink_to_fit();
-
-        ControlFlow::Continue((fields.into_boxed_slice(), values.into_boxed_slice()))
     }
+
+    fields.shrink_to_fit();
+    values.shrink_to_fit();
+
+    ControlFlow::Continue((fields.into_boxed_slice(), values.into_boxed_slice()))
 }
 
 impl<Db> DebugWithDb<Db> for ClosedRow<InDb>

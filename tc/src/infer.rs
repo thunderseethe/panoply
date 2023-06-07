@@ -33,6 +33,8 @@ use row_solver::{
     RowCombination, RowEquationSolver, RowTheory, ScopedRowCombination, SimpleRowCombination,
 };
 
+use self::row_solver::IntoTypeCheckerError;
+
 /// Constraints that the type of a product `handler` that handles effect `eff`
 struct HandlesConstraint<'infer> {
     /// Product type that should be a handler
@@ -1045,7 +1047,6 @@ where
         row: Sema::Closed<InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>>
     where
-        TypeCheckError<'infer>: From<Sema::Error<'infer>>,
         Self: RowEquationSolver<'infer, Sema>,
         Sema: Ord + Clone,
         Sema::Closed<InArena<'infer>>: Copy + std::fmt::Debug,
@@ -1149,7 +1150,6 @@ where
         unnorm_goal: Row<Sema, InArena<'infer>>,
     ) -> Result<(), TypeCheckError<'infer>>
     where
-        TypeCheckError<'infer>: From<Sema::Error<'infer>>,
         Self: RowEquationSolver<'infer, Sema>,
         Sema: RowTheory + Ord + Clone,
         Sema::Closed<InArena<'infer>>: std::fmt::Debug,
@@ -1160,26 +1160,19 @@ where
 
         match (left, right, goal) {
             (Row::Closed(left), Row::Closed(right), goal) => {
-                let (fields, values) = Sema::combine(&left, &right)?;
+                let (fields, values) =
+                    Sema::combine(&left, &right).map_err(|err| err.into_tychk_err(self.ctx))?;
                 let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
                 self.unify(goal, row)?;
             }
             (Row::Closed(left), Row::Open(right), Row::Closed(goal)) => {
                 let (fields, values) = Sema::diff_left(&goal, &left);
                 let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
-                println!(
-                    "LEFT:\n\tgoal:{:?}\n\tsub:{:?}\n\tresult:{:?}",
-                    goal, left, row
-                );
                 self.unify(right, row)?;
             }
             (Row::Open(left), Row::Closed(right), Row::Closed(goal)) => {
                 let (fields, values) = Sema::diff_right(&goal, &right);
                 let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
-                println!(
-                    "RIGHT:\n\tgoal: {:?}\n\tsub:{:?}\n\tresult:{:?}",
-                    goal, right, row
-                );
                 self.unify(left, row)?;
             }
             (left, right, goal) => {

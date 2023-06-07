@@ -33,6 +33,7 @@ fn main() -> eyre::Result<()> {
     println!("{}", doc.deref().pretty(80));
 
     let mut interpreter = Machine::default();
+
     let value = interpreter.interpret(ir.item(&db).clone());
     println!("\n\nINTERPRETS INTO\n");
 

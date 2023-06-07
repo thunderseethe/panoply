@@ -1,3 +1,5 @@
+use crate::infer::RowsNotDisjoint;
+
 use super::*;
 pub struct SimpleClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
 
@@ -75,39 +77,6 @@ impl<A: TypeAlloc> RowOps<A> for SimpleClosedRow<A> {
     }
 }
 
-impl<A: TypeAlloc> SimpleClosedRow<A> {
-    pub fn _disjoint_union<'a, E>(
-        &self,
-        right: &Self,
-        acc: &impl AccessTy<'a, A>,
-        mk_err: impl Fn(&Self, &Self, &RowLabel) -> E,
-    ) -> Result<RowInternals<A>, E>
-    where
-        A: 'a,
-        Ty<A>: Copy,
-        Self: Clone,
-    {
-        let control_flow = self.0._merge_rows(&right.0, acc, |overlap| {
-            ControlFlow::Break(mk_err(self, right, &overlap.overlap_label))
-        });
-        match control_flow {
-            ControlFlow::Continue(row_internals) => Ok(row_internals),
-            ControlFlow::Break(err) => Err(err),
-        }
-    }
-}
-impl SimpleClosedRow<InDb> {
-    /// Invariant: These rows have already been typed checked so we cannot fail at union.
-    pub fn disjoint_union<'a>(
-        &self,
-        acc: &impl AccessTy<'a, InDb>,
-        right: &Self,
-    ) -> RowInternals<InDb> {
-        self._disjoint_union::<Infallible>(right, acc, |_, _, _| unreachable!())
-            .unwrap()
-    }
-}
-
 impl<A: TypeAlloc + Copy> Copy for SimpleClosedRow<A> where ClosedRow<A>: Copy {}
 impl<Db> DebugWithDb<Db> for SimpleClosedRow<InDb>
 where
@@ -148,5 +117,43 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for SimpleClosedRow<A
     ) -> Result<Self::Out<F::Out>, F::Error> {
         let (fields, values) = self.0.try_fold_with(fold)?;
         Ok(fold.ctx().mk_row(&fields, &values))
+    }
+}
+
+impl<A: TypeAlloc> SimpleClosedRow<A> {
+    pub fn merge_rowlikes<'a, V: Copy>(
+        left: (&'a [RowLabel], &'a [V]),
+        right: (&'a [RowLabel], &'a [V]),
+    ) -> Result<RowLike<V>, RowsNotDisjoint<'a, V>> {
+        let res = merge_rowlikes(left, right, |overlap| {
+            ControlFlow::Break(RowsNotDisjoint {
+                left,
+                right,
+                label: overlap.overlap_label,
+            })
+        });
+
+        match res {
+            ControlFlow::Continue(ok) => Ok(ok),
+            ControlFlow::Break(err) => Err(err),
+        }
+    }
+
+    pub fn difference_rowlikes<V: Copy>(
+        (goal_fields, goal_values): (&[RowLabel], &[V]),
+        sub_fields: &[RowLabel],
+    ) -> (Box<[RowLabel]>, Box<[V]>) {
+        let out_row = goal_fields
+            .iter()
+            .zip(goal_values.iter())
+            .filter(|(field, _)| sub_fields.binary_search_by(|lbl| lbl.cmp(field)).is_err());
+
+        let (mut fields, mut values) = (Vec::new(), Vec::new());
+        for (field, value) in out_row {
+            fields.push(*field);
+            values.push(*value);
+        }
+
+        (fields.into_boxed_slice(), values.into_boxed_slice())
     }
 }

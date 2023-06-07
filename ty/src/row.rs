@@ -18,7 +18,6 @@ use super::{alloc::MkTy, AccessTy, FallibleTypeFold, InDb, Ty, TypeAlloc, TypeFo
 pub type RowLabel = Ident;
 
 mod closed_row;
-pub(crate) use closed_row::ClosedRow;
 pub use closed_row::{NewRow, RowInternals, RowOps, ScopedClosedRow, SimpleClosedRow};
 
 mod seal_row_sema {

@@ -7,9 +7,7 @@ use aiahr_core::{
     span::Span,
 };
 use aiahr_ty::{
-    infer::{
-        InArena, InferTy, RowsNotDisjoint, ScopedInferRow, SimpleInferRow, UnifierToTcVarError,
-    },
+    infer::{InArena, InferTy, ScopedInferRow, SimpleInferRow, UnifierToTcVarError},
     row::{Row, RowLabel, ScopedClosedRow, SimpleClosedRow},
     PrettyType, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
 };
@@ -80,11 +78,6 @@ impl<'ctx>
         ),
     ) -> Self {
         Self::EffectRowsNotEqual(Row::Closed(left), Row::Closed(right))
-    }
-}
-impl<'ctx> From<RowsNotDisjoint<'ctx>> for TypeCheckError<'ctx> {
-    fn from(value: RowsNotDisjoint<'ctx>) -> Self {
-        TypeCheckError::RowsNotDisjoint(value.left, value.right, value.label)
     }
 }
 

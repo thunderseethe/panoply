@@ -77,28 +77,6 @@ impl<A: TypeAlloc> RowOps<A> for ScopedClosedRow<A> {
     }
 }
 
-impl<A: TypeAlloc> ScopedClosedRow<A> {
-    /// Union together two rows, whenever rows contain overlapping keys both will be included in
-    /// the output in `self, right` order.
-    pub fn _union<'a>(&self, right: &Self, acc: &impl AccessTy<'a, A>) -> RowInternals<A>
-    where
-        Ty<A>: Copy,
-        A: 'a,
-    {
-        let control_flow: ControlFlow<Infallible, RowInternals<A>> =
-            self.0._merge_rows(&right.0, acc, |overlap| {
-                overlap.fields.extend(overlap.left_fields);
-                overlap.fields.extend(overlap.right_fields);
-                overlap.values.extend(overlap.left_values);
-                overlap.values.extend(overlap.right_values);
-                ControlFlow::Continue(())
-            });
-        match control_flow {
-            ControlFlow::Continue(row_internals) => row_internals,
-            ControlFlow::Break(_) => unreachable!(),
-        }
-    }
-}
 impl<A, Db, Ann> PrettyType<Db, A, Ann> for ScopedClosedRow<A>
 where
     A: TypeAlloc,
@@ -138,5 +116,135 @@ impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for ScopedClosedRow<A
     ) -> Result<Self::Out<F::Out>, F::Error> {
         let (fields, values) = self.0.try_fold_with(fold)?;
         Ok(fold.ctx().mk_row(&fields, &values))
+    }
+}
+
+impl<A: TypeAlloc> ScopedClosedRow<A> {
+    pub fn merge_rowlikes<V: Copy>(
+        left: (&[RowLabel], &[V]),
+        right: (&[RowLabel], &[V]),
+    ) -> (Box<[RowLabel]>, Box<[V]>) {
+        let res = merge_rowlikes(left, right, |overlap| {
+            overlap.fields.extend(overlap.left_fields);
+            overlap.fields.extend(overlap.right_fields);
+            overlap.values.extend(overlap.left_values);
+            overlap.values.extend(overlap.right_values);
+            ControlFlow::<Infallible>::Continue(())
+        });
+
+        match res {
+            ControlFlow::Continue(row_like_internals) => row_like_internals,
+            ControlFlow::Break(_) => unreachable!(),
+        }
+    }
+
+    pub(crate) fn difference_rowlikes<'a, V: Copy>(
+        (goal_fields, goal_values): (&'a [RowLabel], &'a [V]),
+        sub_fields: &[RowLabel],
+        mut handle_overlap: impl for<'g> FnMut(
+            &'g [(&'a RowLabel, &'a V)],
+            usize,
+        ) -> &'g [(&'a RowLabel, &'a V)],
+    ) -> (Box<[RowLabel]>, Box<[V]>) {
+        //TODO: Avoid allocating vecs here.
+        //Maybe not worth since we'll have to allocate vecs per group anyways? and this lets us do
+        //all our work in slices.
+        let goal_vec = goal_fields
+            .iter()
+            .zip(goal_values.iter())
+            .collect::<Vec<_>>();
+        let mut goal_groups = GroupBy::new(&goal_vec, |a, b| a.0 == b.0);
+        let sub_groups = GroupBy::new(sub_fields, |a, b| a == b);
+
+        let (mut fields, mut values) = (vec![], vec![]);
+
+        for sub_group in sub_groups {
+            for goal_group in goal_groups.by_ref() {
+                match goal_group[0].0.cmp(&sub_group[0]) {
+                    Ordering::Less => {
+                        fields.extend(goal_group.iter().map(|(field, _)| **field));
+                        values.extend(goal_group.iter().map(|(_, value)| **value));
+                    }
+                    Ordering::Equal => {
+                        let right_group = handle_overlap(goal_group, sub_group.len());
+                        fields.extend(right_group.iter().map(|(field, _)| **field));
+                        values.extend(right_group.iter().map(|(_, value)| **value));
+                        break;
+                    }
+                    Ordering::Greater => {
+                        unreachable!(
+                            "ICE: Sub scoped row contained field(s) goal scoped row did not"
+                        )
+                    }
+                }
+            }
+        }
+
+        // Append any remaining goal groups, they cannot appear in the sub row.
+        for goal_group in goal_groups {
+            fields.extend(goal_group.iter().map(|(field, _)| **field));
+            values.extend(goal_group.iter().map(|(_, value)| **value));
+        }
+
+        fields.shrink_to_fit();
+        values.shrink_to_fit();
+
+        (fields.into_boxed_slice(), values.into_boxed_slice())
+    }
+
+    pub fn diff_left_rowlikes<V: Copy>(
+        goal: (&[RowLabel], &[V]),
+        left_fields: &[RowLabel],
+    ) -> (Box<[RowLabel]>, Box<[V]>) {
+        Self::difference_rowlikes(goal, left_fields, |goal, left_count| &goal[left_count..])
+    }
+
+    pub fn diff_right_rowlikes<V: Copy>(
+        goal: (&[RowLabel], &[V]),
+        right_fields: &[RowLabel],
+    ) -> (Box<[RowLabel]>, Box<[V]>) {
+        Self::difference_rowlikes(goal, right_fields, |goal, right_count| {
+            &goal[0..(goal.len() - right_count)]
+        })
+    }
+}
+
+// TODO: Replace with std::slice::group_by once stable.
+struct GroupBy<'a, T: 'a, P> {
+    slice: &'a [T],
+    predicate: P,
+}
+
+impl<'a, T: 'a, P> GroupBy<'a, T, P>
+where
+    P: FnMut(&'a T, &'a T) -> bool,
+{
+    fn new(slice: &'a [T], predicate: P) -> Self {
+        Self { slice, predicate }
+    }
+}
+impl<'a, T, P> Iterator for GroupBy<'a, T, P>
+where
+    P: FnMut(&'a T, &'a T) -> bool,
+{
+    type Item = &'a [T];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.slice.is_empty() {
+            None
+        } else {
+            let mut len = 1;
+            let mut iter = self.slice.windows(2);
+            while let Some([l, r]) = iter.next() {
+                if (self.predicate)(l, r) {
+                    len += 1
+                } else {
+                    break;
+                }
+            }
+            let (head, tail) = self.slice.split_at(len);
+            self.slice = tail;
+            Some(head)
+        }
     }
 }
