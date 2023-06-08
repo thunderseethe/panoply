@@ -5,7 +5,7 @@ use aiahr_ir::{
 };
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
-    row::{Row, RowOps, Scoped, ScopedClosedRow, ScopedRow, Simple, SimpleClosedRow, SimpleRow},
+    row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
     AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
 };
 use la_arena::Idx;
@@ -91,6 +91,181 @@ impl<'a, S> LowerCtx<'a, '_, S> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RowIndx {
+    Left(usize, Ty<InDb>),
+    Right(usize, Ty<InDb>),
+}
+
+trait WIPRowEvidenceName: RowSema {
+    fn kind() -> Kind;
+
+    fn merge<Db: ?Sized + crate::Db>(
+        db: &Db,
+        left: Self::Closed<InDb>,
+        right: Self::Closed<InDb>,
+    ) -> Box<[RowIndx]>;
+
+    fn diff_left<Db: ?Sized + crate::Db>(
+        db: &Db,
+        goal: Self::Closed<InDb>,
+        left: Self::Closed<InDb>,
+    ) -> Box<[(usize, Ty<InDb>)]>;
+
+    fn diff_right<Db: ?Sized + crate::Db>(
+        db: &Db,
+        goal: Self::Closed<InDb>,
+        right: Self::Closed<InDb>,
+    ) -> Box<[(usize, Ty<InDb>)]>;
+}
+
+impl WIPRowEvidenceName for Simple {
+    fn kind() -> Kind {
+        Kind::SimpleRow
+    }
+
+    fn merge<Db: ?Sized + crate::Db>(
+        db: &Db,
+        left: Self::Closed<InDb>,
+        right: Self::Closed<InDb>,
+    ) -> Box<[RowIndx]> {
+        let left_fields = left.fields(&db);
+        let right_fields = right.fields(&db);
+
+        let left_indxs = left
+            .values(&db)
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| RowIndx::Left(i, *ty))
+            .collect::<Vec<_>>();
+        let right_indxs = right
+            .values(&db)
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| RowIndx::Right(i, *ty))
+            .collect::<Vec<_>>();
+
+        SimpleClosedRow::<InDb>::merge_rowlikes(
+            (left_fields, left_indxs.as_slice()),
+            (right_fields, right_indxs.as_slice()),
+        )
+        .unwrap_or_else(|_| unreachable!("ICE: Type checked simple rows should be disjoint"))
+        .1
+    }
+
+    fn diff_left<Db: ?Sized + crate::Db>(
+        db: &Db,
+        goal: Self::Closed<InDb>,
+        left: Self::Closed<InDb>,
+    ) -> Box<[(usize, Ty<InDb>)]> {
+        let goal_fields = goal.fields(&db);
+        let goal_indxs = goal
+            .values(&db)
+            .iter()
+            .copied()
+            .enumerate()
+            .collect::<Vec<_>>();
+        SimpleClosedRow::<InDb>::difference_rowlikes((goal_fields, &goal_indxs), left.fields(&db)).1
+    }
+
+    fn diff_right<Db: ?Sized + crate::Db>(
+        db: &Db,
+        goal: Self::Closed<InDb>,
+        right: Self::Closed<InDb>,
+    ) -> Box<[(usize, Ty<InDb>)]> {
+        let goal_fields = goal.fields(&db);
+        let goal_indxs = goal
+            .values(&db)
+            .iter()
+            .copied()
+            .enumerate()
+            .collect::<Vec<_>>();
+        SimpleClosedRow::<InDb>::difference_rowlikes((goal_fields, &goal_indxs), right.fields(&db))
+            .1
+    }
+}
+
+impl WIPRowEvidenceName for Scoped {
+    fn kind() -> Kind {
+        Kind::ScopedRow
+    }
+
+    fn merge<Db: ?Sized + crate::Db>(
+        db: &Db,
+        left: Self::Closed<InDb>,
+        right: Self::Closed<InDb>,
+    ) -> Box<[RowIndx]> {
+        let left_fields = left.fields(&db);
+        let right_fields = right.fields(&db);
+
+        let left_indxs = left
+            .values(&db)
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| RowIndx::Left(i, *ty))
+            .collect::<Vec<_>>();
+        let right_indxs = right
+            .values(&db)
+            .iter()
+            .enumerate()
+            .map(|(i, ty)| RowIndx::Right(i, *ty))
+            .collect::<Vec<_>>();
+
+        ScopedClosedRow::<InDb>::merge_rowlikes(
+            (left_fields, &left_indxs),
+            (right_fields, &right_indxs),
+        )
+        .1
+    }
+
+    fn diff_left<Db: ?Sized + crate::Db>(
+        db: &Db,
+        goal: Self::Closed<InDb>,
+        left: Self::Closed<InDb>,
+    ) -> Box<[(usize, Ty<InDb>)]> {
+        let goal_fields = goal.fields(&db);
+        let goal_indxs = goal
+            .values(&db)
+            .iter()
+            .copied()
+            .enumerate()
+            .collect::<Vec<_>>();
+
+        ScopedClosedRow::<InDb>::diff_left_rowlikes((goal_fields, &goal_indxs), left.fields(&db)).1
+    }
+
+    fn diff_right<Db: ?Sized + crate::Db>(
+        db: &Db,
+        goal: Self::Closed<InDb>,
+        right: Self::Closed<InDb>,
+    ) -> Box<[(usize, Ty<InDb>)]> {
+        let goal_fields = goal.fields(&db);
+        let goal_indxs = goal
+            .values(&db)
+            .iter()
+            .copied()
+            .enumerate()
+            .collect::<Vec<_>>();
+
+        ScopedClosedRow::<InDb>::diff_right_rowlikes((goal_fields, &goal_indxs), right.fields(&db))
+            .1
+    }
+}
+
+trait RowVarConvert<Sema: WIPRowEvidenceName> {
+    fn convert_row_var(&mut self, row_var: Sema::Open<InDb>) -> IrTyVarId;
+}
+impl<S> RowVarConvert<Simple> for LowerCtx<'_, '_, S> {
+    fn convert_row_var(&mut self, row_var: <Simple as RowSema>::Open<InDb>) -> IrTyVarId {
+        self.tyvar_conv.convert(row_var)
+    }
+}
+impl<S> RowVarConvert<Scoped> for LowerCtx<'_, '_, S> {
+    fn convert_row_var(&mut self, row_var: <Scoped as RowSema>::Open<InDb>) -> IrTyVarId {
+        self.tyvar_conv.convert(row_var)
+    }
+}
+
 impl<'a, S> LowerCtx<'a, '_, S> {
     pub(crate) fn lower_scheme(&mut self, scheme: &TyScheme) -> IrTy {
         let ir_ty = self.lower_ty(scheme.ty);
@@ -160,150 +335,27 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         }
     }
 
-    #[allow(unused)]
-    fn scoped_row_evidence_ir(
+    #[allow(dead_code)]
+    fn row_evidence_ir<Sema: WIPRowEvidenceName>(
         &mut self,
-        left: ScopedClosedRow,
-        right: ScopedClosedRow,
-        goal: ScopedClosedRow,
-    ) -> Ir {
-        let (left_prod, left_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(left));
-        let (right_prod, right_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(right));
-        let (goal_prod, goal_coprod) = self.scoped_row_ir_tys(&ScopedRow::Closed(goal));
+        left: Sema::Closed<InDb>,
+        right: Sema::Closed<InDb>,
+        goal: Sema::Closed<InDb>,
+    ) -> Ir
+    where
+        Self: RowVarConvert<Sema>,
+        Sema::Closed<InDb>: Copy,
+        Sema::Open<InDb>: Copy,
+    {
+        let (left_prod, left_coprod) = self.row_ir_tys(&Row::<Sema>::Closed(left));
+        let (right_prod, right_coprod) = self.row_ir_tys(&Row::<Sema>::Closed(right));
+        let (goal_prod, goal_coprod) = self.row_ir_tys(&Row::<Sema>::Closed(goal));
 
-        let branch_tyvar = IrVarTy {
-            var: self.tyvar_conv.generate(),
-            kind: Kind::Type,
-        };
         let left_var_id = self.var_conv.generate();
         let right_var_id = self.var_conv.generate();
         let goal_var_id = self.var_conv.generate();
 
-        let left_prod_var = IrVar {
-            var: left_var_id,
-            ty: left_prod,
-        };
-        let right_prod_var = IrVar {
-            var: right_var_id,
-            ty: right_prod,
-        };
-        let goal_prod_var = IrVar {
-            var: goal_var_id,
-            ty: goal_prod,
-        };
-
-        #[derive(Clone, Copy)]
-        enum Indx {
-            Left(usize, Ty<InDb>),
-            Right(usize, Ty<InDb>),
-        }
-
-        let left_indxs = left
-            .values(&self.db)
-            .iter()
-            .enumerate()
-            .map(|(indx, ty)| Indx::Left(indx, *ty))
-            .collect::<Vec<_>>();
-        let right_indxs = right
-            .values(&self.db)
-            .iter()
-            .enumerate()
-            .map(|(indx, ty)| Indx::Right(indx, *ty))
-            .collect::<Vec<_>>();
-
-        let (_, indxs) = ScopedClosedRow::<InDb>::merge_rowlikes(
-            (left.fields(&self.db), &left_indxs),
-            (right.fields(&self.db), &right_indxs),
-        );
-
-        let concat = Ir::abss(
-            [left_prod_var, right_prod_var],
-            Ir::new(Struct(
-                indxs
-                    .iter()
-                    .map(|indx| {
-                        P::new(match indx {
-                            Indx::Left(l, _) => Ir::field_proj(*l, Ir::var(left_prod_var)),
-                            Indx::Right(r, _) => Ir::field_proj(*r, Ir::var(right_prod_var)),
-                        })
-                    })
-                    .collect(),
-            )),
-        );
-
-        let branch_var_ty = self.mk_ir_ty(IrTyKind::VarTy(branch_tyvar));
-        let left_coprod_var = IrVar {
-            var: left_var_id,
-            ty: self
-                .db
-                .mk_ir_ty(IrTyKind::FunTy(left_coprod, branch_var_ty)),
-        };
-        let right_coprod_var = IrVar {
-            var: right_var_id,
-            ty: self
-                .db
-                .mk_ir_ty(IrTyKind::FunTy(right_coprod, branch_var_ty)),
-        };
-        let goal_coprod_var = IrVar {
-            var: goal_var_id,
-            ty: goal_coprod,
-        };
-        let case_var = self.var_conv.generate();
-        let branch = TyAbs(
-            branch_tyvar,
-            Ir::abss(
-                [left_coprod_var, right_coprod_var],
-                Ir::case_on_var(
-                    goal_coprod_var,
-                    indxs.iter().map(|indx| match indx {
-                        Indx::Left(l, ty) => {
-                            let ty = self.lower_ty(*ty);
-                            //TODO: Generate case variable
-                            //TODO: Inj the type
-                            Ir::abss([], todo!())
-                        }
-                        Indx::Right(r, ty) => todo!(),
-                    }),
-                ),
-            ),
-        );
-
-        todo!("Implement witness of scoped row evidence")
-    }
-
-    #[allow(unused)]
-    fn simple_row_evidence_ir(
-        &mut self,
-        left: SimpleClosedRow,
-        right: SimpleClosedRow,
-        goal: SimpleClosedRow,
-    ) -> Ir {
-        let (left_prod, left_coprod) = self.row_ir_tys(&SimpleRow::Closed(left));
-        let (right_prod, right_coprod) = self.row_ir_tys(&SimpleRow::Closed(right));
-        let (goal_prod, goal_coprod) = self.row_ir_tys(&SimpleRow::Closed(goal));
-
-        let branch_tyvar = IrVarTy {
-            var: self.tyvar_conv.generate(),
-            kind: Kind::Type,
-        };
-        let left_var_id = self.var_conv.generate();
-        let right_var_id = self.var_conv.generate();
-        let goal_var_id = self.var_conv.generate();
-
-        // Product combinators: Concat, PrjL, and PrjR
-        let left_prod_var = IrVar {
-            var: left_var_id,
-            ty: left_prod,
-        };
-        let right_prod_var = IrVar {
-            var: right_var_id,
-            ty: right_prod,
-        };
-        let goal_prod_var = IrVar {
-            var: goal_var_id,
-            ty: goal_prod,
-        };
-        // Helper to handle when we need to unwrap trivial single field structs
+        // Helpers to handle when we need to unwrap trivial single field structs
         let prj = |index, len, prod| {
             if len == 1 {
                 prod
@@ -311,158 +363,164 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 Ir::new(FieldProj(index, P::new(prod)))
             }
         };
+        let inj = |index, len, coprod| {
+            if len == 1 {
+                coprod
+            } else {
+                Ir::new(Tag(index, P::new(coprod)))
+            }
+        };
+
+        let indxs = Sema::merge(self.db, left, right);
+
         let left_len = left.len(&self.db);
         let right_len = right.len(&self.db);
         let goal_len = goal.len(&self.db);
-        let concat = P::new(Ir::abss(
-            [left_prod_var, right_prod_var],
-            Ir::new(match (left.is_empty(&self.db), right.is_empty(&self.db)) {
-                (true, true) => Struct(vec![]),
-                (true, false) => Var(right_prod_var),
-                (false, true) => Var(left_prod_var),
-                (false, false) => {
-                    let left_elems =
-                        (0..left_len).map(|i| prj(i, left_len, Ir::var(left_prod_var)));
-                    let right_elems =
-                        (0..right_len).map(|i| prj(i, right_len, Ir::var(right_prod_var)));
-                    Struct(left_elems.chain(right_elems).map(P::new).collect())
+        debug_assert_eq!(left_len + right_len, goal_len);
+
+        let concat = {
+            let left_prod_var = IrVar {
+                var: left_var_id,
+                ty: left_prod,
+            };
+            let right_prod_var = IrVar {
+                var: right_var_id,
+                ty: right_prod,
+            };
+            P::new(Ir::abss([left_prod_var, right_prod_var], {
+                let mut elems = indxs.iter().map(|indx| match indx {
+                    RowIndx::Left(i, _) => prj(*i, left_len, Ir::var(left_prod_var)),
+                    RowIndx::Right(i, _) => prj(*i, right_len, Ir::var(right_prod_var)),
+                });
+                if goal_len == 1 {
+                    elems.next().unwrap()
+                } else {
+                    Ir::new(Struct(elems.map(P::new).collect()))
                 }
-            }),
-        ));
-        let prj_l = P::new(Ir::abss(
-            [goal_prod_var],
-            if left_len == 1 {
-                prj(0, goal_len, Ir::var(goal_prod_var))
-            } else {
-                Ir::new(Struct(
-                    (0..left_len)
-                        .map(|i| prj(i, goal_len, Ir::var(goal_prod_var)))
-                        .map(P::new)
-                        .collect(),
-                ))
-            },
-        ));
-        let prj_r = P::new(Ir::abss(
-            [goal_prod_var],
-            if right_len == 1 {
-                prj(goal_len - 1, goal_len, Ir::var(goal_prod_var))
-            } else {
-                let range = (goal_len - right_len)..goal_len;
-                Ir::new(Struct(
-                    range
-                        .map(|i| prj(i, goal_len, Ir::var(goal_prod_var)))
-                        .map(P::new)
-                        .collect(),
-                ))
-            },
-        ));
+            }))
+        };
 
-        let left_branch_var = IrVar {
-            var: left_var_id,
-            ty: self.mk_ir_ty(FunTy(left_coprod, self.mk_ir_ty(VarTy(branch_tyvar)))),
-        };
-        let right_branch_var = IrVar {
-            var: right_var_id,
-            ty: self.mk_ir_ty(FunTy(right_coprod, self.mk_ir_ty(VarTy(branch_tyvar)))),
-        };
-        let goal_branch_var = IrVar {
-            var: goal_var_id,
-            ty: goal_coprod,
-        };
-        let inj = |i, j, e| {
-            if j == 1 {
-                e
-            } else {
-                Ir::new(Tag(i, P::new(e)))
-            }
-        };
-        let branch = P::new(Ir::new(TyAbs(
-            branch_tyvar,
-            P::new(Ir::abss(
-                [left_branch_var, right_branch_var, goal_branch_var],
-                match (left.is_empty(&self.db), right.is_empty(&self.db)) {
-                    // we're discriminating void, produce a case with no branches
-                    (true, true) => Ir::case_on_var(goal_branch_var, vec![]),
-                    (true, false) => Ir::app(Ir::var(left_branch_var), [Ir::var(goal_branch_var)]),
-                    (false, true) => Ir::app(Ir::var(right_branch_var), [Ir::var(goal_branch_var)]),
-                    (false, false) => {
-                        debug_assert!(left_len + right_len == goal_len);
-
+        let branch = {
+            let branch_tyvar = IrVarTy {
+                var: self.tyvar_conv.generate(),
+                kind: Kind::Type,
+            };
+            let branch_var_ty = self.mk_ir_ty(VarTy(branch_tyvar));
+            let left_branch_var = IrVar {
+                var: left_var_id,
+                ty: self.mk_ir_ty(FunTy(left_coprod, branch_var_ty)),
+            };
+            let right_branch_var = IrVar {
+                var: right_var_id,
+                ty: self.mk_ir_ty(FunTy(right_coprod, branch_var_ty)),
+            };
+            let goal_branch_var = IrVar {
+                var: goal_var_id,
+                ty: goal_coprod,
+            };
+            P::new(Ir::new(TyAbs(
+                branch_tyvar,
+                P::new(Ir::abss(
+                    [left_branch_var, right_branch_var, goal_branch_var],
+                    {
                         let case_var_id = self.var_conv.generate();
-                        let elems = left
-                            .values(&self.db)
-                            .iter()
-                            .chain(right.values(&self.db).iter())
-                            .enumerate()
-                            .map(|(i, ty)| {
-                                let case_var = IrVar {
-                                    var: case_var_id,
-                                    ty: self.lower_ty(*ty),
-                                };
-                                let (branch_var, length) = if i < left_len {
-                                    (left_branch_var, left_len)
-                                } else {
-                                    (right_branch_var, right_len)
-                                };
-                                Ir::abss(
-                                    [case_var],
-                                    Ir::app(
-                                        Ir::var(branch_var),
-                                        [inj(i, length, Ir::var(case_var))],
-                                    ),
-                                )
-                            });
+                        let elems = indxs.iter().map(|indx| {
+                            let (i, ty, length, branch_var) = match indx {
+                                RowIndx::Left(i, ty) => (i, ty, left_len, left_branch_var),
+                                RowIndx::Right(i, ty) => (i, ty, right_len, right_branch_var),
+                            };
+
+                            let case_var = IrVar {
+                                var: case_var_id,
+                                ty: self.lower_ty(*ty),
+                            };
+                            Ir::abss(
+                                [case_var],
+                                Ir::app(Ir::var(branch_var), [inj(*i, length, Ir::var(case_var))]),
+                            )
+                        });
 
                         Ir::case_on_var(goal_branch_var, elems)
-                    }
-                },
-            )),
-        )));
+                    },
+                )),
+            )))
+        };
 
-        let left_coprod_var = IrVar {
-            var: left_var_id,
-            ty: left_coprod,
+        let goal_prod_var = IrVar {
+            var: goal_var_id,
+            ty: goal_prod,
         };
-        let right_coprod_var = IrVar {
-            var: right_var_id,
-            ty: right_coprod,
+
+        let left_indxs = Sema::diff_right(self.db, goal, right);
+
+        let prj_l = {
+            P::new(Ir::abss([goal_prod_var], {
+                let mut elems = left_indxs
+                    .iter()
+                    .map(|(i, _)| prj(*i, goal_len, Ir::var(goal_prod_var)));
+                if left_len == 1 {
+                    elems.next().unwrap()
+                } else {
+                    Ir::new(Struct(elems.map(P::new).collect()))
+                }
+            }))
         };
-        let inj_l = P::new(Ir::abss(
-            [left_coprod_var],
-            if left_len == 1 {
-                inj(0, goal_len, Ir::var(left_coprod_var))
-            } else {
+        let inj_l = {
+            let left_coprod_var = IrVar {
+                var: left_var_id,
+                ty: left_coprod,
+            };
+            P::new(Ir::abss([left_coprod_var], {
                 let case_var_id = self.var_conv.generate();
-                Ir::case_on_var(
-                    left_coprod_var,
-                    left.values(&self.db).iter().enumerate().map(|(i, ty)| {
-                        let y = IrVar {
-                            var: case_var_id,
-                            ty: self.lower_ty(*ty),
-                        };
-                        Ir::abss([y], inj(i, goal_len, Ir::var(y)))
-                    }),
-                )
-            },
-        ));
-        let inj_r = P::new(Ir::abss(
-            [right_coprod_var],
-            if right_len == 1 {
-                inj(goal_len - 1, goal_len, Ir::var(right_coprod_var))
-            } else {
+                let mut elems = left_indxs.iter().map(|(i, ty)| {
+                    let y = IrVar {
+                        var: case_var_id,
+                        ty: self.lower_ty(*ty),
+                    };
+                    Ir::abss([y], inj(*i, goal_len, Ir::var(y)))
+                });
+                if left_len == 1 {
+                    Ir::app(elems.next().unwrap(), [Ir::var(left_coprod_var)])
+                } else {
+                    Ir::case_on_var(left_coprod_var, elems)
+                }
+            }))
+        };
+
+        let right_indxs = Sema::diff_left(self.db, goal, left);
+        let prj_r = {
+            P::new(Ir::abss([goal_prod_var], {
+                let mut elems = right_indxs
+                    .iter()
+                    .map(|(i, _)| prj(*i, goal_len, Ir::var(goal_prod_var)));
+                if right_len == 1 {
+                    elems.next().unwrap()
+                } else {
+                    Ir::new(Struct(elems.map(P::new).collect()))
+                }
+            }))
+        };
+        let inj_r = {
+            let right_coprod_var = IrVar {
+                var: right_var_id,
+                ty: right_coprod,
+            };
+            P::new(Ir::abss([right_coprod_var], {
                 let case_var_id = self.var_conv.generate();
-                Ir::case_on_var(
-                    right_coprod_var,
-                    right.values(&self.db).iter().enumerate().map(|(i, ty)| {
-                        let y = IrVar {
-                            var: case_var_id,
-                            ty: self.lower_ty(*ty),
-                        };
-                        Ir::abss([y], inj(goal_len - right_len + i, goal_len, Ir::var(y)))
-                    }),
-                )
-            },
-        ));
+                let mut elems = right_indxs.iter().map(|(i, ty)| {
+                    let y = IrVar {
+                        var: case_var_id,
+                        ty: self.lower_ty(*ty),
+                    };
+                    Ir::abss([y], inj(*i, goal_len, Ir::var(y)))
+                });
+                if right_len == 1 {
+                    Ir::app(elems.next().unwrap(), [Ir::var(right_coprod_var)])
+                } else {
+                    Ir::case_on_var(right_coprod_var, elems)
+                }
+            }))
+        };
 
         Ir::new(Struct(vec![
             concat,
@@ -472,37 +530,17 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         ]))
     }
 
-    fn scoped_row_ir_tys(&mut self, row: &Row<Scoped>) -> (IrTy, IrTy) {
+    fn row_ir_tys<Sema: WIPRowEvidenceName>(&mut self, row: &Row<Sema>) -> (IrTy, IrTy)
+    where
+        Self: RowVarConvert<Sema>,
+        Sema::Open<InDb>: Copy,
+    {
         match row {
             Row::Open(row_var) => {
-                let var = self.tyvar_conv.convert(*row_var);
+                let var = self.convert_row_var(*row_var);
                 let var = self.mk_ir_ty(VarTy(IrVarTy {
                     var,
-                    kind: Kind::ScopedRow,
-                }));
-                (var, var)
-            }
-            Row::Closed(row) => {
-                let elems = row
-                    .values(&self.db)
-                    .iter()
-                    .map(|ty| self.lower_ty(*ty))
-                    .collect::<Vec<_>>();
-                (
-                    self.mk_prod_ty(elems.as_slice()),
-                    self.mk_coprod_ty(elems.as_slice()),
-                )
-            }
-        }
-    }
-
-    fn row_ir_tys(&mut self, row: &Row<Simple>) -> (IrTy, IrTy) {
-        match row {
-            Row::Open(row_var) => {
-                let var = self.tyvar_conv.convert(*row_var);
-                let var = self.mk_ir_ty(VarTy(IrVarTy {
-                    var,
-                    kind: Kind::SimpleRow,
+                    kind: Sema::kind(),
                 }));
                 (var, var)
             }
@@ -529,9 +567,9 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                     self.row_ir_tys(goal),
                 ),
                 Evidence::EffRow { left, right, goal } => (
-                    self.scoped_row_ir_tys(left),
-                    self.scoped_row_ir_tys(right),
-                    self.scoped_row_ir_tys(goal),
+                    self.row_ir_tys(left),
+                    self.row_ir_tys(right),
+                    self.row_ir_tys(goal),
                 ),
             };
 
