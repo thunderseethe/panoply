@@ -306,11 +306,11 @@ pub VarId;
 
 /// Uniquely identifies variables in IR. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub IrVarId;
+pub ReducIrVarId;
 
 /// Uniquely identifies an IR type. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub IrTyVarId;
+pub ReducIrTyVarId;
 );
 
 impl<'a, D, A: 'a> Pretty<'a, D, A> for VarId
@@ -335,7 +335,7 @@ where
     }
 }
 
-impl<'a, D, A: 'a> Pretty<'a, D, A> for IrVarId
+impl<'a, D, A: 'a> Pretty<'a, D, A> for ReducIrVarId
 where
     D: DocAllocator<'a, A>,
 {

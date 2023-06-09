@@ -3,7 +3,7 @@ use std::ops::Deref;
 use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase, Args};
 use aiahr_core::Db as CoreDb;
 use aiahr_interpreter::Machine;
-use aiahr_lower_ir::Db as LowerIrDb;
+use aiahr_lower_reducir::Db as LowerReducIrDb;
 use aiahr_parser::Db;
 use clap::Parser;
 use pretty::BoxDoc;

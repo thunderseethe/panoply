@@ -1,11 +1,11 @@
-use aiahr_core::id::{IrTyVarId, IrVarId};
+use aiahr_core::id::{ReducIrTyVarId, ReducIrVarId};
 use pretty::{DocAllocator, *};
 use rustc_hash::FxHashSet;
 use std::fmt;
 use std::ops::Deref;
 
 #[salsa::jar(db = Db)]
-pub struct Jar(IrTy);
+pub struct Jar(ReducIrTy);
 pub trait Db: salsa::DbWithJar<Jar> {
     fn as_ir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -14,16 +14,16 @@ pub trait Db: salsa::DbWithJar<Jar> {
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
 
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
-pub enum IrTyKind {
+pub enum ReducIrTyKind {
     IntTy,
-    VarTy(IrVarTy),
-    FunTy(IrTy, IrTy),
-    ForallTy(IrVarTy, IrTy),
-    ProductTy(Vec<IrTy>),
-    CoproductTy(Vec<IrTy>),
+    VarTy(ReducIrVarTy),
+    FunTy(ReducIrTy, ReducIrTy),
+    ForallTy(ReducIrVarTy, ReducIrTy),
+    ProductTy(Vec<ReducIrTy>),
+    CoproductTy(Vec<ReducIrTy>),
 }
 
-impl IrTyKind {
+impl ReducIrTyKind {
     fn pretty<'a, D, DB, A>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
     where
         A: 'a,
@@ -31,11 +31,11 @@ impl IrTyKind {
         DB: ?Sized + crate::Db,
     {
         match self {
-            IrTyKind::IntTy => a.text("Int"),
-            IrTyKind::VarTy(ty_var) => ty_var.pretty(a),
-            IrTyKind::FunTy(arg, ret) => {
+            ReducIrTyKind::IntTy => a.text("Int"),
+            ReducIrTyKind::VarTy(ty_var) => ty_var.pretty(a),
+            ReducIrTyKind::FunTy(arg, ret) => {
                 let mut arg_doc = arg.pretty(db, a);
-                if let IrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
+                if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
                     arg_doc = arg_doc.parens();
                 }
                 arg_doc
@@ -44,7 +44,7 @@ impl IrTyKind {
                     .append(a.softline())
                     .append(ret.pretty(db, a))
             }
-            IrTyKind::ForallTy(ty_var, ty) => a
+            ReducIrTyKind::ForallTy(ty_var, ty) => a
                 .text("forall")
                 .append(a.space())
                 .append(ty_var.pretty(a))
@@ -52,10 +52,10 @@ impl IrTyKind {
                 .append(a.text("."))
                 .append(a.softline())
                 .append(ty.pretty(db, a)),
-            IrTyKind::ProductTy(tys) => a
+            ReducIrTyKind::ProductTy(tys) => a
                 .intersperse(tys.into_iter().map(|ty| ty.pretty(db, a)), ",")
                 .braces(),
-            IrTyKind::CoproductTy(tys) => a
+            ReducIrTyKind::CoproductTy(tys) => a
                 .intersperse(tys.into_iter().map(|ty| ty.pretty(db, a)), ",")
                 .angles(),
         }
@@ -64,11 +64,11 @@ impl IrTyKind {
 
 #[salsa::interned]
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-pub struct IrTy {
-    pub kind: IrTyKind,
+pub struct ReducIrTy {
+    pub kind: ReducIrTyKind,
 }
 
-impl IrTy {
+impl ReducIrTy {
     fn pretty<'a, D, DB, A>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
     where
         A: 'a,
@@ -80,57 +80,60 @@ impl IrTy {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct IrVar {
-    pub var: IrVarId,
-    pub ty: IrTy,
+pub struct ReducIrVar {
+    pub var: ReducIrVarId,
+    pub ty: ReducIrTy,
 }
 
-pub trait MkIrTy {
-    fn mk_ir_ty(&self, kind: IrTyKind) -> IrTy;
-    fn mk_prod_ty(&self, elems: &[IrTy]) -> IrTy;
-    fn mk_coprod_ty(&self, elems: &[IrTy]) -> IrTy;
+pub trait MkReducIrTy {
+    fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy;
+    fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
+    fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
 
-    fn mk_binary_fun_ty<F, S, R>(&self, fst_arg: F, snd_arg: S, ret: R) -> IrTy
-    where
-        F: IntoIrTy,
-        S: IntoIrTy,
-        R: IntoIrTy,
-    {
-        use IrTyKind::*;
-        self.mk_ir_ty(FunTy(
-            fst_arg.into_ir_ty(self),
-            self.mk_ir_ty(FunTy(snd_arg.into_ir_ty(self), ret.into_ir_ty(self))),
+    fn mk_binary_fun_ty(
+        &self,
+        fst_arg: impl IntoReducIrTy,
+        snd_arg: impl IntoReducIrTy,
+        ret: impl IntoReducIrTy,
+    ) -> ReducIrTy {
+        use ReducIrTyKind::*;
+        self.mk_reducir_ty(FunTy(
+            fst_arg.into_reducir_ty(self),
+            self.mk_reducir_ty(FunTy(
+                snd_arg.into_reducir_ty(self),
+                ret.into_reducir_ty(self),
+            )),
         ))
     }
 }
-pub trait IntoIrTy {
-    fn into_ir_ty<I: ?Sized + MkIrTy>(self, ctx: &I) -> IrTy;
+pub trait IntoReducIrTy {
+    fn into_reducir_ty<I: ?Sized + MkReducIrTy>(self, ctx: &I) -> ReducIrTy;
 }
-impl IntoIrTy for IrTy {
-    fn into_ir_ty<I: ?Sized + MkIrTy>(self, _ctx: &I) -> IrTy {
+impl IntoReducIrTy for ReducIrTy {
+    fn into_reducir_ty<I: ?Sized + MkReducIrTy>(self, _ctx: &I) -> ReducIrTy {
         self
     }
 }
-impl IntoIrTy for IrTyKind {
-    fn into_ir_ty<I: ?Sized + MkIrTy>(self, ctx: &I) -> IrTy {
-        ctx.mk_ir_ty(self)
+impl IntoReducIrTy for ReducIrTyKind {
+    fn into_reducir_ty<I: ?Sized + MkReducIrTy>(self, ctx: &I) -> ReducIrTy {
+        ctx.mk_reducir_ty(self)
     }
 }
 
-impl<DB> MkIrTy for DB
+impl<DB> MkReducIrTy for DB
 where
     DB: ?Sized + crate::Db,
 {
-    fn mk_ir_ty(&self, kind: IrTyKind) -> IrTy {
-        IrTy::new(self.as_ir_db(), kind)
+    fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
+        ReducIrTy::new(self.as_ir_db(), kind)
     }
 
-    fn mk_prod_ty(&self, elems: &[IrTy]) -> IrTy {
-        self.mk_ir_ty(IrTyKind::ProductTy(elems.to_owned()))
+    fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
+        self.mk_reducir_ty(ReducIrTyKind::ProductTy(elems.to_owned()))
     }
 
-    fn mk_coprod_ty(&self, elems: &[IrTy]) -> IrTy {
-        self.mk_ir_ty(IrTyKind::CoproductTy(elems.to_owned()))
+    fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
+        self.mk_reducir_ty(ReducIrTyKind::CoproductTy(elems.to_owned()))
     }
 }
 
@@ -187,12 +190,12 @@ where
 
 /// An ir type variable and it's kind
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct IrVarTy {
-    pub var: IrTyVarId,
+pub struct ReducIrVarTy {
+    pub var: ReducIrTyVarId,
     pub kind: Kind,
 }
 
-impl<'a, D, A> Pretty<'a, D, A> for IrVarTy
+impl<'a, D, A> Pretty<'a, D, A> for ReducIrVarTy
 where
     A: 'a,
     D: ?Sized + DocAllocator<'a, A>,
@@ -201,7 +204,7 @@ where
         docs![a, "T", a.as_string(self.var.0)]
     }
 }
-impl IrVarTy {
+impl ReducIrVarTy {
     fn pretty_with_kind<'a, D, A>(self, a: &'a D) -> DocBuilder<'a, D, A>
     where
         A: 'a,
@@ -212,15 +215,15 @@ impl IrVarTy {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum IrKind<IR = P<Ir>> {
+pub enum ReducIrKind<IR = P<ReducIr>> {
     Int(usize),
-    Var(IrVar),
+    Var(ReducIrVar),
     // Value abstraction and application
-    Abs(IrVar, IR),
+    Abs(ReducIrVar, IR),
     App(IR, IR),
     // Type abstraction and application
-    TyAbs(IrVarTy, IR),
-    TyApp(IR, IrTy),
+    TyAbs(ReducIrVarTy, IR),
+    TyApp(IR, ReducIrTy),
     // Trivial products
     Struct(Vec<IR>),      // Intro
     FieldProj(usize, IR), // Elim
@@ -229,86 +232,89 @@ pub enum IrKind<IR = P<Ir>> {
     Case(IR, Vec<IR>), // Elim
     // Delimited control
     // Generate a new prompt marker
-    NewPrompt(IrVar, IR),
+    NewPrompt(ReducIrVar, IR),
     // Install a prompt for a marker
     Prompt(IR, IR),
     // Yield to a marker's prompt
     Yield(IR, IR),
 }
-use IrKind::*;
+use ReducIrKind::*;
 
-/// An Ir node
-/// `Ir` is much more explicit than `Term`. It is based on System F with some modest
+/// A ReducIr node
+/// `ReducIr` is much more explicit than `Term`. It is based on System F with some modest
 /// extensions. Each variable is annotated with it's type, and each type is annotated with it's kind.
-/// Type constraints are represented as explicit parameters in `Ir`.
+/// Type constraints are represented as explicit parameters in `ReducIr`.
 ///
-/// The row typing of `Ast` is boiled down to trivial products and coproducts at the `Ir` level.
-/// Evidence parameters (which are just value parameters in `Ir`) are used to replicate the
+/// The row typing of `Ast` is boiled down to trivial products and coproducts at the `ReducIr` level.
+/// Evidence parameters (which are just value parameters in `ReducIr`) are used to replicate the
 /// behavior of rows seen in `Ast`.
 ///
-/// Effect typing is also made explicit and transformed to a lower level reprsentation in `Ir`.
+/// Effect typing is also made explicit and transformed to a lower level reprsentation in `ReducIr`.
 /// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
 /// the primitives to express delimited control which is how we implement effects under the hood.
 #[derive(Clone, PartialEq, Eq)]
-pub struct Ir {
-    pub kind: IrKind,
+pub struct ReducIr {
+    pub kind: ReducIrKind,
 }
-impl fmt::Debug for Ir {
+impl fmt::Debug for ReducIr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.kind.fmt(f)
     }
 }
-impl Ir {
-    pub fn new(kind: IrKind) -> Self {
+impl ReducIr {
+    pub fn new(kind: ReducIrKind) -> Self {
         Self { kind }
     }
 
-    pub fn kind(&self) -> &IrKind {
+    pub fn kind(&self) -> &ReducIrKind {
         &self.kind
     }
 
-    pub fn var(var: IrVar) -> Self {
-        Ir::new(Var(var))
+    pub fn var(var: ReducIrVar) -> Self {
+        ReducIr::new(Var(var))
     }
 
     pub fn app(head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
-        spine
-            .into_iter()
-            .fold(head, |func, arg| Ir::new(App(P::new(func), P::new(arg))))
+        spine.into_iter().fold(head, |func, arg| {
+            ReducIr::new(App(P::new(func), P::new(arg)))
+        })
     }
 
-    pub fn abss<I>(vars: I, body: Ir) -> Self
+    pub fn abss<I>(vars: I, body: ReducIr) -> Self
     where
         I: IntoIterator,
-        I::IntoIter: DoubleEndedIterator<Item = IrVar>,
+        I::IntoIter: DoubleEndedIterator<Item = ReducIrVar>,
     {
         vars.into_iter()
-            .rfold(body, |body, var| Ir::new(Abs(var, P::new(body))))
+            .rfold(body, |body, var| ReducIr::new(Abs(var, P::new(body))))
     }
 
-    pub fn case_on_var(var: IrVar, cases: impl IntoIterator<Item = Ir>) -> Self {
-        Ir::new(Case(
-            P::new(Ir::var(var)),
+    pub fn case_on_var(var: ReducIrVar, cases: impl IntoIterator<Item = ReducIr>) -> Self {
+        ReducIr::new(Case(
+            P::new(ReducIr::var(var)),
             cases.into_iter().map(P::new).collect(),
         ))
     }
 
-    pub fn local(var: IrVar, value: Ir, body: Ir) -> Self {
-        Ir::new(App(P::new(Ir::new(Abs(var, P::new(body)))), P::new(value)))
+    pub fn local(var: ReducIrVar, value: ReducIr, body: ReducIr) -> Self {
+        ReducIr::new(App(
+            P::new(ReducIr::new(Abs(var, P::new(body)))),
+            P::new(value),
+        ))
     }
 
-    pub fn field_proj(indx: usize, target: Ir) -> Self {
-        Ir::new(FieldProj(indx, P::new(target)))
+    pub fn field_proj(indx: usize, target: ReducIr) -> Self {
+        ReducIr::new(FieldProj(indx, P::new(target)))
     }
 
-    pub fn unbound_vars(&self) -> impl Iterator<Item = IrVar> + '_ {
+    pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
         self.unbound_vars_with_bound(FxHashSet::default())
     }
 
     pub fn unbound_vars_with_bound(
         &self,
-        bound: FxHashSet<IrVarId>,
-    ) -> impl Iterator<Item = IrVar> + '_ {
+        bound: FxHashSet<ReducIrVarId>,
+    ) -> impl Iterator<Item = ReducIrVar> + '_ {
         UnboundVars {
             bound,
             stack: vec![self],
@@ -317,11 +323,11 @@ impl Ir {
 }
 
 struct UnboundVars<'a> {
-    bound: FxHashSet<IrVarId>,
-    stack: Vec<&'a Ir>,
+    bound: FxHashSet<ReducIrVarId>,
+    stack: Vec<&'a ReducIr>,
 }
 impl Iterator for UnboundVars<'_> {
-    type Item = IrVar;
+    type Item = ReducIrVar;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.stack.pop().and_then(|ir| match ir.kind() {
@@ -355,7 +361,7 @@ impl Iterator for UnboundVars<'_> {
     }
 }
 
-impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVarTy {
+impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &ReducIrVarTy {
     fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, A> {
         allocator
             .as_string(self.var.0)
@@ -370,13 +376,13 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVarTy {
     }
 }
 
-impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &IrVar {
+impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &ReducIrVar {
     fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, A> {
         arena.text("V").append(arena.text(self.var.0.to_string()))
     }
 }
 
-impl IrVar {
+impl ReducIrVar {
     #[allow(dead_code)]
     fn pretty_with_ty<'a, D, A, DB>(&self, db: &DB, arena: &'a D) -> DocBuilder<'a, D, A>
     where
@@ -394,7 +400,7 @@ impl IrVar {
     }
 }
 
-impl Ir {
+impl ReducIr {
     pub fn pretty<'a, A, D, DB>(&self, db: &DB, allocator: &'a D) -> DocBuilder<'a, D, A>
     where
         A: 'a,
@@ -406,7 +412,7 @@ impl Ir {
     }
 }
 
-impl IrKind {
+impl ReducIrKind {
     fn pretty<'a, D, A, DB>(&self, db: &DB, arena: &'a D) -> pretty::DocBuilder<'a, D, A>
     where
         A: 'a,
@@ -414,7 +420,7 @@ impl IrKind {
         DocBuilder<'a, D, A>: Clone,
         DB: ?Sized + crate::Db,
     {
-        fn gather_abs<'a>(vars: &mut Vec<IrVar>, kind: &'a IrKind) -> &'a IrKind {
+        fn gather_abs<'a>(vars: &mut Vec<ReducIrVar>, kind: &'a ReducIrKind) -> &'a ReducIrKind {
             match kind {
                 Abs(arg, body) => {
                     vars.push(*arg);
@@ -423,7 +429,10 @@ impl IrKind {
                 _ => kind,
             }
         }
-        fn gather_ty_abs<'a>(vars: &mut Vec<IrVarTy>, kind: &'a IrKind) -> &'a IrKind {
+        fn gather_ty_abs<'a>(
+            vars: &mut Vec<ReducIrVarTy>,
+            kind: &'a ReducIrKind,
+        ) -> &'a ReducIrKind {
             match kind {
                 TyAbs(arg, body) => {
                     vars.push(*arg);
@@ -432,7 +441,10 @@ impl IrKind {
                 _ => kind,
             }
         }
-        fn gather_app<'a>(vars: &mut Vec<&'a IrKind>, kind: &'a IrKind) -> &'a IrKind {
+        fn gather_app<'a>(
+            vars: &mut Vec<&'a ReducIrKind>,
+            kind: &'a ReducIrKind,
+        ) -> &'a ReducIrKind {
             match kind {
                 App(func, arg) => {
                     vars.push(&arg.deref().kind);

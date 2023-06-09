@@ -4,7 +4,9 @@ use aiahr_core::{
     ident::Ident,
     modules::Module,
 };
-use aiahr_ir::{Ir, IrKind::*, IrTy, IrTyKind, IrVarTy, Kind, MkIrTy, P};
+use aiahr_reducir::{
+    Kind, MkReducIrTy, ReducIr, ReducIrKind::*, ReducIrTy, ReducIrTyKind, ReducIrVarTy, P,
+};
 use aiahr_tc::{EffectInfo, TypedItem};
 use aiahr_ty::{InDb, Ty, TyScheme};
 use la_arena::Idx;
@@ -20,84 +22,88 @@ mod lower;
 
 /// Slightly lower level of information than required by EffectInfo.
 /// However this is all calculatable off of the effect definition
-pub trait IrEffectInfo: EffectInfo {
+pub trait ReducIrEffectInfo: EffectInfo {
     fn effect_handler_return_index(&self, effect: EffectName) -> usize;
     fn effect_handler_op_index(&self, effect_op: EffectOpName) -> usize;
     fn effect_vector_index(&self, effect: EffectName) -> usize;
 
-    fn effect_handler_ir_ty(&self, effect: EffectName) -> IrTy;
+    fn effect_handler_ir_ty(&self, effect: EffectName) -> ReducIrTy;
 }
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
-    IrModule,
-    IrItem,
+    ReducIrModule,
+    ReducIrItem,
     lower_module,
     lower_item,
     lower_impl,
     effect_handler_ir_ty,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_ir::Db {
-    fn as_lower_ir_db(&self) -> &dyn crate::Db {
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
+    fn as_lower_reducir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 
-    fn lower_module(&self, module: AstModule) -> IrModule {
-        lower_module(self.as_lower_ir_db(), module)
+    fn lower_module(&self, module: AstModule) -> ReducIrModule {
+        lower_module(self.as_lower_reducir_db(), module)
     }
 
-    fn lower_item(&self, term_name: TermName) -> IrItem {
-        lower_item(self.as_lower_ir_db(), term_name)
+    fn lower_item(&self, term_name: TermName) -> ReducIrItem {
+        lower_item(self.as_lower_reducir_db(), term_name)
     }
 
-    fn lower_module_of(&self, module: Module) -> IrModule {
+    fn lower_module_of(&self, module: Module) -> ReducIrModule {
         let ast_module = self.desugar_module_of(module);
         self.lower_module(ast_module)
     }
 
-    fn lower_module_for_path(&self, path: std::path::PathBuf) -> IrModule {
+    fn lower_module_for_path(&self, path: std::path::PathBuf) -> ReducIrModule {
         let module = self.root_module_for_path(path);
         let ast_module = self.desugar_module_of(module);
         self.lower_module(ast_module)
     }
 
-    fn lower_item_for_file_name(&self, path: std::path::PathBuf, item: Ident) -> Option<IrItem> {
+    fn lower_item_for_file_name(
+        &self,
+        path: std::path::PathBuf,
+        item: Ident,
+    ) -> Option<ReducIrItem> {
         let module = self.root_module_for_path(path);
         let term_name = self.id_for_name(module, item)?;
         Some(self.lower_item(term_name))
     }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_ir::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {}
 
 #[salsa::tracked]
-pub struct IrModule {
+pub struct ReducIrModule {
     #[id]
     pub module: Module,
     #[return_ref]
-    pub items: Vec<IrItem>,
+    pub items: Vec<ReducIrItem>,
 }
 
 #[salsa::tracked]
-pub struct IrItem {
+pub struct ReducIrItem {
     #[id]
     pub name: TermName,
     #[return_ref]
-    pub item: Ir,
+    pub item: ReducIr,
 }
 
 #[salsa::tracked]
-fn lower_module(db: &dyn crate::Db, module: AstModule) -> IrModule {
+fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
     let ast_db = db.as_ast_db();
     let items = module
         .terms(ast_db)
         .iter()
         .map(|term| lower_impl(db, *term))
         .collect();
-    IrModule::new(db, module.module(ast_db), items)
+    ReducIrModule::new(db, module.module(ast_db), items)
 }
 
 #[salsa::tracked]
-fn lower_item(db: &dyn crate::Db, term_name: TermName) -> IrItem {
+fn lower_item(db: &dyn crate::Db, term_name: TermName) -> ReducIrItem {
     let module = term_name.module(db.as_core_db());
     let ir_module = db.lower_module_of(module);
     *ir_module
@@ -113,24 +119,24 @@ fn lower_item(db: &dyn crate::Db, term_name: TermName) -> IrItem {
 }
 
 #[salsa::tracked]
-fn lower_impl(db: &dyn crate::Db, term: AstTerm) -> IrItem {
+fn lower_impl(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
     let ast_db = db.as_ast_db();
     let name = term.name(ast_db);
     let ast = term.data(ast_db);
     let typed_item = db.type_scheme_of(name);
     let ir = lower(db, name, typed_item, ast);
-    IrItem::new(db, name, ir)
+    ReducIrItem::new(db, name, ir)
 }
 
 #[salsa::tracked]
-fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> IrTy {
+fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
     let bogus_item = TermName::from_id(salsa::Id::from_u32(0u32));
     // TODO: Clean this up so we can access lower ty without requiring a full LowerCtx
     // TODO: Do we need to create a new tyvar_conv per scheme we lower?
     let mut lower_ctx = LowerCtx::new(
-        db.as_lower_ir_db(),
+        db.as_lower_reducir_db(),
         &mut var_conv,
         &mut tyvar_conv,
         bogus_item,
@@ -153,10 +159,10 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> IrTy {
             .collect::<Vec<_>>()
             .as_slice(),
     );
-    db.mk_prod_ty(&[db.mk_ir_ty(IrTyKind::IntTy), handler_ty])
+    db.mk_prod_ty(&[db.mk_reducir_ty(ReducIrTyKind::IntTy), handler_ty])
 }
 
-impl<DB> IrEffectInfo for DB
+impl<DB> ReducIrEffectInfo for DB
 where
     DB: ?Sized + crate::Db,
 {
@@ -172,8 +178,8 @@ where
         aiahr_nameres::effect_vector_index(self.as_nameres_db(), effect)
     }
 
-    fn effect_handler_ir_ty(&self, effect: EffectName) -> IrTy {
-        effect_handler_ir_ty(self.as_lower_ir_db(), effect)
+    fn effect_handler_ir_ty(&self, effect: EffectName) -> ReducIrTy {
+        effect_handler_ir_ty(self.as_lower_reducir_db(), effect)
     }
 }
 impl<DB> ItemSchemes for DB
@@ -206,7 +212,12 @@ where
 
 /// Lower an `Ast` into an `Ir`.
 /// TODO: Real documentation.
-pub fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<VarId>) -> Ir {
+pub fn lower(
+    db: &dyn crate::Db,
+    name: TermName,
+    typed_item: TypedItem,
+    ast: &Ast<VarId>,
+) -> ReducIr {
     let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
@@ -220,20 +231,20 @@ pub fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &As
     let body = lower_ctx.lower_top_level(ast, ast.tree);
     // Bind all unique solved row evidence to local variables at top of the term
     let body = ev_locals.into_iter().fold(body, |body, (ev_param, ev_ir)| {
-        Ir::app(Ir::abss([ev_param], body), [ev_ir])
+        ReducIr::app(ReducIr::abss([ev_param], body), [ev_ir])
     });
     // Add unsolved row evidence as parameters of the term
     let body = ev_params
         .into_iter()
-        .rfold(body, |body, arg| Ir::new(Abs(arg, P::new(body))));
+        .rfold(body, |body, arg| ReducIr::new(Abs(arg, P::new(body))));
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme
         .bound_data_row
         .iter()
         .rfold(body, |acc, simple_row_var| {
-            Ir::new(TyAbs(
-                IrVarTy {
+            ReducIr::new(TyAbs(
+                ReducIrVarTy {
                     var: tyvar_conv.convert(*simple_row_var),
                     kind: Kind::SimpleRow,
                 },
@@ -244,8 +255,8 @@ pub fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &As
         .bound_eff_row
         .iter()
         .rfold(body, |acc, scoped_row_var| {
-            Ir::new(TyAbs(
-                IrVarTy {
+            ReducIr::new(TyAbs(
+                ReducIrVarTy {
                     var: tyvar_conv.convert(*scoped_row_var),
                     kind: Kind::ScopedRow,
                 },
@@ -253,8 +264,8 @@ pub fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &As
             ))
         });
     scheme.bound_ty.iter().rfold(body, |acc, ty_var| {
-        Ir::new(TyAbs(
-            IrVarTy {
+        ReducIr::new(TyAbs(
+            ReducIrVarTy {
                 var: tyvar_conv.convert(*ty_var),
                 kind: Kind::Type,
             },
@@ -271,8 +282,8 @@ mod tests {
         file::{FileId, SourceFile, SourceFileSet},
         Db,
     };
-    use aiahr_ir::Ir;
     use aiahr_parser::Db as ParserDb;
+    use aiahr_reducir::ReducIr;
     use expect_test::expect;
     use pretty::{BoxAllocator, BoxDoc, Doc};
 
@@ -282,7 +293,7 @@ mod tests {
         aiahr_ast::Jar,
         aiahr_core::Jar,
         aiahr_desugar::Jar,
-        aiahr_ir::Jar,
+        aiahr_reducir::Jar,
         aiahr_nameres::Jar,
         aiahr_parser::Jar,
         aiahr_tc::Jar,
@@ -294,7 +305,7 @@ mod tests {
     impl salsa::Database for TestDatabase {}
 
     /// Lower a snippet and return the produced IR
-    fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db Ir {
+    fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
         let path = std::path::PathBuf::from("test.aiahr");
         let mut contents = r#"
 effect State {

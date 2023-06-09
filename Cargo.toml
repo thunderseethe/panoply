@@ -18,8 +18,8 @@ aiahr-ast.workspace = true
 aiahr-core.workspace = true
 aiahr-desugar.workspace = true
 aiahr-interpreter.workspace = true
-aiahr-ir.workspace = true
-aiahr-lower-ir.workspace = true
+aiahr-reducir.workspace = true
+aiahr-lower-reducir.workspace = true
 aiahr-nameres.workspace = true
 aiahr-parser.workspace = true
 aiahr-tc.workspace = true
@@ -40,8 +40,8 @@ members = [
     "cst",
     "desugar",
     "interpreter",
-    "ir",
-    "lower-ir",
+    "reducir",
+    "lower-reducir",
     "nameres",
     "parser",
     "tc",
@@ -62,8 +62,8 @@ aiahr-cst = { path = "cst" }
 aiahr-desugar = { path = "desugar" }
 aiahr-nameres = { path = "nameres" }
 aiahr-interpreter = { path = "interpreter" }
-aiahr-ir = { path = "ir" }
-aiahr-lower-ir = { path = "lower-ir" }
+aiahr-reducir = { path = "reducir" }
+aiahr-lower-reducir = { path = "lower-reducir" }
 aiahr-parser = { path = "parser" }
 aiahr-tc = { path = "tc" }
 aiahr-test = { path = "test-utils" }

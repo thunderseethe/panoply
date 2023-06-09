@@ -1,6 +1,6 @@
 use std::ops::Index;
 
-use aiahr_ir::IrVar;
+use aiahr_reducir::ReducIrVar;
 use aiahr_ty::row::{Scoped, Simple, SimpleClosedRow};
 use aiahr_ty::{row::Row, Evidence, InDb};
 
@@ -26,14 +26,14 @@ impl Copy for PartialEv where InDb: Copy {}
 #[derive(Default, Debug)]
 pub(crate) struct EvidenceMap {
     /// Unique list of parameters we've generated so far
-    params: Vec<IrVar>,
+    params: Vec<ReducIrVar>,
     // Find evidence when we only have partial information about it.
     // Like when we encounter a Project or Inject node.
     partial_map: FxHashMap<PartialEv, usize>,
     complete_map: FxHashMap<Evidence, usize>,
 }
 impl EvidenceMap {
-    pub(crate) fn insert(&mut self, ev: Evidence, param: IrVar) {
+    pub(crate) fn insert(&mut self, ev: Evidence, param: ReducIrVar) {
         let idx = self
             .params
             .iter()
@@ -83,14 +83,14 @@ impl EvidenceMap {
     }
 }
 impl Index<&Evidence> for EvidenceMap {
-    type Output = IrVar;
+    type Output = ReducIrVar;
 
     fn index(&self, index: &Evidence) -> &Self::Output {
         &self.params[self.complete_map[index]]
     }
 }
 impl Index<&PartialEv> for EvidenceMap {
-    type Output = IrVar;
+    type Output = ReducIrVar;
 
     fn index(&self, index: &PartialEv) -> &Self::Output {
         &self.params[*self.partial_map.get(index).unwrap_or_else(|| {

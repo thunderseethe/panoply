@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use aiahr_core::id::IrVarId;
-use aiahr_ir::{Ir, IrKind, IrVar, P};
+use aiahr_core::id::ReducIrVarId;
+use aiahr_reducir::{ReducIr, ReducIrKind, ReducIrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub struct Prompt(usize);
 
 /// A mapping from variables to values
-type Env = FxHashMap<IrVarId, Value>;
+type Env = FxHashMap<ReducIrVarId, Value>;
 
 /// An interpreter value.
 /// This will be the result of interpretation and all intermediate computations
@@ -18,9 +18,9 @@ pub enum Value {
     Int(usize),
     /// A lambda (or closure). Stores any captured variables in env.
     Lam {
-        env: FxHashMap<IrVarId, Value>,
-        arg: IrVar,
-        body: P<Ir>,
+        env: FxHashMap<ReducIrVarId, Value>,
+        arg: ReducIrVar,
+        body: P<ReducIr>,
     },
     /// A tuple of values
     Tuple(Vec<Value>),
@@ -36,7 +36,7 @@ pub enum Value {
 use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 
 fn pretty_env<'a, D, A: 'a>(
-    env: &FxHashMap<IrVarId, Value>,
+    env: &FxHashMap<ReducIrVarId, Value>,
     a: &'a D,
 ) -> pretty::DocBuilder<'a, D, A>
 where
@@ -60,7 +60,7 @@ impl Value {
         A: 'a,
         D: DocAllocator<'a, A> + 'a,
         DocBuilder<'a, D, A>: Clone,
-        DB: ?Sized + aiahr_ir::Db,
+        DB: ?Sized + aiahr_reducir::Db,
     {
         match self {
             Value::Int(i) => a.as_string(i),
@@ -115,16 +115,38 @@ impl Value {
 /// These store in process computation, and are pushed onto the stack as we interpret.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalCtx {
-    FnApp { arg: Value },
-    ArgApp { func: P<Ir> },
-    PromptMarker { body: P<Ir> },
-    YieldMarker { value: P<Ir> },
-    YieldValue { marker: Value },
-    StructEval { vals: Vec<Value>, rest: Vec<P<Ir>> },
-    Index { index: usize },
-    Tag { tag: usize },
-    CaseScrutinee { branches: Vec<P<Ir>> },
-    VectorSet { evv: IrVar, index: usize },
+    FnApp {
+        arg: Value,
+    },
+    ArgApp {
+        func: P<ReducIr>,
+    },
+    PromptMarker {
+        body: P<ReducIr>,
+    },
+    YieldMarker {
+        value: P<ReducIr>,
+    },
+    YieldValue {
+        marker: Value,
+    },
+    StructEval {
+        vals: Vec<Value>,
+        rest: Vec<P<ReducIr>>,
+    },
+    Index {
+        index: usize,
+    },
+    Tag {
+        tag: usize,
+    },
+    CaseScrutinee {
+        branches: Vec<P<ReducIr>>,
+    },
+    VectorSet {
+        evv: ReducIrVar,
+        index: usize,
+    },
 }
 
 /// A stack frame is either a prompt or a list of evaluation contexts.
@@ -166,7 +188,7 @@ pub struct Machine {
 }
 
 enum InterpretResult {
-    Step(P<Ir>),
+    Step(P<ReducIr>),
     Done(Value),
 }
 
@@ -283,7 +305,7 @@ impl Machine {
         }
     }
 
-    fn lookup_var(&self, v: IrVar) -> Value {
+    fn lookup_var(&self, v: ReducIrVar) -> Value {
         self.cur_env
             .get(&v.var)
             .or_else(|| {
@@ -297,19 +319,19 @@ impl Machine {
             .clone()
     }
 
-    fn step(&mut self, ir: Ir) -> InterpretResult {
+    fn step(&mut self, ir: ReducIr) -> InterpretResult {
         match ir.kind {
             // Literals
-            IrKind::Int(i) => {
+            ReducIrKind::Int(i) => {
                 log::info!("Unwind: Int({})", i);
                 self.unwind(Value::Int(i))
             }
             // Lambda Calculus
-            IrKind::Var(v) => {
+            ReducIrKind::Var(v) => {
                 log::info!("Unwind: Var({:?})", v);
                 self.unwind(self.lookup_var(v))
             }
-            IrKind::Abs(arg, body) => {
+            ReducIrKind::Abs(arg, body) => {
                 log::info!("Unwind: Lam({:?}, {:?})", arg, body);
                 // TODO: make this check each env scope for all variables rathan than looking up
                 // all variables one by one.
@@ -319,13 +341,13 @@ impl Machine {
                     .collect();
                 self.unwind(Value::Lam { env, arg, body })
             }
-            IrKind::App(func, arg) => {
+            ReducIrKind::App(func, arg) => {
                 log::info!("Step: App({:?}, {:?})", func, arg);
                 self.cur_frame.push(EvalCtx::ArgApp { func });
                 InterpretResult::Step(arg)
             }
             // Product rows
-            IrKind::Struct(mut elems) => {
+            ReducIrKind::Struct(mut elems) => {
                 elems.reverse();
                 match elems.pop() {
                     // if elems is empty unwind with unit value
@@ -343,46 +365,46 @@ impl Machine {
                     }
                 }
             }
-            IrKind::FieldProj(index, value) => {
+            ReducIrKind::FieldProj(index, value) => {
                 log::info!("Step: FieldProj({:?}, {:?})", value, index);
                 self.cur_frame.push(EvalCtx::Index { index });
                 InterpretResult::Step(value)
             }
             // Sum rows
-            IrKind::Tag(tag, value) => {
+            ReducIrKind::Tag(tag, value) => {
                 log::info!("Step: Tag({:?}, {:?})", tag, value);
                 self.cur_frame.push(EvalCtx::Tag { tag });
                 InterpretResult::Step(value)
             }
-            IrKind::Case(discr, branches) => {
+            ReducIrKind::Case(discr, branches) => {
                 log::info!("Step: Case({:?}, {:?})", discr, branches);
                 self.cur_frame.push(EvalCtx::CaseScrutinee { branches });
                 InterpretResult::Step(discr)
             }
             // Delimited continuations
-            IrKind::NewPrompt(arg, body) => {
+            ReducIrKind::NewPrompt(arg, body) => {
                 let prompt = Prompt(self.prompt);
                 self.prompt += 1;
                 self.cur_env.insert(arg.var, Value::Prompt(prompt));
                 InterpretResult::Step(body)
             }
-            IrKind::Prompt(marker, body) => {
+            ReducIrKind::Prompt(marker, body) => {
                 self.cur_frame.push(EvalCtx::PromptMarker { body });
                 InterpretResult::Step(marker)
             }
-            IrKind::Yield(marker, value) => {
+            ReducIrKind::Yield(marker, value) => {
                 self.cur_frame.push(EvalCtx::YieldMarker { value });
                 InterpretResult::Step(marker)
             }
             // Type applications
             // TODO: Handle type applications but they shouldn't show up in real runtime
-            IrKind::TyAbs(_, body) => InterpretResult::Step(body),
-            IrKind::TyApp(_, _) => todo!(),
+            ReducIrKind::TyAbs(_, body) => InterpretResult::Step(body),
+            ReducIrKind::TyApp(_, _) => todo!(),
         }
     }
 
     /// Interpret an IR term until it is a value, or diverge.
-    pub fn interpret(&mut self, top: Ir) -> Value {
+    pub fn interpret(&mut self, top: ReducIr) -> Value {
         let mut ir = top;
         loop {
             match self.step(ir) {
@@ -395,7 +417,7 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_ir::{IrTyKind, MkIrTy};
+    use aiahr_reducir::{MkReducIrTy, ReducIrTyKind};
 
     use super::*;
 
@@ -404,8 +426,8 @@ mod tests {
         aiahr_ast::Jar,
         aiahr_core::Jar,
         aiahr_desugar::Jar,
-        aiahr_ir::Jar,
-        aiahr_lower_ir::Jar,
+        aiahr_reducir::Jar,
+        aiahr_lower_reducir::Jar,
         aiahr_nameres::Jar,
         aiahr_parser::Jar,
         aiahr_tc::Jar,
@@ -419,11 +441,14 @@ mod tests {
     #[test]
     fn interpret_id_fun() {
         let db = TestDatabase::default();
-        let x = IrVar {
-            var: IrVarId(0),
-            ty: db.mk_ir_ty(IrTyKind::IntTy),
+        let x = ReducIrVar {
+            var: ReducIrVarId(0),
+            ty: db.mk_reducir_ty(ReducIrTyKind::IntTy),
         };
-        let ir = Ir::app(Ir::abss([x], Ir::var(x)), [Ir::new(IrKind::Int(1))]);
+        let ir = ReducIr::app(
+            ReducIr::abss([x], ReducIr::var(x)),
+            [ReducIr::new(ReducIrKind::Int(1))],
+        );
         let mut interpreter = Machine::default();
         assert_eq!(interpreter.interpret(ir), Value::Int(1));
     }
@@ -431,17 +456,20 @@ mod tests {
     #[test]
     fn interpret_lamba_captures_env_as_expected() {
         let db = TestDatabase::default();
-        let x = IrVar {
-            var: IrVarId(0),
-            ty: db.mk_ir_ty(IrTyKind::IntTy),
+        let x = ReducIrVar {
+            var: ReducIrVarId(0),
+            ty: db.mk_reducir_ty(ReducIrTyKind::IntTy),
         };
-        let y = IrVar {
-            var: IrVarId(1),
-            ty: db.mk_ir_ty(IrTyKind::IntTy),
+        let y = ReducIrVar {
+            var: ReducIrVarId(1),
+            ty: db.mk_reducir_ty(ReducIrTyKind::IntTy),
         };
-        let ir = Ir::app(
-            Ir::abss([x, y], Ir::var(x)),
-            [Ir::new(IrKind::Int(2)), Ir::new(IrKind::Int(0))],
+        let ir = ReducIr::app(
+            ReducIr::abss([x, y], ReducIr::var(x)),
+            [
+                ReducIr::new(ReducIrKind::Int(2)),
+                ReducIr::new(ReducIrKind::Int(0)),
+            ],
         );
         let mut interpreter = Machine::default();
         assert_eq!(interpreter.interpret(ir), Value::Int(2));
