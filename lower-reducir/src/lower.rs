@@ -62,10 +62,176 @@ pub(crate) struct LowerCtx<'a, 'b, State = Evidenceless> {
     db: &'a dyn crate::Db,
     current: TermName,
     var_conv: &'b mut IdConverter<VarId, ReducIrVarId>,
-    tyvar_conv: &'b mut IdConverter<TyVarId, ReducIrTyVarId>,
+    ty_ctx: LowerTyCtx<'a, 'b>,
     ev_map: EvidenceMap,
     evv_var: ReducIrVar,
     _marker: std::marker::PhantomData<State>,
+}
+
+// This exists as a standalone struct so we can construct it and lower types without having to
+// construct a full LowerCtx
+pub(crate) struct LowerTyCtx<'a, 'b> {
+    db: &'a dyn crate::Db,
+    tyvar_conv: &'b mut IdConverter<TyVarId, ReducIrTyVarId>,
+}
+impl<'a, 'b> LowerTyCtx<'a, 'b> {
+    pub(crate) fn new(
+        db: &'a dyn crate::Db,
+        tyvar_conv: &'b mut IdConverter<TyVarId, ReducIrTyVarId>,
+    ) -> Self {
+        Self { db, tyvar_conv }
+    }
+
+    fn row_ir_tys<Sema: WIPRowEvidenceName>(&mut self, row: &Row<Sema>) -> (ReducIrTy, ReducIrTy)
+    where
+        Self: RowVarConvert<Sema>,
+        Sema::Open<InDb>: Copy,
+    {
+        match row {
+            Row::Open(row_var) => {
+                let var = self.convert_row_var(*row_var);
+                let var = self.db.mk_reducir_ty(VarTy(ReducIrVarTy {
+                    var,
+                    kind: Sema::kind(),
+                }));
+                (var, var)
+            }
+            Row::Closed(row) => {
+                let elems = row
+                    .values(&self.db)
+                    .iter()
+                    .map(|ty| self.lower_ty(*ty))
+                    .collect::<Vec<_>>();
+                (
+                    self.db.mk_prod_ty(elems.as_slice()),
+                    self.db.mk_coprod_ty(elems.as_slice()),
+                )
+            }
+        }
+    }
+
+    fn row_evidence_ir_ty(&mut self, ev: &Evidence) -> ReducIrTy {
+        let ((left_prod, left_coprod), (right_prod, right_coprod), (goal_prod, goal_coprod)) =
+            match ev {
+                Evidence::DataRow { left, right, goal } => (
+                    self.row_ir_tys(left),
+                    self.row_ir_tys(right),
+                    self.row_ir_tys(goal),
+                ),
+                Evidence::EffRow { left, right, goal } => (
+                    self.row_ir_tys(left),
+                    self.row_ir_tys(right),
+                    self.row_ir_tys(goal),
+                ),
+            };
+
+        let branch_var = ReducIrVarTy {
+            var: self.tyvar_conv.generate(),
+            kind: Kind::Type,
+        };
+        let branch_var_ty = self.db.mk_reducir_ty(VarTy(branch_var));
+
+        self.db.mk_prod_ty(&[
+            self.db.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
+            self.db.mk_reducir_ty(ForallTy(
+                branch_var,
+                self.db.mk_binary_fun_ty(
+                    FunTy(left_coprod, branch_var_ty),
+                    FunTy(right_coprod, branch_var_ty),
+                    FunTy(goal_coprod, branch_var_ty),
+                ),
+            )),
+            self.db.mk_prod_ty(&[
+                self.db.mk_reducir_ty(FunTy(goal_prod, left_prod)),
+                self.db.mk_reducir_ty(FunTy(left_coprod, goal_coprod)),
+            ]),
+            self.db.mk_prod_ty(&[
+                self.db.mk_reducir_ty(FunTy(goal_prod, right_prod)),
+                self.db.mk_reducir_ty(FunTy(right_coprod, goal_coprod)),
+            ]),
+        ])
+    }
+
+    fn lower_ty(&mut self, ty: Ty) -> ReducIrTy {
+        match self.db.kind(&ty) {
+            TypeKind::RowTy(_) => panic!("This should not be allowed"),
+            TypeKind::ErrorTy => unreachable!(),
+            TypeKind::IntTy => self.db.mk_reducir_ty(ReducIrTyKind::IntTy),
+            TypeKind::VarTy(var) => {
+                let var = self.tyvar_conv.convert(*var);
+                self.db.mk_reducir_ty(ReducIrTyKind::VarTy(ReducIrVarTy {
+                    var,
+                    kind: Kind::Type,
+                }))
+            }
+            TypeKind::FunTy(arg, ret) => {
+                let arg = self.lower_ty(*arg);
+                let ret = self.lower_ty(*ret);
+                self.db.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ret))
+            }
+            TypeKind::SumTy(Row::Open(row_var)) | TypeKind::ProdTy(Row::Open(row_var)) => {
+                let var = self.tyvar_conv.convert(*row_var);
+                self.db.mk_reducir_ty(ReducIrTyKind::VarTy(ReducIrVarTy {
+                    var,
+                    kind: Kind::SimpleRow,
+                }))
+            }
+            TypeKind::ProdTy(Row::Closed(row)) => {
+                let elems = row
+                    .values(&self.db)
+                    .iter()
+                    .map(|ty| self.lower_ty(*ty))
+                    .collect::<Vec<_>>();
+                self.db.mk_prod_ty(elems.as_slice())
+            }
+            TypeKind::SumTy(Row::Closed(row)) => {
+                let elems = row
+                    .values(&self.db)
+                    .iter()
+                    .map(|ty| self.lower_ty(*ty))
+                    .collect::<Vec<_>>();
+                self.db.mk_coprod_ty(elems.as_slice())
+            }
+        }
+    }
+
+    pub(crate) fn lower_scheme(&mut self, scheme: &TyScheme) -> ReducIrTy {
+        let ir_ty = self.lower_ty(scheme.ty);
+
+        // Add parameter to type for each constraint
+        let constrs_ty = scheme.constrs.iter().rfold(ir_ty, |ty, constr| {
+            let arg = self.row_evidence_ir_ty(constr);
+            self.db.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ty))
+        });
+        // Add each type variable around type
+        scheme.bound_ty.iter().rfold(constrs_ty, |ty, ty_var| {
+            let ir_ty_var_id = self.tyvar_conv.convert(*ty_var);
+            let var = ReducIrVarTy {
+                var: ir_ty_var_id,
+                kind: if scheme.bound_data_row.contains(ty_var) {
+                    Kind::SimpleRow
+                } else if scheme.bound_eff_row.contains(ty_var) {
+                    Kind::ScopedRow
+                } else {
+                    Kind::Type
+                },
+            };
+            self.db.mk_reducir_ty(ForallTy(var, ty))
+        })
+    }
+}
+trait RowVarConvert<Sema: WIPRowEvidenceName> {
+    fn convert_row_var(&mut self, row_var: Sema::Open<InDb>) -> ReducIrTyVarId;
+}
+impl RowVarConvert<Simple> for LowerTyCtx<'_, '_> {
+    fn convert_row_var(&mut self, row_var: <Simple as RowSema>::Open<InDb>) -> ReducIrTyVarId {
+        self.tyvar_conv.convert(row_var)
+    }
+}
+impl RowVarConvert<Scoped> for LowerTyCtx<'_, '_> {
+    fn convert_row_var(&mut self, row_var: <Scoped as RowSema>::Open<InDb>) -> ReducIrTyVarId {
+        self.tyvar_conv.convert(row_var)
+    }
 }
 
 impl<'a, 'b, S> MkReducIrTy for LowerCtx<'a, 'b, S> {
@@ -253,89 +419,7 @@ impl WIPRowEvidenceName for Scoped {
     }
 }
 
-trait RowVarConvert<Sema: WIPRowEvidenceName> {
-    fn convert_row_var(&mut self, row_var: Sema::Open<InDb>) -> ReducIrTyVarId;
-}
-impl<S> RowVarConvert<Simple> for LowerCtx<'_, '_, S> {
-    fn convert_row_var(&mut self, row_var: <Simple as RowSema>::Open<InDb>) -> ReducIrTyVarId {
-        self.tyvar_conv.convert(row_var)
-    }
-}
-impl<S> RowVarConvert<Scoped> for LowerCtx<'_, '_, S> {
-    fn convert_row_var(&mut self, row_var: <Scoped as RowSema>::Open<InDb>) -> ReducIrTyVarId {
-        self.tyvar_conv.convert(row_var)
-    }
-}
-
-impl<'a, S> LowerCtx<'a, '_, S> {
-    pub(crate) fn lower_scheme(&mut self, scheme: &TyScheme) -> ReducIrTy {
-        let ir_ty = self.lower_ty(scheme.ty);
-
-        // Add parameter to type for each constraint
-        let constrs_ty = scheme.constrs.iter().rfold(ir_ty, |ty, constr| {
-            let arg = self.row_evidence_ir_ty(constr);
-            self.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ty))
-        });
-        // Add each type variable around type
-        scheme.bound_ty.iter().rfold(constrs_ty, |ty, ty_var| {
-            let ir_ty_var_id = self.tyvar_conv.convert(*ty_var);
-            let var = ReducIrVarTy {
-                var: ir_ty_var_id,
-                kind: if scheme.bound_data_row.contains(ty_var) {
-                    Kind::SimpleRow
-                } else if scheme.bound_eff_row.contains(ty_var) {
-                    Kind::ScopedRow
-                } else {
-                    Kind::Type
-                },
-            };
-            self.mk_reducir_ty(ForallTy(var, ty))
-        })
-    }
-
-    fn lower_ty(&mut self, ty: Ty) -> ReducIrTy {
-        match self.db.kind(&ty) {
-            TypeKind::RowTy(_) => panic!("This should not be allowed"),
-            TypeKind::ErrorTy => unreachable!(),
-            TypeKind::IntTy => self.mk_reducir_ty(ReducIrTyKind::IntTy),
-            TypeKind::VarTy(var) => {
-                let var = self.tyvar_conv.convert(*var);
-                self.mk_reducir_ty(ReducIrTyKind::VarTy(ReducIrVarTy {
-                    var,
-                    kind: Kind::Type,
-                }))
-            }
-            TypeKind::FunTy(arg, ret) => {
-                let arg = self.lower_ty(*arg);
-                let ret = self.lower_ty(*ret);
-                self.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ret))
-            }
-            TypeKind::SumTy(Row::Open(row_var)) | TypeKind::ProdTy(Row::Open(row_var)) => {
-                let var = self.tyvar_conv.convert(*row_var);
-                self.mk_reducir_ty(ReducIrTyKind::VarTy(ReducIrVarTy {
-                    var,
-                    kind: Kind::SimpleRow,
-                }))
-            }
-            TypeKind::ProdTy(Row::Closed(row)) => {
-                let elems = row
-                    .values(&self.db)
-                    .iter()
-                    .map(|ty| self.lower_ty(*ty))
-                    .collect::<Vec<_>>();
-                self.mk_prod_ty(elems.as_slice())
-            }
-            TypeKind::SumTy(Row::Closed(row)) => {
-                let elems = row
-                    .values(&self.db)
-                    .iter()
-                    .map(|ty| self.lower_ty(*ty))
-                    .collect::<Vec<_>>();
-                self.mk_coprod_ty(elems.as_slice())
-            }
-        }
-    }
-
+impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
     #[allow(dead_code)]
     fn row_evidence_ir<Sema: WIPRowEvidenceName>(
         &mut self,
@@ -344,13 +428,13 @@ impl<'a, S> LowerCtx<'a, '_, S> {
         goal: Sema::Closed<InDb>,
     ) -> ReducIr
     where
-        Self: RowVarConvert<Sema>,
+        LowerTyCtx<'a, 'b>: RowVarConvert<Sema>,
         Sema::Closed<InDb>: Copy,
         Sema::Open<InDb>: Copy,
     {
-        let (left_prod, left_coprod) = self.row_ir_tys(&Row::<Sema>::Closed(left));
-        let (right_prod, right_coprod) = self.row_ir_tys(&Row::<Sema>::Closed(right));
-        let (goal_prod, goal_coprod) = self.row_ir_tys(&Row::<Sema>::Closed(goal));
+        let (left_prod, left_coprod) = self.ty_ctx.row_ir_tys(&Row::<Sema>::Closed(left));
+        let (right_prod, right_coprod) = self.ty_ctx.row_ir_tys(&Row::<Sema>::Closed(right));
+        let (goal_prod, goal_coprod) = self.ty_ctx.row_ir_tys(&Row::<Sema>::Closed(goal));
 
         let left_var_id = self.var_conv.generate();
         let right_var_id = self.var_conv.generate();
@@ -403,7 +487,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
 
         let branch = {
             let branch_tyvar = ReducIrVarTy {
-                var: self.tyvar_conv.generate(),
+                var: self.ty_ctx.tyvar_conv.generate(),
                 kind: Kind::Type,
             };
             let branch_var_ty = self.mk_reducir_ty(VarTy(branch_tyvar));
@@ -433,7 +517,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
 
                             let case_var = ReducIrVar {
                                 var: case_var_id,
-                                ty: self.lower_ty(*ty),
+                                ty: self.ty_ctx.lower_ty(*ty),
                             };
                             ReducIr::abss(
                                 [case_var],
@@ -479,7 +563,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 let mut elems = left_indxs.iter().map(|(i, ty)| {
                     let y = ReducIrVar {
                         var: case_var_id,
-                        ty: self.lower_ty(*ty),
+                        ty: self.ty_ctx.lower_ty(*ty),
                     };
                     ReducIr::abss([y], inj(*i, goal_len, ReducIr::var(y)))
                 });
@@ -514,7 +598,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
                 let mut elems = right_indxs.iter().map(|(i, ty)| {
                     let y = ReducIrVar {
                         var: case_var_id,
-                        ty: self.lower_ty(*ty),
+                        ty: self.ty_ctx.lower_ty(*ty),
                     };
                     ReducIr::abss([y], inj(*i, goal_len, ReducIr::var(y)))
                 });
@@ -532,76 +616,6 @@ impl<'a, S> LowerCtx<'a, '_, S> {
             P::new(ReducIr::new(Struct(vec![prj_l, inj_l]))),
             P::new(ReducIr::new(Struct(vec![prj_r, inj_r]))),
         ]))
-    }
-
-    fn row_ir_tys<Sema: WIPRowEvidenceName>(&mut self, row: &Row<Sema>) -> (ReducIrTy, ReducIrTy)
-    where
-        Self: RowVarConvert<Sema>,
-        Sema::Open<InDb>: Copy,
-    {
-        match row {
-            Row::Open(row_var) => {
-                let var = self.convert_row_var(*row_var);
-                let var = self.mk_reducir_ty(VarTy(ReducIrVarTy {
-                    var,
-                    kind: Sema::kind(),
-                }));
-                (var, var)
-            }
-            Row::Closed(row) => {
-                let elems = row
-                    .values(&self.db)
-                    .iter()
-                    .map(|ty| self.lower_ty(*ty))
-                    .collect::<Vec<_>>();
-                (
-                    self.mk_prod_ty(elems.as_slice()),
-                    self.mk_coprod_ty(elems.as_slice()),
-                )
-            }
-        }
-    }
-
-    fn row_evidence_ir_ty(&mut self, ev: &Evidence) -> ReducIrTy {
-        let ((left_prod, left_coprod), (right_prod, right_coprod), (goal_prod, goal_coprod)) =
-            match ev {
-                Evidence::DataRow { left, right, goal } => (
-                    self.row_ir_tys(left),
-                    self.row_ir_tys(right),
-                    self.row_ir_tys(goal),
-                ),
-                Evidence::EffRow { left, right, goal } => (
-                    self.row_ir_tys(left),
-                    self.row_ir_tys(right),
-                    self.row_ir_tys(goal),
-                ),
-            };
-
-        let branch_var = ReducIrVarTy {
-            var: self.tyvar_conv.generate(),
-            kind: Kind::Type,
-        };
-        let branch_var_ty = self.mk_reducir_ty(VarTy(branch_var));
-
-        self.mk_prod_ty(&[
-            self.mk_binary_fun_ty(left_prod, right_prod, goal_prod),
-            self.mk_reducir_ty(ForallTy(
-                branch_var,
-                self.mk_binary_fun_ty(
-                    FunTy(left_coprod, branch_var_ty),
-                    FunTy(right_coprod, branch_var_ty),
-                    FunTy(goal_coprod, branch_var_ty),
-                ),
-            )),
-            self.mk_prod_ty(&[
-                self.mk_reducir_ty(FunTy(goal_prod, left_prod)),
-                self.mk_reducir_ty(FunTy(left_coprod, goal_coprod)),
-            ]),
-            self.mk_prod_ty(&[
-                self.mk_reducir_ty(FunTy(goal_prod, right_prod)),
-                self.mk_reducir_ty(FunTy(right_coprod, goal_coprod)),
-            ]),
-        ])
     }
 }
 
@@ -623,7 +637,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
             db,
             current,
             var_conv,
-            tyvar_conv,
+            ty_ctx: LowerTyCtx { db, tyvar_conv },
             ev_map: EvidenceMap::default(),
             evv_var: ReducIrVar {
                 var: evv_id,
@@ -655,7 +669,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
 
     fn lower_evidence(&mut self, ev: &Evidence) -> ReducIrVar {
         let ev_term = self.var_conv.generate();
-        let row_ev_ty = self.row_evidence_ir_ty(ev);
+        let row_ev_ty = self.ty_ctx.row_evidence_ir_ty(ev);
         ReducIrVar {
             var: ev_term,
             ty: row_ev_ty,
@@ -669,7 +683,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             db: prior.db,
             current: prior.current,
             var_conv: prior.var_conv,
-            tyvar_conv: prior.tyvar_conv,
+            ty_ctx: prior.ty_ctx,
             ev_map: prior.ev_map,
             evv_var: prior.evv_var,
             _marker: std::marker::PhantomData,
@@ -687,7 +701,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             Unit => ReducIr::new(Struct(vec![])),
             Abstraction { arg, body } => {
                 let term_ty = self.lookup_var(*arg);
-                let ty = self.lower_ty(term_ty);
+                let ty = self.ty_ctx.lower_ty(term_ty);
                 let var = ReducIrVar {
                     var: self.var_conv.convert(*arg),
                     ty,
@@ -702,7 +716,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let ty = self.lookup_var(*var);
                 ReducIr::new(Var(ReducIrVar {
                     var: self.var_conv.convert(*var),
-                    ty: self.lower_ty(ty),
+                    ty: self.ty_ctx.lower_ty(ty),
                 }))
             }
             Term::Int(i) => ReducIr::new(ReducIrKind::Int(*i)),
@@ -792,7 +806,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     .unwrap_or_else(|_| unreachable!());
                 let value_var = ReducIrVar {
                     var: self.var_conv.generate(),
-                    ty: self.lower_ty(value_ty),
+                    ty: self.ty_ctx.lower_ty(value_ty),
                 };
                 let eff = op.effect(self.db.as_core_db());
                 let handle_var = ReducIrVar {
@@ -876,7 +890,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 }];
                 let handler_var = ReducIrVar {
                     var: self.var_conv.generate(),
-                    ty: self.lower_ty(handler_infer.ty),
+                    ty: self.ty_ctx.lower_ty(handler_infer.ty),
                 };
                 let handler_prj_ret = ReducIr::app(
                     ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(handler_ev))),
@@ -885,10 +899,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let handler_ir = self.lower_term(ast, *handler);
 
                 let term_infer = self.lookup_term(term);
-                let ret_ty = self.lower_ty(term_infer.ty);
+                let ret_ty = self.ty_ctx.lower_ty(term_infer.ty);
 
                 let body_infer = self.lookup_term(*body);
-                let body_ty = self.lower_ty(body_infer.ty);
+                let body_ty = self.ty_ctx.lower_ty(body_infer.ty);
                 let eff_ev = self.ev_map[&Evidence::EffRow {
                     left: term_infer.eff,
                     right: handler_infer.eff,

@@ -14,7 +14,8 @@ use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 
 pub(crate) mod id_converter;
 use id_converter::IdConverter;
-use salsa::AsId;
+
+use crate::lower::LowerTyCtx;
 
 pub(crate) mod evidence;
 
@@ -130,17 +131,9 @@ fn lower_impl(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
 
 #[salsa::tracked]
 fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
-    let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
-    let bogus_item = TermName::from_id(salsa::Id::from_u32(0u32));
-    // TODO: Clean this up so we can access lower ty without requiring a full LowerCtx
-    // TODO: Do we need to create a new tyvar_conv per scheme we lower?
-    let mut lower_ctx = LowerCtx::new(
-        db.as_lower_reducir_db(),
-        &mut var_conv,
-        &mut tyvar_conv,
-        bogus_item,
-    );
+
+    let mut lower_ty_ctx = LowerTyCtx::new(db.as_lower_reducir_db(), &mut tyvar_conv);
 
     // TODO: Produce members in order so we don't have to sort or get names here.
     let mut members = db
@@ -148,7 +141,10 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
         .iter()
         .map(|op| {
             let scheme = db.effect_member_sig(*op);
-            (db.effect_member_name(*op), lower_ctx.lower_scheme(&scheme))
+            (
+                db.effect_member_name(*op),
+                lower_ty_ctx.lower_scheme(&scheme),
+            )
         })
         .collect::<Vec<_>>();
     members.sort_by(|a, b| a.0.cmp(&b.0));
