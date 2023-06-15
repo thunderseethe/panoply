@@ -13,7 +13,7 @@ use crate::{
     row::{
         Row, RowInternals, RowLabel, RowOps, ScopedClosedRow, ScopedRow, SimpleClosedRow, SimpleRow,
     },
-    Ty, TypeKind,
+    FallibleTypeFold, Ty, TypeAlloc, TypeFoldable, TypeKind, Wrapper,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -326,6 +326,24 @@ impl<'ctx> SimpleClosedRow<InArena<'ctx>> {
 
     pub fn iter(&self) -> impl Iterator<Item = (&RowLabel, &Ty<InArena<'ctx>>)> {
         self.0.fields.iter().zip(self.0.values.iter())
+    }
+}
+
+impl<'ctx, A: 'ctx + Clone + TypeAlloc> TypeFoldable<'ctx> for Wrapper<A> {
+    type Alloc = A;
+
+    type Out<B: TypeAlloc> = Wrapper<B>;
+
+    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::Out>, F::Error> {
+        Ok(Wrapper {
+            tys: self.tys.try_fold_with(fold)?,
+            data_rows: self.data_rows.try_fold_with(fold)?,
+            eff_rows: self.eff_rows.try_fold_with(fold)?,
+            constrs: self.constrs.try_fold_with(fold)?,
+        })
     }
 }
 

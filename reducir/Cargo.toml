@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 aiahr-core.workspace = true
+aiahr-ty.workspace = true
 rustc-hash.workspace = true
 pretty.workspace = true
 salsa.workspace = true

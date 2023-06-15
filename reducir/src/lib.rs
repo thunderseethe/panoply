@@ -1,4 +1,6 @@
-use aiahr_core::id::{ReducIrTyVarId, ReducIrVarId};
+use aiahr_core::id::{ReducIrTyVarId, ReducIrVarId, TermName};
+use aiahr_ty::row::{ScopedRow, SimpleRow};
+use aiahr_ty::PrettyType;
 use pretty::{DocAllocator, *};
 use rustc_hash::FxHashSet;
 use std::fmt;
@@ -6,12 +8,12 @@ use std::ops::Deref;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(ReducIrTy);
-pub trait Db: salsa::DbWithJar<Jar> {
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {
     fn as_ir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {}
 
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub enum ReducIrTyKind {
@@ -66,6 +68,31 @@ impl ReducIrTyKind {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct ReducIrTy {
     pub kind: ReducIrTyKind,
+}
+
+// We allow Rows in type applications because they might show up in constraints.
+// But we want to ensure they don't appear in our ReducIr types outside of that so we make a specific type
+// for it
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub enum ReducIrTyApp {
+    Ty(ReducIrTy),
+    DataRow(SimpleRow),
+    EffRow(ScopedRow),
+}
+impl ReducIrTyApp {
+    fn pretty<'a, D, DB, A>(&self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
+    where
+        A: 'a,
+        D: DocAllocator<'a, A>,
+        DB: ?Sized + crate::Db,
+        D::Doc: pretty::Pretty<'a, D, A> + Clone,
+    {
+        match self {
+            ReducIrTyApp::Ty(ty) => ty.pretty(db, a),
+            ReducIrTyApp::DataRow(simp) => simp.pretty(a, db, &db),
+            ReducIrTyApp::EffRow(scope) => scope.pretty(a, db, &db),
+        }
+    }
 }
 
 impl ReducIrTy {
@@ -218,12 +245,13 @@ impl ReducIrVarTy {
 pub enum ReducIrKind<IR = P<ReducIr>> {
     Int(usize),
     Var(ReducIrVar),
+    Item(TermName),
     // Value abstraction and application
     Abs(ReducIrVar, IR),
     App(IR, IR),
     // Type abstraction and application
     TyAbs(ReducIrVarTy, IR),
-    TyApp(IR, ReducIrTy),
+    TyApp(IR, ReducIrTyApp),
     // Trivial products
     Struct(Vec<IR>),      // Intro
     FieldProj(usize, IR), // Elim
@@ -332,6 +360,7 @@ impl Iterator for UnboundVars<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         self.stack.pop().and_then(|ir| match ir.kind() {
             Int(_) => self.next(),
+            Item(_) => self.next(),
             Var(v) => (!self.bound.contains(&v.var))
                 .then_some(*v)
                 .or_else(|| self.next()),
@@ -407,6 +436,7 @@ impl ReducIr {
         D: DocAllocator<'a, A>,
         DocBuilder<'a, D, A>: Clone,
         DB: ?Sized + crate::Db,
+        D::Doc: pretty::Pretty<'a, D, A> + Clone,
     {
         self.kind.pretty(db, allocator)
     }
@@ -419,6 +449,7 @@ impl ReducIrKind {
         D: DocAllocator<'a, A>,
         DocBuilder<'a, D, A>: Clone,
         DB: ?Sized + crate::Db,
+        D::Doc: pretty::Pretty<'a, D, A> + Clone,
     {
         fn gather_abs<'a>(vars: &mut Vec<ReducIrVar>, kind: &'a ReducIrKind) -> &'a ReducIrKind {
             match kind {
@@ -629,6 +660,7 @@ impl ReducIrKind {
                         .nest(2),
                 )
                 .parens(),
+            Item(name) => arena.text(name.name(db.as_core_db()).text(db.as_core_db()).clone()),
         }
     }
 }

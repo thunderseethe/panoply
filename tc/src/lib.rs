@@ -31,8 +31,6 @@ use folds::zonker::Zonker;
 mod infer;
 pub use infer::TyChkRes;
 
-use self::infer::Wrapper;
-
 /// Information we need about effects during type checking
 pub trait EffectInfo {
     /// Lookup the name of an effect from it's ID
@@ -130,7 +128,7 @@ pub struct TypedItem {
     #[return_ref]
     pub required_evidence: FxHashSet<Evidence<InDb>>,
     #[return_ref]
-    pub item_to_wrappers: FxHashMap<Idx<ast::Term<VarId>>, Wrapper<InDb>>,
+    pub item_to_wrappers: FxHashMap<Idx<ast::Term<VarId>>, Wrapper>,
     pub ty_scheme: TyScheme,
 }
 

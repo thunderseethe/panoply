@@ -1,20 +1,20 @@
 use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId};
 use aiahr_reducir::{
-    Kind, MkReducIrTy, ReducIr, ReducIrKind, ReducIrKind::*, ReducIrTy, ReducIrTyKind,
-    ReducIrTyKind::*, ReducIrVar, ReducIrVarTy, P,
+    Kind, MkReducIrTy, ReducIr, ReducIrKind, ReducIrKind::*, ReducIrTy, ReducIrTyApp,
+    ReducIrTyKind, ReducIrTyKind::*, ReducIrVar, ReducIrVarTy, P,
 };
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
     row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
-    AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
+    AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind, Wrapper,
 };
 use la_arena::Idx;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv},
     id_converter::IdConverter,
-    ReducIrEffectInfo,
+    lower_scoped_row_ev_item, lower_simple_row_ev_item, ReducIrEffectInfo,
 };
 /// Unwrap a type into it a product and return the product's row.
 ///
@@ -42,6 +42,10 @@ fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row<
     ty.try_as_fn_ty(db)
         .and_then(|(arg, _)| arg.try_as_sum_row(db))
         .unwrap_or_else(|_| unreachable!())
+}
+
+pub trait ItemWrappers {
+    fn lookup_wrapper(&self, term_name: TermName, term: Idx<Term<VarId>>) -> &Wrapper;
 }
 
 pub trait ItemSchemes {
@@ -220,7 +224,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
         })
     }
 }
-trait RowVarConvert<Sema: WIPRowEvidenceName> {
+pub(crate) trait RowVarConvert<Sema: WIPRowEvidenceName> {
     fn convert_row_var(&mut self, row_var: Sema::Open<InDb>) -> ReducIrTyVarId;
 }
 impl RowVarConvert<Simple> for LowerTyCtx<'_, '_> {
@@ -256,15 +260,19 @@ impl<'a, S> LowerCtx<'a, '_, S> {
     fn lookup_var(&self, var_id: VarId) -> Ty {
         self.db.lookup_var(self.current, var_id)
     }
+
+    fn lookup_wrapper(&self, term: Idx<Term<VarId>>) -> &'a Wrapper {
+        self.db.lookup_wrapper(self.current, term)
+    }
 }
 
 #[derive(Clone, Copy)]
-enum RowIndx {
+pub(crate) enum RowIndx {
     Left(usize, Ty<InDb>),
     Right(usize, Ty<InDb>),
 }
 
-trait WIPRowEvidenceName: RowSema {
+pub(crate) trait WIPRowEvidenceName: RowSema {
     fn kind() -> Kind;
 
     fn merge<Db: ?Sized + crate::Db>(
@@ -420,8 +428,7 @@ impl WIPRowEvidenceName for Scoped {
 }
 
 impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
-    #[allow(dead_code)]
-    fn row_evidence_ir<Sema: WIPRowEvidenceName>(
+    pub(crate) fn row_evidence_ir<Sema: WIPRowEvidenceName>(
         &mut self,
         left: Sema::Closed<InDb>,
         right: Sema::Closed<InDb>,
@@ -655,16 +662,49 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         let mut evs = ev_iter.collect::<Vec<_>>();
 
         evs.sort();
-        let params = evs
-            .into_iter()
-            .map(|ev| {
-                let param = self.lower_evidence(ev);
-                self.ev_map.insert(*ev, param);
-                param
-            })
-            .collect::<Vec<_>>();
+        let mut solved = vec![];
+        let mut params = vec![];
+        for ev in evs {
+            let param = self.lower_evidence(ev);
+            self.ev_map.insert(*ev, param);
+            match ev {
+                Evidence::DataRow {
+                    left: Row::Closed(left),
+                    right: Row::Closed(right),
+                    goal: Row::Closed(goal),
+                } => {
+                    let ir_item = lower_simple_row_ev_item(
+                        self.db,
+                        self.current.module(self.db.as_core_db()),
+                        *left,
+                        *right,
+                        *goal,
+                    );
+                    let ir = ReducIr::new(Item(ir_item.name(self.db)));
+                    solved.push((param, ir));
+                }
+                Evidence::EffRow {
+                    left: Row::Closed(left),
+                    right: Row::Closed(right),
+                    goal: Row::Closed(goal),
+                } => {
+                    let ir_item = lower_scoped_row_ev_item(
+                        self.db,
+                        self.current.module(self.db.as_core_db()),
+                        *left,
+                        *right,
+                        *goal,
+                    );
+                    let ir = ReducIr::new(Item(ir_item.name(self.db)));
+                    solved.push((param, ir));
+                }
+                _ => {
+                    params.push(param);
+                }
+            }
+        }
 
-        (LowerCtx::with_evidenceless(self), vec![], params)
+        (LowerCtx::with_evidenceless(self), solved, params)
     }
 
     fn lower_evidence(&mut self, ev: &Evidence) -> ReducIrVar {
@@ -720,7 +760,32 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 }))
             }
             Term::Int(i) => ReducIr::new(ReducIrKind::Int(*i)),
-            Item(_term_name) => todo!(),
+            Item(term_name) => {
+                let wrapper = self.lookup_wrapper(term);
+                let ir = ReducIr::new(ReducIrKind::Item(*term_name));
+                let ir = ReducIr::app(
+                    ir,
+                    wrapper
+                        .constrs
+                        .iter()
+                        .map(|ev| ReducIr::var(self.ev_map[ev])),
+                );
+                let ir = wrapper.data_rows.iter().rfold(ir, |body, row| {
+                    ReducIr::new(ReducIrKind::TyApp(
+                        P::new(body),
+                        ReducIrTyApp::DataRow(*row),
+                    ))
+                });
+                let ir = wrapper.eff_rows.iter().rfold(ir, |body, row| {
+                    ReducIr::new(ReducIrKind::TyApp(P::new(body), ReducIrTyApp::EffRow(*row)))
+                });
+                wrapper.tys.iter().rfold(ir, |body, ty| {
+                    ReducIr::new(ReducIrKind::TyApp(
+                        P::new(body),
+                        ReducIrTyApp::Ty(self.ty_ctx.lower_ty(*ty)),
+                    ))
+                })
+            }
             // At this level Label/Unlabel are removed
             Label { term, .. } => self.lower_term(ast, *term),
             Unlabel { term, .. } => self.lower_term(ast, *term),
@@ -928,7 +993,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                         ReducIr::new(Prompt(
                             P::new(ReducIr::var(prompt_var)),
                             P::new(ReducIr::app(
-                                ReducIr::new(TyApp(P::new(handler_prj_ret), body_ty)),
+                                ReducIr::new(TyApp(
+                                    P::new(handler_prj_ret),
+                                    ReducIrTyApp::Ty(body_ty),
+                                )),
                                 [self.lower_term(ast, *body)],
                             )),
                         )),
@@ -937,7 +1005,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
 
                 ReducIr::local(
                     handler_var,
-                    ReducIr::new(TyApp(P::new(handler_ir), ret_ty)),
+                    ReducIr::new(TyApp(P::new(handler_ir), ReducIrTyApp::Ty(ret_ty))),
                     install_prompt,
                 )
             }

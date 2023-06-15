@@ -8,7 +8,10 @@ use aiahr_reducir::{
     Kind, MkReducIrTy, ReducIr, ReducIrKind::*, ReducIrTy, ReducIrTyKind, ReducIrVarTy, P,
 };
 use aiahr_tc::{EffectInfo, TypedItem};
-use aiahr_ty::{InDb, Ty, TyScheme};
+use aiahr_ty::{
+    row::{RowOps, RowSema, Scoped, Simple},
+    InDb, Ty, TyScheme, Wrapper,
+};
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 
@@ -16,6 +19,8 @@ pub(crate) mod id_converter;
 use id_converter::IdConverter;
 
 use crate::lower::LowerTyCtx;
+
+use self::lower::{ItemWrappers, RowVarConvert, WIPRowEvidenceName};
 
 pub(crate) mod evidence;
 
@@ -37,6 +42,8 @@ pub struct Jar(
     ReducIrItem,
     lower_module,
     lower_item,
+    lower_simple_row_ev_item,
+    lower_scoped_row_ev_item,
     lower_impl,
     effect_handler_ir_ty,
 );
@@ -101,6 +108,61 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
         .map(|term| lower_impl(db, *term))
         .collect();
     ReducIrModule::new(db, module.module(ast_db), items)
+}
+
+#[salsa::tracked]
+fn lower_simple_row_ev_item(
+    db: &dyn crate::Db,
+    module: Module,
+    left: <Simple as RowSema>::Closed<InDb>,
+    right: <Simple as RowSema>::Closed<InDb>,
+    goal: <Simple as RowSema>::Closed<InDb>,
+) -> ReducIrItem {
+    lower_row_ev_item::<Simple>(db, module, left, right, goal)
+}
+
+#[salsa::tracked]
+fn lower_scoped_row_ev_item(
+    db: &dyn crate::Db,
+    module: Module,
+    left: <Scoped as RowSema>::Closed<InDb>,
+    right: <Scoped as RowSema>::Closed<InDb>,
+    goal: <Scoped as RowSema>::Closed<InDb>,
+) -> ReducIrItem {
+    lower_row_ev_item::<Scoped>(db, module, left, right, goal)
+}
+
+fn lower_row_ev_item<Sema: WIPRowEvidenceName>(
+    db: &dyn crate::Db,
+    module: Module,
+    left: Sema::Closed<InDb>,
+    right: Sema::Closed<InDb>,
+    goal: Sema::Closed<InDb>,
+) -> ReducIrItem
+where
+    for<'a, 'b> LowerTyCtx<'a, 'b>: RowVarConvert<Sema>,
+    Sema::Closed<InDb>: Copy,
+    Sema::Open<InDb>: Copy,
+{
+    let left_fields: String = left
+        .fields(&db)
+        .iter()
+        .map(|ident| ident.text(db.as_core_db()).as_str())
+        .collect();
+    let right_fields: String = right
+        .fields(&db)
+        .iter()
+        .map(|ident| ident.text(db.as_core_db()).as_str())
+        .collect();
+    let row_ev_ident = db.ident(format!("_row_{}_{}", left_fields, right_fields));
+    let row_ev_name = TermName::new(db.as_core_db(), row_ev_ident, module);
+
+    let mut var_conv = IdConverter::new();
+    let mut tyvar_conv = IdConverter::new();
+    let mut lower_ctx = LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, row_ev_name);
+    let ir = lower_ctx.row_evidence_ir::<Sema>(left, right, goal);
+
+    ReducIrItem::new(db, row_ev_name, ir)
 }
 
 #[salsa::tracked]
@@ -178,6 +240,17 @@ where
         effect_handler_ir_ty(self.as_lower_reducir_db(), effect)
     }
 }
+impl<DB> ItemWrappers for DB
+where
+    DB: ?Sized + crate::Db,
+{
+    fn lookup_wrapper(&self, term_name: TermName, term: Idx<Term<VarId>>) -> &Wrapper {
+        let typed_item = self.type_scheme_of(term_name);
+        let wrappers = typed_item.item_to_wrappers(self.as_tc_db());
+        &wrappers[&term]
+    }
+}
+
 impl<DB> ItemSchemes for DB
 where
     DB: ?Sized + crate::Db,
@@ -206,30 +279,26 @@ where
     }
 }
 
-/// Lower an `Ast` into an `Ir`.
+/// Lower an `Ast` into an `ReducIr`.
 /// TODO: Real documentation.
-pub fn lower(
-    db: &dyn crate::Db,
-    name: TermName,
-    typed_item: TypedItem,
-    ast: &Ast<VarId>,
-) -> ReducIr {
+fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<VarId>) -> ReducIr {
     let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
     let scheme = typed_item.ty_scheme(db.as_tc_db());
 
     let required_evidence = typed_item.required_evidence(tc_db);
-    let (mut lower_ctx, ev_locals, ev_params) =
+    let (mut lower_ctx, ev_solved, ev_params) =
         LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, name)
             .collect_evidence_params(required_evidence.iter());
 
     let body = lower_ctx.lower_top_level(ast, ast.tree);
-    // Bind all unique solved row evidence to local variables at top of the term
-    let body = ev_locals.into_iter().fold(body, |body, (ev_param, ev_ir)| {
-        ReducIr::app(ReducIr::abss([ev_param], body), [ev_ir])
-    });
-    // Add unsolved row evidence as parameters of the term
+    // TODO: Bit of a hack. Eventually we'd like to generate our solved row ev in a central location.
+    // Add row evidence as parameters of the term
+    let body = ev_solved
+        .into_iter()
+        .rfold(body, |body, (arg, term)| ReducIr::local(arg, term, body));
+    // Wrap our term in any unsolved row evidence params we need
     let body = ev_params
         .into_iter()
         .rfold(body, |body, arg| ReducIr::new(Abs(arg, P::new(body))));
@@ -348,7 +417,9 @@ main = "#
 
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
-        let expect = expect!["(forall [(T1: Type)] (fun [V1, V2, V0, V3] (V2[0] V3 V3)))"];
+        let expect = expect![[r#"
+            (forall [(T1: Type)] (let (V1 _row__)
+                (let (V2 _row_x_y) (fun [V0, V3] (V2[0] V3 V3)))))"#]];
         expect.assert_eq(&pretty_ir);
     }
 
@@ -362,7 +433,7 @@ main = "#
         let expect = expect![[r#"
             (forall
               [(T1: Type) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) (T7: SimpleRow)]
-              (fun [V1, V2, V3, V0, V4, V5] (V3[3][0] (V2[0] V4 V5))))"#]];
+              (fun [V2, V3] (let (V1 _row__) (fun [V0, V4, V5] (V3[3][0] (V2[0] V4 V5))))))"#]];
         expect.assert_eq(&pretty_ir)
     }
 
@@ -382,16 +453,23 @@ with {
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            (forall [(T4: Type)] (fun [V1, V2, V3, V4, V5, V6, V0]
-                (let
-                  (V8 ((V6[0]
-                    (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {}))
-                    (fun [V13] V13)) @ {}))
-                  (new_prompt [V7] (let (V0 (V2[0] V0 {V7, V8}))
-                    (prompt V7 (((V6[3][0] V8) @ {})
-                        ((fun [V15, V14] (yield V15[0] (fun [V16] (V15[1][1] V14 V16))))
-                          (V3[3][0] V0)
-                          {}))))))))"#]];
+            (forall [(T4: Type)] (let (V1 _row__)
+                (let (V2 _row__State)
+                  (let (V3 _row_State_)
+                    (let (V4 _row_put_get)
+                      (let (V5 _row_return_putget)
+                        (let (V6 _row_putget_return)
+                          (fun [V0]
+                            (let
+                              (V8 ((V6[0]
+                                (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {}))
+                                (fun [V13] V13)) @ {}))
+                              (new_prompt [V7] (let (V0 (V2[0] V0 {V7, V8}))
+                                (prompt V7 (((V6[3][0] V8) @ {})
+                                    ((fun [V15, V14]
+                                      (yield V15[0] (fun [V16] (V15[1][1] V14 V16))))
+                                      (V3[3][0] V0)
+                                      {}))))))))))))))"#]];
         expect.assert_eq(&pretty_ir);
     }
 }

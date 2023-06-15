@@ -118,31 +118,6 @@ pub(crate) trait InferState {
     type Storage<'infer>;
 }
 
-#[derive(Eq, PartialEq, Debug)]
-pub struct Wrapper<A: TypeAlloc> {
-    tys: Vec<Ty<A>>,
-    data_rows: Vec<SimpleRow<A>>,
-    eff_rows: Vec<ScopedRow<A>>,
-    constrs: Vec<Evidence<A>>,
-}
-impl<'ctx, A: 'ctx + Clone + TypeAlloc> TypeFoldable<'ctx> for Wrapper<A> {
-    type Alloc = A;
-
-    type Out<B: TypeAlloc> = Wrapper<B>;
-
-    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::Out>, F::Error> {
-        Ok(Wrapper {
-            tys: self.tys.try_fold_with(fold)?,
-            data_rows: self.data_rows.try_fold_with(fold)?,
-            eff_rows: self.eff_rows.try_fold_with(fold)?,
-            constrs: self.constrs.try_fold_with(fold)?,
-        })
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct GenerationStorage<'infer> {
     pub(crate) var_tys: FxHashMap<VarId, InferTy<'infer>>,

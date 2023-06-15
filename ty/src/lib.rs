@@ -374,3 +374,11 @@ where
             .finish()
     }
 }
+
+#[derive(Eq, PartialEq, Debug)]
+pub struct Wrapper<A: TypeAlloc = InDb> {
+    pub tys: Vec<Ty<A>>,
+    pub data_rows: Vec<SimpleRow<A>>,
+    pub eff_rows: Vec<ScopedRow<A>>,
+    pub constrs: Vec<Evidence<A>>,
+}

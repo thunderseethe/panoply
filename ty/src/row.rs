@@ -96,8 +96,8 @@ pub enum Row<Sema: RowSema, A: TypeAlloc = InDb> {
     /// A closed row is a concrete mapping from fields to values.
     Closed(Sema::Closed<A>),
 }
-pub type SimpleRow<A> = Row<Simple, A>;
-pub type ScopedRow<A> = Row<Scoped, A>;
+pub type SimpleRow<A = InDb> = Row<Simple, A>;
+pub type ScopedRow<A = InDb> = Row<Scoped, A>;
 
 impl<A: TypeAlloc, Sema: RowSema + Clone> Copy for Row<Sema, A>
 where

@@ -61,6 +61,7 @@ impl Value {
         D: DocAllocator<'a, A> + 'a,
         DocBuilder<'a, D, A>: Clone,
         DB: ?Sized + aiahr_reducir::Db,
+        D::Doc: pretty::Pretty<'a, D, A> + Clone,
     {
         match self {
             Value::Int(i) => a.as_string(i),
@@ -400,6 +401,7 @@ impl Machine {
             // TODO: Handle type applications but they shouldn't show up in real runtime
             ReducIrKind::TyAbs(_, body) => InterpretResult::Step(body),
             ReducIrKind::TyApp(_, _) => todo!(),
+            ReducIrKind::Item(_) => todo!(),
         }
     }
 

@@ -324,11 +324,12 @@ where
     }
 }
 
-impl<'a, D> Pretty<'a, D> for TyVarId
+impl<'a, D, A> Pretty<'a, D, A> for TyVarId
 where
-    D: DocAllocator<'a>,
+    A: 'a,
+    D: DocAllocator<'a, A>,
 {
-    fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, ()> {
+    fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, A> {
         alloc
             .text("ty_var")
             .append(alloc.as_string(self.0).angles())
