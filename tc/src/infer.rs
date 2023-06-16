@@ -1,6 +1,7 @@
 use aiahr_ast::{Ast, Direction, Term, Term::*};
 use aiahr_core::{
-    diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, modules::Module, span::Span,
+    diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, memory::handle, modules::Module,
+    span::Span,
 };
 use aiahr_ty::{
     infer::{
@@ -433,23 +434,31 @@ where
                 self.add_effect_row_combine(left_infer.eff, right_infer.eff, expected.eff, span);
                 self.add_data_row_combine(left_row, right_row, row, span);
             }
-            (Branch { left, right }, FunTy(arg, ret)) => {
-                let arg_row = self.equate_as_sum_row(arg, current_span);
-
-                let left_infer = self._infer(*left);
-                let (left_arg, left_ret) = self.equate_as_fn_ty(left_infer.ty, current_span);
-                let left_row = self.equate_as_sum_row(left_arg, current_span);
-
-                let right_infer = self._infer(*right);
-                let (right_arg, right_ret) = self.equate_as_fn_ty(right_infer.ty, current_span);
-                let right_row = self.equate_as_sum_row(right_arg, current_span);
-
+            (Branch { left, right }, FunTy(Ty(handle::Handle(SumTy(arg_row))), ret)) => {
                 let span = current_span();
-                self.add_effect_row_combine(left_infer.eff, right_infer.eff, expected.eff, span);
-                self.add_data_row_combine(left_row, right_row, arg_row, span);
-                // All branch return types must be equal
-                self.constraints.add_ty_eq(left_ret, ret, current_span());
-                self.constraints.add_ty_eq(right_ret, ret, current_span());
+
+                let left_eff = self.fresh_scoped_row();
+                let right_eff = self.fresh_scoped_row();
+                self.add_effect_row_combine(left_eff, right_eff, expected.eff, span);
+
+                let left_row = self.fresh_simple_row();
+                let right_row = self.fresh_simple_row();
+                self.add_data_row_combine(left_row, right_row, *arg_row, span);
+
+                self._check(
+                    *left,
+                    TyChkRes::new(
+                        self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret)),
+                        left_eff,
+                    ),
+                );
+                self._check(
+                    *right,
+                    TyChkRes::new(
+                        self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret)),
+                        right_eff,
+                    ),
+                );
             }
             (Project { .. }, RowTy(row)) => {
                 // Coerce row into a product and re-check.
@@ -887,22 +896,6 @@ where
                 let unifier = self.data_row_unifiers.new_key(None);
                 self.constraints
                     .add_ty_eq(self.mk_ty(ProdTy(Row::Open(unifier))), ty, span());
-                Row::Open(unifier)
-            }
-        }
-    }
-    pub(crate) fn equate_as_sum_row(
-        &mut self,
-        ty: InferTy<'infer>,
-        span: impl FnOnce() -> Span,
-    ) -> SimpleInferRow<'infer> {
-        match ty.deref() {
-            TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Row::Closed(*row),
-            TypeKind::SumTy(Row::Open(var)) => Row::Open(*var),
-            _ => {
-                let unifier = self.data_row_unifiers.new_key(None);
-                self.constraints
-                    .add_ty_eq(self.mk_ty(SumTy(Row::Open(unifier))), ty, span());
                 Row::Open(unifier)
             }
         }

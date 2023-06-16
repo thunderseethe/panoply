@@ -86,7 +86,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
         effect_defn(self.as_nameres_db(), eff_name)
     }
 
-    fn term_defn(&self, term_name: TermName) -> NameResTerm {
+    fn nameres_term_of(&self, term_name: TermName) -> NameResTerm {
         term_defn(self.as_nameres_db(), term_name)
     }
 
@@ -499,10 +499,10 @@ impl InScopeName {
                 module_names.get(*term).span()
             }
             InScopeName::TermTyVar(term, ty_var) => {
-                db.term_defn(*term).locals(db.as_nameres_db()).ty_vars[*ty_var].span()
+                db.nameres_term_of(*term).locals(db.as_nameres_db()).ty_vars[*ty_var].span()
             }
             InScopeName::TermVar(term, var) => {
-                db.term_defn(*term).locals(db.as_nameres_db()).vars[*var].span()
+                db.nameres_term_of(*term).locals(db.as_nameres_db()).vars[*var].span()
             }
             InScopeName::EffectTyVar(eff_op, ty_var) => {
                 let effect = eff_op.effect(db.as_core_db());

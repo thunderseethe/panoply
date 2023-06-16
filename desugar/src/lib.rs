@@ -45,6 +45,11 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_
         let nameres_module = self.nameres_module_of(module);
         desugar_module(self.as_desugar_db(), nameres_module)
     }
+
+    fn desugar_term_of(&self, term: TermName) -> AstTerm {
+        let nameres_term = self.nameres_term_of(term);
+        desugar_term(self.as_desugar_db(), nameres_term)
+    }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_ty::Db
 {}

@@ -44,7 +44,6 @@ pub struct Jar(
     lower_item,
     lower_simple_row_ev_item,
     lower_scoped_row_ev_item,
-    lower_impl,
     effect_handler_ir_ty,
 );
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
@@ -57,7 +56,8 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
     }
 
     fn lower_item(&self, term_name: TermName) -> ReducIrItem {
-        lower_item(self.as_lower_reducir_db(), term_name)
+        let ast_term = self.desugar_term_of(term_name);
+        lower_item(self.as_lower_reducir_db(), ast_term)
     }
 
     fn lower_module_of(&self, module: Module) -> ReducIrModule {
@@ -105,7 +105,7 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
     let items = module
         .terms(ast_db)
         .iter()
-        .map(|term| lower_impl(db, *term))
+        .map(|term| lower_item(db, *term))
         .collect();
     ReducIrModule::new(db, module.module(ast_db), items)
 }
@@ -166,23 +166,7 @@ where
 }
 
 #[salsa::tracked]
-fn lower_item(db: &dyn crate::Db, term_name: TermName) -> ReducIrItem {
-    let module = term_name.module(db.as_core_db());
-    let ir_module = db.lower_module_of(module);
-    *ir_module
-        .items(db)
-        .iter()
-        .find(|term| term.name(db) == term_name)
-        .unwrap_or_else(|| {
-            panic!(
-                "ICE: No IrItem constructed for TermName {:?}",
-                term_name.name(db.as_core_db())
-            )
-        })
-}
-
-#[salsa::tracked]
-fn lower_impl(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
+fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
     let ast_db = db.as_ast_db();
     let name = term.name(ast_db);
     let ast = term.data(ast_db);
