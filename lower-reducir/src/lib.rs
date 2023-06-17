@@ -5,7 +5,10 @@ use aiahr_core::{
     modules::Module,
 };
 use aiahr_reducir::{
-    Kind, MkReducIrTy, ReducIr, ReducIrKind::*, ReducIrTy, ReducIrTyKind, ReducIrVarTy, P,
+    ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
+    ReducIr,
+    ReducIrKind::*,
+    P,
 };
 use aiahr_tc::{EffectInfo, TypedItem};
 use aiahr_ty::{

@@ -419,7 +419,7 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_reducir::{MkReducIrTy, ReducIrTyKind};
+    use aiahr_reducir::ty::{MkReducIrTy, ReducIrTyKind};
 
     use super::*;
 

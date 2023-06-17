@@ -1,8 +1,12 @@
 use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId};
 use aiahr_reducir::{
-    Kind, MkReducIrTy, ReducIr, ReducIrKind, ReducIrKind::*, ReducIrTy, ReducIrTyApp,
-    ReducIrTyKind, ReducIrTyKind::*, ReducIrVar, ReducIrVarTy, P,
+    ty::{
+        Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*, ReducIrVarTy,
+    },
+    ReducIr, ReducIrKind,
+    ReducIrKind::*,
+    ReducIrVar, P,
 };
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
