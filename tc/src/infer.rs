@@ -723,6 +723,7 @@ where
             Operation(op_name) => {
                 let (wrapper, sig) =
                     self.instantiate(self.db.effect_member_sig(*op_name), current_span());
+
                 self.state.item_wrappers.insert(term, wrapper);
 
                 InferResult::new(
@@ -1309,13 +1310,14 @@ where
                 // We succesfully unified the handler against it's expected signature.
                 // That means we can unify our eff_var against our effect
                 let name = self.db.effect_name(eff_name);
-                let unit_ty = self.mk_ty(ProdTy(Row::Closed(self.mk_row(&[], &[]))));
-                let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[unit_ty]);
+                let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[normal_ret]);
                 self.unify(eff_var, eff_row)
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
                 let eff_ident = *eff.fields(self).first().unwrap();
+                let eff_ret_ty = *eff.values(self).first().unwrap();
+                self.unify(normal_ret, eff_ret_ty)?;
                 let eff_name = self
                     .db
                     .lookup_effect_by_name(self.module, eff_ident)
@@ -1342,6 +1344,8 @@ where
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
                 let eff_ident = *eff.fields(self).first().unwrap();
+                let eff_ret_ty = *eff.values(self).first().unwrap();
+                self.unify(normal_ret, eff_ret_ty)?;
                 let eff_name = self
                     .db
                     .lookup_effect_by_name(self.module, eff_ident)

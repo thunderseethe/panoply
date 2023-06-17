@@ -735,6 +735,33 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         ReducIr::abss([self.evv_var], ir)
     }
 
+    fn apply_wrapper(&mut self, wrapper: &Wrapper, ir: ReducIr) -> ReducIr {
+        // This needs to be done in the reverse order that we add our Abs and TyAbs when we lower
+        let ir = wrapper.tys.iter().rfold(ir, |body, ty| {
+            ReducIr::new(ReducIrKind::TyApp(
+                P::new(body),
+                ReducIrTyApp::Ty(self.ty_ctx.lower_ty(*ty)),
+            ))
+        });
+        let ir = wrapper.eff_rows.iter().rfold(ir, |body, row| {
+            ReducIr::new(ReducIrKind::TyApp(P::new(body), ReducIrTyApp::EffRow(*row)))
+        });
+        let ir = wrapper.data_rows.iter().rfold(ir, |body, row| {
+            ReducIr::new(ReducIrKind::TyApp(
+                P::new(body),
+                ReducIrTyApp::DataRow(*row),
+            ))
+        });
+        let ir = ReducIr::app(
+            ir,
+            wrapper
+                .constrs
+                .iter()
+                .map(|ev| ReducIr::var(self.ev_map[ev])),
+        );
+        ir
+    }
+
     fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> ReducIr {
         use Term::*;
         match ast.view(term) {
@@ -763,28 +790,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             Item(term_name) => {
                 let wrapper = self.lookup_wrapper(term);
                 let ir = ReducIr::new(ReducIrKind::Item(*term_name));
-                let ir = ReducIr::app(
-                    ir,
-                    wrapper
-                        .constrs
-                        .iter()
-                        .map(|ev| ReducIr::var(self.ev_map[ev])),
-                );
-                let ir = wrapper.data_rows.iter().rfold(ir, |body, row| {
-                    ReducIr::new(ReducIrKind::TyApp(
-                        P::new(body),
-                        ReducIrTyApp::DataRow(*row),
-                    ))
-                });
-                let ir = wrapper.eff_rows.iter().rfold(ir, |body, row| {
-                    ReducIr::new(ReducIrKind::TyApp(P::new(body), ReducIrTyApp::EffRow(*row)))
-                });
-                wrapper.tys.iter().rfold(ir, |body, ty| {
-                    ReducIr::new(ReducIrKind::TyApp(
-                        P::new(body),
-                        ReducIrTyApp::Ty(self.ty_ctx.lower_ty(*ty)),
-                    ))
-                })
+                self.apply_wrapper(wrapper, ir)
             }
             // At this level Label/Unlabel are removed
             Label { term, .. } => self.lower_term(ast, *term),
@@ -865,7 +871,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             // Effect stuff
             Operation(op) => {
                 let term_infer = self.lookup_term(term);
-                let (value_ty, _) = term_infer
+                let (value_ty, op_ret) = term_infer
                     .ty
                     .try_as_fn_ty(&self.db)
                     .unwrap_or_else(|_| unreachable!());
@@ -878,16 +884,26 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     var: self.var_conv.generate(),
                     ty: self.db.effect_handler_ir_ty(eff),
                 };
+                let kont_ret_ty = match term_infer.eff {
+                    Row::Open(_) => {
+                        todo!("Is this case possible? If so how do we build our continuation type")
+                    }
+                    Row::Closed(eff_row) => {
+                        let eff_name = eff.name(self.db.as_core_db());
+                        let ret_ty_indx = eff_row
+                            .fields(&self.db)
+                            .iter()
+                            .rev()
+                            .position(|eff_id| *eff_id == eff_name)
+                            .expect("ICE: Type checked effect should appear in effet row");
+                        let ret_ty = eff_row.values(&self.db)[ret_ty_indx];
+                        self.ty_ctx.lower_ty(ret_ty)
+                    }
+                };
+                let op_ret = self.ty_ctx.lower_ty(op_ret);
                 let kont_var = ReducIrVar {
                     var: self.var_conv.generate(),
-                    // Figure out how to construct this return type
-                    // I think we might be able infer it from top level term type and op sig
-                    // where op sig is `op_arg -> op_ret`. We need to lean on the effect row here.
-                    // We'll stash the return type of a particular handler in the effect row so
-                    // that when we look up the effet row here the effect we're yielding too should
-                    // hold the innermost return type and we can make use of it to know how to type
-                    // our continuation.
-                    ty: self.mk_reducir_ty(IntTy),
+                    ty: self.mk_reducir_ty(FunTy(op_ret, kont_ret_ty)),
                 };
 
                 let op_ty = self.db.effect_member_sig(*op);
@@ -896,28 +912,27 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     right: op_ty.eff,
                     goal: term_infer.eff,
                 }];
-                let prj = ReducIr::new(FieldProj(
-                    0,
-                    P::new(ReducIr::new(FieldProj(3, P::new(ReducIr::var(eff_ev))))),
-                ));
+                let prj = ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(eff_ev)));
                 let eff_handler = ReducIr::app(prj, [ReducIr::var(self.evv_var)]);
 
                 let handler_index = self.db.effect_handler_op_index(*op);
+                let wrapper = self.lookup_wrapper(term);
+                let handler = self.apply_wrapper(
+                    wrapper,
+                    ReducIr::field_proj(
+                        handler_index,
+                        ReducIr::field_proj(1, ReducIr::var(handle_var)),
+                    ),
+                );
                 ReducIr::app(
                     ReducIr::abss(
                         [handle_var, value_var],
                         ReducIr::new(Yield(
-                            P::new(ReducIr::new(FieldProj(0, P::new(ReducIr::var(handle_var))))),
+                            P::new(ReducIr::field_proj(0, ReducIr::var(handle_var))),
                             P::new(ReducIr::abss(
                                 [kont_var],
                                 ReducIr::app(
-                                    ReducIr::new(FieldProj(
-                                        handler_index,
-                                        P::new(ReducIr::new(FieldProj(
-                                            1,
-                                            P::new(ReducIr::var(handle_var)),
-                                        ))),
-                                    )),
+                                    handler,
                                     [ReducIr::var(value_var), ReducIr::var(kont_var)],
                                 ),
                             )),
@@ -945,7 +960,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     .fields(&self.db)
                     .binary_search(&ret_label)
                     .unwrap_or_else(|_| {
-                        panic!("ICE: Type checked handler should contain 'return'")
+                        panic!("ICE: Type checked handler should contain 'return' field")
                     });
                 let handler_ret_ty = handler_row.values(&self.db)[ret_idx];
                 let handler_ret_row = self.db.single_row(ret_label, handler_ret_ty);

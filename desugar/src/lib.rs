@@ -50,6 +50,11 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_
         let nameres_term = self.nameres_term_of(term);
         desugar_term(self.as_desugar_db(), nameres_term)
     }
+
+    fn desugar_effect_of(&self, eff: EffectName) -> AstEffect {
+        let nameres_eff = self.nameres_effect_of(eff);
+        desugar_effect(self.as_desugar_db(), nameres_eff)
+    }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_ty::Db
 {}
