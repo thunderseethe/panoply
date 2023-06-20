@@ -274,14 +274,19 @@ impl<Db> DebugWithDb<Db> for ClosedRow<InDb>
 where
     Db: ?Sized + crate::Db,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
         f.debug_map()
             .entries(
                 self.fields
                     .fields(db.as_ty_db())
                     .iter()
                     .map(|handle| handle.text(db.as_core_db()))
-                    .zip(self.values.values(db.as_ty_db()).iter()),
+                    .zip(
+                        self.values
+                            .values(db.as_ty_db())
+                            .iter()
+                            .map(|ty| ty.debug_with(db, include_all_fields)),
+                    ),
             )
             .finish()
     }

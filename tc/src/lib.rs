@@ -12,12 +12,14 @@ use aiahr_core::{
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use la_arena::Idx;
+use pretty::RcAllocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use aiahr_ty::{
-    infer::{InArena, TcUnifierVar, TyCtx},
+    infer::{InArena, TcUnifierVar, TyCtx, UnifierKind},
     *,
 };
+use salsa::DebugWithDb;
 
 mod unsolved_row;
 
@@ -198,7 +200,10 @@ where
     let (mut ty_unifiers, mut data_row_unifiers, mut eff_row_unifiers, unsolved_eqs, errors) =
         infer.solve();
 
-    //print_root_unifiers(&mut unifiers);
+    print_root_unifiers(db, &mut ty_unifiers);
+    print_root_unifiers(db, &mut data_row_unifiers);
+    print_root_unifiers(db, &mut eff_row_unifiers);
+
     // Zonk the variable -> type mapping and the root term type.
     let mut zonker = Zonker {
         ctx: db,
@@ -223,7 +228,13 @@ where
     let zonked_required_ev = gen_storage
         .required_ev
         .into_iter()
-        .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
+        .map(|ev| {
+            println!("unzonked: {:?}", ev.debug(db));
+            let zonked_ev = ev.try_fold_with(&mut zonker).unwrap();
+            println!("zonked: {:?}\n", zonked_ev.debug(db));
+
+            zonked_ev
+        })
         .collect::<FxHashSet<_>>();
 
     let constrs = unsolved_eqs
@@ -267,8 +278,12 @@ where
     }
 }
 
-#[allow(dead_code)]
-fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
+fn print_root_unifiers<'ctx, K: UnifierKind>(
+    db: &dyn crate::Db,
+    uni: &mut InPlaceUnificationTable<TcUnifierVar<'ctx, K>>,
+) where
+    K::UnifyValue<'ctx>: for<'db> PrettyType<dyn crate::Db + 'db, InArena<'ctx>, ()>,
+{
     println!("UnificationTable [");
     for uv in (0..uni.len()).map(|i| TcUnifierVar::from_index(i as u32)) {
         let root = uni.find(uv);
@@ -276,7 +291,8 @@ fn print_root_unifiers(uni: &mut InPlaceUnificationTable<TcUnifierVar<'_>>) {
             continue;
         }
         if let Some(candidate) = uni.probe_value(root) {
-            println!("\t{} => {:?}", uv.index(), candidate);
+            let doc: pretty::RcDoc = candidate.pretty(&RcAllocator, db, &()).into_doc();
+            println!("\t{} => {}", uv.index(), doc.pretty(80));
         }
     }
     println!("]");

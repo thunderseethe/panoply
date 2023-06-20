@@ -356,8 +356,7 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    /// Lower a snippet and return the produced IR
-    fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
+    fn lower_function<'db>(db: &'db TestDatabase, input: &str, fn_name: &str) -> &'db ReducIr {
         let path = std::path::PathBuf::from("test.aiahr");
         let mut contents = r#"
 effect State {
@@ -369,19 +368,25 @@ effect Reader {
     ask : {} -> {}
 }
 
-main = "#
-            .to_string();
+"#
+        .to_string();
         contents.push_str(input);
         let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
         SourceFileSet::new(db, vec![file]);
 
-        match db.lower_item_for_file_name(path, db.ident_str("main")) {
+        match db.lower_item_for_file_name(path, db.ident_str(fn_name)) {
             Some(term) => term.item(db),
             None => {
                 dbg!(db.all_parse_errors());
                 panic!("Errors occurred")
             }
         }
+    }
+
+    /// Lower a snippet and return the produced IR
+    fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
+        let main = format!("main = {}", input);
+        lower_function(db, &main, "main")
     }
 
     #[test]
@@ -405,7 +410,7 @@ main = "#
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
         let expect = expect![[r#"
-            (forall [(T2: Type)] (let (V1 _row__)
+            (forall [(T1: Type)] (let (V1 _row__)
                 (let (V2 _row_x_y) (fun [V0, V3] (V2[0] V3 V3)))))"#]];
         expect.assert_eq(&pretty_ir);
     }
@@ -419,7 +424,7 @@ main = "#
 
         let expect = expect![[r#"
             (forall
-              [(T2: Type) (T3: SimpleRow) (T4: SimpleRow) (T6: SimpleRow) (T8: SimpleRow)]
+              [(T1: Type) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) (T7: SimpleRow)]
               (fun [V2, V3] (let (V1 _row__) (fun [V0, V4, V5] (V3[3][0] (V2[0] V4 V5))))))"#]];
         expect.assert_eq(&pretty_ir)
     }
@@ -427,20 +432,21 @@ main = "#
     #[test]
     fn lower_state_get() {
         let db = TestDatabase::default();
-        let ir = lower_snippet(
+        let ir = lower_function(
             &db,
             r#"
-with {
+main : {} = with {
     put = |x| |k| {},
     get = |x| |k| {},
     return = |x| x,
 } do State.get({})"#,
+            "main",
         );
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            (forall [(T8: Type)] (let (V1 _row__)
+            (forall [(T5: Type)] (let (V1 _row__)
                 (let (V2 _row__State)
                   (let (V3 _row_State_)
                     (let (V4 _row_put_get)
@@ -448,9 +454,9 @@ with {
                         (let (V6 _row_putget_return)
                           (fun [V0]
                             (let
-                              (V8 ((V6[0]
+                              (V8 (V6[0]
                                 (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {}))
-                                (fun [V13] V13)) @ {}))
+                                (fun [V13] V13)))
                               (new_prompt [V7] (let (V0 (V2[0] V0 {V7, V8}))
                                 (prompt V7 (((V6[3][0] V8) @ {})
                                     ((fun [V15, V14]

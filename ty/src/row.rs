@@ -112,10 +112,13 @@ where
     Sema::Open<InDb>: Debug,
     Sema::Closed<InDb>: DebugWithDb<Db>,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
         match self {
             Row::Open(var) => f.debug_tuple("Open").field(var).finish(),
-            Row::Closed(row) => f.debug_tuple("Closed").field(&row.debug(db)).finish(),
+            Row::Closed(row) => f
+                .debug_tuple("Closed")
+                .field(&row.debug_with(db, include_all_fields))
+                .finish(),
         }
     }
 }

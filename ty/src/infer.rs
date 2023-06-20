@@ -8,12 +8,13 @@ use std::{
 
 use ena::unify::{EqUnifyValue, UnifyKey, UnifyValue};
 use pretty::DocAllocator;
+use salsa::DebugWithDb;
 
 use crate::{
     row::{
         Row, RowInternals, RowLabel, RowOps, ScopedClosedRow, ScopedRow, SimpleClosedRow, SimpleRow,
     },
-    FallibleTypeFold, Ty, TypeAlloc, TypeFoldable, TypeKind, Wrapper,
+    Evidence, FallibleTypeFold, Ty, TypeAlloc, TypeFoldable, TypeKind, Wrapper,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -242,6 +243,113 @@ pub(crate) mod arena {
     }
 }
 pub use arena::{InArena, TyCtx};
+
+impl<'ctx, DB> DebugWithDb<DB> for SimpleClosedRow<InArena<'ctx>>
+where
+    DB: ?Sized + crate::Db,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &DB, include_all_fields: bool) -> fmt::Result {
+        f.debug_map()
+            .entries(self.iter().map(|(k, v)| {
+                (
+                    k.text(db.as_core_db()).as_str(),
+                    v.debug_with(db, include_all_fields),
+                )
+            }))
+            .finish()
+    }
+}
+
+impl<'ctx, DB> DebugWithDb<DB> for SimpleRow<InArena<'ctx>>
+where
+    DB: ?Sized + crate::Db,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &DB, include_all_fields: bool) -> fmt::Result {
+        match self {
+            Row::Open(var) => var.fmt(f),
+            Row::Closed(row) => row.debug_with(db, include_all_fields).fmt(f),
+        }
+    }
+}
+
+impl<'ctx, DB> DebugWithDb<DB> for ScopedClosedRow<InArena<'ctx>>
+where
+    DB: ?Sized + crate::Db,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &DB, include_all_fields: bool) -> fmt::Result {
+        f.debug_map()
+            .entries(self.iter().map(|(k, v)| {
+                (
+                    k.text(db.as_core_db()).as_str(),
+                    v.debug_with(db, include_all_fields),
+                )
+            }))
+            .finish()
+    }
+}
+impl<'ctx, DB> DebugWithDb<DB> for ScopedRow<InArena<'ctx>>
+where
+    DB: ?Sized + crate::Db,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &DB, include_all_fields: bool) -> fmt::Result {
+        match self {
+            Row::Open(var) => var.fmt(f),
+            Row::Closed(row) => row.debug_with(db, include_all_fields).fmt(f),
+        }
+    }
+}
+
+impl<'ctx, DB> DebugWithDb<DB> for Evidence<InArena<'ctx>>
+where
+    DB: ?Sized + crate::Db,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &DB, include_all_fields: bool) -> fmt::Result {
+        match self {
+            Evidence::DataRow { left, right, goal } => f
+                .debug_struct("DataRow")
+                .field("left", &left.debug_with(db, include_all_fields))
+                .field("right", &right.debug_with(db, include_all_fields))
+                .field("goal", &goal.debug_with(db, include_all_fields))
+                .finish(),
+            Evidence::EffRow { left, right, goal } => f
+                .debug_struct("EffRow")
+                .field("left", &left.debug_with(db, include_all_fields))
+                .field("right", &right.debug_with(db, include_all_fields))
+                .field("goal", &goal.debug_with(db, include_all_fields))
+                .finish(),
+        }
+    }
+}
+
+impl<'ctx, DB> DebugWithDb<DB> for TypeKind<InArena<'ctx>>
+where
+    DB: ?Sized + crate::Db,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &DB, include_all_fields: bool) -> fmt::Result {
+        match self {
+            TypeKind::ErrorTy => f.debug_tuple("ErrorTy").finish(),
+            TypeKind::IntTy => f.debug_tuple("IntTy").finish(),
+            TypeKind::VarTy(var) => f.debug_tuple("VarTy").field(var).finish(),
+            TypeKind::RowTy(row) => f
+                .debug_tuple("RowTy")
+                .field(&row.debug_with(db, include_all_fields))
+                .finish(),
+            TypeKind::FunTy(arg, ret) => f
+                .debug_tuple("FunTy")
+                .field(&arg.debug_with(db, include_all_fields))
+                .field(&ret.debug_with(db, include_all_fields))
+                .finish(),
+            TypeKind::ProdTy(row) => f
+                .debug_tuple("ProdTy")
+                .field(&row.debug_with(db, include_all_fields))
+                .finish(),
+            TypeKind::SumTy(row) => f
+                .debug_tuple("SumTy")
+                .field(&row.debug_with(db, include_all_fields))
+                .finish(),
+        }
+    }
+}
 
 impl<'ctx> fmt::Debug for TypeKind<InArena<'ctx>> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

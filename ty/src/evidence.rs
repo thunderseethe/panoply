@@ -159,26 +159,26 @@ where
 
 impl<Db> DebugWithDb<Db> for Evidence<InDb>
 where
-    Db: crate::Db,
+    Db: ?Sized + crate::Db,
 {
     fn fmt(
         &self,
         f: &mut std::fmt::Formatter<'_>,
         db: &Db,
-        _include_all_fields: bool,
+        include_all_fields: bool,
     ) -> std::fmt::Result {
         match self {
             Evidence::DataRow { left, right, goal } => f
                 .debug_struct("Evidence::DataRow")
-                .field("left", &left.debug(db))
-                .field("right", &right.debug(db))
-                .field("goal", &goal.debug(db))
+                .field("left", &left.debug_with(db, include_all_fields))
+                .field("right", &right.debug_with(db, include_all_fields))
+                .field("goal", &goal.debug_with(db, include_all_fields))
                 .finish(),
             Evidence::EffRow { left, right, goal } => f
                 .debug_struct("Evidence::EffRow")
-                .field("left", &left.debug(db))
-                .field("right", &right.debug(db))
-                .field("goal", &goal.debug(db))
+                .field("left", &left.debug_with(db, include_all_fields))
+                .field("right", &right.debug_with(db, include_all_fields))
+                .field("goal", &goal.debug_with(db, include_all_fields))
                 .finish(),
         }
     }

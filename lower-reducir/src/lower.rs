@@ -15,7 +15,6 @@ use aiahr_ty::{
     AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind, Wrapper,
 };
 use la_arena::Idx;
-use pretty::{DocAllocator, RcAllocator};
 
 use crate::{
     evidence::{EvidenceMap, PartialEv},
@@ -727,7 +726,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         *right,
                         *goal,
                     );
-                    let ir_ty = self.ty_ctx.row_evidence_ir_ty(ev);
+                    let ir_ty = ir_item
+                        .item(self.db)
+                        .type_check(self.db.as_ir_db())
+                        .expect("ICE: Generated effect row evidence didn't type check");
                     let ir = ReducIr::new(Item(ir_item.name(self.db), ir_ty));
                     solved.push((param, ir));
                 }
@@ -1022,7 +1024,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let handler_ir = self.lower_term(ast, *handler);
 
                 let term_infer = self.lookup_term(term);
-                let ret_ty = self.ty_ctx.lower_ty(term_infer.ty);
 
                 let body_infer = self.lookup_term(*body);
                 let body_ty = self.ty_ctx.lower_ty(body_infer.ty);
@@ -1061,11 +1062,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     )),
                 ));
 
-                ReducIr::local(
-                    handler_var,
-                    ReducIr::new(TyApp(P::new(handler_ir), ReducIrTyApp::Ty(ret_ty))),
-                    install_prompt,
-                )
+                ReducIr::local(handler_var, handler_ir, install_prompt)
             }
             Annotated { term, .. } => {
                 // We type checked so this is handled, we can just unwrap here.

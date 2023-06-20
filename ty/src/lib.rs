@@ -72,8 +72,11 @@ impl<Db> DebugWithDb<Db> for Ty<InDb>
 where
     Db: ?Sized + crate::Db,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
-        self.0.kind(db.as_ty_db()).debug(db).fmt(f)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
+        self.0
+            .kind(db.as_ty_db())
+            .debug_with(db, include_all_fields)
+            .fmt(f)
     }
 }
 
