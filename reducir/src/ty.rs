@@ -1,6 +1,5 @@
 use aiahr_core::id::ReducIrTyVarId;
-use aiahr_ty::row::{ScopedRow, SimpleRow};
-use aiahr_ty::PrettyType;
+use aiahr_ty::row::{RowSema, Scoped, Simple};
 use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 
 /// The kind of a type variable
@@ -22,6 +21,20 @@ where
             Kind::SimpleRow => a.text("SimpleRow"),
             Kind::ScopedRow => a.text("ScopedRow"),
         }
+    }
+}
+
+pub trait RowReducIrKind: RowSema {
+    fn kind() -> Kind;
+}
+impl RowReducIrKind for Simple {
+    fn kind() -> Kind {
+        Kind::SimpleRow
+    }
+}
+impl RowReducIrKind for Scoped {
+    fn kind() -> Kind {
+        Kind::ScopedRow
     }
 }
 
@@ -54,7 +67,10 @@ impl ReducIrVarTy {
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub enum ReducIrTyKind {
     IntTy,
+    NeverTy,
     VarTy(ReducIrVarTy),
+    ProdVarTy(ReducIrVarTy),
+    CoprodVarTy(ReducIrVarTy),
     FunTy(ReducIrTy, ReducIrTy),
     ForallTy(ReducIrVarTy, ReducIrTy),
     ProductTy(Vec<ReducIrTy>),
@@ -62,15 +78,17 @@ pub enum ReducIrTyKind {
 }
 
 impl ReducIrTyKind {
-    fn pretty<'a, D, DB, A>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
+    fn pretty<'a, D, DB>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
     where
-        A: 'a,
-        D: DocAllocator<'a, A>,
+        D: DocAllocator<'a>,
         DB: ?Sized + crate::Db,
     {
         match self {
             ReducIrTyKind::IntTy => a.text("Int"),
+            ReducIrTyKind::NeverTy => a.text("Never"),
             ReducIrTyKind::VarTy(ty_var) => ty_var.pretty(a),
+            ReducIrTyKind::ProdVarTy(ty_var) => ty_var.pretty(a).braces(),
+            ReducIrTyKind::CoprodVarTy(ty_var) => ty_var.pretty(a).angles(),
             ReducIrTyKind::FunTy(arg, ret) => {
                 let mut arg_doc = arg.pretty(db, a);
                 if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
@@ -106,36 +124,140 @@ pub struct ReducIrTy {
     pub kind: ReducIrTyKind,
 }
 
+impl ReducIrTy {
+    /// Equate our types based on their data, this does a semantic equality check. This allows for
+    /// a looser definition of equality for our types then the Id based equality we use for `Eq`.
+    pub fn ty_eq(&self, db: &dyn crate::Db, rhs: &Self) -> bool {
+        match (self.kind(db), rhs.kind(db)) {
+            (_, ReducIrTyKind::NeverTy) => true,
+            (ReducIrTyKind::NeverTy, _) => true,
+            (_, _) => self == rhs,
+        }
+    }
+
+    fn fold<F>(self, db: &dyn crate::Db, visit: &mut F) -> Self
+    where
+        F: FnMut(&ReducIrTyKind) -> Option<Self>,
+    {
+        let kind = self.kind(db);
+        match kind {
+            ReducIrTyKind::IntTy
+            | ReducIrTyKind::NeverTy
+            | ReducIrTyKind::VarTy(_)
+            | ReducIrTyKind::ProdVarTy(_)
+            | ReducIrTyKind::CoprodVarTy(_) => visit(&kind).unwrap_or(self),
+            ReducIrTyKind::FunTy(arg, ret) => {
+                let arg = arg.fold(db, visit);
+                let ret = ret.fold(db, visit);
+                visit(&ReducIrTyKind::FunTy(arg, ret))
+                    .unwrap_or_else(|| db.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ret)))
+            }
+            ReducIrTyKind::ForallTy(var, body) => {
+                let k = ReducIrTyKind::ForallTy(var, body.fold(db, visit));
+                visit(&k).unwrap_or_else(|| db.mk_reducir_ty(k))
+            }
+            ReducIrTyKind::ProductTy(elems) => {
+                let elems = elems
+                    .into_iter()
+                    .map(|e| e.fold(db, visit))
+                    .collect::<Vec<_>>();
+                let prod = db.mk_prod_ty(&elems);
+                visit(&ReducIrTyKind::ProductTy(elems)).unwrap_or(prod)
+            }
+            ReducIrTyKind::CoproductTy(elems) => {
+                let elems = elems
+                    .into_iter()
+                    .map(|e| e.fold(db, visit))
+                    .collect::<Vec<_>>();
+                let coprod = db.mk_coprod_ty(&elems);
+                visit(&ReducIrTyKind::CoproductTy(elems)).unwrap_or(coprod)
+            }
+        }
+    }
+
+    pub(crate) fn subst_ty(
+        self,
+        db: &dyn crate::Db,
+        needle: ReducIrVarTy,
+        ty: ReducIrTy,
+    ) -> ReducIrTy {
+        self.fold(db, &mut |kind| match kind {
+            ReducIrTyKind::VarTy(var) => (*var == needle).then_some(ty),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn subst_row(
+        self,
+        db: &dyn crate::Db,
+        needle: ReducIrVarTy,
+        row: &ReducIrRow,
+    ) -> ReducIrTy {
+        self.fold(db, &mut |kind| match kind {
+            ReducIrTyKind::ProdVarTy(var) => (*var == needle).then(|| match &row {
+                ReducIrRow::Open(row_var) => db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(*row_var)),
+                ReducIrRow::Closed(tys) => db.mk_prod_ty(tys),
+            }),
+            ReducIrTyKind::CoprodVarTy(var) => (*var == needle).then(|| match &row {
+                ReducIrRow::Open(row_var) => db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(*row_var)),
+                ReducIrRow::Closed(tys) => db.mk_coprod_ty(tys),
+            }),
+            _ => None,
+        })
+    }
+
+    //TODO: Figure out how to substitute row variables into types
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub enum ReducIrRow {
+    Open(ReducIrVarTy),
+    Closed(Vec<ReducIrTy>),
+}
+impl ReducIrRow {
+    fn pretty<'a, D, DB>(&self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
+    where
+        D: DocAllocator<'a>,
+        DB: ?Sized + crate::Db,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+    {
+        match self {
+            ReducIrRow::Open(var) => var.pretty(a),
+            ReducIrRow::Closed(row) => a
+                .intersperse(row.iter().map(|ty| ty.pretty(db, a)), ",")
+                .brackets(),
+        }
+    }
+}
+
 // We allow Rows in type applications because they might show up in constraints.
 // But we want to ensure they don't appear in our ReducIr types outside of that so we make a specific type
 // for it
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum ReducIrTyApp {
     Ty(ReducIrTy),
-    DataRow(SimpleRow),
-    EffRow(ScopedRow),
+    DataRow(ReducIrRow),
+    EffRow(ReducIrRow),
 }
 impl ReducIrTyApp {
-    pub(crate) fn pretty<'a, D, DB, A>(&self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
+    pub(crate) fn pretty<'a, D, DB>(&self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
     where
-        A: 'a,
-        D: DocAllocator<'a, A>,
+        D: DocAllocator<'a>,
         DB: ?Sized + crate::Db,
-        D::Doc: pretty::Pretty<'a, D, A> + Clone,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
     {
         match self {
             ReducIrTyApp::Ty(ty) => ty.pretty(db, a),
-            ReducIrTyApp::DataRow(simp) => simp.pretty(a, db, &db),
-            ReducIrTyApp::EffRow(scope) => scope.pretty(a, db, &db),
+            ReducIrTyApp::DataRow(simp) => simp.pretty(db, a),
+            ReducIrTyApp::EffRow(scope) => scope.pretty(db, a),
         }
     }
 }
 
 impl ReducIrTy {
-    pub(crate) fn pretty<'a, D, DB, A>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D, A>
+    pub(crate) fn pretty<'a, D, DB>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
     where
-        A: 'a,
-        D: DocAllocator<'a, A>,
+        D: DocAllocator<'a>,
         DB: ?Sized + crate::Db,
     {
         self.kind(db.as_ir_db()).pretty(db, a)

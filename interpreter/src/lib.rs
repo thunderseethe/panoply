@@ -55,13 +55,12 @@ where
 }
 
 impl Value {
-    pub fn pretty<'a, A, D, DB>(&self, db: &DB, a: &'a D) -> pretty::DocBuilder<'a, D, A>
+    pub fn pretty<'a, D, DB>(&self, db: &DB, a: &'a D) -> pretty::DocBuilder<'a, D>
     where
-        A: 'a,
-        D: DocAllocator<'a, A> + 'a,
-        DocBuilder<'a, D, A>: Clone,
+        D: DocAllocator<'a> + 'a,
+        DocBuilder<'a, D>: Clone,
         DB: ?Sized + aiahr_reducir::Db,
-        D::Doc: pretty::Pretty<'a, D, A> + Clone,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
     {
         match self {
             Value::Int(i) => a.as_string(i),
@@ -372,7 +371,7 @@ impl Machine {
                 InterpretResult::Step(value)
             }
             // Sum rows
-            ReducIrKind::Tag(tag, value) => {
+            ReducIrKind::Tag(_, tag, value) => {
                 log::info!("Step: Tag({:?}, {:?})", tag, value);
                 self.cur_frame.push(EvalCtx::Tag { tag });
                 InterpretResult::Step(value)
@@ -401,7 +400,7 @@ impl Machine {
             // TODO: Handle type applications but they shouldn't show up in real runtime
             ReducIrKind::TyAbs(_, body) => InterpretResult::Step(body),
             ReducIrKind::TyApp(_, _) => todo!(),
-            ReducIrKind::Item(_) => todo!(),
+            ReducIrKind::Item(_, _) => todo!(),
         }
     }
 

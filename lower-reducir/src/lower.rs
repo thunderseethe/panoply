@@ -2,7 +2,8 @@ use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId};
 use aiahr_reducir::{
     ty::{
-        Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*, ReducIrVarTy,
+        Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*,
+        ReducIrVarTy, RowReducIrKind,
     },
     ReducIr, ReducIrKind,
     ReducIrKind::*,
@@ -14,6 +15,7 @@ use aiahr_ty::{
     AccessTy, Evidence, InDb, MkTy, Ty, TyScheme, TypeKind, Wrapper,
 };
 use la_arena::Idx;
+use pretty::{DocAllocator, RcAllocator};
 
 use crate::{
     evidence::{EvidenceMap, PartialEv},
@@ -90,7 +92,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
         Self { db, tyvar_conv }
     }
 
-    fn row_ir_tys<Sema: WIPRowEvidenceName>(&mut self, row: &Row<Sema>) -> (ReducIrTy, ReducIrTy)
+    fn row_ir_tys<Sema: RowReducrIrEvidence>(&mut self, row: &Row<Sema>) -> (ReducIrTy, ReducIrTy)
     where
         Self: RowVarConvert<Sema>,
         Sema::Open<InDb>: Copy,
@@ -98,11 +100,14 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
         match row {
             Row::Open(row_var) => {
                 let var = self.convert_row_var(*row_var);
-                let var = self.db.mk_reducir_ty(VarTy(ReducIrVarTy {
+                let var = ReducIrVarTy {
                     var,
                     kind: Sema::kind(),
-                }));
-                (var, var)
+                };
+                (
+                    self.db.mk_reducir_ty(ProdVarTy(var)),
+                    self.db.mk_reducir_ty(CoprodVarTy(var)),
+                )
             }
             Row::Closed(row) => {
                 let elems = row
@@ -110,10 +115,15 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
-                (
-                    self.db.mk_prod_ty(elems.as_slice()),
-                    self.db.mk_coprod_ty(elems.as_slice()),
-                )
+                // Unwrap singleton rows
+                if elems.len() == 1 {
+                    (elems[0], elems[0])
+                } else {
+                    (
+                        self.db.mk_prod_ty(elems.as_slice()),
+                        self.db.mk_coprod_ty(elems.as_slice()),
+                    )
+                }
             }
         }
     }
@@ -158,6 +168,24 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                 self.db.mk_reducir_ty(FunTy(right_coprod, goal_coprod)),
             ]),
         ])
+    }
+
+    fn lower_row<Sema: RowReducIrKind>(&mut self, row: Row<Sema>) -> ReducIrRow
+    where
+        Self: RowVarConvert<Sema>,
+    {
+        match row {
+            Row::Open(var) => ReducIrRow::Open(ReducIrVarTy {
+                var: self.convert_row_var(var),
+                kind: Sema::kind(),
+            }),
+            Row::Closed(row) => ReducIrRow::Closed(
+                row.values(&self.db)
+                    .iter()
+                    .map(|ty| self.lower_ty(*ty))
+                    .collect::<Vec<_>>(),
+            ),
+        }
     }
 
     fn lower_ty(&mut self, ty: Ty) -> ReducIrTy {
@@ -228,7 +256,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
         })
     }
 }
-pub(crate) trait RowVarConvert<Sema: WIPRowEvidenceName> {
+pub(crate) trait RowVarConvert<Sema: RowReducIrKind> {
     fn convert_row_var(&mut self, row_var: Sema::Open<InDb>) -> ReducIrTyVarId;
 }
 impl RowVarConvert<Simple> for LowerTyCtx<'_, '_> {
@@ -276,9 +304,7 @@ pub(crate) enum RowIndx {
     Right(usize, Ty<InDb>),
 }
 
-pub(crate) trait WIPRowEvidenceName: RowSema {
-    fn kind() -> Kind;
-
+pub(crate) trait RowReducrIrEvidence: RowReducIrKind {
     fn merge<Db: ?Sized + crate::Db>(
         db: &Db,
         left: Self::Closed<InDb>,
@@ -298,11 +324,7 @@ pub(crate) trait WIPRowEvidenceName: RowSema {
     ) -> Box<[(usize, Ty<InDb>)]>;
 }
 
-impl WIPRowEvidenceName for Simple {
-    fn kind() -> Kind {
-        Kind::SimpleRow
-    }
-
+impl RowReducrIrEvidence for Simple {
     fn merge<Db: ?Sized + crate::Db>(
         db: &Db,
         left: Self::Closed<InDb>,
@@ -364,11 +386,7 @@ impl WIPRowEvidenceName for Simple {
     }
 }
 
-impl WIPRowEvidenceName for Scoped {
-    fn kind() -> Kind {
-        Kind::ScopedRow
-    }
-
+impl RowReducrIrEvidence for Scoped {
     fn merge<Db: ?Sized + crate::Db>(
         db: &Db,
         left: Self::Closed<InDb>,
@@ -432,7 +450,7 @@ impl WIPRowEvidenceName for Scoped {
 }
 
 impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
-    pub(crate) fn row_evidence_ir<Sema: WIPRowEvidenceName>(
+    pub(crate) fn row_evidence_ir<Sema: RowReducrIrEvidence>(
         &mut self,
         left: Sema::Closed<InDb>,
         right: Sema::Closed<InDb>,
@@ -459,11 +477,11 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 ReducIr::new(FieldProj(index, P::new(prod)))
             }
         };
-        let inj = |index, len, coprod| {
+        let inj = |index, len, ty, coprod| {
             if len == 1 {
                 coprod
             } else {
-                ReducIr::new(Tag(index, P::new(coprod)))
+                ReducIr::new(Tag(ty, index, P::new(coprod)))
             }
         };
 
@@ -520,10 +538,14 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                     [left_branch_var, right_branch_var, goal_branch_var],
                     {
                         let case_var_id = self.var_conv.generate();
-                        let elems = indxs.iter().map(|indx| {
-                            let (i, ty, length, branch_var) = match indx {
-                                RowIndx::Left(i, ty) => (i, ty, left_len, left_branch_var),
-                                RowIndx::Right(i, ty) => (i, ty, right_len, right_branch_var),
+                        let mut elems = indxs.iter().map(|indx| {
+                            let (i, ty, coprod_ty, length, branch_var) = match indx {
+                                RowIndx::Left(i, ty) => {
+                                    (i, ty, left_coprod, left_len, left_branch_var)
+                                }
+                                RowIndx::Right(i, ty) => {
+                                    (i, ty, right_coprod, right_len, right_branch_var)
+                                }
                             };
 
                             let case_var = ReducIrVar {
@@ -534,12 +556,17 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                                 [case_var],
                                 ReducIr::app(
                                     ReducIr::var(branch_var),
-                                    [inj(*i, length, ReducIr::var(case_var))],
+                                    [inj(*i, length, coprod_ty, ReducIr::var(case_var))],
                                 ),
                             )
                         });
 
-                        ReducIr::case_on_var(goal_branch_var, elems)
+                        if indxs.len() == 1 {
+                            // Don't emit a case when we
+                            elems.next().unwrap()
+                        } else {
+                            ReducIr::case_on_var(goal_branch_var, elems)
+                        }
                     },
                 )),
             )))
@@ -576,7 +603,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         var: case_var_id,
                         ty: self.ty_ctx.lower_ty(*ty),
                     };
-                    ReducIr::abss([y], inj(*i, goal_len, ReducIr::var(y)))
+                    ReducIr::abss([y], inj(*i, goal_len, goal_coprod, ReducIr::var(y)))
                 });
                 if left_len == 1 {
                     ReducIr::app(elems.next().unwrap(), [ReducIr::var(left_coprod_var)])
@@ -611,7 +638,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         var: case_var_id,
                         ty: self.ty_ctx.lower_ty(*ty),
                     };
-                    ReducIr::abss([y], inj(*i, goal_len, ReducIr::var(y)))
+                    ReducIr::abss([y], inj(*i, goal_len, goal_coprod, ReducIr::var(y)))
                 });
                 if right_len == 1 {
                     ReducIr::app(elems.next().unwrap(), [ReducIr::var(right_coprod_var)])
@@ -684,7 +711,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         *right,
                         *goal,
                     );
-                    let ir = ReducIr::new(Item(ir_item.name(self.db)));
+                    let ir_ty = self.ty_ctx.row_evidence_ir_ty(ev);
+                    let ir = ReducIr::new(Item(ir_item.name(self.db), ir_ty));
                     solved.push((param, ir));
                 }
                 Evidence::EffRow {
@@ -699,7 +727,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         *right,
                         *goal,
                     );
-                    let ir = ReducIr::new(Item(ir_item.name(self.db)));
+                    let ir_ty = self.ty_ctx.row_evidence_ir_ty(ev);
+                    let ir = ReducIr::new(Item(ir_item.name(self.db), ir_ty));
                     solved.push((param, ir));
                 }
                 _ => {
@@ -748,12 +777,15 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             ))
         });
         let ir = wrapper.eff_rows.iter().rfold(ir, |body, row| {
-            ReducIr::new(ReducIrKind::TyApp(P::new(body), ReducIrTyApp::EffRow(*row)))
+            ReducIr::new(ReducIrKind::TyApp(
+                P::new(body),
+                ReducIrTyApp::EffRow(self.ty_ctx.lower_row(*row)),
+            ))
         });
         let ir = wrapper.data_rows.iter().rfold(ir, |body, row| {
             ReducIr::new(ReducIrKind::TyApp(
                 P::new(body),
-                ReducIrTyApp::DataRow(*row),
+                ReducIrTyApp::DataRow(self.ty_ctx.lower_row(*row)),
             ))
         });
         let ir = ReducIr::app(
@@ -793,7 +825,14 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             Term::Int(i) => ReducIr::new(ReducIrKind::Int(*i)),
             Item(term_name) => {
                 let wrapper = self.lookup_wrapper(term);
-                let ir = ReducIr::new(ReducIrKind::Item(*term_name));
+                let scheme = self
+                    .db
+                    .type_scheme_of(*term_name)
+                    .ty_scheme(self.db.as_tc_db());
+                let ir = ReducIr::new(ReducIrKind::Item(
+                    *term_name,
+                    self.ty_ctx.lower_scheme(&scheme),
+                ));
                 self.apply_wrapper(wrapper, ir)
             }
             // At this level Label/Unlabel are removed

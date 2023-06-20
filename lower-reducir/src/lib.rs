@@ -23,7 +23,7 @@ use id_converter::IdConverter;
 
 use crate::lower::LowerTyCtx;
 
-use self::lower::{ItemWrappers, RowVarConvert, WIPRowEvidenceName};
+use self::lower::{ItemWrappers, RowReducrIrEvidence, RowVarConvert};
 
 pub(crate) mod evidence;
 
@@ -135,7 +135,7 @@ fn lower_scoped_row_ev_item(
     lower_row_ev_item::<Scoped>(db, module, left, right, goal)
 }
 
-fn lower_row_ev_item<Sema: WIPRowEvidenceName>(
+fn lower_row_ev_item<Sema: RowReducrIrEvidence>(
     db: &dyn crate::Db,
     module: Module,
     left: Sema::Closed<InDb>,
@@ -405,7 +405,7 @@ main = "#
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
         let expect = expect![[r#"
-            (forall [(T1: Type)] (let (V1 _row__)
+            (forall [(T2: Type)] (let (V1 _row__)
                 (let (V2 _row_x_y) (fun [V0, V3] (V2[0] V3 V3)))))"#]];
         expect.assert_eq(&pretty_ir);
     }
@@ -419,7 +419,7 @@ main = "#
 
         let expect = expect![[r#"
             (forall
-              [(T1: Type) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) (T7: SimpleRow)]
+              [(T2: Type) (T3: SimpleRow) (T4: SimpleRow) (T6: SimpleRow) (T8: SimpleRow)]
               (fun [V2, V3] (let (V1 _row__) (fun [V0, V4, V5] (V3[3][0] (V2[0] V4 V5))))))"#]];
         expect.assert_eq(&pretty_ir)
     }
@@ -440,7 +440,7 @@ with {
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            (forall [(T4: Type)] (let (V1 _row__)
+            (forall [(T8: Type)] (let (V1 _row__)
                 (let (V2 _row__State)
                   (let (V3 _row_State_)
                     (let (V4 _row_put_get)

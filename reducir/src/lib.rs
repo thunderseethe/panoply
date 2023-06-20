@@ -1,5 +1,5 @@
 use aiahr_core::id::{ReducIrVarId, TermName};
-use pretty::{DocAllocator, *};
+use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 use rustc_hash::FxHashSet;
 use std::fmt;
 use std::ops::Deref;
@@ -54,7 +54,7 @@ impl<T> P<T> {
 pub enum ReducIrKind<IR = P<ReducIr>> {
     Int(usize),
     Var(ReducIrVar),
-    Item(TermName),
+    Item(TermName, ReducIrTy),
     // Value abstraction and application
     Abs(ReducIrVar, IR),
     App(IR, IR),
@@ -65,8 +65,8 @@ pub enum ReducIrKind<IR = P<ReducIr>> {
     Struct(Vec<IR>),      // Intro
     FieldProj(usize, IR), // Elim
     // Trivial coproducts
-    Tag(usize, IR),    // Intro
-    Case(IR, Vec<IR>), // Elim
+    Tag(ReducIrTy, usize, IR), // Intro
+    Case(IR, Vec<IR>),         // Elim
     // Delimited control
     // Generate a new prompt marker
     NewPrompt(ReducIrVar, IR),
@@ -77,9 +77,9 @@ pub enum ReducIrKind<IR = P<ReducIr>> {
 }
 use ReducIrKind::*;
 
-use crate::ty::ReducIrVarTy;
+use crate::ty::{ReducIrTyKind, ReducIrVarTy};
 
-use self::ty::{Kind, ReducIrTy, ReducIrTyApp};
+use self::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp};
 
 /// A ReducIr node
 /// `ReducIr` is much more explicit than `Term`. It is based on System F with some modest
@@ -161,6 +161,208 @@ impl ReducIr {
             stack: vec![self],
         }
     }
+
+    pub fn type_check(&self, ctx: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr> {
+        use ty::ReducIrTyKind::*;
+        match &self.kind {
+            Int(_) => Ok(ctx.mk_reducir_ty(IntTy)),
+            Var(v) => Ok(v.ty),
+            Abs(arg, body) => {
+                let ret_ty = body.type_check(ctx).map_err(|err| match err {
+                    ReducIrTyErr::TyMismatch(lhs, rhs) => ReducIrTyErr::TyMismatch(
+                        ctx.mk_reducir_ty(FunTy(arg.ty, lhs)),
+                        ctx.mk_reducir_ty(FunTy(arg.ty, rhs)),
+                    ),
+                    err => err,
+                })?;
+                Ok(ctx.mk_reducir_ty(FunTy(arg.ty, ret_ty)))
+            }
+            App(func, arg) => {
+                let func_ty = func.type_check(ctx)?;
+                let arg_ty = arg.type_check(ctx)?;
+                match func_ty.kind(ctx.as_ir_db()) {
+                    FunTy(fun_arg_ty, ret_ty) => {
+                        if fun_arg_ty.ty_eq(ctx, &arg_ty) {
+                            Ok(ret_ty)
+                        } else {
+                            Err(ReducIrTyErr::TyMismatch(fun_arg_ty, arg_ty))
+                        }
+                    }
+                    _ => Err(ReducIrTyErr::ExpectedFunTy(func_ty)),
+                }
+            }
+            TyAbs(ty_arg, body) => {
+                let ret_ty = body.type_check(ctx)?;
+                Ok(ctx.mk_reducir_ty(ForallTy(*ty_arg, ret_ty)))
+            }
+            TyApp(forall, ty_app) => {
+                let forall_ty = forall.type_check(ctx)?;
+                match forall_ty.kind(ctx) {
+                    ForallTy(ty_var, ret_ty) => match (ty_var.kind, ty_app) {
+                        (Kind::Type, ReducIrTyApp::Ty(ty)) => Ok(ret_ty.subst_ty(ctx, ty_var, *ty)),
+                        (Kind::SimpleRow, ReducIrTyApp::DataRow(row))
+                        | (Kind::ScopedRow, ReducIrTyApp::EffRow(row)) => {
+                            Ok(ret_ty.subst_row(ctx, ty_var, row))
+                        }
+                        (k, ReducIrTyApp::Ty(_)) => Err(ReducIrTyErr::KindMistmatch(k, Kind::Type)),
+                        (k, ReducIrTyApp::DataRow(_)) => {
+                            Err(ReducIrTyErr::KindMistmatch(k, Kind::SimpleRow))
+                        }
+                        (k, ReducIrTyApp::EffRow(_)) => {
+                            Err(ReducIrTyErr::KindMistmatch(k, Kind::ScopedRow))
+                        }
+                    },
+                    _ => Err(ReducIrTyErr::ExpectedForallTy(forall_ty)),
+                }
+            }
+            Struct(elems) => {
+                let elems = elems
+                    .iter()
+                    .map(|e| e.type_check(ctx))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ctx.mk_prod_ty(&elems))
+            }
+            FieldProj(indx, strukt) => {
+                let strukt_ty = strukt.type_check(ctx)?;
+                match strukt_ty.kind(ctx) {
+                    ProductTy(tys) => Ok(tys[*indx]),
+                    _ => Err(ReducIrTyErr::ExpectedProdTy(strukt_ty)),
+                }
+            }
+            Case(discr, branches) => {
+                let coprod = discr.type_check(ctx)?;
+                let tys = match coprod.kind(ctx) {
+                    CoproductTy(tys) => {
+                        let mut s = String::new();
+                        coprod.pretty(ctx, &RcAllocator).render_fmt(80, &mut s);
+                        println!("{}", s);
+                        tys
+                    }
+                    _ => {
+                        return Err(ReducIrTyErr::ExpectedCoprodTy(coprod));
+                    }
+                };
+                branches
+                    .iter()
+                    .zip(tys.into_iter())
+                    .map(|(branch, ty)| {
+                        let branch_ty = branch.type_check(ctx)?;
+                        match branch_ty.kind(ctx) {
+                            FunTy(arg_ty, ret_ty) => {
+                                if arg_ty.ty_eq(ctx, &ty) {
+                                    Ok((branch, ret_ty))
+                                } else {
+                                    let mut s = String::new();
+                                    branch_ty
+                                        .pretty(ctx, &RcAllocator)
+                                        .parens()
+                                        .append(RcAllocator.softline())
+                                        .append(ty.pretty(ctx, &RcAllocator).parens())
+                                        .render_fmt(80, &mut s)
+                                        .unwrap();
+                                    println!("type mismatch: {}", s);
+                                    Err(ReducIrTyErr::TyMismatch(arg_ty, ty))
+                                }
+                            }
+                            _ => Err(ReducIrTyErr::ExpectedFunTy(branch_ty)),
+                        }
+                    })
+                    .reduce(|a, b| {
+                        let (ab, a) = a?;
+                        let (bb, b) = b?;
+                        if a.ty_eq(ctx, &b) {
+                            Ok((ab, a))
+                        } else {
+                            let mut a_s = String::new();
+                            ab.pretty(ctx, &RcAllocator)
+                                .render_fmt(80, &mut a_s)
+                                .unwrap();
+                            let mut b_s = String::new();
+                            bb.pretty(ctx, &RcAllocator)
+                                .render_fmt(80, &mut b_s)
+                                .unwrap();
+                            println!("Type mistmach:\n\t{}\n\t{}", a_s, b_s);
+                            Err(ReducIrTyErr::TyMismatch(a, b))
+                        }
+                    })
+                    .map(|x| x.map(|(_, a)| a))
+                    .unwrap_or_else(|| Ok(ctx.mk_reducir_ty(ReducIrTyKind::NeverTy)))
+            }
+            NewPrompt(prompt, body) => {
+                if let IntTy = prompt.ty.kind(ctx) {
+                    body.type_check(ctx)
+                } else {
+                    Err(ReducIrTyErr::TyMismatch(
+                        prompt.ty,
+                        ctx.mk_reducir_ty(IntTy),
+                    ))
+                }
+            }
+            Prompt(marker, body) | Yield(marker, body) => {
+                let marker_ty = marker.type_check(ctx)?;
+                if let IntTy = marker_ty.kind(ctx) {
+                    body.type_check(ctx)
+                } else {
+                    Err(ReducIrTyErr::TyMismatch(
+                        marker_ty,
+                        ctx.mk_reducir_ty(IntTy),
+                    ))
+                }
+            }
+            Tag(ty, _, _) => Ok(*ty),
+            Item(_, ty) => Ok(*ty),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ReducIrTyErr {
+    TyMismatch(ReducIrTy, ReducIrTy),
+    KindMistmatch(Kind, Kind),
+    ExpectedFunTy(ReducIrTy),
+    ExpectedForallTy(ReducIrTy),
+    ExpectedProdTy(ReducIrTy),
+    ExpectedCoprodTy(ReducIrTy),
+}
+impl ReducIrTyErr {
+    pub fn pretty<'a, D, DB>(&self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
+    where
+        D: DocAllocator<'a>,
+        DB: ?Sized + crate::Db,
+    {
+        match self {
+            ReducIrTyErr::TyMismatch(lhs, rhs) => a.text("TyMistmatch").append(
+                lhs.pretty(db, a)
+                    .append(a.text(","))
+                    .append(a.softline())
+                    .append(rhs.pretty(db, a))
+                    .parens(),
+            ),
+            ReducIrTyErr::KindMistmatch(lhs, rhs) => a.text("KindMistmatch").append(
+                lhs.pretty(a)
+                    .append(a.text(","))
+                    .append(a.softline())
+                    .append(rhs.pretty(a))
+                    .parens(),
+            ),
+            ReducIrTyErr::ExpectedFunTy(ty) => a
+                .text("Expected a function type, but got:")
+                .append(a.softline())
+                .append(ty.pretty(db, a)),
+            ReducIrTyErr::ExpectedForallTy(ty) => a
+                .text("Expected a forall type, but got:")
+                .append(a.softline())
+                .append(ty.pretty(db, a)),
+            ReducIrTyErr::ExpectedProdTy(ty) => a
+                .text("Expected a prod type, but got:")
+                .append(a.softline())
+                .append(ty.pretty(db, a)),
+            ReducIrTyErr::ExpectedCoprodTy(ty) => a
+                .text("Expected a coprod type, but got:")
+                .append(a.softline())
+                .append(ty.pretty(db, a)),
+        }
+    }
 }
 
 struct UnboundVars<'a> {
@@ -173,7 +375,7 @@ impl Iterator for UnboundVars<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         self.stack.pop().and_then(|ir| match ir.kind() {
             Int(_) => self.next(),
-            Item(_) => self.next(),
+            Item(_, _) => self.next(),
             Var(v) => (!self.bound.contains(&v.var))
                 .then_some(*v)
                 .or_else(|| self.next()),
@@ -186,7 +388,7 @@ impl Iterator for UnboundVars<'_> {
                 self.stack.extend([a.deref(), b.deref()]);
                 self.next()
             }
-            TyAbs(_, a) | TyApp(a, _) | FieldProj(_, a) | Tag(_, a) => {
+            TyAbs(_, a) | TyApp(a, _) | FieldProj(_, a) | Tag(_, _, a) => {
                 self.stack.extend([a.deref()]);
                 self.next()
             }
@@ -224,45 +426,25 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &ReducIrVa
     }
 }
 
-impl ReducIrVar {
-    #[allow(dead_code)]
-    fn pretty_with_ty<'a, D, A, DB>(&self, db: &DB, arena: &'a D) -> DocBuilder<'a, D, A>
-    where
-        A: 'a,
-        D: DocAllocator<'a, A>,
-        DB: ?Sized + crate::Db,
-    {
-        arena
-            .text("V")
-            .append(arena.text(self.var.0.to_string()))
-            .append(arena.as_string(":"))
-            .append(arena.space())
-            .append(self.ty.pretty(db, arena))
-            .parens()
-    }
-}
-
 impl ReducIr {
-    pub fn pretty<'a, A, D, DB>(&self, db: &DB, allocator: &'a D) -> DocBuilder<'a, D, A>
+    pub fn pretty<'a, D, DB>(&self, db: &DB, allocator: &'a D) -> DocBuilder<'a, D>
     where
-        A: 'a,
-        D: DocAllocator<'a, A>,
-        DocBuilder<'a, D, A>: Clone,
+        D: DocAllocator<'a>,
+        DocBuilder<'a, D>: Clone,
         DB: ?Sized + crate::Db,
-        D::Doc: pretty::Pretty<'a, D, A> + Clone,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
     {
         self.kind.pretty(db, allocator)
     }
 }
 
 impl ReducIrKind {
-    fn pretty<'a, D, A, DB>(&self, db: &DB, arena: &'a D) -> pretty::DocBuilder<'a, D, A>
+    fn pretty<'a, D, DB>(&self, db: &DB, arena: &'a D) -> pretty::DocBuilder<'a, D>
     where
-        A: 'a,
-        D: DocAllocator<'a, A>,
-        DocBuilder<'a, D, A>: Clone,
+        D: DocAllocator<'a>,
+        DocBuilder<'a, D>: Clone,
         DB: ?Sized + crate::Db,
-        D::Doc: pretty::Pretty<'a, D, A> + Clone,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
     {
         fn gather_abs<'a>(vars: &mut Vec<ReducIrVar>, kind: &'a ReducIrKind) -> &'a ReducIrKind {
             match kind {
@@ -407,7 +589,7 @@ impl ReducIrKind {
                 .deref()
                 .pretty(db, arena)
                 .append(arena.as_string(idx).brackets()),
-            Tag(tag, term) => docs![
+            Tag(_, tag, term) => docs![
                 arena,
                 arena.as_string(tag),
                 arena.text(":"),
@@ -473,7 +655,7 @@ impl ReducIrKind {
                         .nest(2),
                 )
                 .parens(),
-            Item(name) => arena.text(name.name(db.as_core_db()).text(db.as_core_db()).clone()),
+            Item(name, _) => arena.text(name.name(db.as_core_db()).text(db.as_core_db()).clone()),
         }
     }
 }
