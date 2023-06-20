@@ -711,6 +711,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         *goal,
                     );
                     let ir_ty = self.ty_ctx.row_evidence_ir_ty(ev);
+                    let ir_ty = ir_item
+                        .item(self.db)
+                        .type_check(self.db.as_ir_db())
+                        .expect("ICE: Generated effect row evidence didn't type check");
                     let ir = ReducIr::new(Item(ir_item.name(self.db), ir_ty));
                     solved.push((param, ir));
                 }

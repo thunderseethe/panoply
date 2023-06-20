@@ -370,6 +370,7 @@ impl RowTheory for Scoped {
 
 pub(super) trait RowEquationSolver<'ctx, Sema: RowSema>:
     Unify<'ctx, Sema::Open<InArena<'ctx>>, Sema::Closed<InArena<'ctx>>>
+    + Unify<'ctx, Sema::Closed<InArena<'ctx>>, Sema::Closed<InArena<'ctx>>>
     + Unify<'ctx, Row<Sema, InArena<'ctx>>, Sema::Closed<InArena<'ctx>>>
     + Unify<'ctx, Row<Sema, InArena<'ctx>>, Row<Sema, InArena<'ctx>>>
 {

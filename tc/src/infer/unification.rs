@@ -32,6 +32,8 @@ where
 }
 impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, TypeK>, TcUnifierVar<'infer, TypeK>>
     for InferCtx<'_, 'infer, I, Solution>
+where
+    I: MkTy<InArena<'infer>>,
 {
     fn unify(
         &mut self,

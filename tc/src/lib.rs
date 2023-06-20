@@ -1,3 +1,5 @@
+use std::any::type_name;
+
 use aiahr_ast::{self as ast, Ast, Term};
 use aiahr_core::{
     diagnostic::{
@@ -19,7 +21,6 @@ use aiahr_ty::{
     infer::{InArena, TcUnifierVar, TyCtx, UnifierKind},
     *,
 };
-use salsa::DebugWithDb;
 
 mod unsolved_row;
 
@@ -228,13 +229,7 @@ where
     let zonked_required_ev = gen_storage
         .required_ev
         .into_iter()
-        .map(|ev| {
-            println!("unzonked: {:?}", ev.debug(db));
-            let zonked_ev = ev.try_fold_with(&mut zonker).unwrap();
-            println!("zonked: {:?}\n", zonked_ev.debug(db));
-
-            zonked_ev
-        })
+        .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
         .collect::<FxHashSet<_>>();
 
     let constrs = unsolved_eqs
@@ -284,15 +279,17 @@ fn print_root_unifiers<'ctx, K: UnifierKind>(
 ) where
     K::UnifyValue<'ctx>: for<'db> PrettyType<dyn crate::Db + 'db, InArena<'ctx>, ()>,
 {
-    println!("UnificationTable [");
+    println!("UnificationTable<{}> [", type_name::<K>());
     for uv in (0..uni.len()).map(|i| TcUnifierVar::from_index(i as u32)) {
-        let root = uni.find(uv);
-        if root != uv {
-            continue;
-        }
-        if let Some(candidate) = uni.probe_value(root) {
-            let doc: pretty::RcDoc = candidate.pretty(&RcAllocator, db, &()).into_doc();
-            println!("\t{} => {}", uv.index(), doc.pretty(80));
+        match uni.probe_value(uv) {
+            Some(candidate) => {
+                let doc: pretty::RcDoc = candidate.pretty(&RcAllocator, db, &()).into_doc();
+                println!("\t{} => {}", uv.index(), doc.pretty(80));
+            }
+            None => {
+                let doc: pretty::RcDoc = pretty::Pretty::pretty(uv, &RcAllocator).into_doc();
+                println!("\t{} => {}", uv.index(), doc.pretty(80));
+            }
         }
     }
     println!("]");

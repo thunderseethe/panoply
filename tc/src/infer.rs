@@ -1136,13 +1136,23 @@ where
             }
             (Row::Closed(left), Row::Open(right), Row::Closed(goal)) => {
                 let (fields, values) = Sema::diff_left(&goal, &left);
-                let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
-                self.unify(right, row)?;
+                let goal_right: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
+                let (fields, values) = Sema::diff_right(&goal, &goal_right);
+                self.unify(right, goal_right)?;
+
+                // We still have to unify this so our left row types and goal types are unified
+                let goal_left: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
+                self.unify(left, goal_left)?;
             }
             (Row::Open(left), Row::Closed(right), Row::Closed(goal)) => {
                 let (fields, values) = Sema::diff_right(&goal, &right);
-                let row: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
-                self.unify(left, row)?;
+                let goal_left: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
+                let (fields, values) = Sema::diff_left(&goal, &goal_left);
+                self.unify(left, goal_left)?;
+
+                // We still have to unify this so our right row types and goal types are unified
+                let goal_right: Sema::Closed<InArena<'infer>> = self.mk_row(&fields, &values);
+                self.unify(right, goal_right)?;
             }
             (left, right, goal) => {
                 let unifiable_equation = self.equations().iter().find_map(|eqn| {

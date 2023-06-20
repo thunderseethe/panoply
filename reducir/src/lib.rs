@@ -1,5 +1,5 @@
 use aiahr_core::id::{ReducIrVarId, TermName};
-use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
+use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 use rustc_hash::FxHashSet;
 use std::fmt;
 use std::ops::Deref;
@@ -232,12 +232,7 @@ impl ReducIr {
             Case(discr, branches) => {
                 let coprod = discr.type_check(ctx)?;
                 let tys = match coprod.kind(ctx) {
-                    CoproductTy(tys) => {
-                        let mut s = String::new();
-                        coprod.pretty(ctx, &RcAllocator).render_fmt(80, &mut s);
-                        println!("{}", s);
-                        tys
-                    }
+                    CoproductTy(tys) => tys,
                     _ => {
                         return Err(ReducIrTyErr::ExpectedCoprodTy(coprod));
                     }
@@ -250,17 +245,8 @@ impl ReducIr {
                         match branch_ty.kind(ctx) {
                             FunTy(arg_ty, ret_ty) => {
                                 if arg_ty.ty_eq(ctx, &ty) {
-                                    Ok((branch, ret_ty))
+                                    Ok(ret_ty)
                                 } else {
-                                    let mut s = String::new();
-                                    branch_ty
-                                        .pretty(ctx, &RcAllocator)
-                                        .parens()
-                                        .append(RcAllocator.softline())
-                                        .append(ty.pretty(ctx, &RcAllocator).parens())
-                                        .render_fmt(80, &mut s)
-                                        .unwrap();
-                                    println!("type mismatch: {}", s);
                                     Err(ReducIrTyErr::TyMismatch(arg_ty, ty))
                                 }
                             }
@@ -268,24 +254,14 @@ impl ReducIr {
                         }
                     })
                     .reduce(|a, b| {
-                        let (ab, a) = a?;
-                        let (bb, b) = b?;
+                        let a = a?;
+                        let b = b?;
                         if a.ty_eq(ctx, &b) {
-                            Ok((ab, a))
+                            Ok(a)
                         } else {
-                            let mut a_s = String::new();
-                            ab.pretty(ctx, &RcAllocator)
-                                .render_fmt(80, &mut a_s)
-                                .unwrap();
-                            let mut b_s = String::new();
-                            bb.pretty(ctx, &RcAllocator)
-                                .render_fmt(80, &mut b_s)
-                                .unwrap();
-                            println!("Type mistmach:\n\t{}\n\t{}", a_s, b_s);
                             Err(ReducIrTyErr::TyMismatch(a, b))
                         }
                     })
-                    .map(|x| x.map(|(_, a)| a))
                     .unwrap_or_else(|| Ok(ctx.mk_reducir_ty(ReducIrTyKind::NeverTy)))
             }
             NewPrompt(prompt, body) => {

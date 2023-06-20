@@ -446,23 +446,23 @@ main : {} = with {
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            (forall [(T5: Type)] (let (V1 _row__)
-                (let (V2 _row__State)
-                  (let (V3 _row_State_)
-                    (let (V4 _row_put_get)
-                      (let (V5 _row_return_putget)
-                        (let (V6 _row_putget_return)
-                          (fun [V0]
-                            (let
-                              (V8 (V6[0]
-                                (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {}))
-                                (fun [V13] V13)))
-                              (new_prompt [V7] (let (V0 (V2[0] V0 {V7, V8}))
-                                (prompt V7 (((V6[3][0] V8) @ {})
-                                    ((fun [V15, V14]
-                                      (yield V15[0] (fun [V16] (V15[1][1] V14 V16))))
-                                      (V3[3][0] V0)
-                                      {}))))))))))))))"#]];
+            (let (V1 _row__)
+              (let (V2 _row__State)
+                (let (V3 _row_State_)
+                  (let (V4 _row_put_get)
+                    (let (V5 _row_return_putget)
+                      (let (V6 _row_putget_return)
+                        (fun [V0]
+                          (let
+                            (V8 (V6[0]
+                              (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {}))
+                              (fun [V13] V13)))
+                            (new_prompt [V7] (let (V0 (V2[0] V0 {V7, V8}))
+                              (prompt V7 (((V6[3][0] V8) @ {})
+                                  ((fun [V15, V14]
+                                    (yield V15[0] (fun [V16] (V15[1][1] V14 V16))))
+                                    (V3[3][0] V0)
+                                    {})))))))))))))"#]];
         expect.assert_eq(&pretty_ir);
     }
 }
