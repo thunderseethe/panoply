@@ -69,7 +69,6 @@ impl ReducIrVarTy {
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub enum ReducIrTyKind {
     IntTy,
-    NeverTy,
     VarTy(ReducIrVarTy),
     ProdVarTy(ReducIrVarTy),
     CoprodVarTy(ReducIrVarTy),
@@ -87,7 +86,6 @@ impl ReducIrTyKind {
     {
         match self {
             ReducIrTyKind::IntTy => a.text("Int"),
-            ReducIrTyKind::NeverTy => a.text("Never"),
             ReducIrTyKind::VarTy(ty_var) => ty_var.pretty(a),
             ReducIrTyKind::ProdVarTy(ty_var) => ty_var.pretty(a).braces(),
             ReducIrTyKind::CoprodVarTy(ty_var) => ty_var.pretty(a).angles(),
@@ -127,16 +125,6 @@ pub struct ReducIrTy {
 }
 
 impl ReducIrTy {
-    /// Equate our types based on their data, this does a semantic equality check. This allows for
-    /// a looser definition of equality for our types then the Id based equality we use for `Eq`.
-    pub fn ty_eq(&self, db: &dyn crate::Db, rhs: &Self) -> bool {
-        match (self.kind(db), rhs.kind(db)) {
-            (_, ReducIrTyKind::NeverTy) => true,
-            (ReducIrTyKind::NeverTy, _) => true,
-            (_, _) => self == rhs,
-        }
-    }
-
     fn fold<F>(self, db: &dyn crate::Db, visit: &mut F) -> Self
     where
         F: FnMut(&ReducIrTyKind) -> ControlFlow<(), Self>,
@@ -144,7 +132,6 @@ impl ReducIrTy {
         let kind = self.kind(db);
         match kind {
             ReducIrTyKind::IntTy
-            | ReducIrTyKind::NeverTy
             | ReducIrTyKind::VarTy(_)
             | ReducIrTyKind::ProdVarTy(_)
             | ReducIrTyKind::CoprodVarTy(_) => match visit(&kind) {

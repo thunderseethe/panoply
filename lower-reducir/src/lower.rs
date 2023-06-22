@@ -548,6 +548,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                     [left_branch_var, right_branch_var, goal_branch_var],
                     {
                         let case_var_id = self.var_conv.generate();
+                        let case_ty = self.mk_reducir_ty(VarTy(branch_tyvar));
                         let mut elems = indxs.iter().map(|indx| {
                             let (i, ty, coprod_ty, length, branch_var) = match indx {
                                 RowIndx::Left(i, ty) => {
@@ -575,7 +576,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                             // Don't emit a case when we
                             elems.next().unwrap()
                         } else {
-                            ReducIr::case_on_var(goal_branch_var, elems)
+                            ReducIr::case_on_var(case_ty, goal_branch_var, elems)
                         }
                     },
                 )),
@@ -618,7 +619,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 if left_len == 1 {
                     ReducIr::app(elems.next().unwrap(), [ReducIr::var(left_coprod_var)])
                 } else {
-                    ReducIr::case_on_var(left_coprod_var, elems)
+                    ReducIr::case_on_var(goal_coprod, left_coprod_var, elems)
                 }
             }))
         };
@@ -653,7 +654,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 if right_len == 1 {
                     ReducIr::app(elems.next().unwrap(), [ReducIr::var(right_coprod_var)])
                 } else {
-                    ReducIr::case_on_var(right_coprod_var, elems)
+                    ReducIr::case_on_var(goal_coprod, right_coprod_var, elems)
                 }
             }))
         };

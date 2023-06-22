@@ -65,8 +65,8 @@ pub enum ReducIrKind<IR = P<ReducIr>> {
     Struct(Vec<IR>),      // Intro
     FieldProj(usize, IR), // Elim
     // Trivial coproducts
-    Tag(ReducIrTy, usize, IR), // Intro
-    Case(IR, Vec<IR>),         // Elim
+    Tag(ReducIrTy, usize, IR),    // Intro
+    Case(ReducIrTy, IR, Vec<IR>), // Elim
     // Delimited control
     // Generate a new prompt marker
     NewPrompt(ReducIrVar, IR),
@@ -77,7 +77,7 @@ pub enum ReducIrKind<IR = P<ReducIr>> {
 }
 use ReducIrKind::*;
 
-use crate::ty::{ReducIrTyKind, ReducIrVarTy};
+use crate::ty::ReducIrVarTy;
 
 use self::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp};
 
@@ -130,8 +130,13 @@ impl ReducIr {
             .rfold(body, |body, var| ReducIr::new(Abs(var, P::new(body))))
     }
 
-    pub fn case_on_var(var: ReducIrVar, cases: impl IntoIterator<Item = ReducIr>) -> Self {
+    pub fn case_on_var(
+        ty: ReducIrTy,
+        var: ReducIrVar,
+        cases: impl IntoIterator<Item = ReducIr>,
+    ) -> Self {
         ReducIr::new(Case(
+            ty,
             P::new(ReducIr::var(var)),
             cases.into_iter().map(P::new).collect(),
         ))
@@ -182,7 +187,7 @@ impl ReducIr {
                 let arg_ty = arg.type_check(ctx)?;
                 match func_ty.kind(ctx.as_ir_db()) {
                     FunTy(fun_arg_ty, ret_ty) => {
-                        if fun_arg_ty.ty_eq(ctx, &arg_ty) {
+                        if fun_arg_ty == arg_ty {
                             Ok(ret_ty)
                         } else {
                             Err(ReducIrTyErr::TyMismatch(fun_arg_ty, arg_ty))
@@ -235,7 +240,7 @@ impl ReducIr {
                     _ => Err(ReducIrTyErr::ExpectedProdTy(strukt_ty)),
                 }
             }
-            Case(discr, branches) => {
+            Case(case_ty, discr, branches) => {
                 let coprod = discr.type_check(ctx)?;
                 let tys = match coprod.kind(ctx) {
                     CoproductTy(tys) => tys,
@@ -243,32 +248,23 @@ impl ReducIr {
                         return Err(ReducIrTyErr::ExpectedCoprodTy(coprod));
                     }
                 };
-                branches
-                    .iter()
-                    .zip(tys.into_iter())
-                    .map(|(branch, ty)| {
-                        let branch_ty = branch.type_check(ctx)?;
-                        match branch_ty.kind(ctx) {
-                            FunTy(arg_ty, ret_ty) => {
-                                if arg_ty.ty_eq(ctx, &ty) {
-                                    Ok(ret_ty)
-                                } else {
-                                    Err(ReducIrTyErr::TyMismatch(arg_ty, ty))
-                                }
+                for (branch, ty) in branches.iter().zip(tys.into_iter()) {
+                    let branch_ty = branch.type_check(ctx)?;
+                    match branch_ty.kind(ctx) {
+                        FunTy(arg_ty, ret_ty) => {
+                            if arg_ty != ty {
+                                return Err(ReducIrTyErr::TyMismatch(arg_ty, ty));
                             }
-                            _ => Err(ReducIrTyErr::ExpectedFunTy(branch_ty)),
+                            if ret_ty != *case_ty {
+                                return Err(ReducIrTyErr::TyMismatch(ret_ty, *case_ty));
+                            }
                         }
-                    })
-                    .reduce(|a, b| {
-                        let a = a?;
-                        let b = b?;
-                        if a.ty_eq(ctx, &b) {
-                            Ok(a)
-                        } else {
-                            Err(ReducIrTyErr::TyMismatch(a, b))
+                        _ => {
+                            return Err(ReducIrTyErr::ExpectedFunTy(branch_ty));
                         }
-                    })
-                    .unwrap_or_else(|| Ok(ctx.mk_reducir_ty(ReducIrTyKind::NeverTy)))
+                    }
+                }
+                Ok(*case_ty)
             }
             NewPrompt(prompt, body) => {
                 if let IntTy = prompt.ty.kind(ctx) {
@@ -378,7 +374,7 @@ impl Iterator for UnboundVars<'_> {
                 self.stack.extend(irs.iter().map(|ir| ir.deref()));
                 self.next()
             }
-            Case(discr, branches) => {
+            Case(_, discr, branches) => {
                 self.stack.push(discr.deref());
                 self.stack.extend(branches.iter().map(|ir| ir.deref()));
                 self.next()
@@ -579,7 +575,7 @@ impl ReducIrKind {
                 term.pretty(db, arena).nest(2)
             ]
             .angles(),
-            Case(discr, branches) => docs![
+            Case(_, discr, branches) => docs![
                 arena,
                 "case",
                 arena.space(),

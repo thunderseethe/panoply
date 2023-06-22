@@ -376,7 +376,7 @@ impl Machine {
                 self.cur_frame.push(EvalCtx::Tag { tag });
                 InterpretResult::Step(value)
             }
-            ReducIrKind::Case(discr, branches) => {
+            ReducIrKind::Case(_, discr, branches) => {
                 log::info!("Step: Case({:?}, {:?})", discr, branches);
                 self.cur_frame.push(EvalCtx::CaseScrutinee { branches });
                 InterpretResult::Step(discr)

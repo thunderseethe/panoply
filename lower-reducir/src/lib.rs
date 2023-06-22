@@ -357,7 +357,7 @@ mod tests {
     use aiahr_reducir::ReducIr;
     use assert_matches::assert_matches;
     use expect_test::expect;
-    use pretty::{BoxAllocator, BoxDoc, Doc, RcAllocator};
+    use pretty::{BoxAllocator, BoxDoc, Doc};
 
     #[derive(Default)]
     #[salsa::db(
