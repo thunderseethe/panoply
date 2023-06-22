@@ -1,3 +1,5 @@
+use std::ops::ControlFlow;
+
 use aiahr_core::id::ReducIrTyVarId;
 use aiahr_ty::row::{RowSema, Scoped, Simple};
 use pretty::{docs, DocAllocator, DocBuilder, Pretty};
@@ -137,7 +139,7 @@ impl ReducIrTy {
 
     fn fold<F>(self, db: &dyn crate::Db, visit: &mut F) -> Self
     where
-        F: FnMut(&ReducIrTyKind) -> Option<Self>,
+        F: FnMut(&ReducIrTyKind) -> ControlFlow<(), Self>,
     {
         let kind = self.kind(db);
         match kind {
@@ -145,32 +147,44 @@ impl ReducIrTy {
             | ReducIrTyKind::NeverTy
             | ReducIrTyKind::VarTy(_)
             | ReducIrTyKind::ProdVarTy(_)
-            | ReducIrTyKind::CoprodVarTy(_) => visit(&kind).unwrap_or(self),
+            | ReducIrTyKind::CoprodVarTy(_) => match visit(&kind) {
+                ControlFlow::Continue(k) => k,
+                ControlFlow::Break(_) => self,
+            },
             ReducIrTyKind::FunTy(arg, ret) => {
                 let arg = arg.fold(db, visit);
                 let ret = ret.fold(db, visit);
-                visit(&ReducIrTyKind::FunTy(arg, ret))
-                    .unwrap_or_else(|| db.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ret)))
+                match visit(&ReducIrTyKind::FunTy(arg, ret)) {
+                    ControlFlow::Continue(k) => k,
+                    ControlFlow::Break(_) => self,
+                }
             }
             ReducIrTyKind::ForallTy(var, body) => {
                 let k = ReducIrTyKind::ForallTy(var, body.fold(db, visit));
-                visit(&k).unwrap_or_else(|| db.mk_reducir_ty(k))
+                match visit(&k) {
+                    ControlFlow::Continue(k) => k,
+                    ControlFlow::Break(_) => self,
+                }
             }
             ReducIrTyKind::ProductTy(elems) => {
                 let elems = elems
                     .into_iter()
                     .map(|e| e.fold(db, visit))
                     .collect::<Vec<_>>();
-                let prod = db.mk_prod_ty(&elems);
-                visit(&ReducIrTyKind::ProductTy(elems)).unwrap_or(prod)
+                match visit(&ReducIrTyKind::ProductTy(elems)) {
+                    ControlFlow::Continue(k) => k,
+                    ControlFlow::Break(_) => self,
+                }
             }
             ReducIrTyKind::CoproductTy(elems) => {
                 let elems = elems
                     .into_iter()
                     .map(|e| e.fold(db, visit))
                     .collect::<Vec<_>>();
-                let coprod = db.mk_coprod_ty(&elems);
-                visit(&ReducIrTyKind::CoproductTy(elems)).unwrap_or(coprod)
+                match visit(&ReducIrTyKind::CoproductTy(elems)) {
+                    ControlFlow::Continue(k) => k,
+                    ControlFlow::Break(_) => self,
+                }
             }
         }
     }
@@ -182,8 +196,13 @@ impl ReducIrTy {
         ty: ReducIrTy,
     ) -> ReducIrTy {
         self.fold(db, &mut |kind| match kind {
-            ReducIrTyKind::VarTy(var) => (*var == needle).then_some(ty),
-            _ => None,
+            ReducIrTyKind::ForallTy(var, _) if *var == needle => ControlFlow::Break(()),
+            ReducIrTyKind::VarTy(var) => ControlFlow::Continue(if *var == needle {
+                ty
+            } else {
+                db.mk_reducir_ty(ReducIrTyKind::VarTy(*var))
+            }),
+            _ => ControlFlow::Continue(db.mk_reducir_ty(kind.clone())),
         })
     }
 
@@ -194,19 +213,28 @@ impl ReducIrTy {
         row: &ReducIrRow,
     ) -> ReducIrTy {
         self.fold(db, &mut |kind| match kind {
-            ReducIrTyKind::ProdVarTy(var) => (*var == needle).then(|| match &row {
-                ReducIrRow::Open(row_var) => db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(*row_var)),
-                ReducIrRow::Closed(tys) => db.mk_prod_ty(tys),
-            }),
-            ReducIrTyKind::CoprodVarTy(var) => (*var == needle).then(|| match &row {
-                ReducIrRow::Open(row_var) => db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(*row_var)),
-                ReducIrRow::Closed(tys) => db.mk_coprod_ty(tys),
-            }),
-            _ => None,
+            ReducIrTyKind::ForallTy(var, _) if needle == *var => ControlFlow::Break(()),
+            ReducIrTyKind::ProdVarTy(var) => (*var == needle)
+                .then(|| match &row {
+                    ReducIrRow::Open(row_var) => {
+                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(*row_var))
+                    }
+                    ReducIrRow::Closed(tys) => db.mk_prod_ty(tys),
+                })
+                .map(ControlFlow::Continue)
+                .unwrap_or(ControlFlow::Continue(db.mk_reducir_ty(kind.clone()))),
+            ReducIrTyKind::CoprodVarTy(var) => (*var == needle)
+                .then(|| match &row {
+                    ReducIrRow::Open(row_var) => {
+                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(*row_var))
+                    }
+                    ReducIrRow::Closed(tys) => db.mk_coprod_ty(tys),
+                })
+                .map(ControlFlow::Continue)
+                .unwrap_or(ControlFlow::Continue(db.mk_reducir_ty(kind.clone()))),
+            _ => ControlFlow::Continue(db.mk_reducir_ty(kind.clone())),
         })
     }
-
-    //TODO: Figure out how to substitute row variables into types
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]

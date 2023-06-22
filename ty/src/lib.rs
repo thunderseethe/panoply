@@ -122,6 +122,13 @@ impl Ty<InDb> {
             _ => None,
         })
     }
+
+    pub fn ty_vars<'db>(&self, db: &'db dyn crate::Db) -> impl Iterator<Item = TyVarId> + 'db {
+        TyInDbDfs::new(db, *self).filter_map(|ty| match ty.0.kind(db) {
+            TypeKind::VarTy(ty_var) => Some(*ty_var),
+            _ => None,
+        })
+    }
 }
 
 struct TyInDbDfs<'a, Db: ?Sized> {

@@ -192,7 +192,13 @@ impl ReducIr {
                 }
             }
             TyAbs(ty_arg, body) => {
-                let ret_ty = body.type_check(ctx)?;
+                let ret_ty = body.type_check(ctx).map_err(|err| match err {
+                    ReducIrTyErr::TyMismatch(lhs, rhs) => ReducIrTyErr::TyMismatch(
+                        ctx.mk_reducir_ty(ForallTy(*ty_arg, lhs)),
+                        ctx.mk_reducir_ty(ForallTy(*ty_arg, rhs)),
+                    ),
+                    err => err,
+                })?;
                 Ok(ctx.mk_reducir_ty(ForallTy(*ty_arg, ret_ty)))
             }
             TyApp(forall, ty_app) => {

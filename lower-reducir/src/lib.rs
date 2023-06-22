@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use aiahr_ast::{Ast, AstModule, AstTerm, Term};
 use aiahr_core::{
     id::{EffectName, EffectOpName, TermName, VarId},
@@ -164,6 +166,23 @@ where
     let mut tyvar_conv = IdConverter::new();
     let mut lower_ctx = LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, row_ev_name);
     let ir = lower_ctx.row_evidence_ir::<Sema>(left, right, goal);
+    let ty_db = db.as_ty_db();
+    let open_ty_vars = left
+        .values(&ty_db)
+        .iter()
+        .chain(right.values(&ty_db).iter())
+        .chain(goal.values(&ty_db).iter())
+        .flat_map(|ty| ty.ty_vars(ty_db))
+        .collect::<BTreeSet<_>>();
+    let vec = open_ty_vars.into_iter().collect::<Vec<_>>();
+
+    let ir = vec.into_iter().rfold(ir, |ir, var| {
+        let var = ReducIrVarTy {
+            var: tyvar_conv.convert(var),
+            kind: Kind::Type,
+        };
+        ReducIr::new(TyAbs(var, P::new(ir)))
+    });
 
     ReducIrItem::new(db, row_ev_name, ir)
 }
@@ -336,8 +355,9 @@ mod tests {
     };
     use aiahr_parser::Db as ParserDb;
     use aiahr_reducir::ReducIr;
+    use assert_matches::assert_matches;
     use expect_test::expect;
-    use pretty::{BoxAllocator, BoxDoc, Doc};
+    use pretty::{BoxAllocator, BoxDoc, Doc, RcAllocator};
 
     #[derive(Default)]
     #[salsa::db(
@@ -392,11 +412,11 @@ effect Reader {
     #[test]
     fn lower_id() {
         let db = TestDatabase::default();
-
         let ir = lower_snippet(&db, "|x| x");
-
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+
+        assert_matches!(ir.type_check(&db), Ok(_));
         let expect = expect!["(forall [(T0: Type)] (fun [V0, V1] V1))"];
         expect.assert_eq(&pretty_ir);
     }
@@ -404,14 +424,20 @@ effect Reader {
     #[test]
     fn lower_product_literal() {
         let db = TestDatabase::default();
-
         let ir = lower_snippet(&db, "|a| { x = a, y = a }");
-
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+
+        /*match ir.type_check(&db) {
+            Ok(_) => {}
+            Err(err) => {
+                println!("{}", err.pretty(&db, &RcAllocator).pretty(80));
+                panic!();
+            }
+        }*/
         let expect = expect![[r#"
             (forall [(T1: Type)] (let (V1 _row__)
-                (let (V2 _row_x_y) (fun [V0, V3] (V2[0] V3 V3)))))"#]];
+                (let (V2 (_row_x_y @ T1)) (fun [V0, V3] (V2[0] V3 V3)))))"#]];
         expect.assert_eq(&pretty_ir);
     }
 
@@ -422,6 +448,7 @@ effect Reader {
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
+        //assert_matches!(ir.type_check(&db), Ok(_));
         let expect = expect![[r#"
             (forall
               [(T1: Type) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) (T7: SimpleRow)]
@@ -432,19 +459,19 @@ effect Reader {
     #[test]
     fn lower_state_get() {
         let db = TestDatabase::default();
-        let ir = lower_function(
+        let ir = lower_snippet(
             &db,
             r#"
-main : {} = with {
+with {
     put = |x| |k| {},
     get = |x| |k| {},
     return = |x| x,
 } do State.get({})"#,
-            "main",
         );
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
+        //assert_matches!(ir.type_check(&db), Ok(_));
         let expect = expect![[r#"
             (let (V1 _row__)
               (let (V2 _row__State)

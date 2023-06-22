@@ -201,10 +201,6 @@ where
     let (mut ty_unifiers, mut data_row_unifiers, mut eff_row_unifiers, unsolved_eqs, errors) =
         infer.solve();
 
-    print_root_unifiers(db, &mut ty_unifiers);
-    print_root_unifiers(db, &mut data_row_unifiers);
-    print_root_unifiers(db, &mut eff_row_unifiers);
-
     // Zonk the variable -> type mapping and the root term type.
     let mut zonker = Zonker {
         ctx: db,
@@ -273,6 +269,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 fn print_root_unifiers<'ctx, K: UnifierKind>(
     db: &dyn crate::Db,
     uni: &mut InPlaceUnificationTable<TcUnifierVar<'ctx, K>>,

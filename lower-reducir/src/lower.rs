@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId};
 use aiahr_reducir::{
@@ -204,12 +206,21 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                 let ret = self.lower_ty(*ret);
                 self.db.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ret))
             }
-            TypeKind::SumTy(Row::Open(row_var)) | TypeKind::ProdTy(Row::Open(row_var)) => {
+            TypeKind::SumTy(Row::Open(row_var)) => {
                 let var = self.tyvar_conv.convert(*row_var);
-                self.db.mk_reducir_ty(ReducIrTyKind::VarTy(ReducIrVarTy {
-                    var,
-                    kind: Kind::SimpleRow,
-                }))
+                self.db
+                    .mk_reducir_ty(ReducIrTyKind::CoprodVarTy(ReducIrVarTy {
+                        var,
+                        kind: Kind::SimpleRow,
+                    }))
+            }
+            TypeKind::ProdTy(Row::Open(row_var)) => {
+                let var = self.tyvar_conv.convert(*row_var);
+                self.db
+                    .mk_reducir_ty(ReducIrTyKind::ProdVarTy(ReducIrVarTy {
+                        var,
+                        kind: Kind::SimpleRow,
+                    }))
             }
             TypeKind::ProdTy(Row::Closed(row)) => {
                 let elems = row
@@ -710,12 +721,29 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         *right,
                         *goal,
                     );
-                    let ir_ty = self.ty_ctx.row_evidence_ir_ty(ev);
-                    let ir_ty = ir_item
-                        .item(self.db)
+                    let item = ir_item.item(self.db);
+                    let ir_ty = item
                         .type_check(self.db.as_ir_db())
                         .expect("ICE: Generated effect row evidence didn't type check");
+                    let ty_db = self.db.as_ty_db();
+                    let open_ty_vars = left
+                        .values(&ty_db)
+                        .iter()
+                        .chain(right.values(&ty_db).iter())
+                        .chain(goal.values(&ty_db).iter())
+                        .flat_map(|ty| ty.ty_vars(ty_db))
+                        .collect::<BTreeSet<_>>();
                     let ir = ReducIr::new(Item(ir_item.name(self.db), ir_ty));
+                    let ir = open_ty_vars.into_iter().fold(ir, |body, ty_var| {
+                        let var = ReducIrVarTy {
+                            var: self.ty_ctx.tyvar_conv.convert(ty_var),
+                            kind: Kind::Type,
+                        };
+                        ReducIr::new(TyApp(
+                            P::new(body),
+                            ReducIrTyApp::Ty(self.mk_reducir_ty(VarTy(var))),
+                        ))
+                    });
                     solved.push((param, ir));
                 }
                 Evidence::EffRow {
@@ -734,7 +762,25 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         .item(self.db)
                         .type_check(self.db.as_ir_db())
                         .expect("ICE: Generated effect row evidence didn't type check");
+                    let ty_db = self.db.as_ty_db();
+                    let open_ty_vars = left
+                        .values(&ty_db)
+                        .iter()
+                        .chain(right.values(&ty_db).iter())
+                        .chain(goal.values(&ty_db).iter())
+                        .flat_map(|ty| ty.ty_vars(ty_db))
+                        .collect::<BTreeSet<_>>();
                     let ir = ReducIr::new(Item(ir_item.name(self.db), ir_ty));
+                    let ir = open_ty_vars.into_iter().fold(ir, |body, ty_var| {
+                        let var = ReducIrVarTy {
+                            var: self.ty_ctx.tyvar_conv.convert(ty_var),
+                            kind: Kind::Type,
+                        };
+                        ReducIr::new(TyApp(
+                            P::new(body),
+                            ReducIrTyApp::Ty(self.mk_reducir_ty(VarTy(var))),
+                        ))
+                    });
                     solved.push((param, ir));
                 }
                 _ => {
