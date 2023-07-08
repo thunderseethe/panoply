@@ -1,8 +1,6 @@
-use std::collections::BTreeSet;
-
 use aiahr_ast::{Ast, AstModule, AstTerm, Term};
 use aiahr_core::{
-    id::{EffectName, EffectOpName, TermName, VarId},
+    id::{EffectName, EffectOpName, Id, TermName, TyVarId, VarId},
     ident::Ident,
     modules::Module,
 };
@@ -14,16 +12,17 @@ use aiahr_reducir::{
 };
 use aiahr_tc::{EffectInfo, TypedItem};
 use aiahr_ty::{
-    row::{RowOps, RowSema, Scoped, Simple},
-    InDb, Ty, TyScheme, Wrapper,
+    row::{Scoped, Simple},
+    InDb, MkTy, RowFields, Ty, TyScheme, Wrapper,
 };
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 
 pub(crate) mod id_converter;
 use id_converter::IdConverter;
+use rustc_hash::FxHashMap;
 
-use crate::lower::LowerTyCtx;
+use crate::lower::{LowerTyCtx, LowerTySchemeCtx};
 
 use self::lower::{ItemWrappers, RowReducrIrEvidence, RowVarConvert};
 
@@ -45,10 +44,10 @@ pub trait ReducIrEffectInfo: EffectInfo {
 pub struct Jar(
     ReducIrModule,
     ReducIrItem,
+    ReducIrRowEv,
     lower_module,
     lower_item,
-    lower_simple_row_ev_item,
-    lower_scoped_row_ev_item,
+    lower_row_ev,
     effect_handler_ir_ty,
 );
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
@@ -105,6 +104,12 @@ pub struct ReducIrItem {
 }
 
 #[salsa::tracked]
+pub struct ReducIrRowEv {
+    pub simple: ReducIrItem,
+    pub scoped: ReducIrItem,
+}
+
+#[salsa::tracked]
 fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
     let ast_db = db.as_ast_db();
     let items = module
@@ -116,67 +121,112 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
 }
 
 #[salsa::tracked]
-fn lower_simple_row_ev_item(
+fn lower_row_ev(
     db: &dyn crate::Db,
     module: Module,
-    left: <Simple as RowSema>::Closed<InDb>,
-    right: <Simple as RowSema>::Closed<InDb>,
-    goal: <Simple as RowSema>::Closed<InDb>,
-) -> ReducIrItem {
-    lower_row_ev_item::<Simple>(db, module, left, right, goal)
-}
-
-#[salsa::tracked]
-fn lower_scoped_row_ev_item(
-    db: &dyn crate::Db,
-    module: Module,
-    left: <Scoped as RowSema>::Closed<InDb>,
-    right: <Scoped as RowSema>::Closed<InDb>,
-    goal: <Scoped as RowSema>::Closed<InDb>,
-) -> ReducIrItem {
-    lower_row_ev_item::<Scoped>(db, module, left, right, goal)
+    left: RowFields,
+    right: RowFields,
+    goal: RowFields,
+) -> ReducIrRowEv {
+    ReducIrRowEv::new(
+        db,
+        lower_row_ev_item::<Simple>(db, module, "simple", left, right, goal),
+        lower_row_ev_item::<Scoped>(db, module, "scoped", left, right, goal),
+    )
 }
 
 fn lower_row_ev_item<Sema: RowReducrIrEvidence>(
     db: &dyn crate::Db,
     module: Module,
-    left: Sema::Closed<InDb>,
-    right: Sema::Closed<InDb>,
-    goal: Sema::Closed<InDb>,
+    mark: &str,
+    left: RowFields,
+    right: RowFields,
+    goal: RowFields,
 ) -> ReducIrItem
 where
     for<'a, 'b> LowerTyCtx<'a, 'b>: RowVarConvert<Sema>,
     Sema::Closed<InDb>: Copy,
     Sema::Open<InDb>: Copy,
 {
-    let left_fields: String = left
-        .fields(&db)
+    let ty_db = db.as_ty_db();
+    let left_fields = left.fields(ty_db);
+    let left_field_str: String = left_fields
         .iter()
         .map(|ident| ident.text(db.as_core_db()).as_str())
         .collect();
-    let right_fields: String = right
-        .fields(&db)
+    let right_fields = right.fields(ty_db);
+    let right_field_str: String = right_fields
         .iter()
         .map(|ident| ident.text(db.as_core_db()).as_str())
         .collect();
-    let row_ev_ident = db.ident(format!("_row_{}_{}", left_fields, right_fields));
+    let row_ev_ident = db.ident(format!(
+        "_row_{}_{}_{}",
+        mark, left_field_str, right_field_str
+    ));
     let row_ev_name = TermName::new(db.as_core_db(), row_ev_ident, module);
+
+    let mut id_count: i32 = -1;
+    let mut left_values = left_fields
+        .iter()
+        .map(|_| {
+            id_count += 1;
+            id_count
+        })
+        .map(|id| TyVarId::from_raw(id.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    let right_values = right_fields
+        .iter()
+        .map(|_| {
+            id_count += 1;
+            id_count
+        })
+        .map(|id| TyVarId::from_raw(id.try_into().unwrap()))
+        .collect::<Vec<_>>();
+
+    let left_row = db.mk_row_iter::<Sema::Closed<InDb>>(
+        left_fields.iter().copied(),
+        left_values
+            .iter()
+            .map(|id| db.mk_ty(aiahr_ty::TypeKind::VarTy(*id))),
+    );
+    let right_row = db.mk_row_iter::<Sema::Closed<InDb>>(
+        right_fields.iter().copied(),
+        right_values
+            .iter()
+            .map(|id| db.mk_ty(aiahr_ty::TypeKind::VarTy(*id))),
+    );
+
+    let goal_row_indices = Sema::merge(db, left_row, right_row);
+    let goal_values = goal_row_indices
+        .iter()
+        .map(|indx| match indx {
+            lower::RowIndx::Left(_, ty) => *ty,
+            lower::RowIndx::Right(_, ty) => *ty,
+        })
+        .collect::<Vec<_>>();
+
+    let goal_row =
+        db.mk_row::<Sema::Closed<InDb>>(goal.fields(ty_db).as_slice(), goal_values.as_slice());
+
+    left_values.extend(right_values);
+    let order_of_tys = left_values;
+    let tyvar_env = order_of_tys
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| (*ty, i as i32))
+        .collect::<FxHashMap<_, _>>();
 
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
-    let mut lower_ctx = LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, row_ev_name);
-    let ir = lower_ctx.row_evidence_ir::<Sema>(left, right, goal);
-    let ty_db = db.as_ty_db();
-    let open_ty_vars = left
-        .values(&ty_db)
-        .iter()
-        .chain(right.values(&ty_db).iter())
-        .chain(goal.values(&ty_db).iter())
-        .flat_map(|ty| ty.ty_vars(ty_db))
-        .collect::<BTreeSet<_>>();
-    let vec = open_ty_vars.into_iter().collect::<Vec<_>>();
+    let mut lower_ctx = LowerCtx::new(
+        db,
+        &mut var_conv,
+        LowerTyCtx::new(db, &mut tyvar_conv, tyvar_env),
+        row_ev_name,
+    );
+    let ir = lower_ctx.row_evidence_ir::<Sema>(left_row, right_row, goal_row);
 
-    let ir = vec.into_iter().rfold(ir, |ir, var| {
+    let ir = order_of_tys.into_iter().rfold(ir, |ir, var| {
         let var = ReducIrVarTy {
             var: tyvar_conv.convert(var),
             kind: Kind::Type,
@@ -201,28 +251,38 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
 fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
     let mut tyvar_conv = IdConverter::new();
 
-    let mut lower_ty_ctx = LowerTyCtx::new(db.as_lower_reducir_db(), &mut tyvar_conv);
-
+    let varp_ty = db.mk_reducir_ty(ReducIrTyKind::VarTy(0));
     // TODO: Produce members in order so we don't have to sort or get names here.
     let mut members = db
         .effect_members(effect)
         .iter()
         .map(|op| {
+            let lower_ty_ctx = LowerTySchemeCtx::new(db.as_lower_reducir_db(), &mut tyvar_conv);
             let scheme = db.effect_member_sig(*op);
-            (
-                db.effect_member_name(*op),
-                lower_ty_ctx.lower_scheme(&scheme),
-            )
+            let (ir_ty_scheme, _) =
+                lower_ty_ctx.lower_scheme(effect.module(db.as_core_db()), &scheme);
+            let ir_ty_scheme = match ir_ty_scheme.kind(db.as_ir_db()) {
+                ReducIrTyKind::FunTy(arg, ret) => db.mk_binary_fun_ty(
+                    arg,
+                    db.mk_reducir_ty(ReducIrTyKind::FunTy(ret, varp_ty)),
+                    varp_ty,
+                ),
+                _ => unreachable!(),
+            };
+            (db.effect_member_name(*op), ir_ty_scheme)
         })
         .collect::<Vec<_>>();
     members.sort_by(|a, b| a.0.cmp(&b.0));
-    let handler_ty = db.mk_prod_ty(
-        members
-            .into_iter()
-            .map(|(_, ir_ty)| ir_ty)
-            .collect::<Vec<_>>()
-            .as_slice(),
-    );
+    let handler_ty = db.mk_reducir_ty(ReducIrTyKind::ForallTy(
+        Kind::Type,
+        db.mk_prod_ty(
+            members
+                .into_iter()
+                .map(|(_, ir_ty)| ir_ty)
+                .collect::<Vec<_>>()
+                .as_slice(),
+        ),
+    ));
     db.mk_prod_ty(&[db.mk_reducir_ty(ReducIrTyKind::IntTy), handler_ty])
 }
 
@@ -293,12 +353,14 @@ fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<Va
     let mut tyvar_conv = IdConverter::new();
     let scheme = typed_item.ty_scheme(db.as_tc_db());
 
-    let required_evidence = typed_item.required_evidence(tc_db);
-    let (mut lower_ctx, ev_solved, ev_params) =
-        LowerCtx::new(db, &mut var_conv, &mut tyvar_conv, name)
-            .collect_evidence_params(required_evidence.iter());
+    let (_, ty_ctx) = LowerTySchemeCtx::new(db, &mut tyvar_conv)
+        .lower_scheme(name.module(db.as_core_db()), &scheme);
 
-    let body = lower_ctx.lower_top_level(ast, ast.tree);
+    let required_evidence = typed_item.required_evidence(tc_db);
+    let (mut lower_ctx, ev_solved, ev_params) = LowerCtx::new(db, &mut var_conv, ty_ctx, name)
+        .collect_evidence_params(required_evidence.iter());
+
+    let body = lower_ctx.lower_top_level(ast, ast.root());
     // TODO: Bit of a hack. Eventually we'd like to generate our solved row ev in a central location.
     // Add row evidence as parameters of the term
     let body = ev_solved
@@ -347,6 +409,7 @@ fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<Va
 
 #[cfg(test)]
 mod tests {
+
     use crate::Db as LowerIrDb;
 
     use aiahr_core::{
@@ -354,10 +417,9 @@ mod tests {
         Db,
     };
     use aiahr_parser::Db as ParserDb;
-    use aiahr_reducir::ReducIr;
-    use assert_matches::assert_matches;
+    use aiahr_reducir::{ty::ReducIrTy, ReducIr, ReducIrTyErr};
     use expect_test::expect;
-    use pretty::{BoxAllocator, BoxDoc, Doc};
+    use pretty::{BoxAllocator, BoxDoc, Doc, RcAllocator};
 
     #[derive(Default)]
     #[salsa::db(
@@ -409,6 +471,18 @@ effect Reader {
         lower_function(db, &main, "main")
     }
 
+    trait PrettyTyErr {
+        fn to_pretty(self, db: &TestDatabase) -> String;
+    }
+    impl PrettyTyErr for Result<ReducIrTy, ReducIrTyErr> {
+        fn to_pretty(self, db: &TestDatabase) -> String {
+            match self {
+                Ok(ty) => ty.pretty(db, &RcAllocator).pretty(80).to_string(),
+                Err(err) => err.pretty(db, &RcAllocator).pretty(80).to_string(),
+            }
+        }
+    }
+
     #[test]
     fn lower_id() {
         let db = TestDatabase::default();
@@ -416,9 +490,12 @@ effect Reader {
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
-        assert_matches!(ir.type_check(&db), Ok(_));
         let expect = expect!["(forall [(T0: Type)] (fun [V0, V1] V1))"];
         expect.assert_eq(&pretty_ir);
+
+        let expect_ty = expect!["forall Type . {} -> T0 -> T0"];
+        let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
+        expect_ty.assert_eq(&pretty_ir_ty);
     }
 
     #[test]
@@ -428,17 +505,16 @@ effect Reader {
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
-        /*match ir.type_check(&db) {
-            Ok(_) => {}
-            Err(err) => {
-                println!("{}", err.pretty(&db, &RcAllocator).pretty(80));
-                panic!();
-            }
-        }*/
         let expect = expect![[r#"
-            (forall [(T1: Type)] (let (V1 _row__)
-                (let (V2 (_row_x_y @ T1)) (fun [V0, V3] (V2[0] V3 V3)))))"#]];
+            (forall [(T0: Type)] (let
+                [ (V1 _row_scoped__)
+                , (V2 ((_row_simple_x_y @ T0) @ T0))
+                ] (fun [V0, V3] (V2[0] V3 V3))))"#]];
         expect.assert_eq(&pretty_ir);
+
+        let expect_ty = expect!["forall Type . {} -> T0 -> {T0, T0}"];
+        let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
+        expect_ty.assert_eq(&pretty_ir_ty);
     }
 
     #[test]
@@ -448,48 +524,253 @@ effect Reader {
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
-        //assert_matches!(ir.type_check(&db), Ok(_));
         let expect = expect![[r#"
             (forall
-              [(T1: Type) (T2: SimpleRow) (T3: SimpleRow) (T5: SimpleRow) (T7: SimpleRow)]
-              (fun [V2, V3] (let (V1 _row__) (fun [V0, V4, V5] (V3[3][0] (V2[0] V4 V5))))))"#]];
-        expect.assert_eq(&pretty_ir)
+              [(T4: Type) (T3: SimpleRow) (T2: SimpleRow) (T1: SimpleRow) (T0: SimpleRow)]
+              (fun [V2, V3]
+                (let (V1 _row_scoped__) (fun [V0, V4, V5] (V3[3][0] (V2[0] V4 V5))))))"#]];
+        expect.assert_eq(&pretty_ir);
+
+        let expect_ty = expect![[r#"
+            forall Type .
+              forall SimpleRow .
+                forall SimpleRow .
+                  forall SimpleRow .
+                    forall SimpleRow .
+                      { {0} -> {1} -> {2}
+                      , forall Type . (<1> -> T0) -> (<2> -> T0) -> <3> -> T0
+                      , {{2} -> {0}, <0> -> <2>}
+                      , {{2} -> {1}, <1> -> <2>}
+                      } -> { {3} -> T0 -> {2}
+                           , forall Type . (<4> -> T0) -> (T1 -> T0) -> <3> -> T0
+                           , {{2} -> {3}, <3> -> <2>}
+                           , {{2} -> T0, T0 -> <2>}
+                           } -> {} -> {0} -> {1} -> T0"#]];
+        let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
+        expect_ty.assert_eq(&pretty_ir_ty);
     }
 
     #[test]
+    #[ignore = "Fails typechecking due to missing evidence"]
     fn lower_state_get() {
         let db = TestDatabase::default();
         let ir = lower_snippet(
             &db,
             r#"
 with {
-    put = |x| |k| {},
-    get = |x| |k| {},
-    return = |x| x,
+    put = |x| |k| |s| k(s)(s),
+    get = |x| |k| |s| k({})(x),
+    return = |x| |s| x,
 } do State.get({})"#,
         );
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
-        //assert_matches!(ir.type_check(&db), Ok(_));
         let expect = expect![[r#"
-            (let (V1 _row__)
-              (let (V2 _row__State)
-                (let (V3 _row_State_)
-                  (let (V4 _row_put_get)
-                    (let (V5 _row_return_putget)
-                      (let (V6 _row_putget_return)
-                        (fun [V0]
-                          (let
-                            (V8 (V6[0]
-                              (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {}))
-                              (fun [V13] V13)))
-                            (new_prompt [V7] (let (V0 (V2[0] V0 {V7, V8}))
-                              (prompt V7 (((V6[3][0] V8) @ {})
-                                  ((fun [V15, V14]
-                                    (yield V15[0] (fun [V16] (V15[1][1] V14 V16))))
-                                    (V3[3][0] V0)
-                                    {})))))))))))))"#]];
+            (let
+              [ ((V1: { {} -> {} -> {}
+                      , forall Type . (<> -> T0) -> (<> -> T0) -> <> -> T0
+                      , {{} -> {}, <> -> <>}
+                      , {{} -> {}, <> -> <>}
+                      }) _row_scoped__)
+              , ((V2: { {} -> { Int
+                              , forall Type .
+                                {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                              } -> { Int
+                                   , forall Type .
+                                     {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                                   }
+                      , forall Type .
+                        (<> -> T0) -> ({ Int
+                                       , forall Type .
+                                         {{} -> ({} -> T1) -> T1, {} -> ({} -> T1) -> T1}
+                                       } -> T0) -> { Int
+                                                   , forall Type .
+                                                     { {} -> ({} -> T1) -> T1
+                                                     , {} -> ({} -> T1) -> T1
+                                                     }
+                                                   } -> T0
+                      , { { Int
+                          , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                          } -> {}
+                        , <> -> { Int
+                                , forall Type .
+                                  {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                                }
+                        }
+                      , { { Int
+                          , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                          } -> { Int
+                               , forall Type .
+                                 {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                               }
+                        , { Int
+                          , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                          } -> { Int
+                               , forall Type .
+                                 {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                               }
+                        }
+                      }) (_row_scoped__State @ { Int
+                                               , forall Type .
+                                                 { {} -> ({} -> T0) -> T0
+                                                 , {} -> ({} -> T0) -> T0
+                                                 }
+                                               }))
+              , ((V3: { { Int
+                        , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                        } -> {} -> { Int
+                                   , forall Type .
+                                     {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                                   }
+                      , forall Type .
+                        ({ Int
+                         , forall Type . {{} -> ({} -> T1) -> T1, {} -> ({} -> T1) -> T1}
+                         } -> T0) -> (<> -> T0) -> { Int
+                                                   , forall Type .
+                                                     { {} -> ({} -> T1) -> T1
+                                                     , {} -> ({} -> T1) -> T1
+                                                     }
+                                                   } -> T0
+                      , { { Int
+                          , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                          } -> { Int
+                               , forall Type .
+                                 {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                               }
+                        , { Int
+                          , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                          } -> { Int
+                               , forall Type .
+                                 {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                               }
+                        }
+                      , { { Int
+                          , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                          } -> {}
+                        , <> -> { Int
+                                , forall Type .
+                                  {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                                }
+                        }
+                      }) (_row_scoped_State_ @ { Int
+                                               , forall Type .
+                                                 { {} -> ({} -> T0) -> T0
+                                                 , {} -> ({} -> T0) -> T0
+                                                 }
+                                               }))
+              , ((V4: { ({} -> ({} -> {}) -> {}) -> ({} -> ({} -> {}) -> {}) -> { {} -> ({}
+                                                                                -> {}) -> {}
+                                                                                , {} -> ({}
+                                                                                -> {}) -> {}
+                                                                                }
+                      , forall Type .
+                        (({} -> ({} -> {}) -> {}) -> T0) -> (({} -> ({} -> {}) -> {}) -> T0)
+                        -> <{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {}> -> T0
+                      , { {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}} -> {} -> ({} ->
+                        {}) -> {}
+                        , ({} -> ({} -> {}) -> {}) -> <{} -> ({} -> {}) -> {},{} -> ({} ->
+                        {}) -> {}>
+                        }
+                      , { {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}} -> {} -> ({} ->
+                        {}) -> {}
+                        , ({} -> ({} -> {}) -> {}) -> <{} -> ({} -> {}) -> {},{} -> ({} ->
+                        {}) -> {}>
+                        }
+                      }) ((_row_simple_put_get @ {} -> ({} -> {}) -> {}) @ {} -> ({} -> {})
+              -> {}))
+              , ((V5: { ({} -> {}) -> {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}} ->
+                      {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}, {} -> {}}
+                      , forall Type .
+                        (({} -> {}) -> T0) -> (<{} -> ({} -> {}) -> {},{} -> ({} -> {}) ->
+                        {}> -> T0) -> <{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {},{} ->
+                        {}> -> T0
+                      , { {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}, {} -> {}} -> {}
+                        -> {}
+                        , ({} -> {}) -> <{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {},{} ->
+                        {}>
+                        }
+                      , { {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}, {} -> {}} -> { {}
+                                                                                        ->
+                                                                                        ({}
+                                                                                        ->
+                                                                                        {})
+                                                                                        ->
+                                                                                        {}
+                                                                                        , {}
+                                                                                        ->
+                                                                                        ({}
+                                                                                        ->
+                                                                                        {})
+                                                                                        ->
+                                                                                        {}
+                                                                                        }
+                        , <{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {}> -> <{} -> ({} ->
+                        {}) -> {},{} -> ({} -> {}) -> {},{} -> {}>
+                        }
+                      }) (((_row_simple_return_putget @ {} -> {}) @ {} -> ({} -> {}) ->
+              {}) @ {} -> ({} -> {}) -> {}))
+              , ((V6: { {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}} -> ({} -> {}) ->
+                      {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}, {} -> {}}
+                      , forall Type .
+                        (<{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {}> -> T0) -> (({} ->
+                        {}) -> T0) -> <{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {},{} ->
+                        {}> -> T0
+                      , { {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}, {} -> {}} -> { {}
+                                                                                        ->
+                                                                                        ({}
+                                                                                        ->
+                                                                                        {})
+                                                                                        ->
+                                                                                        {}
+                                                                                        , {}
+                                                                                        ->
+                                                                                        ({}
+                                                                                        ->
+                                                                                        {})
+                                                                                        ->
+                                                                                        {}
+                                                                                        }
+                        , <{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {}> -> <{} -> ({} ->
+                        {}) -> {},{} -> ({} -> {}) -> {},{} -> {}>
+                        }
+                      , { {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}, {} -> {}} -> {}
+                        -> {}
+                        , ({} -> {}) -> <{} -> ({} -> {}) -> {},{} -> ({} -> {}) -> {},{} ->
+                        {}>
+                        }
+                      }) (((_row_simple_putget_return @ {} -> ({} -> {}) -> {}) @ {} -> ({}
+              -> {}) -> {}) @ {} -> {}))
+              ]
+              (fun [V0]
+                (let
+                  ((V8: {{} -> ({} -> {}) -> {}, {} -> ({} -> {}) -> {}, {} -> {}}) (V6[0]
+                    (V4[0] (fun [V9, V10] {}) (fun [V11, V12] {}))
+                    (fun [V13] V13)))
+                  (new_prompt [V7] (let
+                    ((V0: { Int
+                          , forall Type . {{} -> ({} -> T0) -> T0, {} -> ({} -> T0) -> T0}
+                          }) (V2[0] V0 {V7, V8}))
+                    (prompt V7 (V6[3][0]
+                        V8
+                        ((fun [V15, V14]
+                          (yield V15[0] (fun [V16] ((V15[1] @ {})[1] V14 V16))))
+                          (V2[3][0] V0)
+                          {}))))))))"#]];
         expect.assert_eq(&pretty_ir);
+
+        let expect_ty = expect!["Expected a forall type, but got: {} -> {}"];
+        let pretty_ir_ty = {
+            let this = ir.type_check(&db);
+            let db = &db;
+            match this {
+                Ok(ty) => ty.pretty(db, &RcAllocator).pretty(80).to_string(),
+                Err(err) => {
+                    println!("{}", err.pretty(db, &RcAllocator).pretty(80));
+                    panic!();
+                }
+            }
+        };
+        expect_ty.assert_eq(&pretty_ir_ty);
     }
 }

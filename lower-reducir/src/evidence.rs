@@ -86,7 +86,12 @@ impl Index<&Evidence> for EvidenceMap {
     type Output = ReducIrVar;
 
     fn index(&self, index: &Evidence) -> &Self::Output {
-        &self.params[self.complete_map[index]]
+        &self.params[*self.complete_map.get(index).unwrap_or_else(|| {
+            panic!(
+                "Cound not find complete ev: {:?} in \n{:#?}",
+                index, self.complete_map
+            )
+        })]
     }
 }
 impl Index<&PartialEv> for EvidenceMap {

@@ -248,7 +248,6 @@ pub enum RowTerm<Var> {
         term: Idx<Term<Var>>,
     },
 }
-
 impl<Var> TryFrom<(Idx<Term<Var>>, &Term<Var>)> for RowTermView<Var> {
     type Error = Idx<Term<Var>>;
 

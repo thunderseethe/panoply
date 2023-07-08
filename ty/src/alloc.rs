@@ -38,7 +38,17 @@ pub type ScopedRowVarOf<A> = <A as TypeAlloc>::ScopedRowVar;
 pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
     fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A>;
     fn mk_label(&self, label: &str) -> RowLabel;
+
     fn mk_row<R: NewRow<A>>(&self, fields: &[RowLabel], values: &[Ty<A>]) -> R;
+    fn mk_row_vec<R: NewRow<A>>(&self, fields: Vec<RowLabel>, values: Vec<Ty<A>>) -> R;
+
+    fn mk_row_iter<R: NewRow<A>>(
+        &self,
+        fields: impl Iterator<Item = RowLabel>,
+        values: impl Iterator<Item = Ty<A>>,
+    ) -> R {
+        self.mk_row_vec(fields.collect(), values.collect())
+    }
 
     fn empty_row<R: NewRow<A>>(&self) -> R {
         self.mk_row(&[], &[])
@@ -176,18 +186,26 @@ pub mod db {
             self.ident_str(label)
         }
 
-        fn mk_row<R: crate::row::NewRow<InDb>>(
+        fn mk_row_vec<R: crate::row::NewRow<InDb>>(
             &self,
-            fields: &[RowLabel],
-            values: &[Ty<InDb>],
+            fields: Vec<RowLabel>,
+            values: Vec<Ty<InDb>>,
         ) -> R {
             debug_assert_eq!(fields.len(), values.len());
             debug_assert!(fields.iter().considered_sorted());
 
             R::new(
-                RowFields::new(self.as_ty_db(), fields.to_vec()),
-                RowValues::new(self.as_ty_db(), values.to_vec()),
+                RowFields::new(self.as_ty_db(), fields),
+                RowValues::new(self.as_ty_db(), values),
             )
+        }
+
+        fn mk_row<R: crate::row::NewRow<InDb>>(
+            &self,
+            fields: &[RowLabel],
+            values: &[Ty<InDb>],
+        ) -> R {
+            self.mk_row_vec(fields.to_vec(), values.to_vec())
         }
     }
 

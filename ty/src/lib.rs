@@ -34,7 +34,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 
-pub trait PrettyType<Db: ?Sized, A: TypeAlloc, Ann> {
+pub trait PrettyType<Db: ?Sized, A: TypeAlloc, Ann = ()> {
     fn pretty<'a, 'b, D>(
         &self,
         allocator: &'a D,

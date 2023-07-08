@@ -1,5 +1,3 @@
-use std::ops::ControlFlow;
-
 use aiahr_core::id::ReducIrTyVarId;
 use aiahr_ty::row::{RowSema, Scoped, Simple};
 use pretty::{docs, DocAllocator, DocBuilder, Pretty};
@@ -62,18 +60,18 @@ impl ReducIrVarTy {
         A: 'a,
         D: DocAllocator<'a, A>,
     {
-        docs![a, "T", a.as_string(self.var.0), ":", a.space(), &self.kind,].parens()
+        docs![a, "T", a.as_string(self.var.0), ":", a.space(), &self.kind].parens()
     }
 }
 
 #[derive(PartialEq, Eq, Clone, Hash, Debug)]
 pub enum ReducIrTyKind {
     IntTy,
-    VarTy(ReducIrVarTy),
-    ProdVarTy(ReducIrVarTy),
-    CoprodVarTy(ReducIrVarTy),
+    VarTy(i32),
+    ProdVarTy(i32),
+    CoprodVarTy(i32),
     FunTy(ReducIrTy, ReducIrTy),
-    ForallTy(ReducIrVarTy, ReducIrTy),
+    ForallTy(Kind, ReducIrTy),
     ProductTy(Vec<ReducIrTy>),
     CoproductTy(Vec<ReducIrTy>),
 }
@@ -82,13 +80,14 @@ impl ReducIrTyKind {
     fn pretty<'a, D, DB>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
     where
         D: DocAllocator<'a>,
+        DocBuilder<'a, D>: Clone,
         DB: ?Sized + crate::Db,
     {
         match self {
             ReducIrTyKind::IntTy => a.text("Int"),
-            ReducIrTyKind::VarTy(ty_var) => ty_var.pretty(a),
-            ReducIrTyKind::ProdVarTy(ty_var) => ty_var.pretty(a).braces(),
-            ReducIrTyKind::CoprodVarTy(ty_var) => ty_var.pretty(a).angles(),
+            ReducIrTyKind::VarTy(ty_var) => a.text("T").append(a.as_string(ty_var)),
+            ReducIrTyKind::ProdVarTy(ty_var) => a.as_string(ty_var).braces(),
+            ReducIrTyKind::CoprodVarTy(ty_var) => a.as_string(ty_var).angles(),
             ReducIrTyKind::FunTy(arg, ret) => {
                 let mut arg_doc = arg.pretty(db, a);
                 if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
@@ -100,17 +99,39 @@ impl ReducIrTyKind {
                     .append(a.softline())
                     .append(ret.pretty(db, a))
             }
-            ReducIrTyKind::ForallTy(ty_var, ty) => a
-                .text("forall")
-                .append(a.space())
-                .append(ty_var.pretty(a))
-                .append(a.space())
-                .append(a.text("."))
-                .append(a.softline())
-                .append(ty.pretty(db, a)),
-            ReducIrTyKind::ProductTy(tys) => a
-                .intersperse(tys.into_iter().map(|ty| ty.pretty(db, a)), ",")
-                .braces(),
+            ReducIrTyKind::ForallTy(kind, ty) => {
+                let preamble = a
+                    .text("forall")
+                    .append(a.space())
+                    .append(kind.pretty(a))
+                    .append(a.space())
+                    .append(a.text("."));
+
+                let single_line = a.space().append(ty.pretty(db, a));
+                let multi_line = a.line().append(ty.pretty(db, a)).nest(2);
+                preamble.append(multi_line.flat_alt(single_line).group())
+            }
+            ReducIrTyKind::ProductTy(tys) => {
+                // I don't understand layout rules well enough to avoid this special case
+                if tys.is_empty() {
+                    return a.text("{}");
+                }
+                let single_line = a
+                    .intersperse(tys.iter().map(|ty| ty.pretty(db, a)), ", ")
+                    .braces();
+                let multi_line = a
+                    .text("{")
+                    .append(a.space())
+                    .append(a.intersperse(
+                        tys.into_iter().map(|ty| ty.pretty(db, a)),
+                        a.line().append(",").append(a.space()),
+                    ))
+                    .append(a.line())
+                    .append("}")
+                    .align();
+
+                multi_line.flat_alt(single_line).group()
+            }
             ReducIrTyKind::CoproductTy(tys) => a
                 .intersperse(tys.into_iter().map(|ty| ty.pretty(db, a)), ",")
                 .angles(),
@@ -124,109 +145,229 @@ pub struct ReducIrTy {
     pub kind: ReducIrTyKind,
 }
 
-impl ReducIrTy {
-    fn fold<F>(self, db: &dyn crate::Db, visit: &mut F) -> Self
-    where
-        F: FnMut(&ReducIrTyKind) -> ControlFlow<(), Self>,
-    {
-        let kind = self.kind(db);
-        match kind {
-            ReducIrTyKind::IntTy
-            | ReducIrTyKind::VarTy(_)
-            | ReducIrTyKind::ProdVarTy(_)
-            | ReducIrTyKind::CoprodVarTy(_) => match visit(&kind) {
-                ControlFlow::Continue(k) => k,
-                ControlFlow::Break(_) => self,
-            },
-            ReducIrTyKind::FunTy(arg, ret) => {
-                let arg = arg.fold(db, visit);
-                let ret = ret.fold(db, visit);
-                match visit(&ReducIrTyKind::FunTy(arg, ret)) {
-                    ControlFlow::Continue(k) => k,
-                    ControlFlow::Break(_) => self,
-                }
-            }
-            ReducIrTyKind::ForallTy(var, body) => {
-                let k = ReducIrTyKind::ForallTy(var, body.fold(db, visit));
-                match visit(&k) {
-                    ControlFlow::Continue(k) => k,
-                    ControlFlow::Break(_) => self,
-                }
-            }
-            ReducIrTyKind::ProductTy(elems) => {
-                let elems = elems
-                    .into_iter()
-                    .map(|e| e.fold(db, visit))
-                    .collect::<Vec<_>>();
-                match visit(&ReducIrTyKind::ProductTy(elems)) {
-                    ControlFlow::Continue(k) => k,
-                    ControlFlow::Break(_) => self,
-                }
-            }
-            ReducIrTyKind::CoproductTy(elems) => {
-                let elems = elems
-                    .into_iter()
-                    .map(|e| e.fold(db, visit))
-                    .collect::<Vec<_>>();
-                match visit(&ReducIrTyKind::CoproductTy(elems)) {
-                    ControlFlow::Continue(k) => k,
-                    ControlFlow::Break(_) => self,
-                }
-            }
+struct Env<T> {
+    env: Vec<(i32, Option<T>)>,
+}
+impl<T: Clone + std::fmt::Debug> Env<T> {
+    fn nil() -> Self {
+        Self { env: vec![] }
+    }
+
+    fn with_entry((i, ty): (i32, T)) -> Self {
+        Self {
+            env: vec![(i, Some(ty))],
         }
     }
 
-    pub(crate) fn subst_ty(
-        self,
-        db: &dyn crate::Db,
-        needle: ReducIrVarTy,
-        ty: ReducIrTy,
-    ) -> ReducIrTy {
-        self.fold(db, &mut |kind| match kind {
-            ReducIrTyKind::ForallTy(var, _) if *var == needle => ControlFlow::Break(()),
-            ReducIrTyKind::VarTy(var) => ControlFlow::Continue(if *var == needle {
-                ty
-            } else {
-                db.mk_reducir_ty(ReducIrTyKind::VarTy(*var))
-            }),
-            _ => ControlFlow::Continue(db.mk_reducir_ty(kind.clone())),
-        })
+    fn with<R>(&mut self, j: i32, body: impl FnOnce(&mut Self) -> R) -> R {
+        self.env.push((j, None));
+        let ret = body(self);
+        self.env.pop();
+        ret
     }
 
-    pub(crate) fn subst_row(
-        self,
-        db: &dyn crate::Db,
-        needle: ReducIrVarTy,
-        row: &ReducIrRow,
-    ) -> ReducIrTy {
-        self.fold(db, &mut |kind| match kind {
-            ReducIrTyKind::ForallTy(var, _) if needle == *var => ControlFlow::Break(()),
-            ReducIrTyKind::ProdVarTy(var) => (*var == needle)
-                .then(|| match &row {
-                    ReducIrRow::Open(row_var) => {
-                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(*row_var))
+    fn get(&self, n: i32) -> &(i32, Option<T>) {
+        // Index from the end of our vec
+        // because we're using it as a stack
+        let indx = (self.env.len() - 1) - (n as usize);
+        &self.env[indx]
+    }
+
+    fn is_empty(&self) -> bool {
+        self.env.is_empty()
+    }
+}
+impl ReducIrTy {
+    pub(crate) fn subst_ty(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
+        fn subst_aux(
+            ty: ReducIrTy,
+            db: &dyn crate::Db,
+            i: i32,
+            j: i32,
+            env: &mut Env<ReducIrTy>,
+        ) -> ReducIrTy {
+            if i == 0 && j == 0 && env.is_empty() {
+                return ty;
+            }
+            match ty.kind(db) {
+                ReducIrTyKind::IntTy => ty,
+                ReducIrTyKind::ProdVarTy(n) => {
+                    if n >= i {
+                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(n + i - j))
+                    } else {
+                        let (j_, _) = env.get(n);
+                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(j - j_ - 1))
                     }
-                    ReducIrRow::Closed(tys) => db.mk_prod_ty(tys),
-                })
-                .map(ControlFlow::Continue)
-                .unwrap_or(ControlFlow::Continue(db.mk_reducir_ty(kind.clone()))),
-            ReducIrTyKind::CoprodVarTy(var) => (*var == needle)
-                .then(|| match &row {
-                    ReducIrRow::Open(row_var) => {
-                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(*row_var))
+                }
+                ReducIrTyKind::CoprodVarTy(n) => {
+                    if n >= i {
+                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(n + i - j))
+                    } else {
+                        let (j_, _) = env.get(n);
+                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(j - j_ - 1))
                     }
-                    ReducIrRow::Closed(tys) => db.mk_coprod_ty(tys),
-                })
-                .map(ControlFlow::Continue)
-                .unwrap_or(ControlFlow::Continue(db.mk_reducir_ty(kind.clone()))),
-            _ => ControlFlow::Continue(db.mk_reducir_ty(kind.clone())),
-        })
+                }
+                ReducIrTyKind::VarTy(n) => {
+                    if n >= i {
+                        db.mk_reducir_ty(ReducIrTyKind::VarTy(n - i + j))
+                    } else {
+                        let (j_, ty) = env.get(n);
+                        match ty {
+                            None => db.mk_reducir_ty(ReducIrTyKind::VarTy(j - j_ - 1)),
+                            Some(ty) => subst_aux(*ty, db, 0, j - j_, &mut Env::nil()),
+                        }
+                    }
+                }
+                ReducIrTyKind::FunTy(arg, ret) => db.mk_reducir_ty(ReducIrTyKind::FunTy(
+                    subst_aux(arg, db, i, j, env),
+                    subst_aux(ret, db, i, j, env),
+                )),
+                ReducIrTyKind::ForallTy(kind, body) => db.mk_reducir_ty(ReducIrTyKind::ForallTy(
+                    kind,
+                    env.with(j, |env| subst_aux(body, db, i + 1, j + 1, env)),
+                )),
+                ReducIrTyKind::ProductTy(elems) => db.mk_reducir_ty(ReducIrTyKind::ProductTy(
+                    elems
+                        .into_iter()
+                        .map(|ty| subst_aux(ty, db, i, j, env))
+                        .collect(),
+                )),
+                ReducIrTyKind::CoproductTy(elems) => db.mk_reducir_ty(ReducIrTyKind::CoproductTy(
+                    elems
+                        .into_iter()
+                        .map(|ty| subst_aux(ty, db, i, j, env))
+                        .collect(),
+                )),
+            }
+        }
+
+        subst_aux(self, db, 1, 0, &mut Env::with_entry((0, ty)))
+    }
+
+    pub(crate) fn subst_row(self, db: &dyn crate::Db, row: ReducIrRow) -> ReducIrTy {
+        fn subst_aux(
+            ty: ReducIrTy,
+            db: &dyn crate::Db,
+            i: i32,
+            j: i32,
+            env: &mut Env<ReducIrRow>,
+        ) -> ReducIrTy {
+            if i == 0 && j == 0 && env.is_empty() {
+                return ty;
+            }
+            match ty.kind(db) {
+                ReducIrTyKind::IntTy => ty,
+                ReducIrTyKind::ProdVarTy(n) => {
+                    if n >= i {
+                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(n - i + j))
+                    } else {
+                        let (j_, row) = env.get(n);
+                        match row {
+                            None => db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(j - j_)),
+                            Some(row) => {
+                                let ty = match row {
+                                    ReducIrRow::Open(v) => {
+                                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(*v))
+                                    }
+                                    ReducIrRow::Closed(row) => db.mk_prod_ty(row.as_slice()),
+                                };
+                                subst_aux(ty, db, 0, j - j_, &mut Env::nil())
+                            }
+                        }
+                    }
+                }
+                ReducIrTyKind::CoprodVarTy(n) => {
+                    if n >= i {
+                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(n - i + j))
+                    } else {
+                        let (j_, row) = env.get(n);
+                        match row {
+                            None => db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(j - j_)),
+                            Some(row) => {
+                                let ty = match row {
+                                    ReducIrRow::Open(v) => {
+                                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(*v))
+                                    }
+                                    ReducIrRow::Closed(row) => db.mk_coprod_ty(row.as_slice()),
+                                };
+                                subst_aux(ty, db, 0, j - j_, &mut Env::nil())
+                            }
+                        }
+                    }
+                }
+                ReducIrTyKind::VarTy(n) => {
+                    if n >= i {
+                        db.mk_reducir_ty(ReducIrTyKind::VarTy(n - i + j))
+                    } else {
+                        let (j_, _) = env.get(n);
+                        db.mk_reducir_ty(ReducIrTyKind::VarTy(j - j_))
+                    }
+                }
+                ReducIrTyKind::FunTy(arg, ret) => db.mk_reducir_ty(ReducIrTyKind::FunTy(
+                    subst_aux(arg, db, i, j, env),
+                    subst_aux(ret, db, i, j, env),
+                )),
+                ReducIrTyKind::ForallTy(kind, body) => db.mk_reducir_ty(ReducIrTyKind::ForallTy(
+                    kind,
+                    env.with(j, |env| subst_aux(body, db, i + 1, j + 1, env)),
+                )),
+                ReducIrTyKind::ProductTy(elems) => db.mk_reducir_ty(ReducIrTyKind::ProductTy(
+                    elems
+                        .into_iter()
+                        .map(|ty| subst_aux(ty, db, i, j, env))
+                        .collect(),
+                )),
+                ReducIrTyKind::CoproductTy(elems) => db.mk_reducir_ty(ReducIrTyKind::CoproductTy(
+                    elems
+                        .into_iter()
+                        .map(|ty| subst_aux(ty, db, i, j, env))
+                        .collect(),
+                )),
+            }
+        }
+
+        subst_aux(self, db, 1, 0, &mut Env::with_entry((0, row)))
+    }
+
+    /// Shift all the variables in a term by delta.
+    pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {
+        fn shift_aux(ty: ReducIrTy, db: &dyn crate::Db, delta: i32, bound: i32) -> ReducIrTy {
+            use ReducIrTyKind::*;
+            match ty.kind(db) {
+                IntTy => ty,
+                VarTy(var) if var >= bound => db.mk_reducir_ty(VarTy(var + delta)),
+                ProdVarTy(var) if var >= bound => db.mk_reducir_ty(ProdVarTy(var + delta)),
+                CoprodVarTy(var) if var >= bound => db.mk_reducir_ty(CoprodVarTy(var + delta)),
+                // If the variable is bound don't shift it
+                VarTy(_) | ProdVarTy(_) | CoprodVarTy(_) => ty,
+                FunTy(arg, ret) => {
+                    db.mk_reducir_ty(FunTy(arg.shift(db, delta), ret.shift(db, delta)))
+                }
+                ForallTy(kind, body) => {
+                    db.mk_reducir_ty(ForallTy(kind, shift_aux(body, db, delta, bound + 1)))
+                }
+                ProductTy(elems) => db.mk_reducir_ty(ProductTy(
+                    elems
+                        .into_iter()
+                        .map(|ty| shift_aux(ty, db, delta, bound))
+                        .collect(),
+                )),
+                CoproductTy(elems) => db.mk_reducir_ty(CoproductTy(
+                    elems
+                        .into_iter()
+                        .map(|ty| shift_aux(ty, db, delta, bound))
+                        .collect(),
+                )),
+            }
+        }
+
+        shift_aux(self, db, delta, 0)
     }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum ReducIrRow {
-    Open(ReducIrVarTy),
+    Open(i32),
     Closed(Vec<ReducIrTy>),
 }
 impl ReducIrRow {
@@ -237,7 +378,7 @@ impl ReducIrRow {
         D::Doc: pretty::Pretty<'a, D> + Clone,
     {
         match self {
-            ReducIrRow::Open(var) => var.pretty(a),
+            ReducIrRow::Open(var) => a.as_string(var),
             ReducIrRow::Closed(row) => a
                 .intersperse(row.iter().map(|ty| ty.pretty(db, a)), ",")
                 .brackets(),
@@ -270,9 +411,10 @@ impl ReducIrTyApp {
 }
 
 impl ReducIrTy {
-    pub(crate) fn pretty<'a, D, DB>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
+    pub fn pretty<'a, D, DB>(self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
     where
         D: DocAllocator<'a>,
+        DocBuilder<'a, D>: Clone,
         DB: ?Sized + crate::Db,
     {
         self.kind(db.as_ir_db()).pretty(db, a)

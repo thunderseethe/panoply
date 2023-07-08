@@ -1,4 +1,5 @@
 use crate::infer::RowsNotDisjoint;
+use crate::RowFields;
 
 use super::*;
 pub struct SimpleClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
@@ -155,5 +156,11 @@ impl<A: TypeAlloc> SimpleClosedRow<A> {
         }
 
         (fields.into_boxed_slice(), values.into_boxed_slice())
+    }
+}
+
+impl SimpleClosedRow<InDb> {
+    pub fn raw_fields(&self) -> RowFields {
+        self.0.fields
     }
 }

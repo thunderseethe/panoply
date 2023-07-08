@@ -1,3 +1,5 @@
+use crate::RowFields;
+
 use super::*;
 pub struct ScopedClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
 
@@ -206,6 +208,12 @@ impl<A: TypeAlloc> ScopedClosedRow<A> {
         Self::difference_rowlikes(goal, right_fields, |goal, right_count| {
             &goal[0..(goal.len() - right_count)]
         })
+    }
+}
+
+impl ScopedClosedRow<InDb> {
+    pub fn raw_fields(&self) -> RowFields {
+        self.0.fields
     }
 }
 

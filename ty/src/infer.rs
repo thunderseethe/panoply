@@ -205,6 +205,14 @@ pub(crate) mod arena {
                 self.row_values.intern_by_ref(values),
             )
         }
+
+        fn mk_row_vec<R: NewRow<InArena<'ctx>>>(
+            &self,
+            fields: Vec<RowLabel>,
+            values: Vec<Ty<InArena<'ctx>>>,
+        ) -> R {
+            self.mk_row(fields.as_slice(), values.as_slice())
+        }
     }
 
     impl<'ctx> AccessTy<'ctx, InArena<'ctx>> for TyCtx<'ctx> {

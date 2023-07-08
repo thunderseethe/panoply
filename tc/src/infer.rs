@@ -252,6 +252,18 @@ impl<'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx<'_, '
     fn mk_row<R: NewRow<A>>(&self, fields: &[RowLabel], values: &[Ty<A>]) -> R {
         self.ctx.mk_row(fields, values)
     }
+
+    fn mk_row_vec<R: NewRow<A>>(&self, fields: Vec<RowLabel>, values: Vec<Ty<A>>) -> R {
+        self.ctx.mk_row_vec(fields, values)
+    }
+
+    fn mk_row_iter<R: NewRow<A>>(
+        &self,
+        fields: impl Iterator<Item = RowLabel>,
+        values: impl Iterator<Item = Ty<A>>,
+    ) -> R {
+        self.ctx.mk_row_iter(fields, values)
+    }
 }
 
 impl<'infer, A: TypeAlloc, I: AccessTy<'infer, A>, S: InferState> AccessTy<'infer, A>
@@ -728,10 +740,14 @@ where
 
                 InferResult::new(
                     sig.ty,
-                    Row::Closed(self.single_row(
-                        self.db.effect_name(op_name.effect(self.db.as_core_db())),
-                        self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
-                    )),
+                    Row::Closed(
+                        self.single_row(
+                            op_name
+                                .effect(self.db.as_core_db())
+                                .name(self.db.as_core_db()),
+                            self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
+                        ),
+                    ),
                 )
             }
             Term::Handle { handler, body } => {
