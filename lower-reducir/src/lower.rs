@@ -850,7 +850,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                                 .reduce_forall(self.db.as_ir_db(), ret_ty)
                         })
                         .collect::<Vec<_>>();
-                    println!("{:?}", ty_vals);
                     (ir_row_ev.scoped(self.db), ty_vals)
                 }
                 _ => {

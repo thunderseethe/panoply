@@ -1,5 +1,5 @@
 use aiahr_core::id::{ReducIrVarId, TermName};
-use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
+use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 use rustc_hash::FxHashSet;
 use std::fmt;
 use std::ops::Deref;
@@ -498,8 +498,7 @@ impl ReducIrKind {
                 let param_single = arena.space().append(
                     arena
                         .intersperse(
-                            vars.iter()
-                                .map(|v| v.pretty_with_type(db.as_ir_db(), arena)),
+                            vars.iter().map(|v| v.pretty(arena)),
                             arena.text(",").append(arena.space()),
                         )
                         .brackets(),
@@ -509,8 +508,7 @@ impl ReducIrKind {
                     .append(
                         arena
                             .intersperse(
-                                vars.iter()
-                                    .map(|v| v.pretty_with_type(db.as_ir_db(), arena)),
+                                vars.iter().map(|v| v.pretty(arena)),
                                 arena.hardline().append(","),
                             )
                             .brackets(),
@@ -533,7 +531,7 @@ impl ReducIrKind {
                         let body = gather_let(&mut binds, body);
                         let binds_len = binds.len();
                         let mut binds_iter = binds.into_iter().map(|(var, defn)| {
-                            var.pretty_with_type(db.as_ir_db(), arena)
+                            var.pretty(arena)
                                 .append(arena.space())
                                 .append(defn.deref().pretty(db, arena))
                                 .parens()
