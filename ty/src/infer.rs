@@ -406,15 +406,6 @@ impl<'ctx> UnifyValue for SimpleInferRow<'ctx> {
     }
 }
 
-pub struct RowsNotDisjoint<'a, V> {
-    /// Left row that was expected to be disjoint
-    pub left: (&'a [RowLabel], &'a [V]),
-    /// Right row that was expected to be disjoint
-    pub right: (&'a [RowLabel], &'a [V]),
-    /// The label left and right both contain
-    pub label: RowLabel,
-}
-
 impl<'ctx> ScopedClosedRow<InArena<'ctx>> {
     /// Checks if we can attempt to unify two rows.
     /// If two rows have different lenghts or different field labels we know they cannot unify so

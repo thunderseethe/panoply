@@ -5,8 +5,8 @@ use aiahr_core::{
 };
 use aiahr_ty::{
     infer::{
-        InArena, InferTy, RowsNotDisjoint, ScopedInferRow, ScopedRowK, SimpleInferRow, SimpleRowK,
-        TcUnifierVar, TypeK,
+        InArena, InferTy, ScopedInferRow, ScopedRowK, SimpleInferRow, SimpleRowK, TcUnifierVar,
+        TypeK,
     },
     row::*,
     TypeKind::*,

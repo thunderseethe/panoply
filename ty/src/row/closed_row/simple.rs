@@ -1,4 +1,4 @@
-use crate::infer::RowsNotDisjoint;
+use crate::row::RowsNotDisjoint;
 use crate::RowFields;
 
 use super::*;

@@ -40,10 +40,11 @@ members = [
     "cst",
     "desugar",
     "interpreter",
-    "reducir",
     "lower-reducir",
     "nameres",
+    "optimize-reducir",
     "parser",
+    "reducir",
     "tc",
     "test-utils",
     "ty",
@@ -62,9 +63,10 @@ aiahr-cst = { path = "cst" }
 aiahr-desugar = { path = "desugar" }
 aiahr-nameres = { path = "nameres" }
 aiahr-interpreter = { path = "interpreter" }
-aiahr-reducir = { path = "reducir" }
 aiahr-lower-reducir = { path = "lower-reducir" }
+aiahr-optimize-reducir = { path = "optimize-reducir" }
 aiahr-parser = { path = "parser" }
+aiahr-reducir = { path = "reducir" }
 aiahr-tc = { path = "tc" }
 aiahr-test = { path = "test-utils" }
 aiahr-ty = { path = "ty" }

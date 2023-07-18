@@ -184,3 +184,12 @@ where
         }
     }
 }
+
+pub struct RowsNotDisjoint<'a, V> {
+    /// Left row that was expected to be disjoint
+    pub left: (&'a [RowLabel], &'a [V]),
+    /// Right row that was expected to be disjoint
+    pub right: (&'a [RowLabel], &'a [V]),
+    /// The label left and right both contain
+    pub label: RowLabel,
+}
