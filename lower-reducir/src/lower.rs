@@ -951,12 +951,11 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     var: self.var_conv.convert(*arg),
                     ty,
                 };
-                ReducIr::new(Abs(var, P::new(self.lower_term(ast, *body))))
+                ReducIr::abss([var], self.lower_term(ast, *body))
             }
-            Application { func, arg } => ReducIr::new(App(
-                P::new(self.lower_term(ast, *func)),
-                P::new(self.lower_term(ast, *arg)),
-            )),
+            Application { func, arg } => {
+                ReducIr::app(self.lower_term(ast, *func), [self.lower_term(ast, *arg)])
+            }
             Variable(var) => {
                 let ty = self.lookup_var(*var);
                 ReducIr::new(Var(ReducIrVar {
