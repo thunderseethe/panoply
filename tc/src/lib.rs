@@ -7,7 +7,7 @@ use aiahr_core::{
         tc::TypeCheckDiagnostic,
     },
     file::FileId,
-    id::{EffectName, EffectOpName, Id, TermName, TyVarId, VarId},
+    id::{EffectName, EffectOpName, TermName, VarId},
     ident::Ident,
     modules::Module,
 };
@@ -24,7 +24,7 @@ use aiahr_ty::{
 
 mod unsolved_row;
 
-use crate::infer::InferCtx;
+use crate::{folds::zonker::FreeTyVars, infer::InferCtx};
 
 mod diagnostic;
 
@@ -202,15 +202,12 @@ where
         infer.solve();
 
     // Zonk the variable -> type mapping and the root term type.
-    let mut zonker = Zonker {
-        ctx: db,
-        free_vars: vec![],
-        free_data_rows: vec![],
-        free_eff_rows: vec![],
-        ty_unifiers: &mut ty_unifiers,
-        datarow_unifiers: &mut data_row_unifiers,
-        effrow_unifiers: &mut eff_row_unifiers,
-    };
+    let mut zonker = Zonker::new(
+        db,
+        &mut ty_unifiers,
+        &mut data_row_unifiers,
+        &mut eff_row_unifiers,
+    );
     let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
 
     let zonked_var_tys = gen_storage.var_tys.try_fold_with(&mut zonker).unwrap();
@@ -228,33 +225,27 @@ where
         .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
         .collect::<FxHashSet<_>>();
 
-    let constrs = unsolved_eqs
+    let mut constrs = unsolved_eqs
         .data_eqns
         .into_iter()
-        .map(|eq| Evidence::from(eq).try_fold_with(&mut zonker).unwrap())
-        .collect();
+        .map(Evidence::from)
+        .chain(unsolved_eqs.eff_eqns.into_iter().map(Evidence::from))
+        .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
+        .collect::<Vec<_>>();
 
-    let ty_var_len = zonker.free_vars.len();
-    let data_row_len = zonker.free_data_rows.len();
+    // We want constraints to be in a consistent order
+    constrs.sort();
+    // We also to remove any duplicates introduced during zonking
+    constrs.dedup();
+
+    // Any unifier variables that weren't solved are free and should be generalized in the type
+    // scheme
+    let free_ty_vars: FreeTyVars = zonker.into();
+
     let scheme = TyScheme {
-        bound_ty: zonker
-            .free_vars
-            .into_iter()
-            .enumerate()
-            .map(|(i, _)| TyVarId::from_raw(i))
-            .collect(),
-        bound_data_row: zonker
-            .free_data_rows
-            .into_iter()
-            .enumerate()
-            .map(|(i, _)| TyVarId::from_raw(i + ty_var_len))
-            .collect(),
-        bound_eff_row: zonker
-            .free_eff_rows
-            .into_iter()
-            .enumerate()
-            .map(|(i, _)| TyVarId::from_raw(i + ty_var_len + data_row_len))
-            .collect(),
+        bound_ty: free_ty_vars.ty,
+        bound_data_row: free_ty_vars.data,
+        bound_eff_row: free_ty_vars.eff,
         constrs,
         eff: zonked_infer.eff,
         ty: zonked_infer.ty,
@@ -284,7 +275,8 @@ fn print_root_unifiers<'ctx, K: UnifierKind>(
                 println!("\t{} => {}", uv.index(), doc.pretty(80));
             }
             None => {
-                let doc: pretty::RcDoc = pretty::Pretty::pretty(uv, &RcAllocator).into_doc();
+                let doc: pretty::RcDoc =
+                    pretty::Pretty::pretty(uni.find(uv), &RcAllocator).into_doc();
                 println!("\t{} => {}", uv.index(), doc.pretty(80));
             }
         }
@@ -473,7 +465,7 @@ mod tests {
             ty_chk_out.diags[0],
             // TODO: Figure out how to check these errors
             TypeCheckDiagnostic {
-                name: "Type Mismatch",
+                name: "Data Rows Mismatch",
                 principal: _
             }
         );
@@ -726,11 +718,7 @@ effect State {
     get : {} -> {}
 }
 
-effect Reader {
-    ask : {} -> {}
-}
-
-f = State.get({}) 
+f = State.get({})
 "#;
 
         let file_id = FileId::new(&db, PathBuf::from("test"));
@@ -744,18 +732,17 @@ f = State.get({})
         let scheme = typed_item.ty_scheme(&db);
 
         let db = &db;
-        assert_matches!(scheme.eff, Row::Closed(closed) => {
-            assert_matches!(closed.fields(&db), [state] => {
-                assert_eq!(state.text(db), "State");
-            });
-            assert_matches!(closed.values(&db), [unit] => {
-                assert_matches_unit_ty!(db, unit);
-            });
+        assert_matches!(scheme.constrs.as_slice(), [
+            Evidence::EffRow {
+                left: Row::Open(_),
+                right: Row::Closed(state),
+                goal: Row::Open(TyVarId(0))
+            }
+        ] => {
+            assert_eq!(state.fields(&db), &[db.ident_str("State")]);
         });
-        assert_matches!(db.kind(&scheme.ty), ProdTy(Row::Closed(closed)) => {
-            assert!(closed.is_empty(&db));
-            assert!(closed.is_empty(&db));
-        });
+        assert_eq!(scheme.eff, Row::Open(TyVarId(0)));
+        assert_matches_unit_ty!(db, &scheme.ty);
     }
 
     #[test]
@@ -789,17 +776,23 @@ f = with {
         let scheme = typed_item.ty_scheme(&db);
         let db = &db;
         assert_matches_unit_ty!(db, &scheme.ty);
-        assert_matches!(
-            scheme.eff,
-            Row::Closed(closed) => {
-                assert_matches!(closed.fields(&db), [reader] => {
-                    assert_eq!(reader.text(db), "Reader");
-                });
-                assert_matches!(closed.values(&db), [unit] => {
-                    assert_matches_unit_ty!(db, unit);
-                });
+        assert_matches!(scheme.constrs.as_slice(), [
+            Evidence::EffRow {
+                left: Row::Open(TyVarId(0)),
+                right: Row::Closed(state),
+                goal: Row::Open(a)
+            },
+            Evidence::EffRow {
+                left: Row::Open(_),
+                right: Row::Closed(reader),
+                goal: Row::Open(b)
             }
-        );
+        ] => {
+            assert_eq!(a, b);
+            assert_eq!(state.fields(&db), &[db.ident_str("State")]);
+            assert_eq!(reader.fields(&db), &[db.ident_str("Reader")]);
+        });
+        assert_matches!(scheme.eff, Row::Open(TyVarId(0)));
     }
 
     #[test]

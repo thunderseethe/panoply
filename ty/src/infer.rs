@@ -479,9 +479,7 @@ mod tests {
 
     #[test]
     fn test_ty_pretty_printing() {
-        //let arena = Bump::new();
         let db = TestDatabase::default();
-        //let ctx: TyCtx<'_> = TyCtx::new(&db, &arena);
 
         let int = db.mk_ty(IntTy);
         let row = db.mk_row(

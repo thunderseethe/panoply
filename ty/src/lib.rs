@@ -16,7 +16,7 @@ pub use evidence::Evidence;
 
 mod fold;
 use self::fold::DefaultFold;
-use self::row::{RowOps, ScopedRow, Simple, SimpleRow};
+use self::row::{RowOps, Scoped, ScopedRow, Simple, SimpleRow};
 pub use fold::{FallibleEndoTypeFold, FallibleTypeFold, TypeFoldable};
 
 pub mod row;
@@ -218,6 +218,7 @@ where
     A::TypeVar: Copy,
     SimpleClosedRow<A>: Copy,
     Row<Simple, A>: Copy,
+    Row<Scoped, A>: Copy,
     Ty<A>: Copy,
 {
 }

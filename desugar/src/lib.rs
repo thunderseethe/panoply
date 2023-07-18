@@ -188,6 +188,8 @@ pub(crate) fn desugar_effect_defn(
     eff: &nst::EffectDefn,
 ) -> ast::EffectDefn {
     let terms = la_arena::Arena::default();
+    let ret_ty_var = ty_vars.push(true);
+    let ret_ty = db.mk_ty(TypeKind::VarTy(ret_ty_var));
     let mut ds_ctx = DesugarCtx::new(db, terms, arenas, vars, ty_vars);
     ast::EffectDefn {
         name: eff.name.value,
@@ -200,12 +202,13 @@ pub(crate) fn desugar_effect_defn(
                     (
                         op.name.value,
                         TyScheme {
-                            bound_ty: vec![],
+                            bound_ty: vec![ret_ty_var],
                             bound_data_row: vec![],
                             bound_eff_row: vec![],
                             constrs: vec![],
-                            // TODO: We probably want to allow operations to throw effects?
-                            eff: Row::Closed(db.empty_row()),
+                            eff: Row::Closed(
+                                db.single_row(eff.name.value.name(db.as_core_db()), ret_ty),
+                            ),
                             ty,
                         },
                     )

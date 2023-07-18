@@ -292,26 +292,23 @@ impl RowTheory for Scoped {
         rows: RowCombination<Row<Self, InArena<'ctx>>>,
     ) -> Option<RowCombination<Row<Self, InArena<'ctx>>>> {
         match eqn {
-            UnsolvedRowEquation::ClosedGoal(cand) => {
-                let row_combo = || RowCombination {
-                    left: Row::Open(cand.left),
-                    right: Row::Open(cand.right),
-                    goal: Row::Closed(cand.goal),
-                };
-                match rows {
-                    RowCombination {
-                        left: Row::Open(left),
-                        right: Row::Open(right),
-                        goal: Row::Closed(goal),
-                    } if (cand.goal.is_unifiable(goal)
-                        && (cand.left == left || cand.right == right))
-                        || (cand.left == left && cand.right == right) =>
-                    {
-                        Some(row_combo())
-                    }
-                    _ => None,
+            UnsolvedRowEquation::ClosedGoal(cand) => match rows {
+                RowCombination {
+                    left: Row::Open(left),
+                    right: Row::Open(right),
+                    goal: Row::Closed(goal),
+                } if (cand.goal.is_unifiable(goal)
+                    && (cand.left == left || cand.right == right))
+                    || (cand.left == left && cand.right == right) =>
+                {
+                    Some(RowCombination {
+                        left: Row::Open(cand.left),
+                        right: Row::Open(cand.right),
+                        goal: Row::Closed(cand.goal),
+                    })
                 }
-            }
+                _ => None,
+            },
             UnsolvedRowEquation::OpenGoal(OpenGoal { goal, ops }) => match ops {
                 Operatives::OpenOpen { left, right } => match rows {
                     RowCombination {

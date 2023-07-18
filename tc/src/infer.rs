@@ -371,7 +371,7 @@ where
                 // Check an abstraction against a function type by checking the body checks against
                 // the function return type with the function argument type in scope.
                 self.local_env.insert(*arg, arg_ty);
-                self._check(*body, expected.with_ty(body_ty));
+                self._check(*body, InferResult::new(body_ty, expected.eff));
                 self.local_env.remove(arg);
             }
             (Label { .. }, ProdTy(Row::Closed(row))) => {
@@ -414,18 +414,8 @@ where
                     ),
                 )
             }
-            (Unit, ProdTy(Row::Closed(closed))) if closed.is_empty(self) => {
-                self.constraints.add_effect_row_eq(
-                    expected.eff,
-                    Row::Closed(self.empty_row()),
-                    current_span(),
-                );
-            }
-            (Int(_), IntTy) => self.constraints.add_effect_row_eq(
-                expected.eff,
-                Row::Closed(self.empty_row()),
-                current_span(),
-            ),
+            (Unit, ProdTy(Row::Closed(closed))) if closed.is_empty(self) => {}
+            (Int(_), IntTy) => {}
             (Unlabel { label, term }, _) => {
                 let expected_ty = self.single_row_ty(*label, expected.ty);
                 self._check(*term, expected.with_ty(expected_ty))
@@ -443,15 +433,14 @@ where
 
                 let span = current_span();
                 // Check our expected effect is a combination of each components effects
-                self.add_effect_row_combine(left_infer.eff, right_infer.eff, expected.eff, span);
+                self.constraints
+                    .add_effect_row_eq(expected.eff, left_infer.eff, current_span());
+                self.constraints
+                    .add_effect_row_eq(expected.eff, right_infer.eff, current_span());
                 self.add_data_row_combine(left_row, right_row, row, span);
             }
             (Branch { left, right }, FunTy(Ty(handle::Handle(SumTy(arg_row))), ret)) => {
                 let span = current_span();
-
-                let left_eff = self.fresh_scoped_row();
-                let right_eff = self.fresh_scoped_row();
-                self.add_effect_row_combine(left_eff, right_eff, expected.eff, span);
 
                 let left_row = self.fresh_simple_row();
                 let right_row = self.fresh_simple_row();
@@ -461,14 +450,14 @@ where
                     *left,
                     TyChkRes::new(
                         self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret)),
-                        left_eff,
+                        expected.eff,
                     ),
                 );
                 self._check(
                     *right,
                     TyChkRes::new(
                         self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret)),
-                        right_eff,
+                        expected.eff,
                     ),
                 );
             }
@@ -570,15 +559,16 @@ where
             // The resulting type of the inference is function type <arg> -> <body>
             Abstraction { arg, body } => {
                 let arg_ty = self.fresh_var();
-                let body_ty = self.fresh_var();
-                let eff = self.fresh_scoped_row();
 
                 self.state.var_tys.insert(*arg, arg_ty);
                 self.local_env.insert(*arg, arg_ty);
-                self._check(*body, InferResult::new(body_ty, eff));
+                let body_out = self._infer(*body);
                 self.local_env.remove(arg);
 
-                InferResult::new(self.mk_ty(TypeKind::FunTy(arg_ty, body_ty)), eff)
+                InferResult::new(
+                    self.mk_ty(TypeKind::FunTy(arg_ty, body_out.ty)),
+                    body_out.eff,
+                )
             }
             // Application inference starts by inferring types for the func of the application.
             // We equate this inferred type to a function type, generating fresh unifiers if
@@ -591,18 +581,15 @@ where
                 // for arg and ret type.
                 let (arg_ty, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
 
-                let arg_eff = self.fresh_scoped_row();
-                self._check(*arg, InferResult::new(arg_ty, arg_eff));
+                self._check(*arg, InferResult::new(arg_ty, fun_infer.eff));
 
-                let eff = self.fresh_scoped_row();
-                self.add_effect_row_combine(fun_infer.eff, arg_eff, eff, current_span());
-                InferResult::new(ret_ty, eff)
+                InferResult::new(ret_ty, fun_infer.eff)
             }
             // If the variable is in environemnt return it's type, otherwise return an error.
             Variable(var) => {
                 if let Some(ty) = self.local_env.get(var).cloned() {
                     self.state.var_tys.insert(*var, ty);
-                    InferResult::new(ty, Row::Closed(self.empty_row()))
+                    InferResult::new(ty, self.fresh_scoped_row())
                 } else {
                     self.errors.push(into_diag(
                         self.db,
@@ -611,7 +598,7 @@ where
                     ));
                     let err_ty = self.mk_ty(ErrorTy);
                     self.state.var_tys.insert(*var, err_ty);
-                    InferResult::new(err_ty, Row::Closed(self.empty_row()))
+                    InferResult::new(err_ty, self.fresh_scoped_row())
                 }
             }
             Label { label, term } => {
@@ -641,37 +628,33 @@ where
                     }
                 })
             }
-            Unit => {
-                // Represent unit by an empty product type
-                let unit = Row::Closed(self.empty_row());
-                InferResult::new(self.mk_ty(ProdTy(unit)), Row::Closed(self.empty_row()))
-            }
+            Unit => InferResult::new(
+                self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
+                self.fresh_scoped_row(),
+            ),
+            Int(_) => InferResult::new(self.mk_ty(IntTy), self.fresh_scoped_row()),
             Concat { left, right } => {
                 let left_row = self.fresh_simple_row();
-                let left_eff = self.fresh_scoped_row();
                 let right_row = self.fresh_simple_row();
-                let right_eff = self.fresh_scoped_row();
                 let out_row = self.fresh_simple_row();
-                let out_eff = self.fresh_scoped_row();
+                let eff = self.fresh_scoped_row();
 
                 let left_ty = self.mk_ty(ProdTy(left_row));
                 let right_ty = self.mk_ty(ProdTy(right_row));
 
-                self._check(*left, InferResult::new(left_ty, left_eff));
-                self._check(*right, InferResult::new(right_ty, right_eff));
+                self._check(*left, InferResult::new(left_ty, eff));
+                self._check(*right, InferResult::new(right_ty, eff));
 
                 let span = current_span();
-                self.add_effect_row_combine(left_eff, right_eff, out_eff, span);
                 self.add_data_row_combine(left_row, right_row, out_row, span);
 
-                InferResult::new(self.mk_ty(ProdTy(out_row)), out_eff)
+                InferResult::new(self.mk_ty(ProdTy(out_row)), eff)
             }
             Branch { left, right } => {
                 let left_row = self.fresh_simple_row();
-                let left_eff = self.fresh_scoped_row();
                 let right_row = self.fresh_simple_row();
-                let right_eff = self.fresh_scoped_row();
                 let out_row = self.fresh_simple_row();
+
                 let out_eff = self.fresh_scoped_row();
 
                 let ret_ty = self.fresh_var();
@@ -679,11 +662,10 @@ where
                 let left_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret_ty));
                 let right_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret_ty));
 
-                self._check(*left, InferResult::new(left_ty, left_eff));
-                self._check(*right, InferResult::new(right_ty, right_eff));
+                self._check(*left, InferResult::new(left_ty, out_eff));
+                self._check(*right, InferResult::new(right_ty, out_eff));
 
                 let span = current_span();
-                self.add_effect_row_combine(left_eff, right_eff, out_eff, span);
                 self.add_data_row_combine(left_row, right_row, out_row, span);
 
                 InferResult::new(
@@ -738,20 +720,33 @@ where
 
                 self.state.item_wrappers.insert(term, wrapper);
 
-                InferResult::new(
-                    sig.ty,
-                    Row::Closed(
-                        self.single_row(
-                            op_name
-                                .effect(self.db.as_core_db())
-                                .name(self.db.as_core_db()),
-                            self.mk_ty(ProdTy(Row::Closed(self.empty_row()))),
-                        ),
+                let unused = self.fresh_scoped_row();
+                let goal = self.fresh_scoped_row();
+
+                let ret_ty = self.fresh_var();
+                let eff = Row::Closed(
+                    self.single_row(
+                        op_name
+                            .effect(self.db.as_core_db())
+                            .name(self.db.as_core_db()),
+                        ret_ty,
                     ),
-                )
+                );
+
+                // Mark our op function with our effect type
+                // This is our version of koka's `open` rule.
+                let mut ty = sig.ty;
+                if let FunTy(arg, ret) = self.kind(&ty) {
+                    ty = self.mk_ty(FunTy(*arg, *ret))
+                }
+
+                self.add_effect_row_combine(unused, eff, goal, current_span());
+
+                InferResult::new(ty, goal)
             }
             Term::Handle { handler, body } => {
                 let ret_ty = self.fresh_var();
+                let out_eff = self.fresh_scoped_row();
 
                 let TyChkRes {
                     ty: body_ty,
@@ -774,10 +769,9 @@ where
                     current_span(),
                 );
 
-                let handler_eff = self.fresh_scoped_row();
                 self._check(
                     *handler,
-                    InferResult::new(self.mk_ty(ProdTy(handler_row)), handler_eff),
+                    InferResult::new(self.mk_ty(ProdTy(handler_row)), out_eff),
                 );
 
                 let handled_eff = self.fresh_scoped_row();
@@ -786,9 +780,6 @@ where
                     *handler,
                     InferResult::new(self.mk_ty(ProdTy(handler_row)), handled_eff),
                 );
-
-                let out_eff = self.fresh_scoped_row();
-
                 // We just want to match the signature against our effects, we don't need to
                 // include the return clause.
                 self.constraints
@@ -800,12 +791,10 @@ where
 
                 InferResult::new(ret_ty, out_eff)
             }
-            Int(_) => InferResult::new(self.mk_ty(IntTy), Row::Closed(self.empty_row())),
             Annotated { ty, term } => {
-                let eff = self.fresh_scoped_row();
                 let mut inst = Instantiate::new(self.db, self.ctx); // TODO: We should possibly extract an effect from this
                 let infer_ty = ty.try_fold_with(&mut inst).unwrap();
-                let res = InferResult::new(infer_ty, eff);
+                let res = InferResult::new(infer_ty, self.fresh_scoped_row());
                 self._check(*term, res);
                 res
             }
@@ -1084,17 +1073,25 @@ where
                     UnsolvedRowEquation::OpenGoal(OpenGoal {
                         goal,
                         ops: Operatives::OpenOpen { left, right },
-                    }) if left == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                        goal,
-                        ops: Operatives::ClosedOpen { left: row, right },
-                    })),
+                    }) if left == var => {
+                        combos.push(RowCombination {
+                            left: Row::Closed(row),
+                            right: Row::Open(right),
+                            goal: Row::Open(goal),
+                        });
+                        None
+                    }
                     UnsolvedRowEquation::OpenGoal(OpenGoal {
                         goal,
                         ops: Operatives::OpenOpen { left, right },
-                    }) if right == var => Some(UnsolvedRowEquation::OpenGoal(OpenGoal {
-                        goal,
-                        ops: Operatives::OpenClosed { left, right: row },
-                    })),
+                    }) if right == var => {
+                        combos.push(RowCombination {
+                            left: Row::Open(left),
+                            right: Row::Closed(row),
+                            goal: Row::Open(goal),
+                        });
+                        None
+                    }
                     UnsolvedRowEquation::OpenGoal(OpenGoal {
                         goal,
                         ops: Operatives::ClosedOpen { left, right },

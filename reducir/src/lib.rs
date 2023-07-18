@@ -73,7 +73,7 @@ pub enum ReducIrKind<IR = P<ReducIr>> {
     // Install a prompt for a marker
     Prompt(IR, IR),
     // Yield to a marker's prompt
-    Yield(IR, IR),
+    Yield(ReducIrTy, IR, IR),
 }
 use ReducIrKind::*;
 
@@ -173,13 +173,7 @@ impl ReducIr {
             Int(_) => Ok(ctx.mk_reducir_ty(IntTy)),
             Var(v) => Ok(v.ty),
             Abs(arg, body) => {
-                let ret_ty = body.type_check(ctx)/*.map_err(|err| match err {
-                    ReducIrTyErr::TyMismatch(lhs, rhs) => ReducIrTyErr::TyMismatch(
-                        ctx.mk_reducir_ty(FunTy(arg.ty, lhs)),
-                        ctx.mk_reducir_ty(FunTy(arg.ty, rhs)),
-                    ),
-                    err => err,
-                })*/?;
+                let ret_ty = body.type_check(ctx)?;
                 Ok(ctx.mk_reducir_ty(FunTy(arg.ty, ret_ty)))
             }
             App(func, arg) => {
@@ -190,42 +184,14 @@ impl ReducIr {
                         if fun_arg_ty == arg_ty {
                             Ok(ret_ty)
                         } else {
-                            let mut fs = String::new();
-                            func.pretty(ctx, &RcAllocator)
-                                .render_fmt(80, &mut fs)
-                                .unwrap();
-                            let mut rs = String::new();
-                            arg.pretty(ctx, &RcAllocator)
-                                .render_fmt(80, &mut rs)
-                                .unwrap();
-                            let mut as_ty = String::new();
-                            arg.type_check(ctx)
-                                .unwrap()
-                                .pretty(ctx, &RcAllocator)
-                                .render_fmt(80, &mut as_ty)
-                                .unwrap();
-                            println!("{} {} {}", fs, rs, as_ty);
                             Err(ReducIrTyErr::TyMismatch(fun_arg_ty, arg_ty))
                         }
                     }
-                    _ => {
-                        let mut fs = String::new();
-                        func.pretty(ctx, &RcAllocator)
-                            .render_fmt(80, &mut fs)
-                            .unwrap();
-                        println!("err: {}", fs);
-                        Err(ReducIrTyErr::ExpectedFunTy(func_ty))
-                    }
+                    _ => Err(ReducIrTyErr::ExpectedFunTy(func_ty)),
                 }
             }
             TyAbs(ty_arg, body) => {
-                let ret_ty = body.type_check(ctx).map_err(|err| match err {
-                    ReducIrTyErr::TyMismatch(lhs, rhs) => ReducIrTyErr::TyMismatch(
-                        ctx.mk_reducir_ty(ForallTy(ty_arg.kind, lhs)),
-                        ctx.mk_reducir_ty(ForallTy(ty_arg.kind, rhs)),
-                    ),
-                    err => err,
-                })?;
+                let ret_ty = body.type_check(ctx)?;
                 Ok(ctx.mk_reducir_ty(ForallTy(ty_arg.kind, ret_ty)))
             }
             TyApp(forall, ty_app) => {
@@ -271,19 +237,7 @@ impl ReducIr {
                     }
                 };
                 for (branch, ty) in branches.iter().zip(tys.into_iter()) {
-                    let branch_ty = branch.type_check(ctx).map_err(|err| {
-                        let mut s = String::new();
-                        branch
-                            .pretty(ctx, &RcAllocator)
-                            .render_fmt(80, &mut s)
-                            .unwrap();
-                        s.push(' ');
-                        err.pretty(ctx, &RcAllocator)
-                            .render_fmt(80, &mut s)
-                            .unwrap();
-                        println!("error in case: {}", s);
-                        err
-                    })?;
+                    let branch_ty = branch.type_check(ctx)?;
                     match branch_ty.kind(ctx) {
                         FunTy(arg_ty, ret_ty) => {
                             if arg_ty != ty {
@@ -321,7 +275,7 @@ impl ReducIr {
                     ))
                 }
             }
-            Yield(marker, body) => {
+            Yield(ty, marker, body) => {
                 let marker_ty = marker.type_check(ctx)?;
                 let IntTy = marker_ty.kind(ctx) else {
                     return Err(ReducIrTyErr::TyMismatch(
@@ -329,11 +283,9 @@ impl ReducIr {
                         ctx.mk_reducir_ty(IntTy),
                     ));
                 };
-                let body_ty = body.type_check(ctx)?;
-                match body_ty.kind(ctx) {
-                    FunTy(_, ret_ty) => Ok(ret_ty),
-                    _ => Err(ReducIrTyErr::ExpectedFunTy(body_ty)),
-                }
+                // We want to make sure body type checks but we don't actually use the result
+                let _ = body.type_check(ctx)?;
+                Ok(*ty)
             }
             Tag(ty, _, _) => Ok(*ty),
             Item(_, ty) => Ok(*ty),
@@ -411,7 +363,7 @@ impl Iterator for UnboundVars<'_> {
                 self.stack.push(body.deref());
                 self.next()
             }
-            App(a, b) | Prompt(a, b) | Yield(a, b) => {
+            App(a, b) | Prompt(a, b) | Yield(_, a, b) => {
                 self.stack.extend([a.deref(), b.deref()]);
                 self.next()
             }
@@ -546,7 +498,8 @@ impl ReducIrKind {
                 let param_single = arena.space().append(
                     arena
                         .intersperse(
-                            vars.iter().map(|v| v.pretty(arena)),
+                            vars.iter()
+                                .map(|v| v.pretty_with_type(db.as_ir_db(), arena)),
                             arena.text(",").append(arena.space()),
                         )
                         .brackets(),
@@ -556,7 +509,8 @@ impl ReducIrKind {
                     .append(
                         arena
                             .intersperse(
-                                vars.iter().map(|v| v.pretty(arena)),
+                                vars.iter()
+                                    .map(|v| v.pretty_with_type(db.as_ir_db(), arena)),
                                 arena.hardline().append(","),
                             )
                             .brackets(),
@@ -579,7 +533,7 @@ impl ReducIrKind {
                         let body = gather_let(&mut binds, body);
                         let binds_len = binds.len();
                         let mut binds_iter = binds.into_iter().map(|(var, defn)| {
-                            var.pretty(arena)
+                            var.pretty_with_type(db.as_ir_db(), arena)
                                 .append(arena.space())
                                 .append(defn.deref().pretty(db, arena))
                                 .parens()
@@ -715,7 +669,7 @@ impl ReducIrKind {
                         .nest(2),
                 )
                 .parens(),
-            Yield(marker, body) => arena
+            Yield(_, marker, body) => arena
                 .as_string("yield")
                 .append(
                     arena

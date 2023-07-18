@@ -21,7 +21,7 @@ where
         *self
             .cache
             .entry(var_id)
-            .or_insert_with(|| self.gen.push(()))
+            .or_insert_with(|| self.gen.generate())
     }
 
     pub(crate) fn generate(&mut self) -> VarOut {

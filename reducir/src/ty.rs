@@ -178,6 +178,15 @@ impl<T: Clone + std::fmt::Debug> Env<T> {
     }
 }
 impl ReducIrTy {
+    /// Assume `self` is a forall and reduce it by applying `ty` as it's argument.
+    /// This applies type substitution without having to create a TyApp ReducIr node.
+    pub fn reduce_forall(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
+        match self.kind(db) {
+            ReducIrTyKind::ForallTy(Kind::Type, ret_ty) => ret_ty.subst_ty(db, ty),
+            _ => panic!("reduce_forall called on non forall type"),
+        }
+    }
+
     pub(crate) fn subst_ty(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
         fn subst_aux(
             ty: ReducIrTy,

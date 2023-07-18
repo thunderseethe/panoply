@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 
 use aiahr_ty::{
     infer::InArena,
-    row::{Row, RowSema, Simple},
+    row::{Row, RowSema, Scoped, Simple},
     Evidence, TypeAlloc,
 };
 
@@ -117,30 +117,49 @@ where
 
 impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>, Simple>> for Evidence<InArena<'ctx>> {
     fn from(eq: UnsolvedRowEquation<InArena<'ctx>, Simple>) -> Self {
-        match eq {
-            UnsolvedRowEquation::ClosedGoal(cand) => Evidence::DataRow {
-                left: Row::Open(cand.left),
-                right: Row::Open(cand.right),
-                goal: Row::Closed(cand.goal),
-            },
-            UnsolvedRowEquation::OpenGoal(cand) => match cand.ops {
-                Operatives::OpenOpen { left, right } => Evidence::DataRow {
-                    left: Row::Open(left),
-                    right: Row::Open(right),
-                    goal: Row::Open(cand.goal),
-                },
-                Operatives::OpenClosed { left, right } => Evidence::DataRow {
-                    left: Row::Open(left),
-                    right: Row::Closed(right),
-                    goal: Row::Open(cand.goal),
-                },
-                Operatives::ClosedOpen { left, right } => Evidence::DataRow {
-                    left: Row::Closed(left),
-                    right: Row::Open(right),
-                    goal: Row::Open(cand.goal),
-                },
-            },
-        }
+        into_ev(eq, |left, right, goal| Evidence::DataRow {
+            left,
+            right,
+            goal,
+        })
+    }
+}
+
+impl<'ctx> From<UnsolvedRowEquation<InArena<'ctx>, Scoped>> for Evidence<InArena<'ctx>> {
+    fn from(eq: UnsolvedRowEquation<InArena<'ctx>, Scoped>) -> Self {
+        into_ev(eq, |left, right, goal| Evidence::EffRow {
+            left,
+            right,
+            goal,
+        })
+    }
+}
+
+fn into_ev<'ctx, Sema: RowSema>(
+    eq: UnsolvedRowEquation<InArena<'ctx>, Sema>,
+    ev_constr: impl FnOnce(
+        Row<Sema, InArena<'ctx>>,
+        Row<Sema, InArena<'ctx>>,
+        Row<Sema, InArena<'ctx>>,
+    ) -> Evidence<InArena<'ctx>>,
+) -> Evidence<InArena<'ctx>> {
+    match eq {
+        UnsolvedRowEquation::ClosedGoal(cand) => ev_constr(
+            Row::Open(cand.left),
+            Row::Open(cand.right),
+            Row::Closed(cand.goal),
+        ),
+        UnsolvedRowEquation::OpenGoal(cand) => match cand.ops {
+            Operatives::OpenOpen { left, right } => {
+                ev_constr(Row::Open(left), Row::Open(right), Row::Open(cand.goal))
+            }
+            Operatives::OpenClosed { left, right } => {
+                ev_constr(Row::Open(left), Row::Closed(right), Row::Open(cand.goal))
+            }
+            Operatives::ClosedOpen { left, right } => {
+                ev_constr(Row::Closed(left), Row::Open(right), Row::Open(cand.goal))
+            }
+        },
     }
 }
 

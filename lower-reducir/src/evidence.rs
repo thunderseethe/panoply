@@ -1,8 +1,9 @@
 use std::ops::Index;
 
 use aiahr_reducir::ReducIrVar;
-use aiahr_ty::row::{Scoped, Simple, SimpleClosedRow};
+use aiahr_ty::row::{Scoped, ScopedRow, Simple, SimpleClosedRow};
 use aiahr_ty::{row::Row, Evidence, InDb};
+use aiahr_ty::{RowFields, RowValues};
 
 use rustc_hash::FxHashMap;
 
@@ -80,6 +81,31 @@ impl EvidenceMap {
         }
 
         self.complete_map.insert(ev, idx);
+    }
+
+    /// Lookup a `PartialEvidence::ScopedRight` where we know the field of our right row, but not
+    /// it's value. Because we keep our return value in our effect row, we can't know what it is
+    /// ahead of time.
+    pub(crate) fn match_right_eff_ev(
+        &self,
+        right: RowFields,
+        goal: ScopedRow,
+    ) -> Option<(RowValues, ReducIrVar)> {
+        self.partial_map
+            .iter()
+            .find_map(|(ev, indx)| {
+                if let PartialEv::ScopedRight {
+                    right: Row::Closed(right_ev),
+                    goal: goal_ev,
+                } = ev
+                {
+                    (right_ev.raw_fields() == right && *goal_ev == goal)
+                        .then_some((right_ev.raw_values(), *indx))
+                } else {
+                    None
+                }
+            })
+            .map(|(vals, indx)| (vals, self.params[indx]))
     }
 }
 impl Index<&Evidence> for EvidenceMap {

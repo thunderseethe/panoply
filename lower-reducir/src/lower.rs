@@ -15,10 +15,9 @@ use aiahr_reducir::{
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
     row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
-    AccessTy, Evidence, InDb, MkTy, PrettyType, Ty, TyScheme, TypeKind, Wrapper,
+    AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
 };
 use la_arena::Idx;
-use pretty::{RcAllocator, RcDoc};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -107,21 +106,26 @@ impl<'a, 'b> LowerTySchemeCtx<'a, 'b> {
         module: Module,
         scheme: &TyScheme,
     ) -> (ReducIrTy, LowerTyCtx<'a, 'b>) {
+        // We bind foralls in Type -> SimpleRow -> ScopedRow order
+        // So we need to build our tyvar_env in reverse ordering so indices are correct
         let foralls = scheme
-            .bound_ty
+            .bound_eff_row
             .iter()
-            .map(|tyvar| (*tyvar, Kind::Type))
+            .rev()
+            .map(|tyvar| (*tyvar, Kind::ScopedRow))
             .chain(
                 scheme
                     .bound_data_row
                     .iter()
+                    .rev()
                     .map(|tyvar| (*tyvar, Kind::SimpleRow)),
             )
             .chain(
                 scheme
-                    .bound_eff_row
+                    .bound_ty
                     .iter()
-                    .map(|tyvar| (*tyvar, Kind::ScopedRow)),
+                    .rev()
+                    .map(|tyvar| (*tyvar, Kind::Type)),
             )
             .collect::<Vec<_>>();
         let tyvar_env = foralls
@@ -252,21 +256,29 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
     /// Lowers an effect row into it's corresponding reducir product type.
     /// The effect row stores a unit type for all effects, the reducir product type replaces these
     /// with the effect's handler type.
-    fn eff_row_into_evv_ty(&self, module: Module, eff: Row<Scoped>) -> RowEvIrTy {
+    fn eff_row_into_evv_ty(&mut self, module: Module, eff: Row<Scoped>) -> RowEvIrTy {
         match eff {
             Row::Open(v) => RowEvIrTy {
                 prod: self.db.mk_reducir_ty(ProdVarTy(self.tyvar_env[&v])),
                 coprod: self.db.mk_reducir_ty(CoprodVarTy(self.tyvar_env[&v])),
             },
             Row::Closed(row) => {
-                let mut iter = row.fields(&self.db).iter().map(|eff_id| {
-                    let eff = self
-                        .db
-                        .lookup_effect_by_name(module, *eff_id)
-                        .expect("Effect Ident had no associated effect in lowering");
-                    self.db.effect_handler_ir_ty(eff)
-                });
-                if row.len(&self.db) == 1 {
+                let row_len = row.len(&self.db);
+                let mut iter = row
+                    .fields(&self.db)
+                    .iter()
+                    .zip(row.values(&self.db).iter())
+                    .map(|(eff_id, ret_ty)| {
+                        let eff = self
+                            .db
+                            .lookup_effect_by_name(module, *eff_id)
+                            .expect("Effect Ident had no associated effect in lowering");
+                        let ret_ty = self.lower_ty(*ret_ty);
+                        self.db
+                            .effect_handler_ir_ty(eff)
+                            .reduce_forall(self.db.as_ir_db(), ret_ty)
+                    });
+                if row_len == 1 {
                     let elem = iter.next().unwrap();
                     RowEvIrTy {
                         prod: elem,
@@ -655,7 +667,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
 
                         if indxs.len() == 1 {
                             // Don't emit a case when we
-                            elems.next().unwrap()
+                            ReducIr::app(elems.next().unwrap(), [ReducIr::var(goal_branch_var)])
                         } else {
                             ReducIr::case_on_var(branch_var_ty, goal_branch_var, elems)
                         }
@@ -822,35 +834,24 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         right.raw_fields(),
                         goal.raw_fields(),
                     );
-                    let left_pretty: RcDoc<()> =
-                        left.pretty(&RcAllocator, self.db, &self.db).into_doc();
-                    let right_pretty: RcDoc<()> =
-                        right.pretty(&RcAllocator, self.db, &self.db).into_doc();
-                    println!(
-                        "left: {}\nright:{}",
-                        left_pretty.pretty(80),
-                        right_pretty.pretty(80)
-                    );
-                    let scoped = ir_row_ev.scoped(self.db);
-                    let item = scoped.item(self.db);
-                    let ir_ty = item
-                        .type_check(self.db.as_ir_db())
-                        .expect("ICE: Generated effect row evidence didn't type check");
-                    println!("{}", ir_ty.pretty(self.db, &RcAllocator).pretty(80));
-                    (
-                        scoped,
-                        left.fields(&ty_db)
-                            .iter()
-                            .chain(right.fields(&ty_db))
-                            .map(|eff_label| {
-                                let eff = self
-                                    .db
-                                    .lookup_effect_by_name(self.current.module(core_db), *eff_label)
-                                    .expect("Effect Ident had no associated effect in lowering");
-                                self.db.effect_handler_ir_ty(eff)
-                            })
-                            .collect::<Vec<_>>(),
-                    )
+                    let left_row_iter = left.fields(&ty_db).iter().zip(left.values(&ty_db).iter());
+                    let right_row_iter =
+                        right.fields(&ty_db).iter().zip(right.values(&ty_db).iter());
+                    let ty_vals = left_row_iter
+                        .chain(right_row_iter)
+                        .map(|(eff_label, eff_ret_ty)| {
+                            let eff = self
+                                .db
+                                .lookup_effect_by_name(self.current.module(core_db), *eff_label)
+                                .expect("Effect Ident had no associated effect in lowering");
+                            let ret_ty = self.ty_ctx.lower_ty(*eff_ret_ty);
+                            self.db
+                                .effect_handler_ir_ty(eff)
+                                .reduce_forall(self.db.as_ir_db(), ret_ty)
+                        })
+                        .collect::<Vec<_>>();
+                    println!("{:?}", ty_vals);
+                    (ir_row_ev.scoped(self.db), ty_vals)
                 }
                 _ => {
                     params.push(param);
@@ -863,7 +864,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                 .type_check(self.db.as_ir_db())
                 .expect("ICE: Generated effect row evidence didn't type check");
             let ir = ReducIr::new(Item(ir_item.name(self.db), ir_ty));
-            let ir = ty_vals_iter.into_iter().fold(ir, |ir, ty| {
+            let ir = ty_vals_iter.into_iter().rfold(ir, |ir, ty| {
                 ReducIr::new(TyApp(P::new(ir), ReducIrTyApp::Ty(ty)))
             });
             solved.push((param, ir));
@@ -898,10 +899,14 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
     }
 
     pub(crate) fn lower_top_level(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> ReducIr {
+        let term_infer = self.lookup_term(term);
         let ir = self.lower_term(ast, term);
         let evv_var = ReducIrVar {
             var: self.evv_var_id,
-            ty: self.mk_prod_ty(&[]),
+            ty: match self.ty_ctx.lower_row(term_infer.eff) {
+                ReducIrRow::Open(i) => self.db.mk_reducir_ty(ReducIrTyKind::VarTy(i)),
+                ReducIrRow::Closed(tys) => self.mk_reducir_ty(ProductTy(tys)),
+            },
         };
         ReducIr::abss([evv_var], ir)
     }
@@ -1062,25 +1067,26 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     ty: self.ty_ctx.lower_ty(value_ty),
                 };
                 let eff = op.effect(self.db.as_core_db());
+
+                let eff_name = eff.name(self.db.as_core_db());
+                let (eff_vals, eff_ev) = self
+                    .ev_map
+                    .match_right_eff_ev(
+                        RowFields::new(self.db.as_ty_db(), vec![eff_name]),
+                        term_infer.eff,
+                    )
+                    .expect("Evidence for operation to exist");
+
+                // We know this is safe because we looked up a RowFields with one field
+                let kont_ret_ty = self
+                    .ty_ctx
+                    .lower_ty(*eff_vals.values(self.db.as_ty_db()).first().unwrap());
                 let handle_var = ReducIrVar {
                     var: self.var_conv.generate(),
-                    ty: self.db.effect_handler_ir_ty(eff),
-                };
-                let kont_ret_ty = match term_infer.eff {
-                    Row::Open(_) => {
-                        todo!("Is this case possible? If so how do we build our continuation type")
-                    }
-                    Row::Closed(eff_row) => {
-                        let eff_name = eff.name(self.db.as_core_db());
-                        let ret_ty_indx = eff_row
-                            .fields(&self.db)
-                            .iter()
-                            .rev()
-                            .position(|eff_id| *eff_id == eff_name)
-                            .expect("ICE: Type checked effect should appear in effet row");
-                        let ret_ty = eff_row.values(&self.db)[ret_ty_indx];
-                        self.ty_ctx.lower_ty(ret_ty)
-                    }
+                    ty: self
+                        .db
+                        .effect_handler_ir_ty(eff)
+                        .reduce_forall(self.db.as_ir_db(), kont_ret_ty),
                 };
                 let op_ret = self.ty_ctx.lower_ty(op_ret);
                 let kont_var = ReducIrVar {
@@ -1088,23 +1094,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     ty: self.mk_reducir_ty(FunTy(op_ret, kont_ret_ty)),
                 };
 
-                // TODO: Clean this up behind an api exposed out of `tc`
-                let op_eff_row = self.db.single_row(
-                    eff.name(self.db.as_core_db()),
-                    self.db
-                        .mk_ty(TypeKind::ProdTy(Row::Closed(self.db.empty_row()))),
-                );
-
-                let doc: RcDoc<()> = term_infer
-                    .eff
-                    .pretty(&RcAllocator, self.db, &self.db)
-                    .into_doc();
-                println!("term eff: {}", doc.pretty(80));
-
-                let eff_ev = self.ev_map[&PartialEv::ScopedRight {
-                    right: Row::Closed(op_eff_row),
-                    goal: term_infer.eff,
-                }];
                 let prj = ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(eff_ev)));
                 let eff_var = ReducIrVar {
                     var: self.evv_var_id,
@@ -1119,22 +1108,15 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let eff_handler = ReducIr::app(prj, [ReducIr::var(eff_var)]);
 
                 let handler_index = self.db.effect_handler_op_index(*op);
-                let wrapper = self.lookup_wrapper(term);
-                let handler = self.apply_wrapper(
-                    wrapper,
-                    ReducIr::field_proj(
-                        handler_index,
-                        ReducIr::new(TyApp(
-                            P::new(ReducIr::field_proj(1, ReducIr::var(handle_var))),
-                            ReducIrTyApp::Ty(kont_ret_ty),
-                        )),
-                    ),
+                let handler = ReducIr::field_proj(
+                    handler_index,
+                    ReducIr::field_proj(1, ReducIr::var(handle_var)),
                 );
-                println!("{}", handle_var.ty.pretty(self.db, &RcAllocator).pretty(80));
                 ReducIr::app(
                     ReducIr::abss(
                         [handle_var, value_var],
                         ReducIr::new(Yield(
+                            op_ret,
                             P::new(ReducIr::field_proj(0, ReducIr::var(handle_var))),
                             P::new(ReducIr::abss(
                                 [kont_var],
@@ -1171,16 +1153,21 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     });
                 let handler_ret_ty = handler_row.values(&self.db)[ret_idx];
                 let handler_ret_row = self.db.single_row(ret_label, handler_ret_ty);
-                let handler_ev = self.ev_map[&PartialEv::Data {
+                let handler_ret_ev = self.ev_map[&PartialEv::Data {
                     other: Row::Closed(handler_ret_row),
                     goal: Row::Closed(handler_row),
                 }];
+
                 let handler_var = ReducIrVar {
                     var: self.var_conv.generate(),
                     ty: self.ty_ctx.lower_ty(handler_infer.ty),
                 };
                 let handler_prj_ret = ReducIr::app(
-                    ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(handler_ev))),
+                    ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(handler_ret_ev))),
+                    [ReducIr::var(handler_var)],
+                );
+                let handler_prj_sig = ReducIr::app(
+                    ReducIr::field_proj(0, ReducIr::field_proj(2, ReducIr::var(handler_ret_ev))),
                     [ReducIr::var(handler_var)],
                 );
                 let handler_ir = self.lower_term(ast, *handler);
@@ -1208,7 +1195,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                         }),
                         ReducIr::new(Struct(vec![
                             P::new(ReducIr::var(prompt_var)),
-                            P::new(ReducIr::var(handler_var)),
+                            P::new(handler_prj_sig),
                         ])),
                     ],
                 );

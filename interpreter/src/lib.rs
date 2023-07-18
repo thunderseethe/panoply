@@ -392,7 +392,7 @@ impl Machine {
                 self.cur_frame.push(EvalCtx::PromptMarker { body });
                 InterpretResult::Step(marker)
             }
-            ReducIrKind::Yield(marker, value) => {
+            ReducIrKind::Yield(_, marker, value) => {
                 self.cur_frame.push(EvalCtx::YieldMarker { value });
                 InterpretResult::Step(marker)
             }

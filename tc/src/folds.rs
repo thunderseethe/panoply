@@ -239,6 +239,38 @@ pub(crate) mod zonker {
 
     use crate::{InDb, MkTy, Ty, TypeKind};
 
+    /// Combine our different unifier variables as one enum during zonking
+    #[derive(PartialEq, Eq)]
+    enum Unifier<'infer> {
+        Ty(TcUnifierVar<'infer, TypeK>),
+        SimpleRow(TcUnifierVar<'infer, SimpleRowK>),
+        ScopedRow(TcUnifierVar<'infer, ScopedRowK>),
+    }
+
+    /// Split out our free type variables by their kind once we're done zonking
+    #[derive(Default)]
+    pub(crate) struct FreeTyVars {
+        pub(crate) ty: Vec<TyVarId>,
+        pub(crate) data: Vec<TyVarId>,
+        pub(crate) eff: Vec<TyVarId>,
+    }
+
+    impl From<Zonker<'_, '_>> for FreeTyVars {
+        fn from(value: Zonker<'_, '_>) -> Self {
+            let mut free_ty_vars = FreeTyVars::default();
+            for (i, unifier) in value.free_unifiers.into_iter().enumerate() {
+                match unifier {
+                    Unifier::Ty(_) => free_ty_vars.ty.push(TyVarId::from_raw(i)),
+                    Unifier::SimpleRow(_) => free_ty_vars.data.push(TyVarId::from_raw(i)),
+                    Unifier::ScopedRow(_) => free_ty_vars.eff.push(TyVarId::from_raw(i)),
+                }
+            }
+            // Because we walk free_unifiers in order each output vec in free_ty_vars is already in
+            // ascending order, no need to resort.
+            free_ty_vars
+        }
+    }
+
     /// Zonk anything that is TypeFoldable.
     /// This removes all unification variables.
     /// If a unification variables is solved to a type, it is replaced by that type.
@@ -246,29 +278,42 @@ pub(crate) mod zonker {
     /// as free.
     pub(crate) struct Zonker<'a, 'infer> {
         pub(crate) ctx: &'a dyn crate::Db,
-        pub(crate) free_vars: Vec<TcUnifierVar<'infer, TypeK>>,
-        pub(crate) free_data_rows: Vec<TcUnifierVar<'infer, SimpleRowK>>,
-        pub(crate) free_eff_rows: Vec<TcUnifierVar<'infer, ScopedRowK>>,
         pub(crate) ty_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
         pub(crate) datarow_unifiers:
             &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
         pub(crate) effrow_unifiers:
             &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
+        free_unifiers: Vec<Unifier<'infer>>,
     }
 
     impl<'a, 'infer> Zonker<'a, 'infer> {
+        pub(crate) fn new(
+            ctx: &'a dyn crate::Db,
+            ty_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
+            datarow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
+            effrow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
+        ) -> Self {
+            Self {
+                ctx,
+                ty_unifiers,
+                datarow_unifiers,
+                effrow_unifiers,
+                free_unifiers: vec![],
+            }
+        }
+
         fn add_ty(&mut self, var: TcUnifierVar<'infer, TypeK>) -> TyVarId {
             // Find the root unification variable and return a type varaible representing that
             // root.
             let root = self.ty_unifiers.find(var);
             let var_indx = self
-                .free_vars
+                .free_unifiers
                 .iter()
-                .position(|uv| &root == uv)
+                .position(|uv| Unifier::Ty(root) == *uv)
                 // We have not seen this unification variable before, so create a new one.
                 .unwrap_or_else(|| {
-                    let next_index = self.free_vars.len();
-                    self.free_vars.push(var);
+                    let next_index = self.free_unifiers.len();
+                    self.free_unifiers.push(Unifier::Ty(root));
                     next_index
                 });
             TyVarId::from_raw(var_indx)
@@ -277,12 +322,12 @@ pub(crate) mod zonker {
         fn add_datarow(&mut self, var: TcUnifierVar<'infer, SimpleRowK>) -> TyVarId {
             let root = self.datarow_unifiers.find(var);
             let var_indx = self
-                .free_data_rows
+                .free_unifiers
                 .iter()
-                .position(|uv| &root == uv)
+                .position(|uv| Unifier::SimpleRow(root) == *uv)
                 .unwrap_or_else(|| {
-                    let next_index = self.free_data_rows.len();
-                    self.free_data_rows.push(var);
+                    let next_index = self.free_unifiers.len();
+                    self.free_unifiers.push(Unifier::SimpleRow(root));
                     next_index
                 });
             TyVarId::from_raw(var_indx)
@@ -291,12 +336,12 @@ pub(crate) mod zonker {
         fn add_effrow(&mut self, var: TcUnifierVar<'infer, ScopedRowK>) -> TyVarId {
             let root = self.effrow_unifiers.find(var);
             let var_indx = self
-                .free_eff_rows
+                .free_unifiers
                 .iter()
-                .position(|uv| &root == uv)
+                .position(|uv| Unifier::ScopedRow(root) == *uv)
                 .unwrap_or_else(|| {
-                    let next_index = self.free_data_rows.len();
-                    self.free_eff_rows.push(var);
+                    let next_index = self.free_unifiers.len();
+                    self.free_unifiers.push(Unifier::ScopedRow(root));
                     next_index
                 });
             TyVarId::from_raw(var_indx)
@@ -325,7 +370,7 @@ pub(crate) mod zonker {
         ) -> Result<Ty<InDb>, Self::Error> {
             match self.ty_unifiers.probe_value(var) {
                 Some(ty) => ty.try_fold_with(self),
-                _ => {
+                None => {
                     // Our unification variable wasn't solved to a type.
                     // Generalize it to a type variable.
                     let ty_var = self.add_ty(var);
@@ -340,7 +385,7 @@ pub(crate) mod zonker {
         ) -> Result<SimpleRow<Self::Out>, Self::Error> {
             match self.datarow_unifiers.probe_value(var) {
                 Some(row) => row.try_fold_with(self).map(Row::Closed),
-                _ => {
+                None => {
                     let row_var = self.add_datarow(var);
                     Ok(Row::Open(row_var))
                 }
@@ -353,7 +398,7 @@ pub(crate) mod zonker {
         ) -> Result<ScopedRow<Self::Out>, Self::Error> {
             match self.effrow_unifiers.probe_value(var) {
                 Some(row) => row.try_fold_with(self).map(Row::Closed),
-                _ => {
+                None => {
                     let row_var = self.add_effrow(var);
                     Ok(Row::Open(row_var))
                 }

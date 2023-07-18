@@ -1,4 +1,4 @@
-use crate::RowFields;
+use crate::{RowFields, RowValues};
 
 use super::*;
 pub struct ScopedClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
@@ -214,6 +214,10 @@ impl<A: TypeAlloc> ScopedClosedRow<A> {
 impl ScopedClosedRow<InDb> {
     pub fn raw_fields(&self) -> RowFields {
         self.0.fields
+    }
+
+    pub fn raw_values(&self) -> RowValues {
+        self.0.values
     }
 }
 
