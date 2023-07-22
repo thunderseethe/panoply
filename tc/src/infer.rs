@@ -14,6 +14,7 @@ use aiahr_ty::{
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
+use pretty::RcAllocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::DebugWithDb;
 use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
@@ -1227,7 +1228,12 @@ where
     ) -> Result<(), TypeCheckError<'infer>> {
         let normal_handler = self.normalize_row(handler);
         let normal_eff = self.normalize_row(eff);
+        let ret_doc: pretty::RcDoc<()> = ret.pretty(&RcAllocator, self.db, &()).into_doc();
+        println!("ret ty: {}", ret_doc.pretty(80));
         let normal_ret = self.normalize_ty(ret);
+        let norm_ret_doc: pretty::RcDoc<()> =
+            normal_ret.pretty(&RcAllocator, self.db, &()).into_doc();
+        println!("normal ret ty: {}", norm_ret_doc.pretty(80));
 
         let transform_to_cps_handler_ty = |ctx: &mut Self, ty: InferTy<'infer>| {
             // Transform our ty into the type a handler should have
@@ -1341,6 +1347,7 @@ where
                 let eff_ident = *eff.fields(self).first().unwrap();
                 let eff_ret_ty = *eff.values(self).first().unwrap();
                 self.unify(normal_ret, eff_ret_ty)?;
+
                 let eff_name = self
                     .db
                     .lookup_effect_by_name(self.module, eff_ident)

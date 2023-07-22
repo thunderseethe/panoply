@@ -21,6 +21,7 @@ use aiahr_ty::{
     infer::{InArena, TcUnifierVar, TyCtx, UnifierKind},
     *,
 };
+use salsa::DebugWithDb;
 
 mod unsolved_row;
 
@@ -222,7 +223,10 @@ where
     let zonked_required_ev = gen_storage
         .required_ev
         .into_iter()
-        .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
+        .map(|ev| {
+            println!("{:?}\n", ev.debug(db));
+            ev.try_fold_with(&mut zonker).unwrap()
+        })
         .collect::<FxHashSet<_>>();
 
     let mut constrs = unsolved_eqs

@@ -19,7 +19,7 @@ pub enum Value {
     /// A lambda (or closure). Stores any captured variables in env.
     Lam {
         env: FxHashMap<ReducIrVarId, Value>,
-        arg: ReducIrVar,
+        args: Vec<ReducIrVar>,
         body: P<ReducIr>,
     },
     /// A tuple of values
@@ -64,11 +64,11 @@ impl Value {
     {
         match self {
             Value::Int(i) => a.as_string(i),
-            Value::Lam { env, arg, body } => docs![
+            Value::Lam { env, args, body } => docs![
                 a,
                 pretty_env(env, a),
                 "|",
-                arg,
+                a.intersperse(args.iter().map(|arg| arg.pretty(a)), ", "),
                 "|",
                 a.line(),
                 body.pretty(db, a).nest(2).align(),
@@ -116,10 +116,12 @@ impl Value {
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalCtx {
     FnApp {
-        arg: Value,
+        args: Vec<Value>,
     },
     ArgApp {
         func: P<ReducIr>,
+        eval: Vec<Value>,
+        args: Vec<ReducIr>,
     },
     PromptMarker {
         body: P<ReducIr>,
@@ -132,7 +134,7 @@ pub enum EvalCtx {
     },
     StructEval {
         vals: Vec<Value>,
-        rest: Vec<P<ReducIr>>,
+        rest: Vec<ReducIr>,
     },
     Index {
         index: usize,
@@ -141,7 +143,7 @@ pub enum EvalCtx {
         tag: usize,
     },
     CaseScrutinee {
-        branches: Vec<P<ReducIr>>,
+        branches: Vec<ReducIr>,
     },
     VectorSet {
         evv: ReducIrVar,
@@ -212,24 +214,44 @@ impl Machine {
         match self.cur_frame.pop() {
             None => self.pop_stack(val),
             Some(eval_ctx) => match eval_ctx {
-                EvalCtx::ArgApp { func } => {
-                    self.cur_frame.push(EvalCtx::FnApp { arg: val });
-                    InterpretResult::Step(func)
+                EvalCtx::ArgApp {
+                    func,
+                    mut eval,
+                    mut args,
+                } => {
+                    eval.push(val);
+                    match args.pop() {
+                        None => {
+                            self.cur_frame.push(EvalCtx::FnApp { args: eval });
+                            InterpretResult::Step(func)
+                        }
+                        Some(next) => {
+                            self.cur_frame.push(EvalCtx::ArgApp { func, eval, args });
+                            InterpretResult::Step(P::new(next))
+                        }
+                    }
                 }
-                EvalCtx::FnApp { arg } => match val {
+                EvalCtx::FnApp { args } => match val {
                     Value::Lam {
                         env,
-                        arg: arg_var,
+                        args: arg_vars,
                         body,
                     } => {
                         self.cur_env.extend(env);
-                        self.cur_env.insert(arg_var.var, arg);
+                        debug_assert_eq!(arg_vars.len(), args.len());
+                        self.cur_env.extend(
+                            arg_vars
+                                .iter()
+                                .zip(args.iter())
+                                .map(|(var, val)| (var.var, val.clone())),
+                        );
                         InterpretResult::Step(body)
                     }
                     Value::Cont(substack) => {
                         self.new_stack_frame();
                         self.stack.extend(substack);
-                        self.unwind(arg)
+                        debug_assert!(args.len() == 1);
+                        self.unwind(args[0].clone())
                     }
                     _ => panic!("Stuck: called a non funciton object"),
                 },
@@ -248,9 +270,10 @@ impl Machine {
                     self.new_stack_frame();
                     let substack = self.stack.split_off_prompt(prompt);
                     match val {
-                        Value::Lam { env, arg, body } => {
+                        Value::Lam { env, args, body } => {
                             self.cur_env.extend(env);
-                            self.cur_env.insert(arg.var, Value::Cont(substack));
+                            debug_assert!(args.len() == 1);
+                            self.cur_env.insert(args[0].var, Value::Cont(substack));
                             InterpretResult::Step(body)
                         }
                         _ => panic!("Stuck: expected a function as Yield value"),
@@ -260,7 +283,7 @@ impl Machine {
                     Some(ir) => {
                         vals.push(val);
                         self.cur_frame.push(EvalCtx::StructEval { vals, rest });
-                        InterpretResult::Step(ir)
+                        InterpretResult::Step(P::new(ir))
                     }
                     None => {
                         vals.push(val);
@@ -277,8 +300,8 @@ impl Machine {
                         _ => panic!("Stuck: non-tagged avlue passed to Case"),
                     };
                     let branch = branches.swap_remove(tag);
-                    self.cur_frame.push(EvalCtx::FnApp { arg: *discr });
-                    InterpretResult::Step(branch)
+                    self.cur_frame.push(EvalCtx::FnApp { args: vec![*discr] });
+                    InterpretResult::Step(P::new(branch))
                 }
                 EvalCtx::Tag { tag } => self.unwind(Value::Tag(tag, Box::new(val))),
                 EvalCtx::VectorSet { evv, index } => {
@@ -331,20 +354,31 @@ impl Machine {
                 log::info!("Unwind: Var({:?})", v);
                 self.unwind(self.lookup_var(v))
             }
-            ReducIrKind::Abs(arg, body) => {
-                log::info!("Unwind: Lam({:?}, {:?})", arg, body);
+            ReducIrKind::Abs(args, body) => {
+                log::info!("Unwind: Lam({:?}, {:?})", args, body);
                 // TODO: make this check each env scope for all variables rathan than looking up
                 // all variables one by one.
                 let env = body
-                    .unbound_vars_with_bound(FxHashSet::from_iter(std::iter::once(arg.var)))
+                    .unbound_vars_with_bound(FxHashSet::from_iter(args.iter().map(|v| v.var)))
                     .map(|v| (v.var, self.lookup_var(v)))
                     .collect();
-                self.unwind(Value::Lam { env, arg, body })
+                self.unwind(Value::Lam {
+                    env,
+                    args: Vec::from(args),
+                    body,
+                })
             }
-            ReducIrKind::App(func, arg) => {
-                log::info!("Step: App({:?}, {:?})", func, arg);
-                self.cur_frame.push(EvalCtx::ArgApp { func });
-                InterpretResult::Step(arg)
+            ReducIrKind::App(func, args) => {
+                log::info!("Step: App({:?}, {:?})", func, args);
+                let (head, args) = args.split_at(1);
+                let mut rev_args = args.to_vec();
+                rev_args.reverse();
+                self.cur_frame.push(EvalCtx::ArgApp {
+                    func,
+                    eval: vec![],
+                    args: rev_args,
+                });
+                InterpretResult::Step(P::new(head[0].clone()))
             }
             // Product rows
             ReducIrKind::Struct(mut elems) => {
@@ -361,7 +395,7 @@ impl Machine {
                             vals: vec![],
                             rest: elems,
                         });
-                        InterpretResult::Step(next)
+                        InterpretResult::Step(P::new(next))
                     }
                 }
             }
@@ -378,7 +412,9 @@ impl Machine {
             }
             ReducIrKind::Case(_, discr, branches) => {
                 log::info!("Step: Case({:?}, {:?})", discr, branches);
-                self.cur_frame.push(EvalCtx::CaseScrutinee { branches });
+                self.cur_frame.push(EvalCtx::CaseScrutinee {
+                    branches: branches.to_vec(),
+                });
                 InterpretResult::Step(discr)
             }
             // Delimited continuations

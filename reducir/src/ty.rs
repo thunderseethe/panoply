@@ -70,7 +70,7 @@ pub enum ReducIrTyKind {
     VarTy(i32),
     ProdVarTy(i32),
     CoprodVarTy(i32),
-    FunTy(ReducIrTy, ReducIrTy),
+    FunTy(Box<[ReducIrTy]>, ReducIrTy),
     ForallTy(Kind, ReducIrTy),
     ProductTy(Vec<ReducIrTy>),
     CoproductTy(Vec<ReducIrTy>),
@@ -88,15 +88,16 @@ impl ReducIrTyKind {
             ReducIrTyKind::VarTy(ty_var) => a.text("T").append(a.as_string(ty_var)),
             ReducIrTyKind::ProdVarTy(ty_var) => a.as_string(ty_var).braces(),
             ReducIrTyKind::CoprodVarTy(ty_var) => a.as_string(ty_var).angles(),
-            ReducIrTyKind::FunTy(arg, ret) => {
-                let mut arg_doc = arg.pretty(db, a);
-                if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
-                    arg_doc = arg_doc.parens();
-                }
-                arg_doc
-                    .append(a.softline())
-                    .append(a.text("->"))
-                    .append(a.softline())
+            ReducIrTyKind::FunTy(args, ret) => {
+                let docs = args.iter().map(|arg| {
+                    let mut arg_doc = arg.pretty(db, a);
+                    if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
+                        arg_doc = arg_doc.parens();
+                    }
+                    arg_doc
+                });
+                a.intersperse(docs, a.text("->").enclose(a.softline(), a.softline()))
+                    .append(a.text("->").enclose(a.softline(), a.softline()))
                     .append(ret.pretty(db, a))
             }
             ReducIrTyKind::ForallTy(kind, ty) => {
@@ -227,10 +228,10 @@ impl ReducIrTy {
                         }
                     }
                 }
-                ReducIrTyKind::FunTy(arg, ret) => db.mk_reducir_ty(ReducIrTyKind::FunTy(
-                    subst_aux(arg, db, i, j, env),
-                    subst_aux(ret, db, i, j, env),
-                )),
+                ReducIrTyKind::FunTy(args, ret) => {
+                    let ret = subst_aux(ret, db, i, j, env);
+                    db.mk_fun_ty(args.iter().map(|arg| subst_aux(*arg, db, i, j, env)), ret)
+                }
                 ReducIrTyKind::ForallTy(kind, body) => db.mk_reducir_ty(ReducIrTyKind::ForallTy(
                     kind,
                     env.with(j, |env| subst_aux(body, db, i + 1, j + 1, env)),
@@ -312,10 +313,10 @@ impl ReducIrTy {
                         db.mk_reducir_ty(ReducIrTyKind::VarTy(j - j_))
                     }
                 }
-                ReducIrTyKind::FunTy(arg, ret) => db.mk_reducir_ty(ReducIrTyKind::FunTy(
-                    subst_aux(arg, db, i, j, env),
-                    subst_aux(ret, db, i, j, env),
-                )),
+                ReducIrTyKind::FunTy(args, ret) => {
+                    let ret = subst_aux(ret, db, i, j, env);
+                    db.mk_fun_ty(args.iter().map(|arg| subst_aux(*arg, db, i, j, env)), ret)
+                }
                 ReducIrTyKind::ForallTy(kind, body) => db.mk_reducir_ty(ReducIrTyKind::ForallTy(
                     kind,
                     env.with(j, |env| subst_aux(body, db, i + 1, j + 1, env)),
@@ -349,9 +350,10 @@ impl ReducIrTy {
                 CoprodVarTy(var) if var >= bound => db.mk_reducir_ty(CoprodVarTy(var + delta)),
                 // If the variable is bound don't shift it
                 VarTy(_) | ProdVarTy(_) | CoprodVarTy(_) => ty,
-                FunTy(arg, ret) => {
-                    db.mk_reducir_ty(FunTy(arg.shift(db, delta), ret.shift(db, delta)))
-                }
+                FunTy(args, ret) => db.mk_fun_ty(
+                    args.iter().map(|arg| arg.shift(db, delta)),
+                    ret.shift(db, delta),
+                ),
                 ForallTy(kind, body) => {
                     db.mk_reducir_ty(ForallTy(kind, shift_aux(body, db, delta, bound + 1)))
                 }
@@ -432,24 +434,13 @@ impl ReducIrTy {
 
 pub trait MkReducIrTy {
     fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy;
+    fn mk_fun_ty(
+        &self,
+        args: impl IntoIterator<Item = impl IntoReducIrTy>,
+        ret: impl IntoReducIrTy,
+    ) -> ReducIrTy;
     fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
     fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
-
-    fn mk_binary_fun_ty(
-        &self,
-        fst_arg: impl IntoReducIrTy,
-        snd_arg: impl IntoReducIrTy,
-        ret: impl IntoReducIrTy,
-    ) -> ReducIrTy {
-        use ReducIrTyKind::*;
-        self.mk_reducir_ty(FunTy(
-            fst_arg.into_reducir_ty(self),
-            self.mk_reducir_ty(FunTy(
-                snd_arg.into_reducir_ty(self),
-                ret.into_reducir_ty(self),
-            )),
-        ))
-    }
 }
 pub trait IntoReducIrTy {
     fn into_reducir_ty<I: ?Sized + MkReducIrTy>(self, ctx: &I) -> ReducIrTy;
@@ -479,5 +470,29 @@ where
 
     fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
         self.mk_reducir_ty(ReducIrTyKind::CoproductTy(elems.to_owned()))
+    }
+
+    fn mk_fun_ty(
+        &self,
+        args: impl IntoIterator<Item = impl IntoReducIrTy>,
+        ret: impl IntoReducIrTy,
+    ) -> ReducIrTy {
+        let mut args = args
+            .into_iter()
+            .map(|arg| arg.into_reducir_ty(self))
+            .peekable();
+        let ret = ret.into_reducir_ty(self);
+        // If we have no args don't output a function type
+        if args.peek().is_none() {
+            ret
+        } else {
+            match ret.kind(self.as_ir_db()) {
+                ReducIrTyKind::FunTy(iargs, ret) => self.mk_reducir_ty(ReducIrTyKind::FunTy(
+                    args.chain(iargs.iter().copied()).collect(),
+                    ret,
+                )),
+                _ => self.mk_reducir_ty(ReducIrTyKind::FunTy(args.collect(), ret)),
+            }
+        }
     }
 }

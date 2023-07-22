@@ -1,5 +1,5 @@
 use aiahr_core::id::{ReducIrVarId, TermName};
-use pretty::{docs, DocAllocator, DocBuilder, Pretty};
+use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 use rustc_hash::FxHashSet;
 use std::fmt;
 use std::ops::Deref;
@@ -48,38 +48,98 @@ impl<T> P<T> {
     pub fn into_inner(self) -> T {
         *self.ptr
     }
+
+    fn as_mut(&mut self) -> &mut T {
+        self.ptr.as_mut()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ReducIrKind<IR = P<ReducIr>> {
+pub enum ReducIrKind<IR = ReducIr> {
     Int(usize),
     Var(ReducIrVar),
     Item(TermName, ReducIrTy),
     // Value abstraction and application
-    Abs(ReducIrVar, IR),
-    App(IR, IR),
+    Abs(Box<[ReducIrVar]>, P<IR>),
+    App(P<IR>, Vec<IR>),
     // Type abstraction and application
-    TyAbs(ReducIrVarTy, IR),
-    TyApp(IR, ReducIrTyApp),
+    TyAbs(ReducIrVarTy, P<IR>),
+    TyApp(P<IR>, ReducIrTyApp),
     // Trivial products
-    Struct(Vec<IR>),      // Intro
-    FieldProj(usize, IR), // Elim
+    Struct(Vec<IR>),         // Intro
+    FieldProj(usize, P<IR>), // Elim
     // Trivial coproducts
-    Tag(ReducIrTy, usize, IR),    // Intro
-    Case(ReducIrTy, IR, Vec<IR>), // Elim
+    Tag(ReducIrTy, usize, P<IR>),      // Intro
+    Case(ReducIrTy, P<IR>, Box<[IR]>), // Elim
     // Delimited control
     // Generate a new prompt marker
-    NewPrompt(ReducIrVar, IR),
+    NewPrompt(ReducIrVar, P<IR>),
     // Install a prompt for a marker
-    Prompt(IR, IR),
+    Prompt(P<IR>, P<IR>),
     // Yield to a marker's prompt
-    Yield(ReducIrTy, IR, IR),
+    Yield(ReducIrTy, P<IR>, P<IR>),
 }
 use ReducIrKind::*;
 
 use crate::ty::ReducIrVarTy;
 
 use self::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp};
+
+/// A zip that does not own it's iterators and does not consume elements when only one iterator has
+/// elements remaining.
+struct LentZip<'a, A, B>
+where
+    A: Iterator,
+    B: Iterator,
+{
+    a_iter: &'a mut std::iter::Peekable<A>,
+    b_iter: &'a mut std::iter::Peekable<B>,
+}
+impl<'a, A, B> Iterator for LentZip<'a, A, B>
+where
+    A: Iterator,
+    B: Iterator,
+{
+    type Item = (A::Item, B::Item);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match (self.a_iter.peek(), self.b_iter.peek()) {
+            (Some(_), Some(_)) => Some((self.a_iter.next().unwrap(), self.b_iter.next().unwrap())),
+            _ => None,
+        }
+    }
+}
+
+/// Zips two iterators without consuming them.
+/// This allows for iterating over the overlap of two iterators, and then consuming whatever
+/// remains in the two iterators separately after the fact.
+trait ZipNonConsuming {
+    type Iter: Iterator;
+
+    fn zip_non_consuming<'a, J>(
+        &'a mut self,
+        other: &'a mut std::iter::Peekable<J>,
+    ) -> LentZip<'a, Self::Iter, J>
+    where
+        J: Sized + Iterator;
+}
+impl<I: Iterator> ZipNonConsuming for std::iter::Peekable<I> {
+    type Iter = I;
+
+    fn zip_non_consuming<'a, J>(
+        &'a mut self,
+        other: &'a mut std::iter::Peekable<J>,
+    ) -> LentZip<'a, I, J>
+    where
+        Self: Sized + Iterator,
+        J: Sized + Iterator,
+    {
+        LentZip {
+            a_iter: self,
+            b_iter: other,
+        }
+    }
+}
 
 /// A ReducIr node
 /// `ReducIr` is much more explicit than `Term`. It is based on System F with some modest
@@ -115,19 +175,32 @@ impl ReducIr {
         ReducIr::new(Var(var))
     }
 
-    pub fn app(head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
-        spine.into_iter().fold(head, |func, arg| {
-            ReducIr::new(App(P::new(func), P::new(arg)))
-        })
+    pub fn app(mut head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
+        match head.kind {
+            App(_, ref mut in_place_spine) => {
+                in_place_spine.extend(spine);
+                head
+            }
+            _ => ReducIr::new(App(P::new(head), spine.into_iter().collect())),
+        }
     }
 
     pub fn abss<I>(vars: I, body: ReducIr) -> Self
     where
-        I: IntoIterator,
-        I::IntoIter: DoubleEndedIterator<Item = ReducIrVar>,
+        I: IntoIterator<Item = ReducIrVar>,
     {
-        vars.into_iter()
-            .rfold(body, |body, var| ReducIr::new(Abs(var, P::new(body))))
+        let mut vars = vars.into_iter().peekable();
+        // If vars is empty do not construct any abs
+        if vars.peek().is_none() {
+            body
+        } else {
+            // Otherwise try to prepend to an existing Abs
+            let (vars, body) = match body.kind {
+                Abs(ivars, body) => (vars.chain(ivars.iter().copied()).collect(), body),
+                _ => (vars.collect(), P::new(body)),
+            };
+            ReducIr::new(Abs(vars, body))
+        }
     }
 
     pub fn case_on_var(
@@ -138,15 +211,27 @@ impl ReducIr {
         ReducIr::new(Case(
             ty,
             P::new(ReducIr::var(var)),
-            cases.into_iter().map(P::new).collect(),
+            cases.into_iter().collect(),
         ))
     }
 
-    pub fn local(var: ReducIrVar, value: ReducIr, body: ReducIr) -> Self {
-        ReducIr::new(App(
-            P::new(ReducIr::new(Abs(var, P::new(body)))),
-            P::new(value),
-        ))
+    pub fn local(var: ReducIrVar, value: ReducIr, mut body: ReducIr) -> Self {
+        if let App(ref mut head, ref mut spine) = body.kind {
+            if let Abs(ref mut vars, _) = head.as_mut().kind {
+                *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
+                //spine.push(value);
+                spine.insert(0, value);
+                return body;
+            }
+        }
+        if let Abs(ref mut vars, _) = body.kind {
+            *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
+            return ReducIr::app(body, std::iter::once(value));
+        }
+        ReducIr::app(
+            ReducIr::abss(std::iter::once(var), body),
+            std::iter::once(value),
+        )
     }
 
     pub fn field_proj(indx: usize, target: ReducIr) -> Self {
@@ -172,20 +257,31 @@ impl ReducIr {
         match &self.kind {
             Int(_) => Ok(ctx.mk_reducir_ty(IntTy)),
             Var(v) => Ok(v.ty),
-            Abs(arg, body) => {
+            Abs(args, body) => {
                 let ret_ty = body.type_check(ctx)?;
-                Ok(ctx.mk_reducir_ty(FunTy(arg.ty, ret_ty)))
+                Ok(ctx.mk_fun_ty(args.iter().map(|arg| arg.ty), ret_ty))
             }
-            App(func, arg) => {
+            App(func, args) => {
                 let func_ty = func.type_check(ctx)?;
-                let arg_ty = arg.type_check(ctx)?;
+                let mut arg_tys = args.iter().map(|arg| (arg, arg.type_check(ctx))).peekable();
                 match func_ty.kind(ctx.as_ir_db()) {
-                    FunTy(fun_arg_ty, ret_ty) => {
-                        if fun_arg_ty == arg_ty {
-                            Ok(ret_ty)
-                        } else {
-                            Err(ReducIrTyErr::TyMismatch(fun_arg_ty, arg_ty))
+                    FunTy(fun_arg_tys, ret_ty) => {
+                        debug_assert!(args.len() <= fun_arg_tys.len());
+                        let mut fun_args = fun_arg_tys.iter().peekable();
+                        for (fun_arg_ty, (arg, arg_ty)) in fun_args.zip_non_consuming(&mut arg_tys)
+                        {
+                            let arg_ty = arg_ty?;
+                            if *fun_arg_ty != arg_ty {
+                                println!("Failed here");
+                                let mut a = String::new();
+                                arg.pretty(ctx, &RcAllocator)
+                                    .render_fmt(80, &mut a)
+                                    .unwrap();
+                                println!("{}", a);
+                                return Err(ReducIrTyErr::TyMismatch(*fun_arg_ty, arg_ty));
+                            }
                         }
+                        Ok(ctx.mk_fun_ty(fun_args.copied(), ret_ty))
                     }
                     _ => Err(ReducIrTyErr::ExpectedFunTy(func_ty)),
                 }
@@ -239,9 +335,10 @@ impl ReducIr {
                 for (branch, ty) in branches.iter().zip(tys.into_iter()) {
                     let branch_ty = branch.type_check(ctx)?;
                     match branch_ty.kind(ctx) {
-                        FunTy(arg_ty, ret_ty) => {
-                            if arg_ty != ty {
-                                return Err(ReducIrTyErr::TyMismatch(arg_ty, ty));
+                        FunTy(arg_tys, ret_ty) => {
+                            debug_assert!(arg_tys.len() == 1);
+                            if arg_tys[0] != ty {
+                                return Err(ReducIrTyErr::TyMismatch(arg_tys[0], ty));
                             }
                             if ret_ty != *case_ty {
                                 return Err(ReducIrTyErr::TyMismatch(ret_ty, *case_ty));
@@ -358,12 +455,22 @@ impl Iterator for UnboundVars<'_> {
             Var(v) => (!self.bound.contains(&v.var))
                 .then_some(*v)
                 .or_else(|| self.next()),
-            Abs(v, body) | NewPrompt(v, body) => {
+            Abs(vs, body) => {
+                self.bound.extend(vs.iter().map(|v| v.var));
+                self.stack.push(body.deref());
+                self.next()
+            }
+            NewPrompt(v, body) => {
                 self.bound.insert(v.var);
                 self.stack.push(body.deref());
                 self.next()
             }
-            App(a, b) | Prompt(a, b) | Yield(_, a, b) => {
+            App(head, spine) => {
+                self.stack.push(head);
+                self.stack.extend(spine.iter());
+                self.next()
+            }
+            Prompt(a, b) | Yield(_, a, b) => {
                 self.stack.extend([a.deref(), b.deref()]);
                 self.next()
             }
@@ -372,12 +479,12 @@ impl Iterator for UnboundVars<'_> {
                 self.next()
             }
             Struct(irs) => {
-                self.stack.extend(irs.iter().map(|ir| ir.deref()));
+                self.stack.extend(irs.iter());
                 self.next()
             }
             Case(_, discr, branches) => {
                 self.stack.push(discr.deref());
-                self.stack.extend(branches.iter().map(|ir| ir.deref()));
+                self.stack.extend(branches.iter());
                 self.next()
             }
         })
@@ -441,15 +548,6 @@ impl ReducIrKind {
         DB: ?Sized + crate::Db,
         D::Doc: pretty::Pretty<'a, D> + Clone,
     {
-        fn gather_abs<'a>(vars: &mut Vec<ReducIrVar>, kind: &'a ReducIrKind) -> &'a ReducIrKind {
-            match kind {
-                Abs(arg, body) => {
-                    vars.push(*arg);
-                    gather_abs(vars, &body.deref().kind)
-                }
-                _ => kind,
-            }
-        }
         fn gather_ty_abs<'a>(
             vars: &mut Vec<ReducIrVarTy>,
             kind: &'a ReducIrKind,
@@ -462,39 +560,10 @@ impl ReducIrKind {
                 _ => kind,
             }
         }
-        fn gather_app<'a>(
-            vars: &mut Vec<&'a ReducIrKind>,
-            kind: &'a ReducIrKind,
-        ) -> &'a ReducIrKind {
-            match kind {
-                App(func, arg) => {
-                    vars.push(&arg.deref().kind);
-                    gather_app(vars, &func.deref().kind)
-                }
-                ir => ir,
-            }
-        }
-        fn gather_let<'a>(
-            binds: &mut Vec<(&'a ReducIrVar, &'a P<ReducIr>)>,
-            body: &'a P<ReducIr>,
-        ) -> &'a P<ReducIr> {
-            match body.kind() {
-                App(func, arg) => match func.kind() {
-                    Abs(var, next_body) => {
-                        binds.push((var, arg));
-                        gather_let(binds, next_body)
-                    }
-                    _ => body,
-                },
-                _ => body,
-            }
-        }
         match self {
             Int(i) => i.to_string().pretty(arena),
             Var(v) => v.pretty(arena),
-            Abs(arg, body) => {
-                let mut vars = vec![*arg];
-                let body = gather_abs(&mut vars, &body.deref().kind);
+            Abs(vars, body) => {
                 let param_single = arena.space().append(
                     arena
                         .intersperse(
@@ -523,67 +592,98 @@ impl ReducIrKind {
                 ]
                 .parens()
             }
-            App(func, arg) => {
+            App(func, args) => {
                 match &func.deref().kind {
                     // If we see App(Abs(_, _), _) print this as a let binding
-                    Abs(var, body) => {
-                        let mut binds = vec![(var, arg)];
-                        let body = gather_let(&mut binds, body);
-                        let binds_len = binds.len();
-                        let mut binds_iter = binds.into_iter().map(|(var, defn)| {
-                            var.pretty(arena)
-                                .append(arena.space())
-                                .append(defn.deref().pretty(db, arena))
-                                .parens()
-                        });
-                        let binds = if binds_len == 1 {
-                            binds_iter.next().unwrap()
-                        } else {
-                            arena
-                                .space()
-                                .append(arena.intersperse(
-                                    binds_iter,
-                                    arena.line().append(",").append(arena.space()),
-                                ))
-                                .append(arena.line())
-                                .brackets()
-                        };
+                    Abs(vars, body) => {
+                        let pretty_binds = |binds: Vec<(&ReducIrVar, &ReducIr)>, body: &ReducIr| {
+                            let binds_len = binds.len();
+                            let mut binds_iter = binds.into_iter().map(|(var, defn)| {
+                                var.pretty(arena)
+                                    .append(arena.space())
+                                    .append(defn.deref().pretty(db, arena))
+                                    .parens()
+                            });
+                            let binds = if binds_len == 1 {
+                                binds_iter.next().unwrap()
+                            } else {
+                                arena
+                                    .space()
+                                    .append(arena.intersperse(
+                                        binds_iter,
+                                        arena.line().append(",").append(arena.space()),
+                                    ))
+                                    .append(arena.line())
+                                    .brackets()
+                            };
 
-                        docs![
-                            arena,
-                            "let",
-                            arena.line().append(binds).nest(2).group(),
-                            arena
-                                .line()
-                                .append(body.deref().pretty(db, arena))
-                                .nest(2)
-                                .group()
-                        ]
-                        .parens()
-                    }
-                    // Print application as normal
-                    func => {
-                        let mut args = vec![&arg.deref().kind];
-                        let func = gather_app(&mut args, func);
-                        func.pretty(db, arena)
-                            .append(
+                            docs![
+                                arena,
+                                "let",
+                                arena.line().append(binds).nest(2).group(),
                                 arena
                                     .line()
-                                    .append(
-                                        arena
-                                            .intersperse(
-                                                args.into_iter()
-                                                    .rev()
-                                                    .map(|arg| arg.pretty(db, arena)),
-                                                arena.line(),
-                                            )
-                                            .align(),
-                                    )
+                                    .append(body.deref().pretty(db, arena))
                                     .nest(2)
-                                    .group(),
-                            )
+                                    .group()
+                            ]
                             .parens()
+                        };
+
+                        let mut binds = vec![];
+                        let mut args_iter = args.iter().peekable();
+                        let mut vars_iter = vars.iter().peekable();
+                        loop {
+                            match (args_iter.peek(), vars_iter.peek()) {
+                                (Some(_), Some(_)) => {
+                                    binds.push((
+                                        vars_iter.next().unwrap(),
+                                        args_iter.next().unwrap(),
+                                    ));
+                                }
+                                (Some(_), None) => {
+                                    let func = pretty_binds(binds, body);
+                                    break func
+                                        .append(
+                                            arena
+                                                .line()
+                                                .append(arena.intersperse(
+                                                    args_iter.map(|arg| arg.pretty(db, arena)),
+                                                    arena.line(),
+                                                ))
+                                                .nest(2)
+                                                .group(),
+                                        )
+                                        .parens();
+                                }
+                                (None, Some(_)) => {
+                                    break pretty_binds(
+                                        binds,
+                                        &ReducIr::abss(vars_iter.copied(), body.deref().clone()),
+                                    )
+                                }
+                                (None, None) => break pretty_binds(binds, body),
+                            }
+                        }
                     }
+                    // Print application as normal
+                    func => func
+                        .pretty(db, arena)
+                        .append(
+                            arena
+                                .line()
+                                .append(
+                                    arena
+                                        .intersperse(
+                                            args.iter().map(|arg| arg.pretty(db, arena)),
+                                            arena.line(),
+                                        )
+                                        .align(),
+                                )
+                                .nest(2)
+                                .group(),
+                        )
+                        .parens(),
                 }
             }
             TyAbs(tyvar, body) => {

@@ -15,9 +15,10 @@ use aiahr_reducir::{
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
     row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
-    AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
+    AccessTy, Evidence, InDb, MkTy, PrettyType, RowFields, Ty, TyScheme, TypeKind, Wrapper,
 };
 use la_arena::Idx;
+use pretty::{RcAllocator, RcDoc};
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -139,10 +140,13 @@ impl<'a, 'b> LowerTySchemeCtx<'a, 'b> {
         let ir_ty = ty_ctx.lower_ty(scheme.ty);
 
         // Add parameter to type for each constraint
-        let constrs_ty = scheme.constrs.iter().rfold(ir_ty, |ty, constr| {
-            let arg = ty_ctx.row_evidence_ir_ty(module, constr);
-            ty_ctx.db.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ty))
-        });
+        let constrs_ty = ty_ctx.db.mk_fun_ty(
+            scheme
+                .constrs
+                .iter()
+                .map(|constr| ty_ctx.row_evidence_ir_ty(module, constr)),
+            ir_ty,
+        );
 
         let ir_ty: ReducIrTy = foralls.into_iter().rfold(constrs_ty, |ir_ty, (_, kind)| {
             ty_ctx.db.mk_reducir_ty(ForallTy(kind, ir_ty))
@@ -232,23 +236,28 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
         let branch_var_ty = self.db.mk_reducir_ty(VarTy(0));
 
         self.db.mk_prod_ty(&[
-            self.db.mk_binary_fun_ty(left.prod, right.prod, goal.prod),
+            self.db.mk_fun_ty([left.prod, right.prod], goal.prod),
             self.db.mk_reducir_ty(ForallTy(
                 Kind::Type,
                 // We introduce an internal forall here so we have to manually shift our types
-                self.db.mk_binary_fun_ty(
-                    FunTy(left.coprod.shift(self.db.as_ir_db(), 1), branch_var_ty),
-                    FunTy(right.coprod.shift(self.db.as_ir_db(), 1), branch_var_ty),
-                    FunTy(goal.coprod.shift(self.db.as_ir_db(), 1), branch_var_ty),
+                self.db.mk_fun_ty(
+                    [
+                        self.db
+                            .mk_fun_ty([left.coprod.shift(self.db.as_ir_db(), 1)], branch_var_ty),
+                        self.db
+                            .mk_fun_ty([right.coprod.shift(self.db.as_ir_db(), 1)], branch_var_ty),
+                        goal.coprod.shift(self.db.as_ir_db(), 1),
+                    ],
+                    branch_var_ty,
                 ),
             )),
             self.db.mk_prod_ty(&[
-                self.db.mk_reducir_ty(FunTy(goal.prod, left.prod)),
-                self.db.mk_reducir_ty(FunTy(left.coprod, goal.coprod)),
+                self.db.mk_fun_ty([goal.prod], left.prod),
+                self.db.mk_fun_ty([left.coprod], goal.coprod),
             ]),
             self.db.mk_prod_ty(&[
-                self.db.mk_reducir_ty(FunTy(goal.prod, right.prod)),
-                self.db.mk_reducir_ty(FunTy(right.coprod, goal.coprod)),
+                self.db.mk_fun_ty([goal.prod], right.prod),
+                self.db.mk_fun_ty([right.coprod], goal.coprod),
             ]),
         ])
     }
@@ -319,9 +328,14 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                 .db
                 .mk_reducir_ty(ReducIrTyKind::VarTy(self.tyvar_env[var])),
             TypeKind::FunTy(arg, ret) => {
-                let arg = self.lower_ty(*arg);
-                let ret = self.lower_ty(*ret);
-                self.db.mk_reducir_ty(ReducIrTyKind::FunTy(arg, ret))
+                let mut args = vec![self.lower_ty(*arg)];
+                // gather any nested funcs into one
+                let mut ret = ret;
+                while let TypeKind::FunTy(arg, next) = self.db.kind(ret) {
+                    args.push(self.lower_ty(*arg));
+                    ret = next;
+                }
+                self.db.mk_fun_ty(args, self.lower_ty(*ret))
             }
             TypeKind::SumTy(Row::Open(row_var)) => self
                 .db
@@ -382,6 +396,14 @@ impl<'a, 'b, S> MkReducIrTy for LowerCtx<'a, 'b, S> {
 
     fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
         self.db.mk_coprod_ty(elems)
+    }
+
+    fn mk_fun_ty(
+        &self,
+        args: impl IntoIterator<Item = impl aiahr_reducir::ty::IntoReducIrTy>,
+        ret: impl aiahr_reducir::ty::IntoReducIrTy,
+    ) -> ReducIrTy {
+        self.db.mk_fun_ty(args, ret)
     }
 }
 
@@ -602,7 +624,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 var: right_var_id,
                 ty: right_ir.prod,
             };
-            P::new(ReducIr::abss([left_prod_var, right_prod_var], {
+            ReducIr::abss([left_prod_var, right_prod_var], {
                 let mut elems = indxs.iter().map(|indx| match indx {
                     RowIndx::Left(i, _) => prj(*i, left_len, ReducIr::var(left_prod_var)),
                     RowIndx::Right(i, _) => prj(*i, right_len, ReducIr::var(right_prod_var)),
@@ -610,9 +632,9 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 if goal_len == 1 {
                     elems.next().unwrap()
                 } else {
-                    ReducIr::new(Struct(elems.map(P::new).collect()))
+                    ReducIr::new(Struct(elems.collect()))
                 }
-            }))
+            })
         };
 
         let branch = {
@@ -626,17 +648,17 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             let right_coprod = right_ir.coprod.shift(self.db.as_ir_db(), 1);
             let left_branch_var = ReducIrVar {
                 var: left_var_id,
-                ty: self.mk_reducir_ty(FunTy(left_coprod, branch_var_ty)),
+                ty: self.mk_fun_ty([left_coprod], branch_var_ty),
             };
             let right_branch_var = ReducIrVar {
                 var: right_var_id,
-                ty: self.mk_reducir_ty(FunTy(right_coprod, branch_var_ty)),
+                ty: self.mk_fun_ty([right_coprod], branch_var_ty),
             };
             let goal_branch_var = ReducIrVar {
                 var: goal_var_id,
                 ty: goal_ir.coprod.shift(ir_db, 1),
             };
-            P::new(ReducIr::new(TyAbs(
+            ReducIr::new(TyAbs(
                 branch_tyvar,
                 P::new(ReducIr::abss(
                     [left_branch_var, right_branch_var, goal_branch_var],
@@ -673,7 +695,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         }
                     },
                 )),
-            )))
+            ))
         };
 
         let goal_prod_var = ReducIrVar {
@@ -684,23 +706,23 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
         let left_indxs = Sema::diff_right(self.db, goal, right);
 
         let prj_l = {
-            P::new(ReducIr::abss([goal_prod_var], {
+            ReducIr::abss([goal_prod_var], {
                 let mut elems = left_indxs
                     .iter()
                     .map(|(i, _)| prj(*i, goal_len, ReducIr::var(goal_prod_var)));
                 if left_len == 1 {
                     elems.next().unwrap()
                 } else {
-                    ReducIr::new(Struct(elems.map(P::new).collect()))
+                    ReducIr::new(Struct(elems.collect()))
                 }
-            }))
+            })
         };
         let inj_l = {
             let left_coprod_var = ReducIrVar {
                 var: left_var_id,
                 ty: left_ir.coprod,
             };
-            P::new(ReducIr::abss([left_coprod_var], {
+            ReducIr::abss([left_coprod_var], {
                 let case_var_id = self.var_conv.generate();
                 let mut elems = left_indxs.iter().map(|(i, ty)| {
                     let y = ReducIrVar {
@@ -714,28 +736,28 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 } else {
                     ReducIr::case_on_var(goal_ir.coprod, left_coprod_var, elems)
                 }
-            }))
+            })
         };
 
         let right_indxs = Sema::diff_left(self.db, goal, left);
         let prj_r = {
-            P::new(ReducIr::abss([goal_prod_var], {
+            ReducIr::abss([goal_prod_var], {
                 let mut elems = right_indxs
                     .iter()
                     .map(|(i, _)| prj(*i, goal_len, ReducIr::var(goal_prod_var)));
                 if right_len == 1 {
                     elems.next().unwrap()
                 } else {
-                    ReducIr::new(Struct(elems.map(P::new).collect()))
+                    ReducIr::new(Struct(elems.collect()))
                 }
-            }))
+            })
         };
         let inj_r = {
             let right_coprod_var = ReducIrVar {
                 var: right_var_id,
                 ty: right_ir.coprod,
             };
-            P::new(ReducIr::abss([right_coprod_var], {
+            ReducIr::abss([right_coprod_var], {
                 let case_var_id = self.var_conv.generate();
                 let mut elems = right_indxs.iter().map(|(i, ty)| {
                     let y = ReducIrVar {
@@ -749,14 +771,14 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 } else {
                     ReducIr::case_on_var(goal_ir.coprod, right_coprod_var, elems)
                 }
-            }))
+            })
         };
 
         ReducIr::new(Struct(vec![
             concat,
             branch,
-            P::new(ReducIr::new(Struct(vec![prj_l, inj_l]))),
-            P::new(ReducIr::new(Struct(vec![prj_r, inj_r]))),
+            ReducIr::new(Struct(vec![prj_l, inj_l])),
+            ReducIr::new(Struct(vec![prj_r, inj_r])),
         ]))
     }
 }
@@ -813,6 +835,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         right.raw_fields(),
                         goal.raw_fields(),
                     );
+                    let doc: RcDoc<()> = left.pretty(&RcAllocator, self.db, &self.db).into_doc();
+                    println!("{}", doc.pretty(80));
                     (
                         ir_row_ev.simple(self.db),
                         left.values(&ty_db)
@@ -945,16 +969,32 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         match ast.view(term) {
             Unit => ReducIr::new(Struct(vec![])),
             Abstraction { arg, body } => {
-                let term_ty = self.lookup_var(*arg);
-                let ty = self.ty_ctx.lower_ty(term_ty);
-                let var = ReducIrVar {
+                let arg_ty = self.lookup_var(*arg);
+                let ty = self.ty_ctx.lower_ty(arg_ty);
+                let mut vars = vec![ReducIrVar {
                     var: self.var_conv.convert(*arg),
                     ty,
-                };
-                ReducIr::abss([var], self.lower_term(ast, *body))
+                }];
+                let mut body = *body;
+                while let Abstraction { arg, body: next } = ast.view(body) {
+                    let arg_ty = self.lookup_var(*arg);
+                    let ty = self.ty_ctx.lower_ty(arg_ty);
+                    vars.push(ReducIrVar {
+                        var: self.var_conv.convert(*arg),
+                        ty,
+                    });
+                    body = *next;
+                }
+                ReducIr::abss(vars, self.lower_term(ast, body))
             }
             Application { func, arg } => {
-                ReducIr::app(self.lower_term(ast, *func), [self.lower_term(ast, *arg)])
+                let mut func = *func;
+                let mut args = vec![self.lower_term(ast, *arg)];
+                while let Application { func: next, arg } = ast.view(func) {
+                    args.push(self.lower_term(ast, *arg));
+                    func = *next;
+                }
+                ReducIr::app(self.lower_term(ast, func), args.into_iter().rev())
             }
             Variable(var) => {
                 let ty = self.lookup_var(*var);
@@ -1089,7 +1129,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let op_ret = self.ty_ctx.lower_ty(op_ret);
                 let kont_var = ReducIrVar {
                     var: self.var_conv.generate(),
-                    ty: self.mk_reducir_ty(FunTy(op_ret, kont_ret_ty)),
+                    ty: self.mk_fun_ty([op_ret], kont_ret_ty),
                 };
 
                 let prj = ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(eff_ev)));
@@ -1110,9 +1150,11 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     handler_index,
                     ReducIr::field_proj(1, ReducIr::var(handle_var)),
                 );
-                ReducIr::app(
-                    ReducIr::abss(
-                        [handle_var, value_var],
+                ReducIr::abss(
+                    [value_var],
+                    ReducIr::local(
+                        handle_var,
+                        eff_handler,
                         ReducIr::new(Yield(
                             op_ret,
                             P::new(ReducIr::field_proj(0, ReducIr::var(handle_var))),
@@ -1125,7 +1167,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                             )),
                         )),
                     ),
-                    [eff_handler],
                 )
             }
             Handle { handler, body } => {
@@ -1191,10 +1232,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                                 )
                                 .prod,
                         }),
-                        ReducIr::new(Struct(vec![
-                            P::new(ReducIr::var(prompt_var)),
-                            P::new(handler_prj_sig),
-                        ])),
+                        ReducIr::new(Struct(vec![ReducIr::var(prompt_var), handler_prj_sig])),
                     ],
                 );
                 let install_prompt = ReducIr::new(NewPrompt(

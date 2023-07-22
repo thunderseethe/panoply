@@ -262,15 +262,19 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
             let (ir_ty_scheme, _) =
                 lower_ty_ctx.lower_scheme(effect.module(db.as_core_db()), &scheme);
             let ir_ty_scheme = match ir_ty_scheme.kind(db.as_ir_db()) {
-                ReducIrTyKind::ForallTy(Kind::Type, ty) => match ty.kind(db.as_ir_db()) {
-                    ReducIrTyKind::FunTy(arg, ret) => db.mk_binary_fun_ty(
-                        arg,
-                        db.mk_reducir_ty(ReducIrTyKind::FunTy(ret, varp_ty)),
-                        varp_ty,
-                    ),
-                    ty => panic!("{:?}", ty),
-                },
+                //ReducIrTyKind::ForallTy(Kind::Type, ty) => match ty.kind(db.as_ir_db()) {
+                ReducIrTyKind::FunTy(args, ret) => {
+                    let (arg, rest) = args.split_at(1);
+
+                    let mut ty = ret;
+                    if !rest.is_empty() {
+                        ty = db.mk_fun_ty(rest.iter().copied(), ret);
+                    }
+                    db.mk_fun_ty([arg[0], db.mk_fun_ty([ty], varp_ty)], varp_ty)
+                }
                 ty => panic!("{:?}", ty),
+                //},
+                //ty => panic!("{:?}", ty),
             };
             (db.effect_member_name(*op), ir_ty_scheme)
         })
@@ -370,9 +374,7 @@ fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<Va
         .into_iter()
         .rfold(body, |body, (arg, term)| ReducIr::local(arg, term, body));
     // Wrap our term in any unsolved row evidence params we need
-    let body = ev_params
-        .into_iter()
-        .rfold(body, |body, arg| ReducIr::new(Abs(arg, P::new(body))));
+    let body = ReducIr::abss(ev_params.into_iter(), body);
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme
@@ -554,20 +556,21 @@ effect Reader {
     #[test]
     fn lower_state_get() {
         let db = TestDatabase::default();
+
         let ir = lower_snippet(
             &db,
             r#"
-with {
-    put = |x| |k| |s| k(s)(s),
-    get = |x| |k| |s| k({})(x),
+(with {
+    get = |x| |k| |s| k(s)(s),
+    put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
-} do State.get({})"#,
+} do State.get({}))({})"#,
         );
         let pretty_ir =
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            (forall [(T2: Type) (T1: ScopedRow) (T0: ScopedRow)] (fun [V1]
+            (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1]
                 (let
                   [ (V2 ((_row_simple_state_value @ {}) @ {}))
                   , (V3 (((_row_simple_return_putget @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
@@ -576,13 +579,13 @@ with {
                   , (V4 (((_row_simple_putget_return @ {} -> {} -> {{}, {}}) @ {} -> ({} ->
                   {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
                   {{}, {}}))
-                  , (V5 ((_row_simple_put_get @ {} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
+                  , (V5 ((_row_simple_get_put @ {} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
                                                                                       , {}
                                                                                       }) @ {}
                   -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}))
                   ]
                   (fun [V0]
-                    (let
+                    ((let
                       (V7 (V4[0]
                         (V5[0]
                           (fun [V8, V9, V10] (V9 V10 V10))
@@ -591,39 +594,39 @@ with {
                       (new_prompt [V6] (let (V0 (V1[0] V0 {V6, (V4[2][0] V7)}))
                         (prompt V6 (V4[3][0]
                             V7
-                            ((fun [V17, V16] (yield V17[0] (fun [V18] (V17[1][1] V16 V18))))
-                              (V1[3][0] V0)
-                              {}))))))))))"#]];
+                            (let (V16 {})
+                              (let (V17 (V1[3][0] V0))
+                                (yield V17[0] (fun [V18] (V17[1][1] V16 V18))))))))))
+                      {})))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
-            forall Type .
+            forall ScopedRow .
               forall ScopedRow .
-                forall ScopedRow .
-                  { {1} -> { Int
+                { {1} -> { Int
+                         , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                           , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                           }
+                         } -> {0}
+                , forall Type .
+                  (<2> -> T0) -> ({ Int
+                                  , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                                    , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                                    }
+                                  } -> T0) -> <1> -> T0
+                , {{0} -> {1}, <1> -> <0>}
+                , { {0} -> { Int
                            , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                              , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                              }
-                           } -> {0}
-                  , forall Type .
-                    (<2> -> T0) -> ({ Int
-                                    , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
-                                      , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
-                                      }
-                                    } -> T0) -> <1> -> T0
-                  , {{0} -> {1}, <1> -> <0>}
-                  , { {0} -> { Int
-                             , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
-                               , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
-                               }
-                             }
-                    , { Int
-                      , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
-                        , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
-                        }
-                      } -> <0>
-                    }
-                  } -> T1 -> {} -> {{}, {}}"#]];
+                           }
+                  , { Int
+                    , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                      , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                      }
+                    } -> <0>
+                  }
+                } -> T1 -> {{}, {}}"#]];
         let pretty_ir_ty = {
             let this = ir.type_check(&db);
             let db = &db;
