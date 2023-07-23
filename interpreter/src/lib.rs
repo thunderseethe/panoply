@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use aiahr_core::id::ReducIrVarId;
-use aiahr_reducir::{ReducIr, ReducIrKind, ReducIrVar, P};
+use aiahr_reducir::{DelimCont, ReducIr, ReducIrKind, ReducIrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -424,11 +424,11 @@ impl Machine {
                 self.cur_env.insert(arg.var, Value::Prompt(prompt));
                 InterpretResult::Step(body)
             }
-            ReducIrKind::Prompt(marker, body) => {
+            ReducIrKind::X(DelimCont::Prompt(marker, body)) => {
                 self.cur_frame.push(EvalCtx::PromptMarker { body });
                 InterpretResult::Step(marker)
             }
-            ReducIrKind::Yield(_, marker, value) => {
+            ReducIrKind::X(DelimCont::Yield(_, marker, value)) => {
                 self.cur_frame.push(EvalCtx::YieldMarker { value });
                 InterpretResult::Step(marker)
             }

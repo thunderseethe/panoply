@@ -1,5 +1,5 @@
 use aiahr_core::id::{ReducIrVarId, TermName};
-use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
+use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 use rustc_hash::FxHashSet;
 use std::fmt;
 use std::ops::Deref;
@@ -55,29 +55,35 @@ impl<T> P<T> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ReducIrKind<IR = ReducIr> {
+pub enum DelimCont {
+    // Install a prompt for a marker
+    Prompt(P<ReducIr<DelimCont>>, P<ReducIr<DelimCont>>),
+    // Yield to a marker's prompt
+    Yield(ReducIrTy, P<ReducIr<DelimCont>>, P<ReducIr<DelimCont>>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ReducIrKind<Ext = DelimCont> {
     Int(usize),
     Var(ReducIrVar),
     Item(TermName, ReducIrTy),
     // Value abstraction and application
-    Abs(Box<[ReducIrVar]>, P<IR>),
-    App(P<IR>, Vec<IR>),
+    Abs(Box<[ReducIrVar]>, P<ReducIr<Ext>>),
+    App(P<ReducIr<Ext>>, Vec<ReducIr<Ext>>),
     // Type abstraction and application
-    TyAbs(ReducIrVarTy, P<IR>),
-    TyApp(P<IR>, ReducIrTyApp),
+    TyAbs(ReducIrVarTy, P<ReducIr<Ext>>),
+    TyApp(P<ReducIr<Ext>>, ReducIrTyApp),
     // Trivial products
-    Struct(Vec<IR>),         // Intro
-    FieldProj(usize, P<IR>), // Elim
+    Struct(Vec<ReducIr<Ext>>),         // Intro
+    FieldProj(usize, P<ReducIr<Ext>>), // Elim
     // Trivial coproducts
-    Tag(ReducIrTy, usize, P<IR>),      // Intro
-    Case(ReducIrTy, P<IR>, Box<[IR]>), // Elim
+    Tag(ReducIrTy, usize, P<ReducIr<Ext>>), // Intro
+    Case(ReducIrTy, P<ReducIr<Ext>>, Box<[ReducIr<Ext>]>), // Elim
     // Delimited control
     // Generate a new prompt marker
-    NewPrompt(ReducIrVar, P<IR>),
-    // Install a prompt for a marker
-    Prompt(P<IR>, P<IR>),
-    // Yield to a marker's prompt
-    Yield(ReducIrTy, P<IR>, P<IR>),
+    NewPrompt(ReducIrVar, P<ReducIr<Ext>>),
+    // Extensions
+    X(Ext),
 }
 use ReducIrKind::*;
 
@@ -154,25 +160,32 @@ impl<I: Iterator> ZipNonConsuming for std::iter::Peekable<I> {
 /// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
 /// the primitives to express delimited control which is how we implement effects under the hood.
 #[derive(Clone, PartialEq, Eq)]
-pub struct ReducIr {
-    pub kind: ReducIrKind,
+pub struct ReducIr<Ext = DelimCont> {
+    pub kind: ReducIrKind<Ext>,
 }
-impl fmt::Debug for ReducIr {
+impl<Ext> fmt::Debug for ReducIr<Ext>
+where
+    Ext: fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.kind.fmt(f)
     }
 }
-impl ReducIr {
-    pub fn new(kind: ReducIrKind) -> Self {
+impl<Ext> ReducIr<Ext> {
+    pub fn new(kind: ReducIrKind<Ext>) -> Self {
         Self { kind }
     }
 
-    pub fn kind(&self) -> &ReducIrKind {
+    pub fn kind(&self) -> &ReducIrKind<Ext> {
         &self.kind
     }
 
     pub fn var(var: ReducIrVar) -> Self {
         ReducIr::new(Var(var))
+    }
+
+    pub fn ext(ext: Ext) -> Self {
+        ReducIr::new(ReducIrKind::X(ext))
     }
 
     pub fn app(mut head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
@@ -185,7 +198,7 @@ impl ReducIr {
         }
     }
 
-    pub fn abss<I>(vars: I, body: ReducIr) -> Self
+    pub fn abss<I>(vars: I, body: Self) -> Self
     where
         I: IntoIterator<Item = ReducIrVar>,
     {
@@ -206,7 +219,7 @@ impl ReducIr {
     pub fn case_on_var(
         ty: ReducIrTy,
         var: ReducIrVar,
-        cases: impl IntoIterator<Item = ReducIr>,
+        cases: impl IntoIterator<Item = Self>,
     ) -> Self {
         ReducIr::new(Case(
             ty,
@@ -215,7 +228,7 @@ impl ReducIr {
         ))
     }
 
-    pub fn local(var: ReducIrVar, value: ReducIr, mut body: ReducIr) -> Self {
+    pub fn local(var: ReducIrVar, value: Self, mut body: Self) -> Self {
         if let App(ref mut head, ref mut spine) = body.kind {
             if let Abs(ref mut vars, _) = head.as_mut().kind {
                 *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
@@ -234,10 +247,11 @@ impl ReducIr {
         )
     }
 
-    pub fn field_proj(indx: usize, target: ReducIr) -> Self {
+    pub fn field_proj(indx: usize, target: Self) -> Self {
         ReducIr::new(FieldProj(indx, P::new(target)))
     }
-
+}
+impl ReducIr {
     pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
         self.unbound_vars_with_bound(FxHashSet::default())
     }
@@ -263,21 +277,14 @@ impl ReducIr {
             }
             App(func, args) => {
                 let func_ty = func.type_check(ctx)?;
-                let mut arg_tys = args.iter().map(|arg| (arg, arg.type_check(ctx))).peekable();
+                let mut arg_tys = args.iter().map(|arg| arg.type_check(ctx)).peekable();
                 match func_ty.kind(ctx.as_ir_db()) {
                     FunTy(fun_arg_tys, ret_ty) => {
                         debug_assert!(args.len() <= fun_arg_tys.len());
                         let mut fun_args = fun_arg_tys.iter().peekable();
-                        for (fun_arg_ty, (arg, arg_ty)) in fun_args.zip_non_consuming(&mut arg_tys)
-                        {
+                        for (fun_arg_ty, arg_ty) in fun_args.zip_non_consuming(&mut arg_tys) {
                             let arg_ty = arg_ty?;
                             if *fun_arg_ty != arg_ty {
-                                println!("Failed here");
-                                let mut a = String::new();
-                                arg.pretty(ctx, &RcAllocator)
-                                    .render_fmt(80, &mut a)
-                                    .unwrap();
-                                println!("{}", a);
                                 return Err(ReducIrTyErr::TyMismatch(*fun_arg_ty, arg_ty));
                             }
                         }
@@ -361,7 +368,7 @@ impl ReducIr {
                     ))
                 }
             }
-            Prompt(marker, body) => {
+            X(DelimCont::Prompt(marker, body)) => {
                 let marker_ty = marker.type_check(ctx)?;
                 if let IntTy = marker_ty.kind(ctx) {
                     body.type_check(ctx)
@@ -372,7 +379,7 @@ impl ReducIr {
                     ))
                 }
             }
-            Yield(ty, marker, body) => {
+            X(DelimCont::Yield(ty, marker, body)) => {
                 let marker_ty = marker.type_check(ctx)?;
                 let IntTy = marker_ty.kind(ctx) else {
                     return Err(ReducIrTyErr::TyMismatch(
@@ -470,7 +477,7 @@ impl Iterator for UnboundVars<'_> {
                 self.stack.extend(spine.iter());
                 self.next()
             }
-            Prompt(a, b) | Yield(_, a, b) => {
+            X(DelimCont::Prompt(a, b)) | X(DelimCont::Yield(_, a, b)) => {
                 self.stack.extend([a.deref(), b.deref()]);
                 self.next()
             }
@@ -752,7 +759,7 @@ impl ReducIrKind {
                 body.deref().kind.pretty(db, arena)
             ]
             .parens(),
-            Prompt(marker, body) => arena
+            X(DelimCont::Prompt(marker, body)) => arena
                 .as_string("prompt")
                 .append(
                     arena
@@ -767,7 +774,7 @@ impl ReducIrKind {
                         .nest(2),
                 )
                 .parens(),
-            Yield(_, marker, body) => arena
+            X(DelimCont::Yield(_, marker, body)) => arena
                 .as_string("yield")
                 .append(
                     arena

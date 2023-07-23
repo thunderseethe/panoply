@@ -8,7 +8,7 @@ use aiahr_reducir::{
         Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*,
         ReducIrVarTy, RowReducIrKind,
     },
-    ReducIr, ReducIrKind,
+    DelimCont, ReducIr, ReducIrKind,
     ReducIrKind::*,
     ReducIrVar, P,
 };
@@ -1155,7 +1155,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     ReducIr::local(
                         handle_var,
                         eff_handler,
-                        ReducIr::new(Yield(
+                        ReducIr::ext(DelimCont::Yield(
                             op_ret,
                             P::new(ReducIr::field_proj(0, ReducIr::var(handle_var))),
                             P::new(ReducIr::abss(
@@ -1251,7 +1251,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                         // Update evv to include the new handler
                         updated_evv,
                         // Install prompt and wrap handler body in handler's return function
-                        ReducIr::new(Prompt(
+                        ReducIr::ext(DelimCont::Prompt(
                             P::new(ReducIr::var(prompt_var)),
                             P::new(ReducIr::app(handler_prj_ret, [self.lower_term(ast, *body)])),
                         )),
