@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 aiahr-reducir.workspace = true
+aiahr-core.workspace = true

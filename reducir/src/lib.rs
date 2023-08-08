@@ -1,6 +1,8 @@
 use aiahr_core::id::{ReducIrVarId, TermName};
 use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 use rustc_hash::FxHashSet;
+use std::borrow::Cow;
+use std::convert::Infallible;
 use std::fmt;
 use std::ops::Deref;
 
@@ -56,10 +58,74 @@ impl<T> P<T> {
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum DelimCont {
+    // Delimited control
+    // Generate a new prompt marker
+    NewPrompt(ReducIrVar, P<ReducIr<DelimCont>>),
     // Install a prompt for a marker
-    Prompt(P<ReducIr<DelimCont>>, P<ReducIr<DelimCont>>),
+    Prompt(
+        P<ReducIr<DelimCont>>,
+        P<ReducIr<DelimCont>>,
+        P<ReducIr<DelimCont>>,
+    ),
     // Yield to a marker's prompt
     Yield(ReducIrTy, P<ReducIr<DelimCont>>, P<ReducIr<DelimCont>>),
+}
+impl PrettyWithDb for DelimCont {
+    fn pretty<'a, D, DB>(&self, db: &DB, arena: &'a D) -> DocBuilder<'a, D>
+    where
+        D: DocAllocator<'a>,
+        DocBuilder<'a, D>: Clone,
+        DB: ?Sized + crate::Db,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+    {
+        match self {
+            DelimCont::NewPrompt(p_var, body) => docs![
+                arena,
+                "new_prompt",
+                arena.space(),
+                p_var.pretty(arena).brackets(),
+                arena.space(),
+                body.deref().kind.pretty(db, arena)
+            ]
+            .parens(),
+            DelimCont::Prompt(marker, upd_hndler, body) => arena
+                .as_string("prompt")
+                .append(
+                    arena
+                        .softline()
+                        .append(marker.deref().pretty(db, arena))
+                        .nest(2),
+                )
+                .append(
+                    arena
+                        .softline()
+                        .append(upd_hndler.pretty(db, arena))
+                        .nest(2),
+                )
+                .append(
+                    arena
+                        .softline()
+                        .append(body.deref().pretty(db, arena))
+                        .nest(2),
+                )
+                .parens(),
+            DelimCont::Yield(_, marker, body) => arena
+                .as_string("yield")
+                .append(
+                    arena
+                        .softline()
+                        .append(marker.deref().kind.pretty(db, arena))
+                        .nest(2),
+                )
+                .append(
+                    arena
+                        .softline()
+                        .append(body.deref().kind.pretty(db, arena))
+                        .nest(2),
+                )
+                .parens(),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -79,9 +145,6 @@ pub enum ReducIrKind<Ext = DelimCont> {
     // Trivial coproducts
     Tag(ReducIrTy, usize, P<ReducIr<Ext>>), // Intro
     Case(ReducIrTy, P<ReducIr<Ext>>, Box<[ReducIr<Ext>]>), // Elim
-    // Delimited control
-    // Generate a new prompt marker
-    NewPrompt(ReducIrVar, P<ReducIr<Ext>>),
     // Extensions
     X(Ext),
 }
@@ -135,17 +198,31 @@ impl<Ext> ReducIr<Ext> {
         ReducIr::new(ReducIrKind::X(ext))
     }
 
+    pub fn ty_app(head: Self, spine: impl IntoIterator<Item = ReducIrTyApp>) -> Self {
+        spine.into_iter().fold(head, |head, ty_app| {
+            ReducIr::new(TyApp(P::new(head), ty_app))
+        })
+    }
+
     pub fn app(mut head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
         match head.kind {
             App(_, ref mut in_place_spine) => {
                 in_place_spine.extend(spine);
                 head
             }
-            _ => ReducIr::new(App(P::new(head), spine.into_iter().collect())),
+            _ => {
+                let mut spine_iter = spine.into_iter().peekable();
+                if spine_iter.peek().is_some() {
+                    ReducIr::new(App(P::new(head), spine_iter.collect()))
+                } else {
+                    // If application is empty we don't create an application node
+                    head
+                }
+            }
         }
     }
 
-    pub fn abss<I>(vars: I, body: Self) -> Self
+    pub fn abss<I>(vars: I, mut body: Self) -> Self
     where
         I: IntoIterator<Item = ReducIrVar>,
     {
@@ -155,11 +232,11 @@ impl<Ext> ReducIr<Ext> {
             body
         } else {
             // Otherwise try to prepend to an existing Abs
-            let (vars, body) = match body.kind {
-                Abs(ivars, body) => (vars.chain(ivars.iter().copied()).collect(), body),
-                _ => (vars.collect(), P::new(body)),
-            };
-            ReducIr::new(Abs(vars, body))
+            if let Abs(ref mut ivars, _) = body.kind {
+                *ivars = vars.chain(ivars.iter().copied()).collect();
+                return body;
+            }
+            ReducIr::new(Abs(vars.collect(), P::new(body)))
         }
     }
 
@@ -179,7 +256,6 @@ impl<Ext> ReducIr<Ext> {
         if let App(ref mut head, ref mut spine) = body.kind {
             if let Abs(ref mut vars, _) = head.as_mut().kind {
                 *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
-                //spine.push(value);
                 spine.insert(0, value);
                 return body;
             }
@@ -198,22 +274,167 @@ impl<Ext> ReducIr<Ext> {
         ReducIr::new(FieldProj(indx, P::new(target)))
     }
 }
-impl ReducIr {
-    pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
-        self.unbound_vars_with_bound(FxHashSet::default())
+
+trait ReducIrFold: Sized {
+    type InExt;
+    type OutExt;
+
+    fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIrKind<Self::OutExt> {
+        ir
     }
 
-    pub fn unbound_vars_with_bound(
-        &self,
-        bound: FxHashSet<ReducIrVarId>,
-    ) -> impl Iterator<Item = ReducIrVar> + '_ {
-        UnboundVars {
-            bound,
-            stack: vec![self],
+    fn fold_ext(&mut self, ext: &Self::InExt) -> Self::OutExt;
+
+    /// Controls traversal of ReducIr, by default will fold every node in the tree.
+    /// Override with a custom implementation if you'd like to control which nodes are folded.
+    fn traverse_ir(&mut self, ir: &ReducIr<Self::InExt>) -> ReducIr<Self::OutExt> {
+        ReducIr::new(match ir.kind() {
+            Abs(vars, body) => {
+                let body = body.fold(self);
+                self.fold_ir(Abs(vars.clone(), P::new(body)))
+            }
+            App(head, spine) => {
+                let head = head.fold(self);
+                let spine = spine.iter().map(|ir| ir.fold(self)).collect();
+                self.fold_ir(App(P::new(head), spine))
+            }
+            TyAbs(ty_var, body) => {
+                let body = body.fold(self);
+                self.fold_ir(TyAbs(*ty_var, P::new(body)))
+            }
+            TyApp(body, ty_app) => {
+                let body = body.fold(self);
+                self.fold_ir(TyApp(P::new(body), ty_app.clone()))
+            }
+            Struct(elems) => {
+                let elems = elems.iter().map(|e| e.fold(self)).collect();
+                self.fold_ir(Struct(elems))
+            }
+            FieldProj(indx, body) => {
+                let body = body.fold(self);
+                self.fold_ir(FieldProj(*indx, P::new(body)))
+            }
+            Tag(ty, tag, body) => {
+                let body = body.fold(self);
+                self.fold_ir(Tag(*ty, *tag, P::new(body)))
+            }
+            Case(ty, discr, branches) => {
+                let discr = discr.fold(self);
+                let branches = branches.iter().map(|branch| branch.fold(self)).collect();
+                self.fold_ir(Case(*ty, P::new(discr), branches))
+            }
+            Int(i) => self.fold_ir(Int(*i)),
+            Var(v) => self.fold_ir(Var(*v)),
+            Item(name, ty) => self.fold_ir(Item(*name, *ty)),
+
+            X(in_ext) => {
+                let out_ext = self.fold_ext(in_ext);
+                self.fold_ir(X(out_ext))
+            }
+        })
+    }
+}
+
+impl<F> ReducIrFold for &mut F
+where
+    F: ReducIrFold,
+{
+    type InExt = F::InExt;
+
+    type OutExt = F::OutExt;
+
+    fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIrKind<Self::OutExt> {
+        F::fold_ir(self, ir)
+    }
+
+    fn fold_ext(&mut self, ext: &Self::InExt) -> Self::OutExt {
+        F::fold_ext(self, ext)
+    }
+}
+
+impl<Ext> ReducIr<Ext> {
+    fn fold<F: ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
+        fold.traverse_ir(self)
+    }
+}
+
+impl<Ext> ReducIr<Ext> {
+    /// Allows "casting" to another Ext type by assuming `ReducIrKind::X` is not used anywhere in
+    /// `self`.
+    /// Panics if `ReducIrKind::X` is present in `self`.
+    pub fn assume_no_ext(&self) -> ReducIr<Infallible> {
+        struct AssumeNoExt<Ext>(std::marker::PhantomData<Ext>);
+        impl<Ext> Default for AssumeNoExt<Ext> {
+            fn default() -> Self {
+                Self(std::marker::PhantomData)
+            }
+        }
+        impl<Ext> ReducIrFold for AssumeNoExt<Ext> {
+            type InExt = Ext;
+            type OutExt = Infallible;
+
+            fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIrKind<Self::OutExt> {
+                ir
+            }
+
+            fn fold_ext(&mut self, _: &Self::InExt) -> Self::OutExt {
+                panic!("Assumed extension would not appear in ReducIr")
+            }
+        }
+        self.fold(&mut AssumeNoExt::default())
+    }
+}
+pub trait TypeCheck {
+    type Ext: Clone;
+    fn type_check<'a>(
+        &'a self,
+        ctx: &dyn crate::Db,
+    ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>>;
+}
+impl TypeCheck for DelimCont {
+    type Ext = Self;
+    fn type_check(&self, ctx: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+        use ty::ReducIrTyKind::*;
+        match self {
+            DelimCont::NewPrompt(prompt, body) => {
+                if let MarkerTy(_) = prompt.ty.kind(ctx) {
+                    body.type_check(ctx)
+                } else {
+                    Err(ReducIrTyErr::ExpectedMarkerTy(prompt.ty))
+                }
+            }
+            DelimCont::Prompt(marker, _upd_handler, body) => {
+                let marker_ty = marker.type_check(ctx)?;
+                if let MarkerTy(_) = marker_ty.kind(ctx) {
+                    body.type_check(ctx)
+                } else {
+                    Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty))
+                }
+            }
+            DelimCont::Yield(ty, marker, body) => {
+                let marker_ty = marker.type_check(ctx)?;
+                let MarkerTy(_) = marker_ty.kind(ctx) else {
+                    return Err(ReducIrTyErr::ExpectedMarkerTy(
+                        marker_ty,
+                    ));
+                };
+                // We want to make sure body type checks but we don't actually use the result
+                let _ = body.type_check(ctx)?;
+                Ok(*ty)
+            }
         }
     }
+}
+impl TypeCheck for Infallible {
+    type Ext = Self;
+    fn type_check(&self, _: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+        unreachable!()
+    }
+}
+impl<Ext: TypeCheck<Ext = Ext> + PrettyWithDb + Clone> TypeCheck for ReducIr<Ext> {
+    type Ext = Ext;
 
-    pub fn type_check(&self, ctx: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr> {
+    fn type_check(&self, ctx: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr<Ext>> {
         use ty::ReducIrTyKind::*;
         match &self.kind {
             Int(_) => Ok(ctx.mk_reducir_ty(IntTy)),
@@ -224,20 +445,30 @@ impl ReducIr {
             }
             App(func, args) => {
                 let func_ty = func.type_check(ctx)?;
-                let mut arg_tys = args.iter().map(|arg| arg.type_check(ctx)).peekable();
+                let args_iter = args.iter();
                 match func_ty.kind(ctx.as_ir_db()) {
                     FunTy(fun_arg_tys, ret_ty) => {
                         debug_assert!(args.len() <= fun_arg_tys.len());
                         let mut fun_args = fun_arg_tys.iter().peekable();
-                        for (fun_arg_ty, arg_ty) in fun_args.zip_non_consuming(&mut arg_tys) {
-                            let arg_ty = arg_ty?;
+                        for (fun_arg_ty, (arg_index, arg)) in
+                            fun_args.zip_non_consuming(&mut args_iter.enumerate().peekable())
+                        {
+                            let arg_ty = arg.type_check(ctx.as_ir_db())?;
                             if *fun_arg_ty != arg_ty {
-                                return Err(ReducIrTyErr::TyMismatch(*fun_arg_ty, arg_ty));
+                                return Err(ReducIrTyErr::TyMismatch {
+                                    left_ty: func_ty,
+                                    left_ir: Cow::Owned(ReducIr::app(
+                                        func.deref().clone(),
+                                        args[0..arg_index].to_vec(),
+                                    )),
+                                    right_ty: arg_ty,
+                                    right_ir: Cow::Borrowed(arg),
+                                });
                             }
                         }
                         Ok(ctx.mk_fun_ty(fun_args.copied(), ret_ty))
                     }
-                    _ => Err(ReducIrTyErr::ExpectedFunTy(func_ty)),
+                    _ => Err(ReducIrTyErr::ExpectedFunTy { ty: func_ty, func }),
                 }
             }
             TyAbs(ty_arg, body) => {
@@ -292,82 +523,107 @@ impl ReducIr {
                         FunTy(arg_tys, ret_ty) => {
                             debug_assert!(arg_tys.len() == 1);
                             if arg_tys[0] != ty {
-                                return Err(ReducIrTyErr::TyMismatch(arg_tys[0], ty));
+                                return Err(ReducIrTyErr::TyMismatch {
+                                    left_ir: Cow::Borrowed(branch),
+                                    left_ty: arg_tys[0],
+                                    right_ir: Cow::Borrowed(discr.deref()),
+                                    right_ty: ty,
+                                });
                             }
                             if ret_ty != *case_ty {
-                                return Err(ReducIrTyErr::TyMismatch(ret_ty, *case_ty));
+                                return Err(ReducIrTyErr::TyMismatch {
+                                    left_ty: ret_ty,
+                                    left_ir: Cow::Borrowed(branch),
+                                    right_ty: *case_ty,
+                                    right_ir: Cow::Borrowed(self),
+                                });
                             }
                         }
                         _ => {
-                            return Err(ReducIrTyErr::ExpectedFunTy(branch_ty));
+                            return Err(ReducIrTyErr::ExpectedFunTy {
+                                ty: branch_ty,
+                                func: branch,
+                            });
                         }
                     }
                 }
                 Ok(*case_ty)
             }
-            NewPrompt(prompt, body) => {
-                if let IntTy = prompt.ty.kind(ctx) {
-                    body.type_check(ctx)
-                } else {
-                    Err(ReducIrTyErr::TyMismatch(
-                        prompt.ty,
-                        ctx.mk_reducir_ty(IntTy),
-                    ))
-                }
-            }
-            X(DelimCont::Prompt(marker, body)) => {
-                let marker_ty = marker.type_check(ctx)?;
-                if let IntTy = marker_ty.kind(ctx) {
-                    body.type_check(ctx)
-                } else {
-                    Err(ReducIrTyErr::TyMismatch(
-                        marker_ty,
-                        ctx.mk_reducir_ty(IntTy),
-                    ))
-                }
-            }
-            X(DelimCont::Yield(ty, marker, body)) => {
-                let marker_ty = marker.type_check(ctx)?;
-                let IntTy = marker_ty.kind(ctx) else {
-                    return Err(ReducIrTyErr::TyMismatch(
-                        marker_ty,
-                        ctx.mk_reducir_ty(IntTy),
-                    ));
-                };
-                // We want to make sure body type checks but we don't actually use the result
-                let _ = body.type_check(ctx)?;
-                Ok(*ty)
-            }
+            X(xt) => xt.type_check(ctx),
             Tag(ty, _, _) => Ok(*ty),
             Item(_, ty) => Ok(*ty),
         }
     }
 }
 
+impl ReducIr {
+    pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
+        self.unbound_vars_with_bound(FxHashSet::default())
+    }
+
+    pub fn unbound_vars_with_bound(
+        &self,
+        bound: FxHashSet<ReducIrVarId>,
+    ) -> impl Iterator<Item = ReducIrVar> + '_ {
+        UnboundVars {
+            bound,
+            stack: vec![self],
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
-pub enum ReducIrTyErr {
-    TyMismatch(ReducIrTy, ReducIrTy),
+pub enum ReducIrTyErr<'a, Ext: Clone> {
+    TyMismatch {
+        left_ty: ReducIrTy,
+        left_ir: Cow<'a, ReducIr<Ext>>,
+        right_ty: ReducIrTy,
+        right_ir: Cow<'a, ReducIr<Ext>>,
+    },
     KindMistmatch(Kind, Kind),
-    ExpectedFunTy(ReducIrTy),
+    ExpectedFunTy {
+        ty: ReducIrTy,
+        func: &'a ReducIr<Ext>,
+    },
     ExpectedForallTy(ReducIrTy),
     ExpectedProdTy(ReducIrTy),
     ExpectedCoprodTy(ReducIrTy),
+    ExpectedMarkerTy(ReducIrTy),
 }
-impl ReducIrTyErr {
+impl<'ir, Ext: PrettyWithDb + Clone> ReducIrTyErr<'ir, Ext> {
     pub fn pretty<'a, D, DB>(&self, db: &DB, a: &'a D) -> DocBuilder<'a, D>
     where
         D: DocAllocator<'a>,
+        D::Doc: Clone + Pretty<'a, D>,
         DocBuilder<'a, D>: Clone,
         DB: ?Sized + crate::Db,
     {
         match self {
-            ReducIrTyErr::TyMismatch(lhs, rhs) => a.text("TyMistmatch").append(
-                lhs.pretty(db, a)
-                    .append(a.text(","))
-                    .append(a.softline())
-                    .append(rhs.pretty(db, a))
-                    .parens(),
-            ),
+            ReducIrTyErr::TyMismatch {
+                left_ty,
+                left_ir,
+                right_ty,
+                right_ir,
+            } => a
+                .text("Type Mismatch:")
+                .append(a.line())
+                .append(
+                    left_ir
+                        .pretty(db, a)
+                        .parens()
+                        .append(a.text(":"))
+                        .append(a.softline())
+                        .append(left_ty.pretty(db, a).parens()),
+                )
+                .append(a.line())
+                .append(
+                    right_ir
+                        .pretty(db, a)
+                        .parens()
+                        .append(a.text(":"))
+                        .append(a.softline())
+                        .append(right_ty.pretty(db, a)),
+                ),
             ReducIrTyErr::KindMistmatch(lhs, rhs) => a.text("KindMistmatch").append(
                 lhs.pretty(a)
                     .append(a.text(","))
@@ -375,8 +631,11 @@ impl ReducIrTyErr {
                     .append(rhs.pretty(a))
                     .parens(),
             ),
-            ReducIrTyErr::ExpectedFunTy(ty) => a
+            ReducIrTyErr::ExpectedFunTy { ty, func } => a
                 .text("Expected a function type, but got:")
+                .append(a.softline())
+                .append(func.pretty(db, a))
+                .append(a.text(":"))
                 .append(a.softline())
                 .append(ty.pretty(db, a)),
             ReducIrTyErr::ExpectedForallTy(ty) => a
@@ -389,6 +648,10 @@ impl ReducIrTyErr {
                 .append(ty.pretty(db, a)),
             ReducIrTyErr::ExpectedCoprodTy(ty) => a
                 .text("Expected a coprod type, but got:")
+                .append(a.softline())
+                .append(ty.pretty(db, a)),
+            ReducIrTyErr::ExpectedMarkerTy(ty) => a
+                .text("Expected a marker type, but got:")
                 .append(a.softline())
                 .append(ty.pretty(db, a)),
         }
@@ -414,18 +677,22 @@ impl Iterator for UnboundVars<'_> {
                 self.stack.push(body.deref());
                 self.next()
             }
-            NewPrompt(v, body) => {
-                self.bound.insert(v.var);
-                self.stack.push(body.deref());
-                self.next()
-            }
             App(head, spine) => {
                 self.stack.push(head);
                 self.stack.extend(spine.iter());
                 self.next()
             }
-            X(DelimCont::Prompt(a, b)) | X(DelimCont::Yield(_, a, b)) => {
+            X(DelimCont::NewPrompt(v, body)) => {
+                self.bound.insert(v.var);
+                self.stack.push(body.deref());
+                self.next()
+            }
+            X(DelimCont::Yield(_, a, b)) => {
                 self.stack.extend([a.deref(), b.deref()]);
+                self.next()
+            }
+            X(DelimCont::Prompt(a, b, c)) => {
+                self.stack.extend([a.deref(), b.deref(), c.deref()]);
                 self.next()
             }
             TyAbs(_, a) | TyApp(a, _) | FieldProj(_, a) | Tag(_, _, a) => {
@@ -482,8 +749,17 @@ impl ReducIrVar {
     }
 }
 
-impl ReducIr {
-    pub fn pretty<'a, D, DB>(&self, db: &DB, allocator: &'a D) -> DocBuilder<'a, D>
+pub trait PrettyWithDb {
+    fn pretty<'a, D, DB>(&self, db: &DB, allocator: &'a D) -> DocBuilder<'a, D>
+    where
+        D: DocAllocator<'a>,
+        DocBuilder<'a, D>: Clone,
+        DB: ?Sized + crate::Db,
+        D::Doc: pretty::Pretty<'a, D> + Clone;
+}
+
+impl<Ext: PrettyWithDb + Clone> PrettyWithDb for ReducIr<Ext> {
+    fn pretty<'a, D, DB>(&self, db: &DB, allocator: &'a D) -> DocBuilder<'a, D>
     where
         D: DocAllocator<'a>,
         DocBuilder<'a, D>: Clone,
@@ -494,7 +770,7 @@ impl ReducIr {
     }
 }
 
-impl ReducIrKind {
+impl<Ext: PrettyWithDb + Clone> PrettyWithDb for ReducIrKind<Ext> {
     fn pretty<'a, D, DB>(&self, db: &DB, arena: &'a D) -> pretty::DocBuilder<'a, D>
     where
         D: DocAllocator<'a>,
@@ -502,10 +778,10 @@ impl ReducIrKind {
         DB: ?Sized + crate::Db,
         D::Doc: pretty::Pretty<'a, D> + Clone,
     {
-        fn gather_ty_abs<'a>(
+        fn gather_ty_abs<'a, Ext>(
             vars: &mut Vec<ReducIrVarTy>,
-            kind: &'a ReducIrKind,
-        ) -> &'a ReducIrKind {
+            kind: &'a ReducIrKind<Ext>,
+        ) -> &'a ReducIrKind<Ext> {
             match kind {
                 TyAbs(arg, body) => {
                     vars.push(*arg);
@@ -550,39 +826,40 @@ impl ReducIrKind {
                 match &func.deref().kind {
                     // If we see App(Abs(_, _), _) print this as a let binding
                     Abs(vars, body) => {
-                        let pretty_binds = |binds: Vec<(&ReducIrVar, &ReducIr)>, body: &ReducIr| {
-                            let binds_len = binds.len();
-                            let mut binds_iter = binds.into_iter().map(|(var, defn)| {
-                                var.pretty(arena)
-                                    .append(arena.space())
-                                    .append(defn.deref().pretty(db, arena))
-                                    .parens()
-                            });
-                            let binds = if binds_len == 1 {
-                                binds_iter.next().unwrap()
-                            } else {
-                                arena
-                                    .space()
-                                    .append(arena.intersperse(
-                                        binds_iter,
-                                        arena.line().append(",").append(arena.space()),
-                                    ))
-                                    .append(arena.line())
-                                    .brackets()
-                            };
+                        let pretty_binds =
+                            |binds: Vec<(&ReducIrVar, &ReducIr<Ext>)>, body: &ReducIr<Ext>| {
+                                let binds_len = binds.len();
+                                let mut binds_iter = binds.into_iter().map(|(var, defn)| {
+                                    var.pretty(arena)
+                                        .append(arena.space())
+                                        .append(defn.deref().pretty(db, arena))
+                                        .parens()
+                                });
+                                let binds = if binds_len == 1 {
+                                    binds_iter.next().unwrap()
+                                } else {
+                                    arena
+                                        .space()
+                                        .append(arena.intersperse(
+                                            binds_iter,
+                                            arena.line().append(",").append(arena.space()),
+                                        ))
+                                        .append(arena.line())
+                                        .brackets()
+                                };
 
-                            docs![
-                                arena,
-                                "let",
-                                arena.line().append(binds).nest(2).group(),
-                                arena
-                                    .line()
-                                    .append(body.deref().pretty(db, arena))
-                                    .nest(2)
-                                    .group()
-                            ]
-                            .parens()
-                        };
+                                docs![
+                                    arena,
+                                    "let",
+                                    arena.line().append(binds).nest(2).group(),
+                                    arena
+                                        .line()
+                                        .append(body.deref().pretty(db, arena))
+                                        .nest(2)
+                                        .group()
+                                ]
+                                .parens()
+                            };
 
                         let mut binds = vec![];
                         let mut args_iter = args.iter().peekable();
@@ -697,46 +974,20 @@ impl ReducIrKind {
                 .append(arena.space())
                 .append(ty.pretty(db, arena))
                 .parens(),
-            NewPrompt(p_var, body) => docs![
-                arena,
-                "new_prompt",
-                arena.space(),
-                p_var.pretty(arena).brackets(),
-                arena.space(),
-                body.deref().kind.pretty(db, arena)
-            ]
-            .parens(),
-            X(DelimCont::Prompt(marker, body)) => arena
-                .as_string("prompt")
-                .append(
-                    arena
-                        .softline()
-                        .append(marker.deref().pretty(db, arena))
-                        .nest(2),
-                )
-                .append(
-                    arena
-                        .softline()
-                        .append(body.deref().pretty(db, arena))
-                        .nest(2),
-                )
-                .parens(),
-            X(DelimCont::Yield(_, marker, body)) => arena
-                .as_string("yield")
-                .append(
-                    arena
-                        .softline()
-                        .append(marker.deref().kind.pretty(db, arena))
-                        .nest(2),
-                )
-                .append(
-                    arena
-                        .softline()
-                        .append(body.deref().kind.pretty(db, arena))
-                        .nest(2),
-                )
-                .parens(),
+            X(xt) => xt.pretty(db, arena),
             Item(name, _) => arena.text(name.name(db.as_core_db()).text(db.as_core_db()).clone()),
         }
+    }
+}
+
+impl PrettyWithDb for Infallible {
+    fn pretty<'a, D, DB>(&self, _: &DB, _: &'a D) -> DocBuilder<'a, D>
+    where
+        D: DocAllocator<'a>,
+        DocBuilder<'a, D>: Clone,
+        DB: ?Sized + crate::Db,
+        D::Doc: pretty::Pretty<'a, D> + Clone,
+    {
+        unreachable!()
     }
 }

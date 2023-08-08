@@ -74,6 +74,11 @@ pub enum ReducIrTyKind {
     ForallTy(Kind, ReducIrTy),
     ProductTy(Vec<ReducIrTy>),
     CoproductTy(Vec<ReducIrTy>),
+    // TODO: Figure out how to not build this in
+    MarkerTy(ReducIrTy),
+    /// Our delimited continuation monad type.
+    /// It's specialized as a type to handle recursion without full support for recursive types.a
+    ControlTy(ReducIrTy, ReducIrTy),
 }
 
 impl ReducIrTyKind {
@@ -136,6 +141,18 @@ impl ReducIrTyKind {
             ReducIrTyKind::CoproductTy(tys) => a
                 .intersperse(tys.into_iter().map(|ty| ty.pretty(db, a)), ",")
                 .angles(),
+            ReducIrTyKind::MarkerTy(ret) => a
+                .text("Marker")
+                .append(a.space())
+                .append(ret.pretty(db, a))
+                .parens(),
+            ReducIrTyKind::ControlTy(evv, t) => a
+                .text("Control")
+                .append(a.space())
+                .append(evv.pretty(db, a))
+                .append(a.space())
+                .append(t.pretty(db, a))
+                .parens(),
         }
     }
 }
@@ -144,6 +161,27 @@ impl ReducIrTyKind {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub struct ReducIrTy {
     pub kind: ReducIrTyKind,
+}
+
+pub struct UnwrapMonTy {
+    pub evv_ty: ReducIrTy,
+    pub a_ty: ReducIrTy,
+}
+impl ReducIrTy {
+    /// Unwrap a monadic type into it's evv type and value type.
+    pub fn try_unwrap_monadic(self, db: &dyn crate::Db) -> Result<UnwrapMonTy, Self> {
+        // Monadic type is evv -> Control evv a
+        // Unwrap and return (evv, a) from Control type
+        match self.kind(db) {
+            ReducIrTyKind::FunTy(args, ret) if args.len() == 1 => match ret.kind(db) {
+                ReducIrTyKind::ControlTy(evv_ty, a_ty) if args[0] == evv_ty => {
+                    Ok(UnwrapMonTy { evv_ty, a_ty })
+                }
+                _ => Err(self),
+            },
+            _ => Err(self),
+        }
+    }
 }
 
 struct Env<T> {
@@ -170,7 +208,14 @@ impl<T: Clone + std::fmt::Debug> Env<T> {
     fn get(&self, n: i32) -> &(i32, Option<T>) {
         // Index from the end of our vec
         // because we're using it as a stack
-        let indx = (self.env.len() - 1) - (n as usize);
+        let (res, overflow) = self.env.len().overflowing_sub(1);
+        if overflow {
+            panic!("Env length is 0");
+        }
+        let (indx, overflow) = res.overflowing_sub(n as usize);
+        if overflow {
+            panic!("env length is less than {}", n);
+        }
         &self.env[indx]
     }
 
@@ -203,7 +248,7 @@ impl ReducIrTy {
                 ReducIrTyKind::IntTy => ty,
                 ReducIrTyKind::ProdVarTy(n) => {
                     if n >= i {
-                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(n + i - j))
+                        db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(n - i + j))
                     } else {
                         let (j_, _) = env.get(n);
                         db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(j - j_ - 1))
@@ -211,7 +256,7 @@ impl ReducIrTy {
                 }
                 ReducIrTyKind::CoprodVarTy(n) => {
                     if n >= i {
-                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(n + i - j))
+                        db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(n - i + j))
                     } else {
                         let (j_, _) = env.get(n);
                         db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(j - j_ - 1))
@@ -247,6 +292,13 @@ impl ReducIrTy {
                         .into_iter()
                         .map(|ty| subst_aux(ty, db, i, j, env))
                         .collect(),
+                )),
+                ReducIrTyKind::MarkerTy(ret) => {
+                    db.mk_reducir_ty(ReducIrTyKind::MarkerTy(subst_aux(ret, db, i, j, env)))
+                }
+                ReducIrTyKind::ControlTy(evv, t) => db.mk_reducir_ty(ReducIrTyKind::ControlTy(
+                    subst_aux(evv, db, i, j, env),
+                    subst_aux(t, db, i, j, env),
                 )),
             }
         }
@@ -333,6 +385,13 @@ impl ReducIrTy {
                         .map(|ty| subst_aux(ty, db, i, j, env))
                         .collect(),
                 )),
+                ReducIrTyKind::MarkerTy(ret) => {
+                    db.mk_reducir_ty(ReducIrTyKind::MarkerTy(subst_aux(ret, db, i, j, env)))
+                }
+                ReducIrTyKind::ControlTy(evv, t) => db.mk_reducir_ty(ReducIrTyKind::ControlTy(
+                    subst_aux(evv, db, i, j, env),
+                    subst_aux(t, db, i, j, env),
+                )),
             }
         }
 
@@ -368,6 +427,13 @@ impl ReducIrTy {
                         .into_iter()
                         .map(|ty| shift_aux(ty, db, delta, bound))
                         .collect(),
+                )),
+                MarkerTy(ret) => {
+                    db.mk_reducir_ty(ReducIrTyKind::MarkerTy(shift_aux(ret, db, delta, bound)))
+                }
+                ControlTy(evv, t) => db.mk_reducir_ty(ReducIrTyKind::ControlTy(
+                    shift_aux(evv, db, delta, bound),
+                    shift_aux(t, db, delta, bound),
                 )),
             }
         }
@@ -441,6 +507,27 @@ pub trait MkReducIrTy {
     ) -> ReducIrTy;
     fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
     fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
+
+    fn mk_forall_ty<I>(&self, kinds: I, ty: impl IntoReducIrTy) -> ReducIrTy
+    where
+        I: IntoIterator<Item = Kind>,
+        I::IntoIter: DoubleEndedIterator,
+    {
+        kinds
+            .into_iter()
+            .rfold(ty.into_reducir_ty(self), |ty, kind| {
+                self.mk_reducir_ty(ReducIrTyKind::ForallTy(kind, ty))
+            })
+    }
+
+    fn mk_mon_ty(&self, evv_ty: impl IntoReducIrTy, a_ty: impl IntoReducIrTy) -> ReducIrTy {
+        let evv_ty = evv_ty.into_reducir_ty(self);
+        let a_ty = a_ty.into_reducir_ty(self);
+        self.mk_fun_ty(
+            [evv_ty],
+            self.mk_reducir_ty(ReducIrTyKind::ControlTy(evv_ty, a_ty)),
+        )
+    }
 }
 pub trait IntoReducIrTy {
     fn into_reducir_ty<I: ?Sized + MkReducIrTy>(self, ctx: &I) -> ReducIrTy;

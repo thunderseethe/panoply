@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::{
     id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
@@ -6,19 +8,19 @@ use aiahr_core::{
 use aiahr_reducir::{
     ty::{
         Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*,
-        ReducIrVarTy, RowReducIrKind,
+        ReducIrVarTy, RowReducIrKind, UnwrapMonTy,
     },
     DelimCont, ReducIr, ReducIrKind,
     ReducIrKind::*,
-    ReducIrVar, P,
+    ReducIrVar, TypeCheck, P,
 };
 use aiahr_tc::{EffectInfo, TyChkRes};
 use aiahr_ty::{
     row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
-    AccessTy, Evidence, InDb, MkTy, PrettyType, RowFields, Ty, TyScheme, TypeKind, Wrapper,
+    AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
 };
 use la_arena::Idx;
-use pretty::{RcAllocator, RcDoc};
+use pretty::RcAllocator;
 use rustc_hash::FxHashMap;
 
 use crate::{
@@ -419,6 +421,22 @@ impl<'a, S> LowerCtx<'a, '_, S> {
     fn lookup_wrapper(&self, term: Idx<Term<VarId>>) -> &'a Wrapper {
         self.db.lookup_wrapper(self.current, term)
     }
+
+    // TODO: Clean this up
+    pub(crate) fn tyvar_conv(&mut self) -> &mut IdConverter<TyVarId, ReducIrTyVarId> {
+        self.ty_ctx.tyvar_conv
+    }
+
+    pub(crate) fn evv_var(&mut self, ast: &Ast<VarId>) -> ReducIrVar {
+        let term_infer = self.lookup_term(ast.root());
+        ReducIrVar {
+            var: self.evv_var_id,
+            ty: match self.ty_ctx.lower_row(term_infer.eff) {
+                ReducIrRow::Open(i) => self.db.mk_reducir_ty(ProdVarTy(i)),
+                ReducIrRow::Closed(tys) => self.mk_reducir_ty(ProductTy(tys)),
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -781,6 +799,407 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             ReducIr::new(Struct(vec![prj_r, inj_r])),
         ]))
     }
+
+    pub(crate) fn lower_monadic_entry(&mut self, ir: &ReducIr<DelimCont>) -> ReducIr<Infallible> {
+        match ir.kind() {
+            ReducIrKind::Abs(vars, _) => match vars.iter().find(|var| var.var == self.evv_var_id) {
+                Some(evv_var) => self.lower_monadic(evv_var.ty, ir),
+                None => {
+                    println!("{:?}", ir);
+                    todo!()
+                }
+            },
+            ReducIrKind::TyAbs(ty_var, ir) => ReducIr::new(ReducIrKind::TyAbs(
+                *ty_var,
+                P::new(self.lower_monadic_entry(ir)),
+            )),
+            ReducIrKind::TyApp(ir, ty_app) => ReducIr::new(ReducIrKind::TyApp(
+                P::new(self.lower_monadic_entry(ir)),
+                ty_app.clone(),
+            )),
+            kind => panic!("{:?}", kind),
+        }
+    }
+
+    fn fresh_marker_item(&mut self) -> ReducIr<Infallible> {
+        let core_db = self.db.as_core_db();
+        let ret_ty = self.mk_reducir_ty(VarTy(0));
+        ReducIr::new(Item(
+            TermName::new(
+                core_db,
+                core_db.ident_str("_mon_freshm"),
+                self.current.module(core_db),
+            ),
+            self.mk_forall_ty(
+                [Kind::Type, Kind::Type],
+                self.mk_fun_ty(
+                    [self.mk_fun_ty([self.mk_reducir_ty(VarTy(1))], ret_ty)],
+                    ret_ty,
+                ),
+            ),
+        ))
+    }
+
+    /// Prompt handles "installing" our prompt into the stack and running an action under an
+    /// updated effect row
+    fn prompt_item(&mut self) -> ReducIr<Infallible> {
+        /*
+          prompt : ∀𝜇 𝜇'. ∀𝛼 h. (𝜇 -> {Marker 𝜇 𝛼, h} -> Mon 𝜇' 𝛼) -> Marker 𝜇 𝛼 -> h -> Mon 𝜇' 𝛼 -> Mon 𝜇 𝛼
+          prompt upd m h e = 𝜆w. case e (upd w {m, h}) of
+            Pure x -> Pure x
+            Yield m' f k ->
+                case m == m' of
+                    False -> Yield m' f (\x . prompt upd m h (k x))
+                    True -> f (\x . prompt upd m h (k x)) w
+        */
+        let m = self.mk_reducir_ty(VarTy(2));
+        let upd_m = self.mk_reducir_ty(VarTy(1));
+        let a = self.mk_reducir_ty(VarTy(0));
+
+        let mark = self.mk_reducir_ty(MarkerTy(a));
+
+        let prompt_type = self.mk_forall_ty(
+            [Kind::Type, Kind::Type, Kind::Type],
+            self.mk_fun_ty(
+                [
+                    mark,
+                    self.mk_fun_ty([m], upd_m),
+                    self.mk_fun_ty([upd_m], self.mk_reducir_ty(ControlTy(upd_m, a))),
+                ],
+                self.mk_fun_ty([m], self.mk_reducir_ty(ControlTy(m, a))),
+            ),
+        );
+
+        let core_db = self.db.as_core_db();
+        ReducIr::new(Item(
+            TermName::new(
+                core_db,
+                self.db.ident_str("__mon_prompt"),
+                self.current.module(core_db),
+            ),
+            prompt_type,
+        ))
+    }
+
+    /// TODO: Return an item representing the bind implementation of our delimited continuation
+    /// monad
+    fn bind_item(&mut self) -> ReducIr<Infallible> {
+        /*
+        (e: Mon m a) |> (g : a -> Mon m b) : Mon m b =
+           𝜆w. case e w of
+               Pure x → g x w (monadic bind)
+               Yield m f k → Yield m f (𝜆x. g x |> k)
+        */
+        let m = self.mk_reducir_ty(VarTy(2));
+        let a = self.mk_reducir_ty(VarTy(1));
+        let b = self.mk_reducir_ty(VarTy(0));
+        let mon_m_b = self.mk_mon_ty(m, b);
+
+        let bind_type = self.mk_forall_ty(
+            [Kind::Type, Kind::Type, Kind::Type],
+            self.mk_fun_ty(
+                [self.mk_mon_ty(m, a), self.mk_fun_ty([a], mon_m_b)],
+                mon_m_b,
+            ),
+        );
+        let core_db = self.db.as_core_db();
+        ReducIr::new(Item(
+            TermName::new(
+                core_db,
+                self.db.ident_str("__mon_bind"),
+                self.current.module(core_db),
+            ),
+            bind_type,
+        ))
+    }
+
+    fn bind(
+        &mut self,
+        ir: ReducIr<Infallible>,
+        derive_out_ty: impl FnOnce(ReducIrTy) -> ReducIrTy,
+        body: impl FnOnce(&mut Self, ReducIrVar) -> ReducIr<Infallible>,
+    ) -> ReducIr<Infallible> {
+        let ty = ir.type_check(self.db.as_ir_db()).unwrap_or_else(|err| {
+            panic!(
+                "{}",
+                err.pretty(self.db.as_ir_db(), &RcAllocator).pretty(80)
+            )
+        });
+        let mon_ty = ty
+            .try_unwrap_monadic(self.db.as_ir_db())
+            .unwrap_or_else(|ty| unreachable!("{}", ty.pretty(self.db, &RcAllocator).pretty(80)));
+        let tmp = ReducIrVar {
+            var: self.var_conv.generate(),
+            ty: mon_ty.a_ty,
+        };
+        let bind = self.bind_item();
+        ReducIr::app(
+            ReducIr::ty_app(
+                bind,
+                [
+                    ReducIrTyApp::Ty(mon_ty.evv_ty),
+                    ReducIrTyApp::Ty(mon_ty.a_ty),
+                    ReducIrTyApp::Ty(derive_out_ty(mon_ty.a_ty)),
+                ],
+            ),
+            [ir, ReducIr::abss([tmp], body(self, tmp))],
+        )
+    }
+
+    /// Translate an IR term containing delimited control primitives into an IR term without those
+    /// primitives that uses a delimited continuation monad to perform the primitives.
+    fn lower_monadic(&mut self, evv_ty: ReducIrTy, ir: &ReducIr<DelimCont>) -> ReducIr<Infallible> {
+        use ReducIrKind::*;
+        let ir_db = self.db.as_ir_db();
+        let evv_var_id = self.evv_var_id;
+        let pure = |ir: ReducIr<Infallible>| {
+            let ty = ir
+                .type_check(ir_db)
+                .expect("ICE: lower_monadic type check error");
+            ReducIr::abss(
+                [ReducIrVar {
+                    var: evv_var_id,
+                    ty: evv_ty,
+                }],
+                ReducIr::new(ReducIrKind::Tag(
+                    ir_db.mk_reducir_ty(ControlTy(evv_ty, ty)),
+                    0,
+                    P::new(ir),
+                )),
+            )
+        };
+        match ir.kind() {
+            Int(i) => pure(ReducIr::new(Int(*i))),
+            Var(v) => ReducIr::var(*v),
+            Abs(vars, body) => {
+                let evv_ty = vars
+                    .iter()
+                    .find(|v| v.var == self.evv_var_id)
+                    .map(|evv_var| evv_var.ty)
+                    .unwrap_or(evv_ty);
+                ReducIr::abss(vars.iter().copied(), self.lower_monadic(evv_ty, body))
+            }
+            App(func, args) => {
+                let ir_db = self.db.as_ir_db();
+                let bind = self.bind_item();
+                let func_mon = self.lower_monadic(evv_ty, func);
+                let mut bind_args = vec![];
+                let mon_args = args
+                    .iter()
+                    .map(|arg| {
+                        let mon_arg = self.lower_monadic(evv_ty, arg);
+                        let mon_arg_ty = mon_arg.type_check(ir_db).unwrap();
+                        match mon_arg_ty.try_unwrap_monadic(ir_db) {
+                            Ok(_) => {
+                                let arg_ty = arg.type_check(ir_db).unwrap();
+                                let arg_var = ReducIrVar {
+                                    var: self.var_conv.generate(),
+                                    ty: arg_ty,
+                                };
+                                bind_args.push((mon_arg, arg_var));
+                                ReducIr::var(arg_var)
+                            }
+                            // We don't need to do anything for a non monadic arg
+                            Err(_) => mon_arg,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let func_ty = func_mon.type_check(ir_db).unwrap();
+                let applied_fun_ty = match func_ty.kind(ir_db) {
+                    FunTy(arg_tys, ret_ty) => {
+                        self.mk_fun_ty(arg_tys.iter().skip(args.len()).copied(), ret_ty)
+                    }
+                    _ => unreachable!(
+                        "Expected function type: {}",
+                        func_ty.pretty(ir_db, &RcAllocator).pretty(80)
+                    ),
+                };
+                let (body, ret_ty) = match applied_fun_ty.try_unwrap_monadic(ir_db) {
+                    Ok(mon) => (ReducIr::app(func_mon, mon_args), mon.a_ty),
+                    Err(_) => {
+                        // If we have no monadic args and our function isn't monadic we're done
+                        if bind_args.is_empty() {
+                            return ReducIr::app(func_mon, mon_args);
+                        }
+                        let y = ReducIrVar {
+                            var: self.var_conv.generate(),
+                            ty: applied_fun_ty,
+                        };
+                        (
+                            ReducIr::local(
+                                y,
+                                ReducIr::app(func_mon, mon_args),
+                                pure(ReducIr::var(y)),
+                            ),
+                            applied_fun_ty,
+                        )
+                    }
+                };
+                bind_args.into_iter().rfold(body, |body, (arg, arg_var)| {
+                    ReducIr::app(
+                        ReducIr::ty_app(
+                            bind.clone(),
+                            [
+                                ReducIrTyApp::Ty(evv_ty),
+                                ReducIrTyApp::Ty(arg_var.ty),
+                                ReducIrTyApp::Ty(ret_ty),
+                            ],
+                        ),
+                        [arg, ReducIr::abss([arg_var], body)],
+                    )
+                })
+            }
+            TyAbs(tyvar, ir) => ReducIr::new(TyAbs(*tyvar, P::new(self.lower_monadic(evv_ty, ir)))),
+            TyApp(ir, ty) => {
+                ReducIr::new(TyApp(P::new(self.lower_monadic(evv_ty, ir)), ty.clone()))
+            }
+            Struct(elems) => {
+                let mut binds = vec![];
+                let mut is_mon = false;
+                let vars = elems
+                    .iter()
+                    .map(|elem| match elem.kind() {
+                        Var(v) => {
+                            if v.ty.try_unwrap_monadic(self.db.as_ir_db()).is_ok() {
+                                is_mon = true;
+                            }
+                            *v
+                        }
+                        _ => {
+                            let v = ReducIrVar {
+                                var: self.var_conv.generate(),
+                                ty: elem.type_check(self.db.as_ir_db()).unwrap(),
+                            };
+                            binds.push((v, elem));
+                            v
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                // If all our elements are variables we just return the pure Struct
+                if binds.is_empty() {
+                    if is_mon {
+                        return pure(ReducIr::new(Struct(
+                            vars.into_iter().map(ReducIr::var).collect(),
+                        )));
+                    } else {
+                        return ReducIr::new(Struct(vars.into_iter().map(ReducIr::var).collect()));
+                    }
+                }
+                let anf = binds.into_iter().fold(
+                    ReducIr::new(Struct(vars.into_iter().map(ReducIr::var).collect())),
+                    |body, (var, defn)| ReducIr::local(var, defn.clone(), body),
+                );
+                self.lower_monadic(evv_ty, &anf)
+            }
+            FieldProj(indx, strukt) => {
+                let strukt = self.lower_monadic(evv_ty, strukt);
+                let ir_db = self.db.as_ir_db();
+                let strukt_ty = strukt.type_check(ir_db).unwrap();
+                match strukt_ty.try_unwrap_monadic(ir_db) {
+                    Ok(_) => self.bind(
+                        strukt,
+                        |ty| match ty.kind(ir_db) {
+                            ProductTy(ref elems) => elems[*indx],
+                            _ => unreachable!(),
+                        },
+                        |_, s| pure(ReducIr::field_proj(*indx, ReducIr::var(s))),
+                    ),
+                    // No bind required
+                    Err(_) => ReducIr::field_proj(*indx, strukt),
+                }
+            }
+            Tag(ty, tag, ir) => {
+                let ir = self.lower_monadic(evv_ty, ir);
+                self.bind(
+                    ir,
+                    |_| *ty,
+                    |_, t| pure(ReducIr::new(Tag(*ty, *tag, P::new(ReducIr::var(t))))),
+                )
+            }
+            Case(ty, disc, branches) => {
+                let disc = self.lower_monadic(evv_ty, disc);
+                self.bind(
+                    disc,
+                    |_| *ty,
+                    |ctx, d| {
+                        ReducIr::case_on_var(
+                            ctx.mk_mon_ty(evv_ty, *ty),
+                            d,
+                            branches.iter().map(|b| ctx.lower_monadic(evv_ty, b)),
+                        )
+                    },
+                )
+            }
+            // TODO: do we need to handle this specially? item should be lowered monadically so it
+            // already returns a monad when we call it here
+            Item(item, ty) => ReducIr::new(Item(*item, *ty)),
+            X(DelimCont::NewPrompt(mark_var, ir)) => {
+                let x = self.lower_monadic(evv_ty, ir);
+                ReducIr::app(
+                    ReducIr::ty_app(
+                        self.fresh_marker_item(),
+                        [
+                            ReducIrTyApp::Ty(mark_var.ty),
+                            ReducIrTyApp::Ty(x.type_check(ir_db).unwrap()),
+                        ],
+                    ),
+                    [ReducIr::abss([*mark_var], x)],
+                )
+            }
+            X(DelimCont::Prompt(marker, upd_evv, body)) => {
+                let ir_db = self.db.as_ir_db();
+                let update_evv_fn_ty = upd_evv.type_check(ir_db).unwrap();
+                // Invariant that this is a function from evv to upd_evv type.
+                let (_, upd_evv_ty) = match update_evv_fn_ty.kind(ir_db) {
+                    FunTy(args, ret) => (args[0], ret),
+                    _ => unreachable!(),
+                };
+                let mon_body = self.lower_monadic(upd_evv_ty, body);
+                let mon_marker = self.lower_monadic(evv_ty, marker);
+                let mon_body_ty = mon_body.type_check(ir_db).unwrap();
+                let UnwrapMonTy {
+                    evv_ty: _,
+                    a_ty: body_ty,
+                } = match mon_body_ty.try_unwrap_monadic(ir_db) {
+                    Ok(upd_mon) => upd_mon,
+                    Err(_) => unreachable!(),
+                };
+                ReducIr::app(
+                    ReducIr::ty_app(
+                        self.prompt_item(),
+                        [
+                            ReducIrTyApp::Ty(evv_ty),
+                            ReducIrTyApp::Ty(upd_evv_ty),
+                            ReducIrTyApp::Ty(body_ty),
+                        ],
+                    ),
+                    [mon_marker, upd_evv.assume_no_ext(), mon_body],
+                )
+            }
+            X(DelimCont::Yield(ty, mark, f)) => {
+                let w = ReducIrVar {
+                    var: self.evv_var_id,
+                    ty: evv_ty,
+                };
+                let x = ReducIrVar {
+                    var: self.evv_var_id,
+                    ty: *ty,
+                };
+                ReducIr::abss(
+                    [w],
+                    ReducIr::new(Tag(
+                        self.mk_reducir_ty(ControlTy(evv_ty, *ty)),
+                        1,
+                        P::new(ReducIr::new(Struct(vec![
+                            self.lower_monadic(evv_ty, mark),
+                            self.lower_monadic(evv_ty, f),
+                            ReducIr::abss([x], ReducIr::var(x)),
+                        ]))),
+                    )),
+                )
+            }
+        }
+    }
 }
 
 type LowerOutput<'a, 'b> = (
@@ -835,8 +1254,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         right.raw_fields(),
                         goal.raw_fields(),
                     );
-                    let doc: RcDoc<()> = left.pretty(&RcAllocator, self.db, &self.db).into_doc();
-                    println!("{}", doc.pretty(80));
                     (
                         ir_row_ev.simple(self.db),
                         left.values(&ty_db)
@@ -921,19 +1338,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         }
     }
 
-    pub(crate) fn lower_top_level(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> ReducIr {
-        let term_infer = self.lookup_term(term);
-        let ir = self.lower_term(ast, term);
-        let evv_var = ReducIrVar {
-            var: self.evv_var_id,
-            ty: match self.ty_ctx.lower_row(term_infer.eff) {
-                ReducIrRow::Open(i) => self.db.mk_reducir_ty(ReducIrTyKind::VarTy(i)),
-                ReducIrRow::Closed(tys) => self.mk_reducir_ty(ProductTy(tys)),
-            },
-        };
-        ReducIr::abss([evv_var], ir)
-    }
-
     fn apply_wrapper(&mut self, wrapper: &Wrapper, ir: ReducIr) -> ReducIr {
         // This needs to be done in the reverse order that we add our Abs and TyAbs when we lower
         let ir = wrapper.tys.iter().rfold(ir, |body, ty| {
@@ -964,7 +1368,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         ir
     }
 
-    fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> ReducIr {
+    pub(crate) fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> ReducIr {
         use Term::*;
         match ast.view(term) {
             Unit => ReducIr::new(Struct(vec![])),
@@ -1170,11 +1574,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 )
             }
             Handle { handler, body } => {
-                let prompt_var = ReducIrVar {
-                    var: self.var_conv.generate(),
-                    // Figure out this type? Dynamically type it maybe
-                    ty: self.mk_reducir_ty(IntTy),
-                };
                 let handler_infer = self.lookup_term(*handler);
 
                 let handler_row = match expect_prod_ty(&self.db, handler_infer.ty) {
@@ -1219,43 +1618,47 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     right: handler_infer.eff,
                     goal: body_infer.eff,
                 }];
-                let updated_evv = ReducIr::app(
-                    ReducIr::new(FieldProj(0, P::new(ReducIr::var(eff_ev)))),
-                    [
-                        ReducIr::var(ReducIrVar {
-                            var: self.evv_var_id,
-                            ty: self
-                                .ty_ctx
-                                .eff_row_into_evv_ty(
-                                    self.current.module(self.db.as_core_db()),
-                                    term_infer.eff,
-                                )
-                                .prod,
-                        }),
-                        ReducIr::new(Struct(vec![ReducIr::var(prompt_var), handler_prj_sig])),
-                    ],
-                );
-                let install_prompt = ReducIr::new(NewPrompt(
+                let return_ = ReducIr::app(handler_prj_ret, [self.lower_term(ast, *body)]);
+                let prompt_var = ReducIrVar {
+                    var: self.var_conv.generate(),
+                    ty: self
+                        .mk_reducir_ty(MarkerTy(return_.type_check(self.db.as_ir_db()).unwrap())),
+                };
+                let update_evv = {
+                    let outer_evv_var = ReducIrVar {
+                        var: self.evv_var_id,
+                        ty: self
+                            .ty_ctx
+                            .eff_row_into_evv_ty(
+                                self.current.module(self.db.as_core_db()),
+                                term_infer.eff,
+                            )
+                            .prod,
+                    };
+                    ReducIr::abss(
+                        [outer_evv_var],
+                        ReducIr::app(
+                            ReducIr::new(FieldProj(0, P::new(ReducIr::var(eff_ev)))),
+                            [
+                                ReducIr::var(outer_evv_var),
+                                ReducIr::new(Struct(vec![
+                                    ReducIr::var(prompt_var),
+                                    handler_prj_sig,
+                                ])),
+                            ],
+                        ),
+                    )
+                };
+                let install_prompt = ReducIr::ext(DelimCont::NewPrompt(
                     prompt_var,
-                    P::new(ReducIr::local(
-                        ReducIrVar {
-                            var: self.evv_var_id,
-                            ty: self
-                                .ty_ctx
-                                .eff_row_into_evv_ty(
-                                    self.current.module(self.db.as_core_db()),
-                                    body_infer.eff,
-                                )
-                                .prod,
-                        },
-                        // Update evv to include the new handler
-                        updated_evv,
+                    P::new(
                         // Install prompt and wrap handler body in handler's return function
                         ReducIr::ext(DelimCont::Prompt(
                             P::new(ReducIr::var(prompt_var)),
-                            P::new(ReducIr::app(handler_prj_ret, [self.lower_term(ast, *body)])),
+                            P::new(update_evv),
+                            P::new(return_),
                         )),
-                    )),
+                    ),
                 ));
 
                 ReducIr::local(handler_var, handler_ir, install_prompt)

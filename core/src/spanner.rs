@@ -3,7 +3,7 @@ use std::{
     hash::{BuildHasher, Hash},
 };
 
-use crate::{graph::Tree, option::IsSomeAnd, span::Span};
+use crate::{graph::Tree, span::Span};
 
 /// A context that associated spans to values of a given type.
 pub trait Spanner<T> {

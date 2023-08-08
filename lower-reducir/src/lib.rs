@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use aiahr_ast::{Ast, AstModule, AstTerm, Term};
 use aiahr_core::{
     id::{EffectName, EffectOpName, Id, TermName, TyVarId, VarId},
@@ -101,6 +103,8 @@ pub struct ReducIrItem {
     pub name: TermName,
     #[return_ref]
     pub item: ReducIr,
+    #[return_ref]
+    pub mon_item: ReducIr<Infallible>,
 }
 
 #[salsa::tracked]
@@ -225,16 +229,22 @@ where
         row_ev_name,
     );
     let ir = lower_ctx.row_evidence_ir::<Sema>(left_row, right_row, goal_row);
+    let mon_ir = ir.assume_no_ext();
 
-    let ir = order_of_tys.into_iter().rfold(ir, |ir, var| {
-        let var = ReducIrVarTy {
-            var: tyvar_conv.convert(var),
-            kind: Kind::Type,
-        };
-        ReducIr::new(TyAbs(var, P::new(ir)))
-    });
+    let (ir, mon_ir) = order_of_tys
+        .into_iter()
+        .rfold((ir, mon_ir), |(ir, mon_ir), var| {
+            let var = ReducIrVarTy {
+                var: tyvar_conv.convert(var),
+                kind: Kind::Type,
+            };
+            (
+                ReducIr::new(TyAbs(var, P::new(ir))),
+                ReducIr::new(TyAbs(var, P::new(mon_ir))),
+            )
+        });
 
-    ReducIrItem::new(db, row_ev_name, ir)
+    ReducIrItem::new(db, row_ev_name, ir, mon_ir)
 }
 
 #[salsa::tracked]
@@ -243,8 +253,8 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
     let name = term.name(ast_db);
     let ast = term.data(ast_db);
     let typed_item = db.type_scheme_of(name);
-    let ir = lower(db, name, typed_item, ast);
-    ReducIrItem::new(db, name, ir)
+    let (ir, mon_ir) = lower(db, name, typed_item, ast);
+    ReducIrItem::new(db, name, ir, mon_ir)
 }
 
 #[salsa::tracked]
@@ -262,7 +272,6 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
             let (ir_ty_scheme, _) =
                 lower_ty_ctx.lower_scheme(effect.module(db.as_core_db()), &scheme);
             let ir_ty_scheme = match ir_ty_scheme.kind(db.as_ir_db()) {
-                //ReducIrTyKind::ForallTy(Kind::Type, ty) => match ty.kind(db.as_ir_db()) {
                 ReducIrTyKind::FunTy(args, ret) => {
                     let (arg, rest) = args.split_at(1);
 
@@ -273,8 +282,6 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
                     db.mk_fun_ty([arg[0], db.mk_fun_ty([ty], varp_ty)], varp_ty)
                 }
                 ty => panic!("{:?}", ty),
-                //},
-                //ty => panic!("{:?}", ty),
             };
             (db.effect_member_name(*op), ir_ty_scheme)
         })
@@ -285,7 +292,7 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
     db.mk_reducir_ty(ReducIrTyKind::ForallTy(
         Kind::Type,
         db.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![
-            db.mk_reducir_ty(ReducIrTyKind::IntTy),
+            db.mk_reducir_ty(ReducIrTyKind::MarkerTy(varp_ty)),
             db.mk_reducir_ty(ReducIrTyKind::ProductTy(
                 members.into_iter().map(|(_, ir_ty)| ir_ty).collect(),
             )),
@@ -354,7 +361,12 @@ where
 
 /// Lower an `Ast` into an `ReducIr`.
 /// TODO: Real documentation.
-fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<VarId>) -> ReducIr {
+fn lower(
+    db: &dyn crate::Db,
+    name: TermName,
+    typed_item: TypedItem,
+    ast: &Ast<VarId>,
+) -> (ReducIr, ReducIr<Infallible>) {
     let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
@@ -367,14 +379,15 @@ fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<Va
     let (mut lower_ctx, ev_solved, ev_params) = LowerCtx::new(db, &mut var_conv, ty_ctx, name)
         .collect_evidence_params(required_evidence.iter());
 
-    let body = lower_ctx.lower_top_level(ast, ast.root());
+    let body = lower_ctx.lower_term(ast, ast.root());
     // TODO: Bit of a hack. Eventually we'd like to generate our solved row ev in a central location.
     // Add row evidence as parameters of the term
     let body = ev_solved
         .into_iter()
         .rfold(body, |body, (arg, term)| ReducIr::local(arg, term, body));
     // Wrap our term in any unsolved row evidence params we need
-    let body = ReducIr::abss(ev_params.into_iter(), body);
+    let evv_var = lower_ctx.evv_var(ast);
+    let body = ReducIr::abss(ev_params.into_iter().chain(std::iter::once(evv_var)), body);
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme
@@ -383,7 +396,7 @@ fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<Va
         .rfold(body, |acc, simple_row_var| {
             ReducIr::new(TyAbs(
                 ReducIrVarTy {
-                    var: tyvar_conv.convert(*simple_row_var),
+                    var: lower_ctx.tyvar_conv().convert(*simple_row_var),
                     kind: Kind::SimpleRow,
                 },
                 P::new(acc),
@@ -395,34 +408,38 @@ fn lower(db: &dyn crate::Db, name: TermName, typed_item: TypedItem, ast: &Ast<Va
         .rfold(body, |acc, scoped_row_var| {
             ReducIr::new(TyAbs(
                 ReducIrVarTy {
-                    var: tyvar_conv.convert(*scoped_row_var),
+                    var: lower_ctx.tyvar_conv().convert(*scoped_row_var),
                     kind: Kind::ScopedRow,
                 },
                 P::new(acc),
             ))
         });
-    scheme.bound_ty.iter().rfold(body, |acc, ty_var| {
+    let ir = scheme.bound_ty.iter().rfold(body, |acc, ty_var| {
         ReducIr::new(TyAbs(
             ReducIrVarTy {
-                var: tyvar_conv.convert(*ty_var),
+                var: lower_ctx.tyvar_conv().convert(*ty_var),
                 kind: Kind::Type,
             },
             P::new(acc),
         ))
-    })
+    });
+    let mon_ir = lower_ctx.lower_monadic_entry(&ir);
+    (ir, mon_ir)
 }
 
 #[cfg(test)]
 mod tests {
 
-    use crate::Db as LowerIrDb;
+    use std::convert::Infallible;
+
+    use crate::{Db as LowerIrDb, ReducIrItem};
 
     use aiahr_core::{
         file::{FileId, SourceFile, SourceFileSet},
         Db,
     };
     use aiahr_parser::Db as ParserDb;
-    use aiahr_reducir::{ty::ReducIrTy, ReducIr, ReducIrTyErr};
+    use aiahr_reducir::{ty::ReducIrTy, PrettyWithDb, ReducIr, ReducIrTyErr, TypeCheck};
     use expect_test::expect;
     use pretty::{BoxAllocator, BoxDoc, Doc, RcAllocator};
 
@@ -443,7 +460,7 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    fn lower_function<'db>(db: &'db TestDatabase, input: &str, fn_name: &str) -> &'db ReducIr {
+    fn lower_function(db: &TestDatabase, input: &str, fn_name: &str) -> ReducIrItem {
         let path = std::path::PathBuf::from("test.aiahr");
         let mut contents = r#"
 effect State {
@@ -462,7 +479,7 @@ effect Reader {
         SourceFileSet::new(db, vec![file]);
 
         match db.lower_item_for_file_name(path, db.ident_str(fn_name)) {
-            Some(term) => term.item(db),
+            Some(term) => term,
             None => {
                 dbg!(db.all_parse_errors());
                 panic!("Errors occurred")
@@ -473,13 +490,17 @@ effect Reader {
     /// Lower a snippet and return the produced IR
     fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
         let main = format!("f = {}", input);
-        lower_function(db, &main, "f")
+        lower_function(db, &main, "f").item(db)
+    }
+    fn lower_mon_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr<Infallible> {
+        let main = format!("f = {}", input);
+        lower_function(db, &main, "f").mon_item(db)
     }
 
     trait PrettyTyErr {
         fn to_pretty(self, db: &TestDatabase) -> String;
     }
-    impl PrettyTyErr for Result<ReducIrTy, ReducIrTyErr> {
+    impl<'a, Ext: PrettyWithDb + Clone> PrettyTyErr for Result<ReducIrTy, ReducIrTyErr<'a, Ext>> {
         fn to_pretty(self, db: &TestDatabase) -> String {
             match self {
                 Ok(ty) => ty.pretty(db, &RcAllocator).pretty(80).to_string(),
@@ -498,7 +519,7 @@ effect Reader {
         let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V0, V1] V1))"];
         expect.assert_eq(&pretty_ir);
 
-        let expect_ty = expect!["forall Type . forall ScopedRow . T0 -> T1 -> T1"];
+        let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> T1"];
         let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
         expect_ty.assert_eq(&pretty_ir_ty);
     }
@@ -511,11 +532,11 @@ effect Reader {
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            (forall [(T1: Type) (T0: ScopedRow)] (let (V1 ((_row_simple_x_y @ T1) @ T1))
-                (fun [V0, V2] (V1[0] V2 V2))))"#]];
+            (forall [(T1: Type) (T0: ScopedRow)] (fun [V0]
+                (let (V1 ((_row_simple_x_y @ T1) @ T1)) (fun [V2] (V1[0] V2 V2)))))"#]];
         expect.assert_eq(&pretty_ir);
 
-        let expect_ty = expect!["forall Type . forall ScopedRow . T0 -> T1 -> {T1, T1}"];
+        let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> {T1, T1}"];
         let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
         expect_ty.assert_eq(&pretty_ir_ty);
     }
@@ -548,7 +569,7 @@ effect Reader {
                              , forall Type . (<2> -> T0) -> (T6 -> T0) -> <3> -> T0
                              , {{2} -> {1}, <1> -> <2>}
                              , {{2} -> T5, T5 -> <2>}
-                             } -> T0 -> {4} -> {3} -> T5"#]];
+                             } -> {0} -> {4} -> {3} -> T5"#]];
         let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
         expect_ty.assert_eq(&pretty_ir_ty);
     }
@@ -570,8 +591,8 @@ effect Reader {
             Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
 
         let expect = expect![[r#"
-            (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1]
-                (let
+            (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
+                ((let
                   [ (V2 ((_row_simple_state_value @ {}) @ {}))
                   , (V3 (((_row_simple_return_putget @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
                   {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> {} ->
@@ -583,50 +604,45 @@ effect Reader {
                                                                                       , {}
                                                                                       }) @ {}
                   -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}))
+                  , (V6 (V4[0]
+                    (V5[0] (fun [V7, V8, V9] (V8 V9 V9)) (fun [V10, V11, V12] (V11 {} V10)))
+                    (fun [V13, V14] (V2[0] V14 V13))))
                   ]
-                  (fun [V0]
-                    ((let
-                      (V7 (V4[0]
-                        (V5[0]
-                          (fun [V8, V9, V10] (V9 V10 V10))
-                          (fun [V11, V12, V13] (V12 {} V11)))
-                        (fun [V14, V15] (V2[0] V15 V14))))
-                      (new_prompt [V6] (let (V0 (V1[0] V0 {V6, (V4[2][0] V7)}))
-                        (prompt V6 (V4[3][0]
-                            V7
-                            (let (V16 {})
-                              (let (V17 (V1[3][0] V0))
-                                (yield V17[0] (fun [V18] (V17[1][1] V16 V18))))))))))
-                      {})))))"#]];
+                  (new_prompt [V18] (prompt V18 (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
+                    (V4[3][0]
+                      V6
+                      (let (V15 {})
+                        (let (V16 (V1[3][0] V0))
+                          (yield V16[0] (fun [V17] (V16[1][1] V15 V17))))))))) {})))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
             forall ScopedRow .
               forall ScopedRow .
-                { {1} -> { Int
+                { {1} -> { (Marker {} -> {{}, {}})
                          , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                            , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                            }
                          } -> {0}
                 , forall Type .
-                  (<2> -> T0) -> ({ Int
+                  (<2> -> T0) -> ({ (Marker {} -> {{}, {}})
                                   , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                                     , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                                     }
                                   } -> T0) -> <1> -> T0
                 , {{0} -> {1}, <1> -> <0>}
-                , { {0} -> { Int
+                , { {0} -> { (Marker {} -> {{}, {}})
                            , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                              , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                              }
                            }
-                  , { Int
+                  , { (Marker {} -> {{}, {}})
                     , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                       , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
                       }
                     } -> <0>
                   }
-                } -> T1 -> {{}, {}}"#]];
+                } -> {1} -> {{}, {}}"#]];
         let pretty_ir_ty = {
             let this = ir.type_check(&db);
             let db = &db;
@@ -639,5 +655,58 @@ effect Reader {
             }
         };
         expect_ty.assert_eq(&pretty_ir_ty);
+    }
+
+    #[test]
+    fn monadic_lower_state_get() {
+        let db = TestDatabase::default();
+
+        let ir = lower_mon_snippet(
+            &db,
+            r#"
+(with {
+    get = |x| |k| |s| k(s)(s),
+    put = |x| |k| |s| k({})(x),
+    return = |x| |s| {state = s, value = x},
+} do State.get({}))({})"#,
+        );
+
+        let pretty_ir =
+            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+
+        let expect = expect![[r#"
+            (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
+                ((let
+                  [ (V2 ((_row_simple_state_value @ {}) @ {}))
+                  , (V3 (((_row_simple_return_putget @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
+                  {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> {} ->
+                  {{}, {}}))
+                  , (V4 (((_row_simple_putget_return @ {} -> {} -> {{}, {}}) @ {} -> ({} ->
+                  {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
+                  {{}, {}}))
+                  , (V5 ((_row_simple_get_put @ {} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
+                                                                                      , {}
+                                                                                      }) @ {}
+                  -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}))
+                  , (V6 (V4[0]
+                    (V5[0] (fun [V7, V8, V9] (V8 V9 V9)) (fun [V10, V11, V12] (V11 {} V10)))
+                    (fun [V13, V14] (V2[0] V14 V13))))
+                  ]
+                  (((_mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} -> { {}
+                                                                                        , {}
+                                                                                        }))
+                    (fun [V18]
+                      ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
+                        V18
+                        (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
+                        ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}})
+                          (let (V15 {})
+                            (let (V16 (V1[3][0] V0))
+                              (fun [V0]
+                                <1: {V16[0], (fun [V17] (V16[1][1] V15 V17)), (fun [V0] V0)
+                                  }>)))
+                          (fun [V19] (let (V20 (V4[3][0] V6 V19)) (fun [V0] <0: V20>))))))))
+                  {})))"#]];
+        expect.assert_eq(&pretty_ir);
     }
 }

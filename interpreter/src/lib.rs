@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use aiahr_core::id::ReducIrVarId;
-use aiahr_reducir::{DelimCont, ReducIr, ReducIrKind, ReducIrVar, P};
+use aiahr_reducir::{DelimCont, PrettyWithDb, ReducIr, ReducIrKind, ReducIrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -418,15 +418,16 @@ impl Machine {
                 InterpretResult::Step(discr)
             }
             // Delimited continuations
-            ReducIrKind::NewPrompt(arg, body) => {
+            ReducIrKind::X(DelimCont::NewPrompt(arg, body)) => {
                 let prompt = Prompt(self.prompt);
                 self.prompt += 1;
                 self.cur_env.insert(arg.var, Value::Prompt(prompt));
                 InterpretResult::Step(body)
             }
-            ReducIrKind::X(DelimCont::Prompt(marker, body)) => {
-                self.cur_frame.push(EvalCtx::PromptMarker { body });
-                InterpretResult::Step(marker)
+            ReducIrKind::X(DelimCont::Prompt(_marker, _upd_handle, _body)) => {
+                todo!("Fix this for real");
+                self.cur_frame.push(EvalCtx::PromptMarker { body: _body });
+                InterpretResult::Step(_marker)
             }
             ReducIrKind::X(DelimCont::Yield(_, marker, value)) => {
                 self.cur_frame.push(EvalCtx::YieldMarker { value });

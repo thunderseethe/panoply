@@ -5,6 +5,7 @@ use aiahr_core::Db as CoreDb;
 use aiahr_interpreter::Machine;
 use aiahr_lower_reducir::Db as LowerReducIrDb;
 use aiahr_parser::Db;
+use aiahr_reducir::PrettyWithDb;
 use clap::Parser;
 use pretty::BoxDoc;
 

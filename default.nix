@@ -1,6 +1,5 @@
 { pkgs ? import <nixpkgs> {} }:
 pkgs.mkShell {
-  #nativeBuildInputs = with pkgs; [ rustc cargo gcc ];
   buildInputs = with pkgs; [ 
     cargo
     cargo-expand
@@ -11,5 +10,4 @@ pkgs.mkShell {
     rustc
     clippy
   ];
-  RUST_BACKTRACE = 1;
 } 
