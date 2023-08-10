@@ -456,10 +456,9 @@ impl<'ctx, A: 'ctx + Clone + TypeAlloc> TypeFoldable<'ctx> for Wrapper<A> {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::id::TyVarId;
-
-    use crate::PrettyType;
     use crate::{row::Row, MkTy, TypeKind::*};
+    use aiahr_core::id::TyVarId;
+    use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
 
     #[derive(Default)]
     #[salsa::db(crate::Jar, aiahr_core::Jar)]
@@ -482,22 +481,13 @@ mod tests {
             db.mk_ty(ProdTy(Row::Closed(row))),
             db.mk_ty(VarTy(TyVarId(0))),
         ));
-        let arena: pretty::Arena<'_, ()> = pretty::Arena::new();
-        let mut out = String::new();
-        ty.pretty(&arena, &db, &&db)
-            .into_doc()
-            .render_fmt(32, &mut out)
-            .unwrap();
+        let out = ty.pretty_with(&(&db, &db)).pprint().pretty(32).to_string();
         assert_eq!(
             out,
             r#"{ x |> Int, y |> Int, z |> Int }
   -> ty_var<0>"#
         );
-        let mut out = String::new();
-        ty.pretty(&arena, &db, &&db)
-            .into_doc()
-            .render_fmt(10, &mut out)
-            .unwrap();
+        let out = ty.pretty_with(&(&db, &db)).pprint().pretty(10).to_string();
         assert_eq!(
             out,
             r#"{ x |> Int

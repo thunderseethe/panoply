@@ -10,6 +10,7 @@ use aiahr_core::{
     id::{EffectName, EffectOpName, TermName, VarId},
     ident::Ident,
     modules::Module,
+    pretty::{PrettyPrint, PrettyWithCtx},
 };
 use bumpalo::Bump;
 use ena::unify::{InPlaceUnificationTable, UnifyKey};
@@ -265,14 +266,17 @@ fn print_root_unifiers<'ctx, K: UnifierKind>(
     db: &dyn crate::Db,
     uni: &mut InPlaceUnificationTable<TcUnifierVar<'ctx, K>>,
 ) where
-    K::UnifyValue<'ctx>: for<'db> PrettyType<dyn crate::Db + 'db, InArena<'ctx>, ()>,
+    K::UnifyValue<'ctx>: for<'db> PrettyWithCtx<(&'db (dyn crate::Db + 'db), ())>,
 {
     println!("UnificationTable<{}> [", type_name::<K>());
     for uv in (0..uni.len()).map(|i| TcUnifierVar::from_index(i as u32)) {
         match uni.probe_value(uv) {
             Some(candidate) => {
-                let doc: pretty::RcDoc = candidate.pretty(&RcAllocator, db, &()).into_doc();
-                println!("\t{} => {}", uv.index(), doc.pretty(80));
+                println!(
+                    "\t{} => {}",
+                    uv.index(),
+                    candidate.pretty_with(&(db, ())).pprint().pretty(80)
+                );
             }
             None => {
                 let doc: pretty::RcDoc =

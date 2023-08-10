@@ -11,16 +11,31 @@ pub mod loc;
 pub mod memory;
 pub mod modules;
 pub mod option;
+pub mod pretty;
 pub mod span;
 pub mod spanner;
 
 pub mod ident {
+    use pretty::DocAllocator;
+
+    use crate::pretty::PrettyWithCtx;
+
     /// An interned identifier.
     #[salsa::interned]
     #[derive(PartialEq)]
     pub struct Ident {
         #[return_ref]
         pub text: String,
+    }
+
+    impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Ident {
+        fn pretty<'a>(
+            &self,
+            db: &DB,
+            alloc: &'a pretty::RcAllocator,
+        ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+            alloc.text(self.text(db.as_core_db()).to_string())
+        }
     }
 }
 

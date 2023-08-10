@@ -436,12 +436,13 @@ mod tests {
 
     use aiahr_core::{
         file::{FileId, SourceFile, SourceFileSet},
+        pretty::{PrettyPrint, PrettyWithCtx},
         Db,
     };
     use aiahr_parser::Db as ParserDb;
-    use aiahr_reducir::{ty::ReducIrTy, PrettyWithDb, ReducIr, ReducIrTyErr, TypeCheck};
+    use aiahr_reducir::{ty::ReducIrTy, ReducIr, ReducIrTyErr, TypeCheck};
     use expect_test::expect;
-    use pretty::{BoxAllocator, BoxDoc, Doc, RcAllocator};
+    use pretty::RcAllocator;
 
     #[derive(Default)]
     #[salsa::db(
@@ -500,7 +501,9 @@ effect Reader {
     trait PrettyTyErr {
         fn to_pretty(self, db: &TestDatabase) -> String;
     }
-    impl<'a, Ext: PrettyWithDb + Clone> PrettyTyErr for Result<ReducIrTy, ReducIrTyErr<'a, Ext>> {
+    impl<'a, Ext: PrettyWithCtx<TestDatabase> + Clone> PrettyTyErr
+        for Result<ReducIrTy, ReducIrTyErr<'a, Ext>>
+    {
         fn to_pretty(self, db: &TestDatabase) -> String {
             match self {
                 Ok(ty) => ty.pretty(db, &RcAllocator).pretty(80).to_string(),
@@ -513,8 +516,7 @@ effect Reader {
     fn lower_id() {
         let db = TestDatabase::default();
         let ir = lower_snippet(&db, "|x| x");
-        let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+        let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
         let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V0, V1] V1))"];
         expect.assert_eq(&pretty_ir);
@@ -528,8 +530,7 @@ effect Reader {
     fn lower_product_literal() {
         let db = TestDatabase::default();
         let ir = lower_snippet(&db, "|a| { x = a, y = a }");
-        let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+        let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
         let expect = expect![[r#"
             (forall [(T1: Type) (T0: ScopedRow)] (fun [V0]
@@ -545,8 +546,7 @@ effect Reader {
     fn lower_wand() {
         let db = TestDatabase::default();
         let ir = lower_snippet(&db, "|m| |n| (m ,, n).x");
-        let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+        let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
         let expect = expect![[r#"
             (forall
@@ -587,8 +587,7 @@ effect Reader {
     return = |x| |s| {state = s, value = x},
 } do State.get({}))({})"#,
         );
-        let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+        let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
@@ -671,8 +670,7 @@ effect Reader {
 } do State.get({}))({})"#,
         );
 
-        let pretty_ir =
-            Doc::<BoxDoc<'_>>::pretty(&ir.pretty(&db, &BoxAllocator).into_doc(), 80).to_string();
+        let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]

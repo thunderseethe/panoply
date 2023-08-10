@@ -8,7 +8,7 @@ use std::{
 
 use pretty::{DocAllocator, Pretty};
 
-use crate::{ident::Ident, modules::Module};
+use crate::{ident::Ident, modules::Module, pretty::PrettyWithCtx};
 
 /// An ID type that wraps a `usize`. Used to assign unique IDs to objects based on their index in an
 /// array.
@@ -330,6 +330,18 @@ where
     D: DocAllocator<'a, A>,
 {
     fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, A> {
+        alloc
+            .text("ty_var")
+            .append(alloc.as_string(self.0).angles())
+    }
+}
+
+impl<Ctx> PrettyWithCtx<Ctx> for TyVarId {
+    fn pretty<'a>(
+        &self,
+        _: &Ctx,
+        alloc: &'a pretty::RcAllocator,
+    ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
         alloc
             .text("ty_var")
             .append(alloc.as_string(self.0).angles())

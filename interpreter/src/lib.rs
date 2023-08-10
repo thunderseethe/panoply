@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use aiahr_core::id::ReducIrVarId;
-use aiahr_reducir::{DelimCont, PrettyWithDb, ReducIr, ReducIrKind, ReducIrVar, P};
+use aiahr_core::pretty::PrettyWithCtx;
+use aiahr_reducir::{DelimCont, ReducIr, ReducIrKind, ReducIrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -33,7 +34,7 @@ pub enum Value {
     Vector(im::Vector<Value>),
 }
 
-use pretty::{docs, DocAllocator, DocBuilder, Pretty};
+use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 
 fn pretty_env<'a, D, A: 'a>(
     env: &FxHashMap<ReducIrVarId, Value>,
@@ -54,14 +55,8 @@ where
     .brackets()
 }
 
-impl Value {
-    pub fn pretty<'a, D, DB>(&self, db: &DB, a: &'a D) -> pretty::DocBuilder<'a, D>
-    where
-        D: DocAllocator<'a> + 'a,
-        DocBuilder<'a, D>: Clone,
-        DB: ?Sized + aiahr_reducir::Db,
-        D::Doc: pretty::Pretty<'a, D> + Clone,
-    {
+impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Value {
+    fn pretty<'a>(&self, db: &DB, a: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
         match self {
             Value::Int(i) => a.as_string(i),
             Value::Lam { env, args, body } => docs![
@@ -425,9 +420,9 @@ impl Machine {
                 InterpretResult::Step(body)
             }
             ReducIrKind::X(DelimCont::Prompt(_marker, _upd_handle, _body)) => {
-                todo!("Fix this for real");
-                self.cur_frame.push(EvalCtx::PromptMarker { body: _body });
-                InterpretResult::Step(_marker)
+                todo!("Apply upd_handle to body to update evv");
+                //self.cur_frame.push(EvalCtx::PromptMarker { body: _body });
+                //InterpretResult::Step(_marker)
             }
             ReducIrKind::X(DelimCont::Yield(_, marker, value)) => {
                 self.cur_frame.push(EvalCtx::YieldMarker { value });

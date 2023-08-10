@@ -4,15 +4,16 @@ use aiahr_core::{
     diagnostic::{tc::TypeCheckDiagnostic, Citation},
     id::VarId,
     ident::Ident,
+    pretty::{PrettyPrint, PrettyWithCtx},
     span::Span,
 };
 use aiahr_ty::{
     infer::{InArena, InferTy, ScopedInferRow, SimpleInferRow, UnifierToTcVarError},
     row::{Row, RowLabel, ScopedClosedRow, SimpleClosedRow},
-    PrettyType, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
+    ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
 };
 
-use pretty::{docs, DocAllocator};
+use pretty::{docs, DocAllocator, RcAllocator};
 
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]
@@ -97,7 +98,7 @@ pub(crate) fn into_diag(
     err: TypeCheckError<'_>,
     span: Span,
 ) -> TypeCheckDiagnostic {
-    let d: pretty::Arena<'_, ()> = pretty::Arena::new();
+    let d = &RcAllocator;
     // TODO: We should probably store the doc in diagnostic directly so we can lay it out at print
     // time when we have more info
     let width = 80;
@@ -108,12 +109,12 @@ pub(crate) fn into_diag(
                 .append(d.softline())
                 .append(
                     docs![
-                        &d,
-                        left.pretty(&d, db.as_ty_db(), &()),
+                        d,
+                        left.pretty_with(&(db.as_ty_db(), ())).pprint(),
                         d.softline(),
                         "!=",
                         d.softline(),
-                        right.pretty(&d, db.as_ty_db(), &())
+                        right.pretty_with(&(db.as_ty_db(), ())).pprint()
                     ]
                     .nest(2),
                 )
@@ -130,9 +131,9 @@ pub(crate) fn into_diag(
                 .intersperse(
                     [
                         d.text("cycle detected for type variable"),
-                        pretty::Pretty::pretty(var, &d),
+                        pretty::Pretty::pretty(var, d),
                         d.text("with inferred type"),
-                        ty.pretty(&d, db.as_ty_db(), &()),
+                        ty.pretty_with(&(db.as_ty_db(), ())).pprint(),
                     ],
                     d.space(),
                 )
@@ -149,9 +150,9 @@ pub(crate) fn into_diag(
                 .intersperse(
                     [
                         d.text("cycle detected for row variable"),
-                        pretty::Pretty::pretty(var, &d),
+                        pretty::Pretty::pretty(var, d),
                         d.text("with inferred row"),
-                        row.pretty(&d, db.as_ty_db(), &()),
+                        row.pretty_with(&(db.as_ty_db(), ())).pprint(),
                     ],
                     d.space(),
                 )
@@ -168,9 +169,9 @@ pub(crate) fn into_diag(
                 .intersperse(
                     [
                         d.text("cycle detected for row variable"),
-                        pretty::Pretty::pretty(var, &d),
+                        pretty::Pretty::pretty(var, d),
                         d.text("with inferred row"),
-                        row.pretty(&d, db.as_ty_db(), &()),
+                        row.pretty_with(&(db.as_ty_db(), ())).pprint(),
                     ],
                     d.space(),
                 )
@@ -186,12 +187,12 @@ pub(crate) fn into_diag(
             let doc = d
                 .text("rows overlap on label:")
                 .append(d.space())
-                .append(d.text(lbl.text(db.as_core_db())))
+                .append(lbl.pretty_with(db).pprint())
                 .append(
                     d.hardline()
-                        .append(left.pretty(&d, db.as_ty_db(), &()))
+                        .append(left.pretty_with(&(db.as_ty_db(), ())).pprint())
                         .append(d.hardline())
-                        .append(right.pretty(&d, db.as_ty_db(), &()))
+                        .append(right.pretty_with(&(db.as_ty_db(), ())).pprint())
                         .nest(2),
                 );
             let mut message = String::new();
@@ -206,9 +207,10 @@ pub(crate) fn into_diag(
                 .text("expected data rows to be equal")
                 .append(d.hardline())
                 .append(
-                    left.pretty(&d, db.as_ty_db(), &())
+                    left.pretty_with(&(db.as_ty_db(), ()))
+                        .pprint()
                         .append(d.hardline())
-                        .append(right.pretty(&d, db.as_ty_db(), &()))
+                        .append(right.pretty_with(&(db.as_ty_db(), ())).pprint())
                         .nest(2),
                 )
                 .pretty(width)
@@ -223,9 +225,10 @@ pub(crate) fn into_diag(
                 .text("expected effect rows to be equal")
                 .append(d.hardline())
                 .append(
-                    left.pretty(&d, db.as_ty_db(), &())
+                    left.pretty_with(&(db.as_ty_db(), ()))
+                        .pprint()
                         .append(d.hardline())
-                        .append(right.pretty(&d, db.as_ty_db(), &()))
+                        .append(right.pretty_with(&(db.as_ty_db(), ())).pprint())
                         .nest(2),
                 )
                 .pretty(width)
@@ -239,7 +242,7 @@ pub(crate) fn into_diag(
             let doc = d
                 .text("could not find an effect signature matching handler:")
                 .append(d.softline())
-                .append(signature.pretty(&d, db.as_ty_db(), &()));
+                .append(signature.pretty_with(&(db.as_ty_db(), ())).pprint());
             let mut message = String::new();
             doc.render_fmt(width, &mut message).unwrap();
             TypeCheckDiagnostic {

@@ -87,27 +87,6 @@ where
         DebugWithDb::fmt(&self.0, f, db, include_all_fields)
     }
 }
-impl<A, Db, Ann> PrettyType<Db, A, Ann> for SimpleClosedRow<A>
-where
-    A: TypeAlloc,
-    Db: ?Sized + crate::Db,
-{
-    fn pretty<'a, 'b, D>(
-        &self,
-        allocator: &'a D,
-        db: &Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> pretty::DocBuilder<'a, D, Ann>
-    where
-        D: ?Sized + DocAllocator<'a, Ann>,
-        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
-        A: 'b,
-        Ann: 'a,
-    {
-        PrettyType::pretty(&self.0, allocator, db, acc)
-    }
-}
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for SimpleClosedRow<A> {
     type Alloc = A;
     type Out<B: TypeAlloc> = SimpleClosedRow<B>;

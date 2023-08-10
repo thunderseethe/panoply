@@ -1,5 +1,4 @@
 use aiahr_core::id::TyVarId;
-use pretty::{docs, DocAllocator};
 use salsa::DebugWithDb;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -34,20 +33,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
 
-pub trait PrettyType<Db: ?Sized, A: TypeAlloc, Ann = ()> {
-    fn pretty<'a, 'b, D>(
-        &self,
-        allocator: &'a D,
-        db: &Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> pretty::DocBuilder<'a, D, Ann>
-    where
-        D: ?Sized + DocAllocator<'a, Ann>,
-        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
-        A: 'b,
-        Ann: 'a;
-}
+mod pretty;
 
 /// A monomorphic type.
 ///
@@ -295,68 +281,6 @@ where
         fold: &mut F,
     ) -> Result<Self::Out<F::Out>, F::Error> {
         fold.access().kind(&self).try_default_fold(fold)
-    }
-}
-
-impl<A, Ann, Db> PrettyType<Db, A, Ann> for Ty<A>
-where
-    A: TypeAlloc,
-    Db: ?Sized + crate::Db,
-{
-    fn pretty<'a, 'b, D>(
-        &self,
-        allocator: &'a D,
-        db: &Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> pretty::DocBuilder<'a, D, Ann>
-    where
-        D: ?Sized + DocAllocator<'a, Ann>,
-        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
-        A: 'b,
-        Ann: 'a,
-    {
-        acc.kind(self).pretty(allocator, db, acc)
-    }
-}
-
-impl<A, Db, Ann> PrettyType<Db, A, Ann> for TypeKind<A>
-where
-    A: TypeAlloc,
-    Db: ?Sized + crate::Db,
-{
-    fn pretty<'a, 'b, D>(
-        &self,
-        a: &'a D,
-        db: &Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> pretty::DocBuilder<'a, D, Ann>
-    where
-        D: ?Sized + DocAllocator<'a, Ann>,
-        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
-        A: 'b,
-        Ann: 'a,
-    {
-        match self {
-            TypeKind::ErrorTy => a.as_string("Error"),
-            TypeKind::IntTy => a.as_string("Int"),
-            TypeKind::VarTy(tv) => pretty::Pretty::pretty(tv.clone(), a),
-            TypeKind::RowTy(simple_row) => simple_row.pretty(a, db, acc).nest(2).parens().group(),
-            TypeKind::FunTy(arg, ret) => arg
-                .pretty(a, db, acc)
-                .append(docs![a, a.softline(), "->", a.softline(), ret.pretty(a, db, acc)].nest(2)),
-            TypeKind::ProdTy(row) => row
-                .pretty(a, db, acc)
-                .enclose(a.softline(), a.softline())
-                .braces()
-                .group(),
-            TypeKind::SumTy(row) => row
-                .pretty(a, db, acc)
-                .enclose(a.softline(), a.softline())
-                .angles()
-                .group(),
-        }
     }
 }
 

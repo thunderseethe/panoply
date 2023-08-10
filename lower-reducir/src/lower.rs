@@ -4,6 +4,7 @@ use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::{
     id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
     modules::Module,
+    pretty::{PrettyErrorWithDb, PrettyWithCtx},
 };
 use aiahr_reducir::{
     ty::{
@@ -919,15 +920,12 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
         derive_out_ty: impl FnOnce(ReducIrTy) -> ReducIrTy,
         body: impl FnOnce(&mut Self, ReducIrVar) -> ReducIr<Infallible>,
     ) -> ReducIr<Infallible> {
-        let ty = ir.type_check(self.db.as_ir_db()).unwrap_or_else(|err| {
-            panic!(
-                "{}",
-                err.pretty(self.db.as_ir_db(), &RcAllocator).pretty(80)
-            )
-        });
+        let ir_db = self.db.as_ir_db();
+        let ty = ir.type_check(ir_db).map_err_pretty_with(ir_db).unwrap();
         let mon_ty = ty
-            .try_unwrap_monadic(self.db.as_ir_db())
-            .unwrap_or_else(|ty| unreachable!("{}", ty.pretty(self.db, &RcAllocator).pretty(80)));
+            .try_unwrap_monadic(ir_db)
+            .map_err_pretty_with(ir_db)
+            .unwrap();
         let tmp = ReducIrVar {
             var: self.var_conv.generate(),
             ty: mon_ty.a_ty,
@@ -988,10 +986,14 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                     .iter()
                     .map(|arg| {
                         let mon_arg = self.lower_monadic(evv_ty, arg);
-                        let mon_arg_ty = mon_arg.type_check(ir_db).unwrap();
+                        let mon_arg_ty = mon_arg
+                            .type_check(ir_db)
+                            .map_err_pretty_with(ir_db)
+                            .unwrap();
                         match mon_arg_ty.try_unwrap_monadic(ir_db) {
                             Ok(_) => {
-                                let arg_ty = arg.type_check(ir_db).unwrap();
+                                let arg_ty =
+                                    arg.type_check(ir_db).map_err_pretty_with(ir_db).unwrap();
                                 let arg_var = ReducIrVar {
                                     var: self.var_conv.generate(),
                                     ty: arg_ty,
@@ -1004,7 +1006,10 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         }
                     })
                     .collect::<Vec<_>>();
-                let func_ty = func_mon.type_check(ir_db).unwrap();
+                let func_ty = func_mon
+                    .type_check(ir_db)
+                    .map_err_pretty_with(ir_db)
+                    .unwrap();
                 let applied_fun_ty = match func_ty.kind(ir_db) {
                     FunTy(arg_tys, ret_ty) => {
                         self.mk_fun_ty(arg_tys.iter().skip(args.len()).copied(), ret_ty)
@@ -1060,7 +1065,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                     .iter()
                     .map(|elem| match elem.kind() {
                         Var(v) => {
-                            if v.ty.try_unwrap_monadic(self.db.as_ir_db()).is_ok() {
+                            if v.ty.try_unwrap_monadic(ir_db).is_ok() {
                                 is_mon = true;
                             }
                             *v
@@ -1068,7 +1073,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         _ => {
                             let v = ReducIrVar {
                                 var: self.var_conv.generate(),
-                                ty: elem.type_check(self.db.as_ir_db()).unwrap(),
+                                ty: elem.type_check(ir_db).map_err_pretty_with(ir_db).unwrap(),
                             };
                             binds.push((v, elem));
                             v
@@ -1094,7 +1099,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             FieldProj(indx, strukt) => {
                 let strukt = self.lower_monadic(evv_ty, strukt);
                 let ir_db = self.db.as_ir_db();
-                let strukt_ty = strukt.type_check(ir_db).unwrap();
+                let strukt_ty = strukt.type_check(ir_db).map_err_pretty_with(ir_db).unwrap();
                 match strukt_ty.try_unwrap_monadic(ir_db) {
                     Ok(_) => self.bind(
                         strukt,
@@ -1140,7 +1145,9 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         self.fresh_marker_item(),
                         [
                             ReducIrTyApp::Ty(mark_var.ty),
-                            ReducIrTyApp::Ty(x.type_check(ir_db).unwrap()),
+                            ReducIrTyApp::Ty(
+                                x.type_check(ir_db).map_err_pretty_with(ir_db).unwrap(),
+                            ),
                         ],
                     ),
                     [ReducIr::abss([*mark_var], x)],
@@ -1148,7 +1155,10 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             }
             X(DelimCont::Prompt(marker, upd_evv, body)) => {
                 let ir_db = self.db.as_ir_db();
-                let update_evv_fn_ty = upd_evv.type_check(ir_db).unwrap();
+                let update_evv_fn_ty = upd_evv
+                    .type_check(ir_db)
+                    .map_err_pretty_with(ir_db)
+                    .unwrap();
                 // Invariant that this is a function from evv to upd_evv type.
                 let (_, upd_evv_ty) = match update_evv_fn_ty.kind(ir_db) {
                     FunTy(args, ret) => (args[0], ret),
@@ -1156,7 +1166,10 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 };
                 let mon_body = self.lower_monadic(upd_evv_ty, body);
                 let mon_marker = self.lower_monadic(evv_ty, marker);
-                let mon_body_ty = mon_body.type_check(ir_db).unwrap();
+                let mon_body_ty = mon_body
+                    .type_check(ir_db)
+                    .map_err_pretty_with(ir_db)
+                    .unwrap();
                 let UnwrapMonTy {
                     evv_ty: _,
                     a_ty: body_ty,

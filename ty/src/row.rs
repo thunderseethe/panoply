@@ -1,5 +1,4 @@
 use aiahr_core::ident::Ident;
-use pretty::{docs, DocAllocator};
 use salsa::DebugWithDb;
 
 use std::cmp::Ordering;
@@ -10,9 +9,9 @@ use std::iter::Peekable;
 use std::ops::ControlFlow;
 use std::slice::Iter;
 
-use crate::PrettyType;
-
 use super::{alloc::MkTy, AccessTy, FallibleTypeFold, InDb, Ty, TypeAlloc, TypeFoldable};
+
+mod pretty;
 
 /// A label of a row field
 pub type RowLabel = Ident;
@@ -119,32 +118,6 @@ where
                 .debug_tuple("Closed")
                 .field(&row.debug_with(db, include_all_fields))
                 .finish(),
-        }
-    }
-}
-
-impl<Db, A: TypeAlloc, Sema: RowSema, Ann> PrettyType<Db, A, Ann> for Row<Sema, A>
-where
-    Db: ?Sized + crate::Db,
-    Sema::Open<A>: Debug,
-    Sema::Closed<A>: PrettyType<Db, A, Ann>,
-{
-    fn pretty<'a, 'b, D>(
-        &self,
-        allocator: &'a D,
-        db: &Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> pretty::DocBuilder<'a, D, Ann>
-    where
-        D: ?Sized + DocAllocator<'a, Ann>,
-        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
-        A: 'b,
-        Ann: 'a,
-    {
-        match self {
-            Row::Open(tv) => allocator.text(format!("{:?}", tv)),
-            Row::Closed(row) => row.pretty(allocator, db, acc),
         }
     }
 }

@@ -1,13 +1,10 @@
-use std::ops::Deref;
-
 use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase, Args};
+use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
 use aiahr_core::Db as CoreDb;
 use aiahr_interpreter::Machine;
 use aiahr_lower_reducir::Db as LowerReducIrDb;
 use aiahr_parser::Db;
-use aiahr_reducir::PrettyWithDb;
 use clap::Parser;
-use pretty::BoxDoc;
 
 fn main() -> eyre::Result<()> {
     let args = Args::parse();
@@ -30,16 +27,14 @@ fn main() -> eyre::Result<()> {
         }
     };
 
-    let doc: BoxDoc<'_, ()> = ir.item(&db).pretty(&db, &pretty::BoxAllocator).into_doc();
-    println!("{}", doc.deref().pretty(80));
+    println!("{}", ir.item(&db).pretty_with(&db).pprint().pretty(80));
 
     let mut interpreter = Machine::default();
 
     let value = interpreter.interpret(ir.item(&db).clone());
     println!("\n\nINTERPRETS INTO\n");
 
-    let doc: BoxDoc<'_, ()> = value.pretty(&db, &pretty::BoxAllocator).into_doc();
-    println!("{}", doc.deref().pretty(80));
+    println!("{}", value.pretty_with(&db).pprint().pretty(80));
 
     Ok(())
 }

@@ -119,47 +119,6 @@ impl<A: TypeAlloc> ClosedRow<A> {
     }
 }
 
-impl<A, Db, Ann> PrettyType<Db, A, Ann> for ClosedRow<A>
-where
-    A: TypeAlloc,
-    Db: ?Sized + crate::Db,
-{
-    fn pretty<'a, 'b, D>(
-        &self,
-        a: &'a D,
-        db: &Db,
-        acc: &impl AccessTy<'b, A>,
-    ) -> pretty::DocBuilder<'a, D, Ann>
-    where
-        D: ?Sized + DocAllocator<'a, Ann>,
-        D::Doc: pretty::Pretty<'a, D, Ann> + Clone,
-        <A as TypeAlloc>::TypeVar: pretty::Pretty<'a, D, Ann>,
-        A: 'b,
-        Ann: 'a,
-    {
-        let docs = acc
-            .row_fields(&self.fields)
-            .iter()
-            .zip(acc.row_values(&self.values).iter())
-            .map(|(field, value)| {
-                docs![
-                    a,
-                    a.as_string(field.text(db.as_core_db())),
-                    a.space(),
-                    "|>",
-                    a.softline(),
-                    value.pretty(a, db, acc)
-                ]
-                .group()
-            });
-        a.intersperse(
-            docs,
-            a.concat([a.softline_(), a.as_string(","), a.space()])
-                .into_doc(),
-        )
-    }
-}
-
 /// Holds information needed to resolve an overlap during row merging.
 pub(crate) struct HandleOverlapState<'a, V> {
     pub(crate) fields: &'a mut Vec<Ident>,
