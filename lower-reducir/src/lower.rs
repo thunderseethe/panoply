@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::{
     id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
@@ -821,7 +819,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
         }
     }
 
-    fn fresh_marker_item(&mut self) -> ReducIr<Infallible> {
+    fn fresh_marker_item(&mut self) -> ReducIr {
         let core_db = self.db.as_core_db();
         let ret_ty = self.mk_reducir_ty(VarTy(0));
         ReducIr::new(Item(
@@ -842,7 +840,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
 
     /// Prompt handles "installing" our prompt into the stack and running an action under an
     /// updated effect row
-    fn prompt_item(&mut self) -> ReducIr<Infallible> {
+    fn prompt_item(&mut self) -> ReducIr {
         /*
           prompt : ∀𝜇 𝜇'. ∀𝛼 h. (𝜇 -> {Marker 𝜇 𝛼, h} -> Mon 𝜇' 𝛼) -> Marker 𝜇 𝛼 -> h -> Mon 𝜇' 𝛼 -> Mon 𝜇 𝛼
           prompt upd m h e = 𝜆w. case e (upd w {m, h}) of
@@ -883,7 +881,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
 
     /// TODO: Return an item representing the bind implementation of our delimited continuation
     /// monad
-    fn bind_item(&mut self) -> ReducIr<Infallible> {
+    fn bind_item(&mut self) -> ReducIr {
         /*
         (e: Mon m a) |> (g : a -> Mon m b) : Mon m b =
            𝜆w. case e w of
@@ -915,10 +913,10 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
 
     fn bind(
         &mut self,
-        ir: ReducIr<Infallible>,
+        ir: ReducIr,
         derive_out_ty: impl FnOnce(ReducIrTy) -> ReducIrTy,
-        body: impl FnOnce(&mut Self, ReducIrVar) -> ReducIr<Infallible>,
-    ) -> ReducIr<Infallible> {
+        body: impl FnOnce(&mut Self, ReducIrVar) -> ReducIr,
+    ) -> ReducIr {
         let ir_db = self.db.as_ir_db();
         let ty = ir.type_check(ir_db).map_err_pretty_with(ir_db).unwrap();
         let mon_ty = ty
@@ -945,11 +943,11 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
 
     /// Translate an IR term containing delimited control primitives into an IR term without those
     /// primitives that uses a delimited continuation monad to perform the primitives.
-    fn lower_monadic(&mut self, evv_ty: ReducIrTy, ir: &ReducIr<DelimCont>) -> ReducIr<Infallible> {
+    fn lower_monadic(&mut self, evv_ty: ReducIrTy, ir: &ReducIr<DelimCont>) -> ReducIr {
         use ReducIrKind::*;
         let ir_db = self.db.as_ir_db();
         let evv_var_id = self.evv_var_id;
-        let pure = |ir: ReducIr<Infallible>| {
+        let pure = |ir: ReducIr| {
             let ty = ir
                 .type_check(ir_db)
                 .expect("ICE: lower_monadic type check error");
