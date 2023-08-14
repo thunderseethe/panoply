@@ -288,8 +288,8 @@ impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<
                         .pretty(db, a)
                         .parens()
                         .append(a.text(":"))
-                        .append(a.softline())
-                        .append(left_ty.pretty(db, a).parens()),
+                        .append(a.line())
+                        .append(left_ty.pretty(db, a).parens().group()),
                 )
                 .append(a.line())
                 .append(

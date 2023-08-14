@@ -5,6 +5,17 @@ use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fmt;
 use std::ops::Deref;
+use ReducIrKind::*;
+
+use crate::ty::ReducIrVarTy;
+
+use self::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp};
+
+mod pretty;
+pub mod ty;
+
+pub mod zip_non_consuming;
+use zip_non_consuming::ZipNonConsuming;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(ty::ReducIrTy);
@@ -14,10 +25,6 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {
     }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {}
-
-pub mod ty;
-
-mod pretty;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct ReducIrVar {
@@ -93,14 +100,6 @@ pub enum ReducIrKind<Ext = DelimCont> {
     // Extensions
     X(Ext),
 }
-use ReducIrKind::*;
-
-use crate::ty::ReducIrVarTy;
-
-use self::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp};
-
-mod zip_non_consuming;
-use zip_non_consuming::ZipNonConsuming;
 
 /// A ReducIr node
 /// `ReducIr` is much more explicit than `Term`. It is based on System F with some modest
@@ -220,12 +219,12 @@ impl<Ext> ReducIr<Ext> {
     }
 }
 
-trait ReducIrFold: Sized {
+pub trait ReducIrFold: Sized {
     type InExt;
     type OutExt;
 
-    fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIrKind<Self::OutExt> {
-        ir
+    fn fold_ir(&mut self, kind: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
+        ReducIr { kind }
     }
 
     fn fold_ext(&mut self, ext: &Self::InExt) -> Self::OutExt;
@@ -233,7 +232,7 @@ trait ReducIrFold: Sized {
     /// Controls traversal of ReducIr, by default will fold every node in the tree.
     /// Override with a custom implementation if you'd like to control which nodes are folded.
     fn traverse_ir(&mut self, ir: &ReducIr<Self::InExt>) -> ReducIr<Self::OutExt> {
-        ReducIr::new(match ir.kind() {
+        match ir.kind() {
             Abs(vars, body) => {
                 let body = body.fold(self);
                 self.fold_ir(Abs(vars.clone(), P::new(body)))
@@ -276,7 +275,7 @@ trait ReducIrFold: Sized {
                 let out_ext = self.fold_ext(in_ext);
                 self.fold_ir(X(out_ext))
             }
-        })
+        }
     }
 }
 
@@ -288,7 +287,7 @@ where
 
     type OutExt = F::OutExt;
 
-    fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIrKind<Self::OutExt> {
+    fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
         F::fold_ir(self, ir)
     }
 
@@ -298,7 +297,7 @@ where
 }
 
 impl<Ext> ReducIr<Ext> {
-    fn fold<F: ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
+    pub fn fold<F: ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
         fold.traverse_ir(self)
     }
 }
@@ -318,14 +317,11 @@ impl<Ext> ReducIr<Ext> {
             type InExt = Ext;
             type OutExt = Infallible;
 
-            fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIrKind<Self::OutExt> {
-                ir
-            }
-
             fn fold_ext(&mut self, _: &Self::InExt) -> Self::OutExt {
                 panic!("Assumed extension would not appear in ReducIr")
             }
         }
+
         self.fold(&mut AssumeNoExt::default())
     }
 }
@@ -401,7 +397,7 @@ impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck
                             let arg_ty = arg.type_check(ctx.as_ir_db())?;
                             if *fun_arg_ty != arg_ty {
                                 return Err(ReducIrTyErr::TyMismatch {
-                                    left_ty: func_ty,
+                                    left_ty: ctx.mk_fun_ty(fun_args.copied(), ret_ty),
                                     left_ir: Cow::Owned(ReducIr::app(
                                         func.deref().clone(),
                                         args[0..arg_index].to_vec(),
@@ -411,6 +407,7 @@ impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck
                                 });
                             }
                         }
+
                         Ok(ctx.mk_fun_ty(fun_args.copied(), ret_ty))
                     }
                     _ => Err(ReducIrTyErr::ExpectedFunTy { ty: func_ty, func }),

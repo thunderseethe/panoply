@@ -1,6 +1,6 @@
 /// A zip that does not own it's iterators and does not consume elements when only one iterator has
 /// elements remaining.
-pub(crate) struct LentZip<'a, A, B>
+pub struct LentZip<'a, A, B>
 where
     A: Iterator,
     B: Iterator,
@@ -26,7 +26,7 @@ where
 /// Zips two iterators without consuming them.
 /// This allows for iterating over the overlap of two iterators, and then consuming whatever
 /// remains in the two iterators separately after the fact.
-pub(crate) trait ZipNonConsuming {
+pub trait ZipNonConsuming {
     type Iter: Iterator;
 
     fn zip_non_consuming<'a, J>(

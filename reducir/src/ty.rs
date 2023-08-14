@@ -77,6 +77,30 @@ impl ReducIrTy {
             _ => Err(self),
         }
     }
+
+    /// Checks if a function type returns a monadic type
+    pub fn try_fun_returns_monadic(self, db: &dyn crate::Db) -> Result<(usize, UnwrapMonTy), Self> {
+        match self.kind(db) {
+            ReducIrTyKind::FunTy(args, ret) => match ret.kind(db) {
+                ReducIrTyKind::ControlTy(evv_ty, a_ty) if args.last() == Some(&evv_ty) => {
+                    // Don't count the evv parameter since it's part of monadic type
+                    Ok((args.len() - 1, UnwrapMonTy { evv_ty, a_ty }))
+                }
+                _ => Err(self),
+            },
+            _ => Err(self),
+        }
+    }
+
+    /// Drops n args off of self if self is a function type. Returns Err if self is not a function type.
+    pub fn drop_args(self, db: &dyn crate::Db, n_args: usize) -> Result<Self, Self> {
+        match self.kind(db) {
+            ReducIrTyKind::FunTy(args, ret) => {
+                Ok(db.mk_fun_ty(args.iter().skip(n_args).copied(), ret))
+            }
+            _ => Err(self),
+        }
+    }
 }
 
 fn default_fold_tykind<'db>(
@@ -167,7 +191,7 @@ impl ReducIrTy {
         }
     }
 
-    pub(crate) fn subst_ty(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
+    pub fn subst_ty(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
         self.fold(&mut Subst {
             db,
             i: 1,
@@ -176,7 +200,7 @@ impl ReducIrTy {
         })
     }
 
-    pub(crate) fn subst_row(self, db: &dyn crate::Db, row: ReducIrRow) -> ReducIrTy {
+    pub fn subst_row(self, db: &dyn crate::Db, row: ReducIrRow) -> ReducIrTy {
         self.fold(&mut Subst {
             db,
             i: 1,
@@ -232,6 +256,17 @@ pub enum ReducIrRow {
     Closed(Vec<ReducIrTy>),
 }
 
+impl ReducIrRow {
+    pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {
+        match self {
+            ReducIrRow::Open(var) => ReducIrRow::Open(var + delta),
+            ReducIrRow::Closed(row) => {
+                ReducIrRow::Closed(row.into_iter().map(|ty| ty.shift(db, delta)).collect())
+            }
+        }
+    }
+}
+
 // We allow Rows in type applications because they might show up in constraints.
 // But we want to ensure they don't appear in our ReducIr types outside of that so we make a specific type
 // for it
@@ -240,6 +275,24 @@ pub enum ReducIrTyApp {
     Ty(ReducIrTy),
     DataRow(ReducIrRow),
     EffRow(ReducIrRow),
+}
+impl ReducIrTyApp {
+    pub fn subst_into(self, db: &dyn crate::Db, haystack: ReducIrTy) -> ReducIrTy {
+        match self {
+            ReducIrTyApp::Ty(needle) => haystack.subst_ty(db, needle),
+            ReducIrTyApp::DataRow(needle) | ReducIrTyApp::EffRow(needle) => {
+                haystack.subst_row(db, needle)
+            }
+        }
+    }
+
+    pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {
+        match self {
+            ReducIrTyApp::Ty(ty) => ReducIrTyApp::Ty(ty.shift(db, delta)),
+            ReducIrTyApp::DataRow(row) => ReducIrTyApp::DataRow(row.shift(db, delta)),
+            ReducIrTyApp::EffRow(row) => ReducIrTyApp::EffRow(row.shift(db, delta)),
+        }
+    }
 }
 
 pub trait MkReducIrTy {

@@ -105,6 +105,9 @@ pub struct ReducIrItem {
     pub item: ReducIr,
     #[return_ref]
     pub mon_item: ReducIr<Infallible>,
+    // List of row evidence items that this item references
+    #[return_ref]
+    pub row_evs: Vec<ReducIrRowEv>,
 }
 
 #[salsa::tracked]
@@ -244,7 +247,7 @@ where
             )
         });
 
-    ReducIrItem::new(db, row_ev_name, ir, mon_ir)
+    ReducIrItem::new(db, row_ev_name, ir, mon_ir, vec![])
 }
 
 #[salsa::tracked]
@@ -253,8 +256,8 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
     let name = term.name(ast_db);
     let ast = term.data(ast_db);
     let typed_item = db.type_scheme_of(name);
-    let (ir, mon_ir) = lower(db, name, typed_item, ast);
-    ReducIrItem::new(db, name, ir, mon_ir)
+    let (ir, mon_ir, row_evs) = lower(db, name, typed_item, ast);
+    ReducIrItem::new(db, name, ir, mon_ir, row_evs)
 }
 
 #[salsa::tracked]
@@ -366,7 +369,7 @@ fn lower(
     name: TermName,
     typed_item: TypedItem,
     ast: &Ast<VarId>,
-) -> (ReducIr, ReducIr<Infallible>) {
+) -> (ReducIr, ReducIr<Infallible>, Vec<ReducIrRowEv>) {
     let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
@@ -376,8 +379,9 @@ fn lower(
         .lower_scheme(name.module(db.as_core_db()), &scheme);
 
     let required_evidence = typed_item.required_evidence(tc_db);
-    let (mut lower_ctx, ev_solved, ev_params) = LowerCtx::new(db, &mut var_conv, ty_ctx, name)
-        .collect_evidence_params(required_evidence.iter());
+    let (mut lower_ctx, ev_solved, ev_params, ev_row_items) =
+        LowerCtx::new(db, &mut var_conv, ty_ctx, name)
+            .collect_evidence_params(required_evidence.iter());
 
     let body = lower_ctx.lower_term(ast, ast.root());
     // TODO: Bit of a hack. Eventually we'd like to generate our solved row ev in a central location.
@@ -424,7 +428,7 @@ fn lower(
         ))
     });
     let mon_ir = lower_ctx.lower_monadic_entry(&ir);
-    (ir, mon_ir)
+    (ir, mon_ir, ev_row_items)
 }
 
 #[cfg(test)]
@@ -436,7 +440,7 @@ mod tests {
 
     use aiahr_core::{
         file::{FileId, SourceFile, SourceFileSet},
-        pretty::{PrettyPrint, PrettyWithCtx},
+        pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
         Db,
     };
     use aiahr_parser::Db as ParserDb;
@@ -674,37 +678,77 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                ((let
-                  [ (V2 ((_row_simple_state_value @ {}) @ {}))
-                  , (V3 (((_row_simple_return_putget @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
-                  {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> {} ->
-                  {{}, {}}))
-                  , (V4 (((_row_simple_putget_return @ {} -> {} -> {{}, {}}) @ {} -> ({} ->
-                  {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
-                  {{}, {}}))
-                  , (V5 ((_row_simple_get_put @ {} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
-                                                                                      , {}
-                                                                                      }) @ {}
-                  -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}))
-                  , (V6 (V4[0]
-                    (V5[0] (fun [V7, V8, V9] (V8 V9 V9)) (fun [V10, V11, V12] (V11 {} V10)))
-                    (fun [V13, V14] (V2[0] V14 V13))))
-                  ]
-                  (((_mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} -> { {}
+                ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
+                  (let
+                    [ (V2 ((_row_simple_state_value @ {}) @ {}))
+                    , (V3 (((_row_simple_return_putget @ {} -> ({} -> {} -> {{}, {}}) -> {}
+                    -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} ->
+                    {} -> {{}, {}}))
+                    , (V4 (((_row_simple_putget_return @ {} -> {} -> {{}, {}}) @ {} -> ({}
+                    -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) ->
+                    {} -> {{}, {}}))
+                    , (V5 ((_row_simple_get_put @ {} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
                                                                                         , {}
-                                                                                        }))
-                    (fun [V18]
-                      ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
-                        V18
-                        (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
-                        ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}})
-                          (let (V15 {})
-                            (let (V16 (V1[3][0] V0))
-                              (fun [V0]
-                                <1: {V16[0], (fun [V17] (V16[1][1] V15 V17)), (fun [V0] V0)
-                                  }>)))
-                          (fun [V19] (let (V20 (V4[3][0] V6 V19)) (fun [V0] <0: V20>))))))))
-                  {})))"#]];
+                                                                                        }) @ {}
+                    -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}))
+                    , (V6 (V4[0]
+                      (V5[0]
+                        (fun [V7, V8, V9] (V8 V9 V9))
+                        (fun [V10, V11, V12] (V11 {} V10)))
+                      (fun [V13, V14] (V2[0] V14 V13))))
+                    ]
+                    (((_mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} ->
+                    {{}, {}}))
+                      (fun [V18]
+                        ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
+                          V18
+                          (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
+                          ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}})
+                            (let (V15 {})
+                              (let (V16 (V1[3][0] V0))
+                                (fun [V0]
+                                  <1: {V16[0], (fun [V17] (V16[1][1] V15 V17)), (fun [V0]
+                                      V0)}>)))
+                            (fun [V21]
+                              (let (V22 (V4[3][0] V6 V21)) (fun [V0] <0: V22>))))))))
+                  (fun [V23] (let (V24 (V23 {})) (fun [V0] <0: V24>))))))"#]];
         expect.assert_eq(&pretty_ir);
+
+        let expect_ty = expect![[r#"
+            forall ScopedRow .
+              forall ScopedRow .
+                { {1} -> { (Marker {} -> {{}, {}})
+                         , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                           , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                           }
+                         } -> {0}
+                , forall Type .
+                  (<2> -> T0) -> ({ (Marker {} -> {{}, {}})
+                                  , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                                    , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                                    }
+                                  } -> T0) -> <1> -> T0
+                , {{0} -> {1}, <1> -> <0>}
+                , { {0} -> { (Marker {} -> {{}, {}})
+                           , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                             , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                             }
+                           }
+                  , { (Marker {} -> {{}, {}})
+                    , { {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                      , {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}
+                      }
+                    } -> <0>
+                  }
+                } -> {1} -> {1} -> (Control {1} {{}, {}})"#]];
+        let pretty_ty = ir
+            .type_check(&db)
+            .map_err_pretty_with(&db)
+            .unwrap()
+            .pretty_with(&db)
+            .pprint()
+            .pretty(80)
+            .to_string();
+        expect_ty.assert_eq(&pretty_ty);
     }
 }

@@ -4,7 +4,7 @@ use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::{
     id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
     modules::Module,
-    pretty::{PrettyErrorWithDb, PrettyWithCtx},
+    pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
 };
 use aiahr_reducir::{
     ty::{
@@ -21,13 +21,12 @@ use aiahr_ty::{
     AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
 };
 use la_arena::Idx;
-use pretty::RcAllocator;
 use rustc_hash::FxHashMap;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv},
     id_converter::IdConverter,
-    lower_row_ev, ReducIrEffectInfo,
+    lower_row_ev, ReducIrEffectInfo, ReducIrRowEv,
 };
 /// Unwrap a type into it a product and return the product's row.
 ///
@@ -981,6 +980,11 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 let ir_db = self.db.as_ir_db();
                 let bind = self.bind_item();
                 let func_mon = self.lower_monadic(evv_ty, func);
+                let func_ty = func_mon
+                    .type_check(ir_db)
+                    .map_err_pretty_with(ir_db)
+                    .unwrap();
+
                 let mut bind_args = vec![];
                 let mon_args = args
                     .iter()
@@ -1006,10 +1010,121 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         }
                     })
                     .collect::<Vec<_>>();
-                let func_ty = func_mon
-                    .type_check(ir_db)
-                    .map_err_pretty_with(ir_db)
-                    .unwrap();
+
+                let (body, ret_ty) = match func_ty.try_fun_returns_monadic(ir_db) {
+                    // Our function might take some number of argument and then return another
+                    // function wrapped in our monad:
+                    //    a -> b -> {evv} -> Ctl {evv} (c -> d -> e)
+                    // To handle this case we split our args based on how many args appear before
+                    // the monadic type. This application is then passed to bind to produce the
+                    // underlying function which is applied to any remaining args and then wrapped
+                    // up in our monad again.
+                    Ok((arg_count, mon)) => {
+                        let mut mon_args = mon_args;
+                        let post_mon_args = mon_args.split_off(arg_count);
+                        let pre_mon_args = mon_args;
+
+                        let f = ReducIrVar {
+                            var: self.var_conv.generate(),
+                            ty: mon.a_ty,
+                        };
+
+                        if post_mon_args.is_empty() {
+                            (ReducIr::app(func_mon, pre_mon_args), mon.a_ty)
+                        } else {
+                            let applied_fun_ty =
+                                mon.a_ty.drop_args(ir_db, post_mon_args.len()).unwrap();
+                            let body = ReducIr::app(
+                                ReducIr::ty_app(
+                                    bind.clone(),
+                                    [
+                                        ReducIrTyApp::Ty(evv_ty),
+                                        ReducIrTyApp::Ty(mon.a_ty),
+                                        ReducIrTyApp::Ty(applied_fun_ty),
+                                    ],
+                                ),
+                                [
+                                    ReducIr::app(func_mon, pre_mon_args),
+                                    ReducIr::abss([f], {
+                                        let y = ReducIrVar {
+                                            var: self.var_conv.generate(),
+                                            ty: applied_fun_ty,
+                                        };
+                                        ReducIr::local(
+                                            y,
+                                            ReducIr::app(ReducIr::var(f), post_mon_args),
+                                            pure(ReducIr::var(y)),
+                                        )
+                                    }),
+                                ],
+                            );
+                            (body, applied_fun_ty)
+                        }
+                    }
+                    Err(ty) => {
+                        // If we have no monadic args and our function isn't monadic return early
+                        // with normal function application
+                        if bind_args.is_empty() {
+                            return ReducIr::app(func_mon, mon_args);
+                        }
+
+                        let applied_fun_ty = ty.drop_args(ir_db, mon_args.len()).unwrap();
+
+                        // Otherwise lift our return value into our monad
+                        let y = ReducIrVar {
+                            var: self.var_conv.generate(),
+                            ty: applied_fun_ty,
+                        };
+
+                        let body = ReducIr::local(
+                            y,
+                            ReducIr::app(func_mon, mon_args),
+                            pure(ReducIr::var(y)),
+                        );
+
+                        (body, applied_fun_ty)
+                    }
+                };
+
+                bind_args.into_iter().rfold(body, |body, (arg, arg_var)| {
+                    ReducIr::app(
+                        ReducIr::ty_app(
+                            bind.clone(),
+                            [
+                                ReducIrTyApp::Ty(evv_ty),
+                                ReducIrTyApp::Ty(arg_var.ty),
+                                ReducIrTyApp::Ty(ret_ty),
+                            ],
+                        ),
+                        [arg, ReducIr::abss([arg_var], body)],
+                    )
+                })
+
+                /*let mut bind_args = vec![];
+                let mon_args = args
+                    .iter()
+                    .map(|arg| {
+                        let mon_arg = self.lower_monadic(evv_ty, arg);
+                        let mon_arg_ty = mon_arg
+                            .type_check(ir_db)
+                            .map_err_pretty_with(ir_db)
+                            .unwrap();
+                        match mon_arg_ty.try_unwrap_monadic(ir_db) {
+                            Ok(_) => {
+                                let arg_ty =
+                                    arg.type_check(ir_db).map_err_pretty_with(ir_db).unwrap();
+                                let arg_var = ReducIrVar {
+                                    var: self.var_conv.generate(),
+                                    ty: arg_ty,
+                                };
+                                bind_args.push((mon_arg, arg_var));
+                                ReducIr::var(arg_var)
+                            }
+                            // We don't need to do anything for a non monadic arg
+                            Err(_) => mon_arg,
+                        }
+                    })
+                    .collect::<Vec<_>>();
                 let applied_fun_ty = match func_ty.kind(ir_db) {
                     FunTy(arg_tys, ret_ty) => {
                         self.mk_fun_ty(arg_tys.iter().skip(args.len()).copied(), ret_ty)
@@ -1019,8 +1134,42 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         func_ty.pretty(ir_db, &RcAllocator).pretty(80)
                     ),
                 };
+
                 let (body, ret_ty) = match applied_fun_ty.try_unwrap_monadic(ir_db) {
-                    Ok(mon) => (ReducIr::app(func_mon, mon_args), mon.a_ty),
+                    Ok((arg_count, mon)) => {
+                        let mut pre_mon_args = mon_args;
+                        println!(
+                            "{:?}",
+                            pre_mon_args
+                                .iter()
+                                .map(|ty| PrettyDebug::from(ty.pretty_with(ir_db)))
+                                .collect::<Vec<_>>()
+                        );
+                        let post_mon_args = pre_mon_args.split_off(arg_count);
+                        let f = ReducIrVar {
+                            var: self.var_conv.generate(),
+                            ty: mon.a_ty,
+                        };
+                        (
+                            ReducIr::app(
+                                ReducIr::ty_app(
+                                    bind.clone(),
+                                    [
+                                        ReducIrTyApp::Ty(evv_ty),
+                                        ReducIrTyApp::Ty(mon.a_ty),
+                                        ReducIrTyApp::Ty(mon.a_ty),
+                                    ],
+                                ),
+                                [
+                                    ReducIr::app(func_mon, pre_mon_args),
+                                    ReducIr::abss([f], {
+                                        ReducIr::app(ReducIr::var(f), post_mon_args)
+                                    }),
+                                ],
+                            ),
+                            mon.a_ty,
+                        )
+                    }
                     Err(_) => {
                         // If we have no monadic args and our function isn't monadic we're done
                         if bind_args.is_empty() {
@@ -1052,7 +1201,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         ),
                         [arg, ReducIr::abss([arg_var], body)],
                     )
-                })
+                })*/
             }
             TyAbs(tyvar, ir) => ReducIr::new(TyAbs(*tyvar, P::new(self.lower_monadic(evv_ty, ir)))),
             TyApp(ir, ty) => {
@@ -1140,7 +1289,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             Item(item, ty) => ReducIr::new(Item(*item, *ty)),
             X(DelimCont::NewPrompt(mark_var, ir)) => {
                 let x = self.lower_monadic(evv_ty, ir);
-                ReducIr::app(
+                let ir = ReducIr::app(
                     ReducIr::ty_app(
                         self.fresh_marker_item(),
                         [
@@ -1151,7 +1300,16 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                         ],
                     ),
                     [ReducIr::abss([*mark_var], x)],
-                )
+                );
+                println!(
+                    "{}",
+                    ir.type_check(self.db.as_ir_db())
+                        .unwrap()
+                        .pretty_with(self.db)
+                        .pprint()
+                        .pretty(80)
+                );
+                ir
             }
             X(DelimCont::Prompt(marker, upd_evv, body)) => {
                 let ir_db = self.db.as_ir_db();
@@ -1219,6 +1377,7 @@ type LowerOutput<'a, 'b> = (
     LowerCtx<'a, 'b, Evidentfull>,
     Vec<(ReducIrVar, ReducIr)>,
     Vec<ReducIrVar>,
+    Vec<ReducIrRowEv>,
 );
 
 impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
@@ -1249,6 +1408,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         let mut evs = ev_iter.collect::<Vec<_>>();
 
         evs.sort();
+        let mut ev_items = vec![];
         let mut solved = vec![];
         let mut params = vec![];
         for ev in evs {
@@ -1267,6 +1427,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         right.raw_fields(),
                         goal.raw_fields(),
                     );
+                    ev_items.push(ir_row_ev);
                     (
                         ir_row_ev.simple(self.db),
                         left.values(&ty_db)
@@ -1288,6 +1449,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         right.raw_fields(),
                         goal.raw_fields(),
                     );
+                    ev_items.push(ir_row_ev);
                     let left_row_iter = left.fields(&ty_db).iter().zip(left.values(&ty_db).iter());
                     let right_row_iter =
                         right.fields(&ty_db).iter().zip(right.values(&ty_db).iter());
@@ -1323,7 +1485,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
             solved.push((param, ir));
         }
 
-        (LowerCtx::with_evidenceless(self), solved, params)
+        (LowerCtx::with_evidenceless(self), solved, params, ev_items)
     }
 
     fn lower_evidence(&mut self, ev: &Evidence) -> ReducIrVar {

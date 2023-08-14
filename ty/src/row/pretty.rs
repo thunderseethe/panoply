@@ -77,12 +77,7 @@ where
     Acc: AccessTy<'ty, A>,
     <A as TypeAlloc>::TypeVar: for<'a> Pretty<'a, RcAllocator>,
 {
-    fn pretty<'a>(
-        &self,
-        ctx: &(&Db, Acc),
-        alloc: &'a RcAllocator,
-    ) -> DocBuilder<'a, RcAllocator> {
+    fn pretty<'a>(&self, ctx: &(&Db, Acc), alloc: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
         self.0.pretty_with(ctx).pretty(alloc)
     }
 }
-

@@ -41,9 +41,10 @@ where
                 .nest(2)
                 .parens()
                 .group(),
-            TypeKind::FunTy(arg, ret) => arg.pretty_with(ctx).pretty(a).append(
-                docs![a, a.softline(), "->", a.softline(), &ret.pretty_with(ctx)].nest(2),
-            ),
+            TypeKind::FunTy(arg, ret) => arg
+                .pretty_with(ctx)
+                .pretty(a)
+                .append(docs![a, a.softline(), "->", a.softline(), &ret.pretty_with(ctx)].nest(2)),
             TypeKind::ProdTy(row) => row
                 .pretty_with(ctx)
                 .pretty(a)
@@ -59,4 +60,3 @@ where
         }
     }
 }
-
