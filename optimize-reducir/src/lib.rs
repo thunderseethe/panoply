@@ -25,7 +25,7 @@ pub struct ReducIrOptimizedItem {
     #[id]
     name: TermName,
     #[return_ref]
-    item: ReducIr<Infallible>,
+    item: ReducIr,
 }
 
 #[salsa::tracked]
@@ -35,7 +35,7 @@ fn simple_reducir_item(db: &dyn crate::Db, item: ReducIrItem) -> ReducIrOptimize
 }
 
 struct Subst {
-    env: FxHashMap<ReducIrVarId, ReducIr<Infallible>>,
+    env: FxHashMap<ReducIrVarId, ReducIr>,
 }
 impl ReducIrFold for Subst {
     type InExt = Infallible;
@@ -116,7 +116,7 @@ impl ReducIrFold for SubstTy<'_> {
 
 struct Simplify<'a> {
     db: &'a dyn crate::Db,
-    row_evs: FxHashMap<TermName, &'a ReducIr<Infallible>>,
+    row_evs: FxHashMap<TermName, &'a ReducIr>,
 }
 impl ReducIrFold for Simplify<'_> {
     type InExt = Infallible;
@@ -202,7 +202,7 @@ impl ReducIrFold for Simplify<'_> {
 
 /// True if an ir term is a value (contains no computations), false if the term does require
 /// computation that can be done
-fn is_value(ir: &ReducIr<Infallible>) -> bool {
+fn is_value(ir: &ReducIr) -> bool {
     match ir.kind() {
         ReducIrKind::Int(_)
         | ReducIrKind::Var(_)
@@ -218,7 +218,7 @@ fn is_value(ir: &ReducIr<Infallible>) -> bool {
 }
 
 #[allow(dead_code)]
-fn simplify(db: &dyn crate::Db, item: ReducIrItem) -> ReducIr<Infallible> {
+fn simplify(db: &dyn crate::Db, item: ReducIrItem) -> ReducIr {
     let lower_db = db.as_lower_reducir_db();
     let row_evs = item.row_evs(lower_db);
     let ir = item.mon_item(lower_db);

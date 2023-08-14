@@ -309,7 +309,7 @@ impl<Ext> ReducIr<Ext> {
     /// Allows "casting" to another Ext type by assuming `ReducIrKind::X` is not used anywhere in
     /// `self`.
     /// Panics if `ReducIrKind::X` is present in `self`.
-    pub fn assume_no_ext(&self) -> ReducIr<Infallible> {
+    pub fn assume_no_ext(&self) -> ReducIr {
         struct AssumeNoExt<Ext>(std::marker::PhantomData<Ext>);
         impl<Ext> Default for AssumeNoExt<Ext> {
             fn default() -> Self {
