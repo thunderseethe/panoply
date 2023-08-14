@@ -2,7 +2,7 @@
 
 use aiahr_core::id::ReducIrVarId;
 use aiahr_core::pretty::PrettyWithCtx;
-use aiahr_reducir::{DelimCont, ReducIr, ReducIrKind, ReducIrVar, P};
+use aiahr_reducir::{DelimCont, DelimReducIr, ReducIrKind, ReducIrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -21,7 +21,7 @@ pub enum Value {
     Lam {
         env: FxHashMap<ReducIrVarId, Value>,
         args: Vec<ReducIrVar>,
-        body: P<ReducIr>,
+        body: P<DelimReducIr>,
     },
     /// A tuple of values
     Tuple(Vec<Value>),
@@ -114,22 +114,22 @@ pub enum EvalCtx {
         args: Vec<Value>,
     },
     ArgApp {
-        func: P<ReducIr>,
+        func: P<DelimReducIr>,
         eval: Vec<Value>,
-        args: Vec<ReducIr>,
+        args: Vec<DelimReducIr>,
     },
     PromptMarker {
-        body: P<ReducIr>,
+        body: P<DelimReducIr>,
     },
     YieldMarker {
-        value: P<ReducIr>,
+        value: P<DelimReducIr>,
     },
     YieldValue {
         marker: Value,
     },
     StructEval {
         vals: Vec<Value>,
-        rest: Vec<ReducIr>,
+        rest: Vec<DelimReducIr>,
     },
     Index {
         index: usize,
@@ -138,7 +138,7 @@ pub enum EvalCtx {
         tag: usize,
     },
     CaseScrutinee {
-        branches: Vec<ReducIr>,
+        branches: Vec<DelimReducIr>,
     },
     VectorSet {
         evv: ReducIrVar,
@@ -185,7 +185,7 @@ pub struct Machine {
 }
 
 enum InterpretResult {
-    Step(P<ReducIr>),
+    Step(P<DelimReducIr>),
     Done(Value),
 }
 
@@ -337,7 +337,7 @@ impl Machine {
             .clone()
     }
 
-    fn step(&mut self, ir: ReducIr) -> InterpretResult {
+    fn step(&mut self, ir: DelimReducIr) -> InterpretResult {
         match ir.kind {
             // Literals
             ReducIrKind::Int(i) => {
@@ -437,7 +437,7 @@ impl Machine {
     }
 
     /// Interpret an IR term until it is a value, or diverge.
-    pub fn interpret(&mut self, top: ReducIr) -> Value {
+    pub fn interpret(&mut self, top: DelimReducIr) -> Value {
         let mut ir = top;
         loop {
             match self.step(ir) {
@@ -451,6 +451,7 @@ impl Machine {
 #[cfg(test)]
 mod tests {
     use aiahr_reducir::ty::{MkReducIrTy, ReducIrTyKind};
+    use aiahr_reducir::ReducIr;
 
     use super::*;
 

@@ -11,7 +11,7 @@ use aiahr_reducir::{
         Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*,
         ReducIrVarTy, RowReducIrKind, UnwrapMonTy,
     },
-    DelimCont, ReducIr, ReducIrKind,
+    DelimCont, DelimReducIr, ReducIr, ReducIrKind,
     ReducIrKind::*,
     ReducIrVar, TypeCheck, P,
 };
@@ -596,7 +596,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
         left: Sema::Closed<InDb>,
         right: Sema::Closed<InDb>,
         goal: Sema::Closed<InDb>,
-    ) -> ReducIr
+    ) -> DelimReducIr
     where
         LowerTyCtx<'a, 'b>: RowVarConvert<Sema>,
         Sema::Closed<InDb>: Copy,
@@ -800,7 +800,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
         ]))
     }
 
-    pub(crate) fn lower_monadic_entry(&mut self, ir: &ReducIr<DelimCont>) -> ReducIr<Infallible> {
+    pub(crate) fn lower_monadic_entry(&mut self, ir: &DelimReducIr) -> ReducIr {
         match ir.kind() {
             ReducIrKind::Abs(vars, _) => match vars.iter().find(|var| var.var == self.evv_var_id) {
                 Some(evv_var) => self.lower_monadic(evv_var.ty, ir),
@@ -1375,7 +1375,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
 
 type LowerOutput<'a, 'b> = (
     LowerCtx<'a, 'b, Evidentfull>,
-    Vec<(ReducIrVar, ReducIr)>,
+    Vec<(ReducIrVar, DelimReducIr)>,
     Vec<ReducIrVar>,
     Vec<ReducIrRowEv>,
 );
@@ -1513,7 +1513,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         }
     }
 
-    fn apply_wrapper(&mut self, wrapper: &Wrapper, ir: ReducIr) -> ReducIr {
+    fn apply_wrapper(&mut self, wrapper: &Wrapper, ir: DelimReducIr) -> DelimReducIr {
         // This needs to be done in the reverse order that we add our Abs and TyAbs when we lower
         let ir = wrapper.tys.iter().rfold(ir, |body, ty| {
             ReducIr::new(ReducIrKind::TyApp(
@@ -1543,7 +1543,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         ir
     }
 
-    pub(crate) fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> ReducIr {
+    pub(crate) fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> DelimReducIr {
         use Term::*;
         match ast.view(term) {
             Unit => ReducIr::new(Struct(vec![])),

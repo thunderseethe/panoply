@@ -114,9 +114,12 @@ pub enum ReducIrKind<Ext = DelimCont> {
 /// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
 /// the primitives to express delimited control which is how we implement effects under the hood.
 #[derive(Clone, PartialEq, Eq)]
-pub struct ReducIr<Ext = DelimCont> {
+pub struct ReducIr<Ext = Infallible> {
     pub kind: ReducIrKind<Ext>,
 }
+
+pub type DelimReducIr = ReducIr<DelimCont>;
+
 impl<Ext> fmt::Debug for ReducIr<Ext>
 where
     Ext: fmt::Debug,
@@ -498,7 +501,7 @@ impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck
     }
 }
 
-impl ReducIr {
+impl DelimReducIr {
     pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
         self.unbound_vars_with_bound(FxHashSet::default())
     }
@@ -535,7 +538,7 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
 
 struct UnboundVars<'a> {
     bound: FxHashSet<ReducIrVarId>,
-    stack: Vec<&'a ReducIr>,
+    stack: Vec<&'a DelimReducIr>,
 }
 impl Iterator for UnboundVars<'_> {
     type Item = ReducIrVar;
