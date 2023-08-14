@@ -1,5 +1,3 @@
-use std::convert::Infallible;
-
 use aiahr_ast::{Ast, AstModule, AstTerm, Term};
 use aiahr_core::{
     id::{EffectName, EffectOpName, Id, TermName, TyVarId, VarId},
@@ -8,7 +6,7 @@ use aiahr_core::{
 };
 use aiahr_reducir::{
     ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
-    ReducIr,
+    DelimReducIr, ReducIr,
     ReducIrKind::*,
     P,
 };
@@ -102,9 +100,9 @@ pub struct ReducIrItem {
     #[id]
     pub name: TermName,
     #[return_ref]
-    pub item: ReducIr,
+    pub item: DelimReducIr,
     #[return_ref]
-    pub mon_item: ReducIr<Infallible>,
+    pub mon_item: ReducIr,
     // List of row evidence items that this item references
     #[return_ref]
     pub row_evs: Vec<ReducIrRowEv>,
@@ -369,7 +367,7 @@ fn lower(
     name: TermName,
     typed_item: TypedItem,
     ast: &Ast<VarId>,
-) -> (ReducIr, ReducIr<Infallible>, Vec<ReducIrRowEv>) {
+) -> (DelimReducIr, ReducIr, Vec<ReducIrRowEv>) {
     let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
@@ -434,8 +432,6 @@ fn lower(
 #[cfg(test)]
 mod tests {
 
-    use std::convert::Infallible;
-
     use crate::{Db as LowerIrDb, ReducIrItem};
 
     use aiahr_core::{
@@ -444,7 +440,7 @@ mod tests {
         Db,
     };
     use aiahr_parser::Db as ParserDb;
-    use aiahr_reducir::{ty::ReducIrTy, ReducIr, ReducIrTyErr, TypeCheck};
+    use aiahr_reducir::{ty::ReducIrTy, DelimReducIr, ReducIr, ReducIrTyErr, TypeCheck};
     use expect_test::expect;
     use pretty::RcAllocator;
 
@@ -493,11 +489,11 @@ effect Reader {
     }
 
     /// Lower a snippet and return the produced IR
-    fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
+    fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db DelimReducIr {
         let main = format!("f = {}", input);
         lower_function(db, &main, "f").item(db)
     }
-    fn lower_mon_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr<Infallible> {
+    fn lower_mon_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
         let main = format!("f = {}", input);
         lower_function(db, &main, "f").mon_item(db)
     }
