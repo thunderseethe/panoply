@@ -6,9 +6,9 @@ use aiahr_core::{
 };
 use aiahr_reducir::{
     ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
-    DelimReducIr, ReducIr,
+    DelimReducIr, GeneratedReducIrName, ReducIr,
     ReducIrKind::*,
-    P,
+    ReducIrTermName, P,
 };
 use aiahr_tc::{EffectInfo, TypedItem};
 use aiahr_ty::{
@@ -44,6 +44,7 @@ pub trait ReducIrEffectInfo: EffectInfo {
 pub struct Jar(
     ReducIrModule,
     ReducIrItem,
+    ReducIrGenItem,
     ReducIrRowEv,
     lower_module,
     lower_item,
@@ -109,9 +110,19 @@ pub struct ReducIrItem {
 }
 
 #[salsa::tracked]
+pub struct ReducIrGenItem {
+    #[id]
+    pub name: GeneratedReducIrName,
+    #[return_ref]
+    pub item: DelimReducIr,
+    #[return_ref]
+    pub mon_item: ReducIr,
+}
+
+#[salsa::tracked]
 pub struct ReducIrRowEv {
-    pub simple: ReducIrItem,
-    pub scoped: ReducIrItem,
+    pub simple: ReducIrGenItem,
+    pub scoped: ReducIrGenItem,
 }
 
 #[salsa::tracked]
@@ -147,7 +158,7 @@ fn lower_row_ev_item<Sema: RowReducrIrEvidence>(
     left: RowFields,
     right: RowFields,
     goal: RowFields,
-) -> ReducIrItem
+) -> ReducIrGenItem
 where
     for<'a, 'b> LowerTyCtx<'a, 'b>: RowVarConvert<Sema>,
     Sema::Closed<InDb>: Copy,
@@ -168,7 +179,7 @@ where
         "_row_{}_{}_{}",
         mark, left_field_str, right_field_str
     ));
-    let row_ev_name = TermName::new(db.as_core_db(), row_ev_ident, module);
+    let row_ev_name = GeneratedReducIrName::new(db.as_ir_db(), row_ev_ident, module);
 
     let mut id_count: i32 = -1;
     let mut left_values = left_fields
@@ -227,7 +238,7 @@ where
         db,
         &mut var_conv,
         LowerTyCtx::new(db, &mut tyvar_conv, tyvar_env),
-        row_ev_name,
+        ReducIrTermName::Gen(row_ev_name),
     );
     let ir = lower_ctx.row_evidence_ir::<Sema>(left_row, right_row, goal_row);
     let mon_ir = ir.assume_no_ext();
@@ -245,7 +256,7 @@ where
             )
         });
 
-    ReducIrItem::new(db, row_ev_name, ir, mon_ir, vec![])
+    ReducIrGenItem::new(db, row_ev_name, ir, mon_ir)
 }
 
 #[salsa::tracked]
@@ -378,7 +389,7 @@ fn lower(
 
     let required_evidence = typed_item.required_evidence(tc_db);
     let (mut lower_ctx, ev_solved, ev_params, ev_row_items) =
-        LowerCtx::new(db, &mut var_conv, ty_ctx, name)
+        LowerCtx::new(db, &mut var_conv, ty_ctx, ReducIrTermName::Term(name))
             .collect_evidence_params(required_evidence.iter());
 
     let body = lower_ctx.lower_term(ast, ast.root());

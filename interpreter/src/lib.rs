@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
-use aiahr_core::id::ReducIrVarId;
 use aiahr_core::pretty::PrettyWithCtx;
-use aiahr_reducir::{DelimCont, DelimReducIr, ReducIrKind, ReducIrVar, P};
+use aiahr_reducir::{DelimCont, DelimReducIr, ReducIrKind, ReducIrLocal, ReducIrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -10,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub struct Prompt(usize);
 
 /// A mapping from variables to values
-type Env = FxHashMap<ReducIrVarId, Value>;
+type Env = FxHashMap<ReducIrLocal, Value>;
 
 /// An interpreter value.
 /// This will be the result of interpretation and all intermediate computations
@@ -19,7 +18,7 @@ pub enum Value {
     Int(usize),
     /// A lambda (or closure). Stores any captured variables in env.
     Lam {
-        env: FxHashMap<ReducIrVarId, Value>,
+        env: FxHashMap<ReducIrLocal, Value>,
         args: Vec<ReducIrVar>,
         body: P<DelimReducIr>,
     },
@@ -37,7 +36,7 @@ pub enum Value {
 use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 
 fn pretty_env<'a, D, A: 'a>(
-    env: &FxHashMap<ReducIrVarId, Value>,
+    env: &FxHashMap<ReducIrLocal, Value>,
     a: &'a D,
 ) -> pretty::DocBuilder<'a, D, A>
 where
@@ -450,8 +449,10 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
+    use aiahr_core::id::{ReducIrVarId, TermName};
     use aiahr_reducir::ty::{MkReducIrTy, ReducIrTyKind};
-    use aiahr_reducir::ReducIr;
+    use aiahr_reducir::{ReducIr, ReducIrTermName};
+    use salsa::AsId;
 
     use super::*;
 
@@ -476,7 +477,10 @@ mod tests {
     fn interpret_id_fun() {
         let db = TestDatabase::default();
         let x = ReducIrVar {
-            var: ReducIrVarId(0),
+            var: ReducIrLocal {
+                top_level: ReducIrTermName::Term(TermName::from_id(salsa::Id::from_u32(0))),
+                id: ReducIrVarId(0),
+            },
             ty: db.mk_reducir_ty(ReducIrTyKind::IntTy),
         };
         let ir = ReducIr::app(
@@ -491,11 +495,17 @@ mod tests {
     fn interpret_lamba_captures_env_as_expected() {
         let db = TestDatabase::default();
         let x = ReducIrVar {
-            var: ReducIrVarId(0),
+            var: ReducIrLocal {
+                top_level: ReducIrTermName::Term(TermName::from_id(salsa::Id::from_u32(0))),
+                id: ReducIrVarId(0),
+            },
             ty: db.mk_reducir_ty(ReducIrTyKind::IntTy),
         };
         let y = ReducIrVar {
-            var: ReducIrVarId(1),
+            var: ReducIrLocal {
+                top_level: ReducIrTermName::Term(TermName::from_id(salsa::Id::from_u32(0))),
+                id: ReducIrVarId(1),
+            },
             ty: db.mk_reducir_ty(ReducIrTyKind::IntTy),
         };
         let ir = ReducIr::app(
