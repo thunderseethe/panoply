@@ -39,6 +39,7 @@ members = [
     "core",
     "cst",
     "desugar",
+    "emit-wasm",
     "interpreter",
     "lower-reducir",
     "nameres",
@@ -61,6 +62,7 @@ aiahr-ast = { path = "ast" }
 aiahr-core = { path = "core" }
 aiahr-cst = { path = "cst" }
 aiahr-desugar = { path = "desugar" }
+aiahr-emit-wasm = { path = "emit-wasm" }
 aiahr-nameres = { path = "nameres" }
 aiahr-interpreter = { path = "interpreter" }
 aiahr-lower-reducir = { path = "lower-reducir" }
