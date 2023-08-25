@@ -1,4 +1,6 @@
 use aiahr_core::id::{ReducIrVarId, TermName};
+use aiahr_core::ident::Ident;
+use aiahr_core::modules::Module;
 use aiahr_core::pretty::PrettyWithCtx;
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
@@ -18,7 +20,7 @@ pub mod zip_non_consuming;
 use zip_non_consuming::ZipNonConsuming;
 
 #[salsa::jar(db = Db)]
-pub struct Jar(ty::ReducIrTy);
+pub struct Jar(ty::ReducIrTy, GeneratedReducIrName);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {
     fn as_ir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -26,9 +28,61 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {}
 
+#[salsa::interned]
+pub struct GeneratedReducIrName {
+    pub name: Ident,
+    pub module: Module,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
+pub enum ReducIrTermName {
+    // A term that existed in syntax and was most likely written by a user
+    Term(TermName),
+    // A generated term that only exists at the ReducIr level
+    Gen(GeneratedReducIrName),
+}
+impl ReducIrTermName {
+    pub fn term<DB: ?Sized + aiahr_core::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
+        ReducIrTermName::Term(TermName::new(
+            db.as_core_db(),
+            db.ident(name.to_string()),
+            module,
+        ))
+    }
+
+    pub fn gen<DB: ?Sized + crate::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
+        ReducIrTermName::Gen(GeneratedReducIrName::new(
+            db.as_ir_db(),
+            db.ident(name.to_string()),
+            module,
+        ))
+    }
+
+    pub fn name<DB: ?Sized + crate::Db>(&self, db: &DB) -> Ident {
+        match self {
+            ReducIrTermName::Term(term) => term.name(db.as_core_db()),
+            ReducIrTermName::Gen(gen) => gen.name(db.as_ir_db()),
+        }
+    }
+
+    pub fn module<DB: ?Sized + crate::Db>(&self, db: &DB) -> Module {
+        match self {
+            ReducIrTermName::Term(term) => term.module(db.as_core_db()),
+            ReducIrTermName::Gen(gen) => gen.module(db.as_ir_db()),
+        }
+    }
+}
+
+/// A ReducIrLocal variable, marked with it's top level term name for uniqueness
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+pub struct ReducIrLocal {
+    pub top_level: ReducIrTermName,
+    pub id: ReducIrVarId,
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct ReducIrVar {
-    pub var: ReducIrVarId,
+    pub var: ReducIrLocal,
     pub ty: ReducIrTy,
 }
 
@@ -84,7 +138,7 @@ pub enum DelimCont {
 pub enum ReducIrKind<Ext = DelimCont> {
     Int(usize),
     Var(ReducIrVar),
-    Item(TermName, ReducIrTy),
+    Item(ReducIrTermName, ReducIrTy),
     // Value abstraction and application
     Abs(Box<[ReducIrVar]>, P<ReducIr<Ext>>),
     App(P<ReducIr<Ext>>, Vec<ReducIr<Ext>>),
@@ -222,6 +276,115 @@ impl<Ext> ReducIr<Ext> {
     }
 }
 
+pub trait ReducIrInPlaceFold {
+    type Ext;
+
+    fn fold_ir_in_place(&mut self, _: &mut ReducIrKind<Self::Ext>) {}
+
+    fn traverse_ir_in_place(&mut self, ir: &mut ReducIr<Self::Ext>) {
+        match ir.kind {
+            Case(_, ref mut discr, ref mut branches) => {
+                discr.as_mut().fold_in_place(self);
+                for branch in branches.iter_mut() {
+                    branch.fold_in_place(self)
+                }
+            }
+            App(ref mut head, ref mut spine) => {
+                head.as_mut().fold_in_place(self);
+                for arg in spine.iter_mut() {
+                    arg.fold_in_place(self)
+                }
+            }
+            Struct(ref mut elems) => {
+                for elem in elems.iter_mut() {
+                    elem.fold_in_place(self)
+                }
+            }
+            Tag(_, _, ref mut body)
+            | FieldProj(_, ref mut body)
+            | Abs(_, ref mut body)
+            | TyAbs(_, ref mut body)
+            | TyApp(ref mut body, _) => {
+                body.as_mut().fold_in_place(self);
+            }
+            _ => {}
+        };
+        self.fold_ir_in_place(&mut ir.kind);
+    }
+}
+
+pub trait ReducIrEndoFold: Sized {
+    type Ext: Clone;
+
+    fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
+        ReducIr::new(kind)
+    }
+
+    fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
+        match ir.kind() {
+            Abs(vars, body) => {
+                let body = body.fold(self);
+                self.fold_ir(Abs(vars.clone(), P::new(body)))
+            }
+            App(head, spine) => {
+                let head = head.fold(self);
+                let spine = spine.iter().map(|ir| ir.fold(self)).collect();
+                self.fold_ir(App(P::new(head), spine))
+            }
+            TyAbs(ty_var, body) => {
+                let body = body.fold(self);
+                self.fold_ir(TyAbs(*ty_var, P::new(body)))
+            }
+            TyApp(body, ty_app) => {
+                let body = body.fold(self);
+                self.fold_ir(TyApp(P::new(body), ty_app.clone()))
+            }
+            Struct(elems) => {
+                let elems = elems.iter().map(|e| e.fold(self)).collect();
+                self.fold_ir(Struct(elems))
+            }
+            FieldProj(indx, body) => {
+                let body = body.fold(self);
+                self.fold_ir(FieldProj(*indx, P::new(body)))
+            }
+            Tag(ty, tag, body) => {
+                let body = body.fold(self);
+                self.fold_ir(Tag(*ty, *tag, P::new(body)))
+            }
+            Case(ty, discr, branches) => {
+                let discr = discr.fold(self);
+                let branches = branches.iter().map(|branch| branch.fold(self)).collect();
+                self.fold_ir(Case(*ty, P::new(discr), branches))
+            }
+            Int(i) => self.fold_ir(Int(*i)),
+            Var(v) => self.fold_ir(Var(*v)),
+            Item(name, ty) => self.fold_ir(Item(*name, *ty)),
+
+            X(in_ext) => {
+                let out_ext = self.fold_ext(in_ext);
+                self.fold_ir(X(out_ext))
+            }
+        }
+    }
+}
+impl<F: ReducIrEndoFold + Sized> ReducIrFold for F {
+    type InExt = F::Ext;
+
+    type OutExt = F::Ext;
+
+    fn fold_ext(&mut self, ext: &Self::InExt) -> Self::OutExt {
+        ext.clone()
+    }
+
+    fn fold_ir(&mut self, kind: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
+        self.endofold_ir(kind)
+    }
+
+    fn traverse_ir(&mut self, ir: &ReducIr<Self::InExt>) -> ReducIr<Self::OutExt> {
+        self.endotraverse_ir(ir)
+    }
+}
+
 pub trait ReducIrFold: Sized {
     type InExt;
     type OutExt;
@@ -282,26 +445,30 @@ pub trait ReducIrFold: Sized {
     }
 }
 
-impl<F> ReducIrFold for &mut F
-where
-    F: ReducIrFold,
-{
-    type InExt = F::InExt;
-
-    type OutExt = F::OutExt;
-
-    fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
-        F::fold_ir(self, ir)
+impl<Ext> ReducIr<Ext> {
+    pub fn fold<F: ?Sized + ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
+        fold.traverse_ir(self)
     }
 
-    fn fold_ext(&mut self, ext: &Self::InExt) -> Self::OutExt {
-        F::fold_ext(self, ext)
+    pub fn fold_in_place<F: ?Sized + ReducIrInPlaceFold<Ext = Ext>>(&mut self, fold: &mut F) {
+        fold.traverse_ir_in_place(self)
     }
 }
 
-impl<Ext> ReducIr<Ext> {
-    pub fn fold<F: ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
-        fold.traverse_ir(self)
+impl<Ext: std::fmt::Debug> ReducIr<Ext> {
+    // Unwrap top level item nodes (TyAbs and Abs) before applying fold in place.
+    pub fn fold_in_place_inside_item<F: ?Sized + ReducIrInPlaceFold<Ext = Ext>>(
+        &mut self,
+        fold: &mut F,
+    ) {
+        let mut body = self;
+        while let TyAbs(_, ref mut inner) = body.kind {
+            body = inner.as_mut();
+        }
+        while let Abs(_, ref mut inner) = body.kind {
+            body = inner.as_mut()
+        }
+        fold.traverse_ir_in_place(body)
     }
 }
 
@@ -328,6 +495,82 @@ impl<Ext> ReducIr<Ext> {
         self.fold(&mut AssumeNoExt::default())
     }
 }
+
+impl ReducIr {
+    fn free_var_aux(
+        &self,
+        in_scope: &mut FxHashSet<ReducIrLocal>,
+        bound: &mut FxHashSet<ReducIrVar>,
+    ) {
+        match &self.kind {
+            Int(_) | Item(_, _) => {}
+            Var(v) => {
+                if !in_scope.contains(&v.var) {
+                    bound.insert(*v);
+                }
+            }
+            Abs(vars, body) => {
+                let tmp = in_scope.clone();
+                in_scope.extend(vars.iter().map(|v| v.var));
+                body.free_var_aux(in_scope, bound);
+                *in_scope = tmp;
+            }
+            App(func, spine) => {
+                func.free_var_aux(in_scope, bound);
+                for arg in spine.iter() {
+                    arg.free_var_aux(in_scope, bound);
+                }
+            }
+            TyAbs(_, body) => body.free_var_aux(in_scope, bound),
+            TyApp(body, _) => body.free_var_aux(in_scope, bound),
+            Struct(elems) => {
+                for e in elems.iter() {
+                    e.free_var_aux(in_scope, bound);
+                }
+            }
+            FieldProj(_, base) => base.free_var_aux(in_scope, bound),
+            Tag(_, _, val) => val.free_var_aux(in_scope, bound),
+            Case(_, discr, branches) => {
+                discr.free_var_aux(in_scope, bound);
+                for branch in branches.iter() {
+                    branch.free_var_aux(in_scope, bound);
+                }
+            }
+            X(_) => unreachable!(),
+        }
+    }
+
+    pub fn free_var_set(&self) -> FxHashSet<ReducIrVar> {
+        let mut free_vars = FxHashSet::default();
+        let mut in_scope = FxHashSet::default();
+        self.free_var_aux(&mut in_scope, &mut free_vars);
+        free_vars
+    }
+
+    pub fn free_vars<'a>(&'a self) -> Box<dyn Iterator<Item = ReducIrVar> + 'a> {
+        match &self.kind {
+            Int(_) | Item(_, _) => Box::new(std::iter::empty()),
+            Var(v) => Box::new(std::iter::once(*v)),
+            Abs(vars, body) => Box::new(body.free_vars().filter(move |v| !vars.contains(v))),
+            App(func, args) => Box::new(
+                func.free_vars()
+                    .chain(args.iter().flat_map(|arg| arg.free_vars())),
+            ),
+            TyAbs(_, body) => Box::new(body.free_vars()),
+            TyApp(head, _) => Box::new(head.free_vars()),
+            Struct(elems) => Box::new(elems.iter().flat_map(|e| e.free_vars())),
+            FieldProj(_, base) => Box::new(base.free_vars()),
+            Tag(_, _, base) => Box::new(base.free_vars()),
+            Case(_, discr, branches) => Box::new(
+                discr
+                    .free_vars()
+                    .chain(branches.iter().flat_map(|b| b.free_vars())),
+            ),
+            X(_) => unreachable!(),
+        }
+    }
+}
+
 pub trait TypeCheck {
     type Ext: Clone;
     fn type_check<'a>(
@@ -508,7 +751,7 @@ impl DelimReducIr {
 
     pub fn unbound_vars_with_bound(
         &self,
-        bound: FxHashSet<ReducIrVarId>,
+        bound: FxHashSet<ReducIrLocal>,
     ) -> impl Iterator<Item = ReducIrVar> + '_ {
         UnboundVars {
             bound,
@@ -537,7 +780,7 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
 }
 
 struct UnboundVars<'a> {
-    bound: FxHashSet<ReducIrVarId>,
+    bound: FxHashSet<ReducIrLocal>,
     stack: Vec<&'a DelimReducIr>,
 }
 impl Iterator for UnboundVars<'_> {

@@ -4,7 +4,7 @@ use aiahr_core::pretty::PrettyWithCtx;
 use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 
 use crate::ty::{Kind, ReducIrVarTy};
-use crate::{DelimCont, ReducIr, ReducIrKind, ReducIrTyErr, ReducIrVar};
+use crate::{DelimCont, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTyErr, ReducIrVar};
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
     fn pretty<'a>(&self, db: &DB, arena: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
@@ -266,7 +266,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
                 .append(ty.pretty(db, arena))
                 .parens(),
             X(xt) => xt.pretty(db, arena),
-            Item(name, _) => arena.text(name.name(db.as_core_db()).text(db.as_core_db()).clone()),
+            Item(name, _) => arena.text(name.name(db).text(db.as_core_db()).clone()),
         }
     }
 }
@@ -348,9 +348,18 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &ReducIrVa
     }
 }
 
+impl<'a, A: 'a, D> ::pretty::Pretty<'a, D, A> for ReducIrLocal
+where
+    D: ::pretty::DocAllocator<'a, A>,
+{
+    fn pretty(self, allocator: &'a D) -> DocBuilder<'a, D, A> {
+        self.id.pretty(allocator)
+    }
+}
+
 impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &ReducIrVar {
     fn pretty(self, arena: &'a D) -> DocBuilder<'a, D, A> {
-        arena.text("V").append(arena.as_string(self.var.0))
+        arena.text("V").append(arena.as_string(self.var.id.0))
     }
 }
 impl ReducIrVar {
@@ -362,7 +371,7 @@ impl ReducIrVar {
     ) -> DocBuilder<'a, RcAllocator> {
         arena
             .text("V")
-            .append(arena.as_string(self.var.0))
+            .append(arena.as_string(self.var.id.0))
             .append(arena.text(":"))
             .append(arena.softline())
             .append(self.ty.pretty_with(db).pretty(arena))
