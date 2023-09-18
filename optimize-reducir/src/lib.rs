@@ -1,13 +1,20 @@
-use aiahr_lower_reducir::ReducIrItem;
+use aiahr_core::modules::Module;
+use aiahr_lower_reducir::{ReducIrItem, ReducIrModule};
+use aiahr_reducir::zip_non_consuming::ZipNonConsuming;
 use rustc_hash::FxHashMap;
 use std::convert::Infallible;
 
-use aiahr_reducir::{ReducIr, ReducIrFold, ReducIrKind, ReducIrTermName};
+use aiahr_reducir::{Lets, ReducIr, ReducIrFold, ReducIrKind, ReducIrTermName};
 
 use crate::subst::{Subst, SubstTy};
 
 #[salsa::jar(db = Db)]
-pub struct Jar(ReducIrOptimizedItem, simple_reducir_item);
+pub struct Jar(
+    ReducIrOptimizedItem,
+    ReducIrOptimizedModule,
+    simple_reducir_item,
+    simple_reducir_module,
+);
 
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {
     fn as_opt_reducir_db(&self) -> &dyn crate::Db {
@@ -17,15 +24,28 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {
     fn simple_reducir_item(&self, item: ReducIrItem) -> Vec<ReducIrOptimizedItem> {
         simple_reducir_item(self.as_opt_reducir_db(), item)
     }
+
+    fn simple_reducir_module(&self, module: Module) -> ReducIrOptimizedModule {
+        let ir_module = self.lower_module_of(module);
+        simple_reducir_module(self.as_opt_reducir_db(), ir_module)
+    }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {}
 
 #[salsa::tracked]
 pub struct ReducIrOptimizedItem {
     #[id]
-    name: ReducIrTermName,
+    pub name: ReducIrTermName,
     #[return_ref]
-    item: ReducIr,
+    pub item: ReducIr<Lets>,
+}
+
+#[salsa::tracked]
+pub struct ReducIrOptimizedModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub items: Vec<ReducIrOptimizedItem>,
 }
 
 #[salsa::tracked]
@@ -46,6 +66,20 @@ fn simple_reducir_item(db: &dyn crate::Db, item: ReducIrItem) -> Vec<ReducIrOpti
             .map(|(name, ir)| ReducIrOptimizedItem::new(db, name, ir)),
     )
     .collect()
+}
+
+#[salsa::tracked]
+fn simple_reducir_module(db: &dyn crate::Db, ir_module: ReducIrModule) -> ReducIrOptimizedModule {
+    let lower_db = db.as_lower_reducir_db();
+    ReducIrOptimizedModule::new(
+        db,
+        ir_module.module(lower_db),
+        ir_module
+            .items(lower_db)
+            .iter()
+            .flat_map(|item| db.simple_reducir_item(*item))
+            .collect(),
+    )
 }
 
 mod subst {
@@ -125,16 +159,16 @@ mod subst {
 }
 
 mod lift {
-    use std::convert::Infallible;
 
     use aiahr_core::id::TermName;
     use aiahr_core::modules::Module;
-    use aiahr_reducir::{ReducIr, ReducIrInPlaceFold, ReducIrKind, ReducIrTermName, TypeCheck};
+    use aiahr_reducir::{
+        Lets, ReducIr, ReducIrInPlaceFold, ReducIrKind, ReducIrTermName, TypeCheck,
+    };
 
     struct EtaExpand;
-
     impl ReducIrInPlaceFold for EtaExpand {
-        type Ext = Infallible;
+        type Ext = Lets;
 
         fn fold_ir_in_place(&mut self, kind: &mut ReducIrKind<Self::Ext>) {
             if let ReducIrKind::Abs(_, _) = kind {
@@ -153,10 +187,10 @@ mod lift {
         db: &'a dyn crate::Db,
         module: Module,
         term_name: TermName,
-        lifts: Vec<(ReducIrTermName, ReducIr)>,
+        lifts: Vec<(ReducIrTermName, ReducIr<Lets>)>,
     }
     impl ReducIrInPlaceFold for LambdaLift<'_> {
-        type Ext = Infallible;
+        type Ext = Lets;
 
         fn fold_ir_in_place(&mut self, kind: &mut ReducIrKind<Self::Ext>) {
             if let ReducIrKind::Abs(_, _) = kind {
@@ -183,8 +217,8 @@ mod lift {
         db: &dyn crate::Db,
         module: Module,
         term_name: TermName,
-        mut ir: ReducIr,
-    ) -> (ReducIr, Vec<(ReducIrTermName, ReducIr)>) {
+        mut ir: ReducIr<Lets>,
+    ) -> (ReducIr<Lets>, Vec<(ReducIrTermName, ReducIr<Lets>)>) {
         let mut lam_lift = LambdaLift {
             db,
             module,
@@ -211,6 +245,41 @@ fn is_value(ir: &ReducIr) -> bool {
         ReducIrKind::Struct(elems) => elems.iter().all(is_value),
         ReducIrKind::FieldProj(_, base) => is_value(base),
         ReducIrKind::Tag(_, _, base) => is_value(base),
+    }
+}
+
+struct InsertLet;
+impl ReducIrFold for InsertLet {
+    type InExt = Infallible;
+
+    type OutExt = Lets;
+
+    fn fold_ext(&mut self, _: &Self::InExt) -> Self::OutExt {
+        unreachable!()
+    }
+
+    fn fold_ir(&mut self, kind: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
+        match kind {
+            ReducIrKind::App(head, spine) => match head.into_inner().kind {
+                ReducIrKind::Abs(vars, body) => {
+                    let mut vars_iter = vars.iter().copied().peekable();
+                    let mut args_iter = spine.into_iter().peekable();
+                    let binds = vars_iter
+                        .zip_non_consuming(&mut args_iter)
+                        .collect::<Vec<_>>();
+                    ReducIr::app(
+                        ReducIr::abss(
+                            vars_iter,
+                            // We want these lets inside the abs so they're not considered free.
+                            ReducIr::new(ReducIrKind::X(Lets { binds, body })),
+                        ),
+                        args_iter,
+                    )
+                }
+                head => ReducIr::app(ReducIr::new(head), spine),
+            },
+            kind => ReducIr::new(kind),
+        }
     }
 }
 
@@ -304,7 +373,7 @@ impl ReducIrFold for Simplify<'_> {
     }
 }
 
-fn simplify(db: &dyn crate::Db, item: ReducIrItem) -> ReducIr {
+fn simplify(db: &dyn crate::Db, item: ReducIrItem) -> ReducIr<Lets> {
     let lower_db = db.as_lower_reducir_db();
     let row_evs = item.row_evs(lower_db);
     let ir = item.mon_item(lower_db);
@@ -330,7 +399,150 @@ fn simplify(db: &dyn crate::Db, item: ReducIrItem) -> ReducIr {
         db,
         row_evs: inline_row_ev,
     })
+    .fold(&mut InsertLet)
 }
+
+/*/// Prompt handles "installing" our prompt into the stack and running an action under an
+/// updated effect row
+fn prompt_term(db: &dyn crate::Db, module: Module) -> ReducIr {
+    use ReducIrTyKind::*;
+    let m_ty = db.mk_reducir_ty(VarTy(2));
+    let upd_m = db.mk_reducir_ty(VarTy(1));
+    let a = db.mk_reducir_ty(VarTy(0));
+
+    let mark_ty = db.mk_reducir_ty(MarkerTy(a));
+    let upd_fun_ty = db.mk_fun_ty([m_ty], upd_m);
+    let body_fun_ty = db.mk_fun_ty([upd_m], db.mk_reducir_ty(ControlTy(upd_m, a)));
+    let ret_ty = db.mk_reducir_ty(ControlTy(m_ty, a));
+
+    let prompt_type = db.mk_forall_ty(
+        [Kind::Type, Kind::Type, Kind::Type],
+        db.mk_fun_ty(
+            [mark_ty, upd_fun_ty, body_fun_ty],
+            db.mk_fun_ty([m_ty], ret_ty),
+        ),
+    );
+    let top_level = ReducIrTermName::gen(db, "__mon_prompt", module);
+    let mut var_gen = IdGen::new();
+    let mut gen_local = || ReducIrLocal {
+        top_level,
+        id: var_gen.generate(),
+    };
+    let mark = ReducIrVar {
+        var: gen_local(),
+        ty: mark_ty,
+    };
+    let upd = ReducIrVar {
+        var: gen_local(),
+        ty: upd_fun_ty,
+    };
+    let body = ReducIrVar {
+        var: gen_local(),
+        ty: body_fun_ty,
+    };
+    let evv = ReducIrVar {
+        var: gen_local(),
+        ty: m_ty,
+    };
+    let x = ReducIrVar {
+        var: gen_local(),
+        ty: a,
+    };
+    let y = ReducIrVar {
+        var: gen_local(),
+        ty: db.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![mark_ty])),
+    };
+
+    let unit = db.mk_reducir_ty(ProductTy(vec![]));
+    let meq = ReducIr::new(ReducIrKind::Item(
+        ReducIrTermName::gen(db, "__mon_eqm", module),
+        db.mk_fun_ty(
+            [m_ty, m_ty],
+            db.mk_reducir_ty(CoproductTy(vec![unit, unit])),
+        ),
+    ));
+
+    /*
+      prompt : ∀𝜇 𝜇'. ∀𝛼 h. (𝜇 -> {Marker 𝜇 𝛼, h} -> Mon 𝜇' 𝛼) -> Marker 𝜇 𝛼 -> h -> Mon 𝜇' 𝛼 -> Mon 𝜇 𝛼
+      prompt upd m h e = 𝜆w. case e (upd w {m, h}) of
+        Pure x -> Pure x
+        Yield m' f k ->
+            case m == m' of
+                False -> Yield m' f (\x . prompt upd m h (k x))
+                True -> f (\x . prompt upd m h (k x)) w
+    */
+    let m_ = ReducIr::field_proj(0, ReducIr::var(y));
+    let f = ReducIr::field_proj(1, ReducIr::var(y));
+    let x = ReducIrVar { var: gen_local(), ty: db.mk_reducir_ty(ReducIrTyKind::IntTy) };
+    ReducIr::abss(
+        [mark, upd, body, evv],
+        ReducIr::case(
+            ret_ty,
+            ReducIr::app(
+                ReducIr::var(body),
+                [ReducIr::app(ReducIr::var(upd), [ReducIr::var(evv)])],
+            ),
+            [
+                ReducIr::abss(
+                    [x],
+                    ReducIr::new(ReducIrKind::Tag(ret_ty, 0, P::new(ReducIr::var(x)))),
+                ),
+                ReducIr::abss(
+                    [y],
+                    ReducIr::case(
+                        ret_ty,
+                        ReducIr::app(meq, [ReducIr::var(mark), m_]),
+                        [ReducIr::abss(
+                            [ReducIrVar {
+                                var: gen_local(),
+                                ty: unit,
+                            }],
+                            ReducIr::new(ReducIrKind::Tag(
+                                ret_ty,
+                                1,
+                                ReducIr::new(ReducIrKind::Struct(vec![
+                                    m_,
+                                    f,
+                                    ReducIr::abss(
+                                        [todo!()],
+                                        ReducIr::app(f, []),
+                                    ),
+                                ])),
+                            )),
+                        )],
+                    ),
+                ),
+            ],
+        ),
+    )
+}
+
+/// TODO: Return an item representing the bind implementation of our delimited continuation
+/// monad
+fn bind_item(&mut self) -> ReducIr {
+    /*
+    (e: Mon m a) |> (g : a -> Mon m b) : Mon m b =
+       𝜆w. case e w of
+           Pure x → g x w (monadic bind)
+           Yield m f k → Yield m f (𝜆x. g x |> k)
+    */
+    let m = self.mk_reducir_ty(VarTy(2));
+    let a = self.mk_reducir_ty(VarTy(1));
+    let b = self.mk_reducir_ty(VarTy(0));
+    let mon_m_b = self.mk_mon_ty(m, b);
+
+    let bind_type = self.mk_forall_ty(
+        [Kind::Type, Kind::Type, Kind::Type],
+        self.mk_fun_ty(
+            [self.mk_mon_ty(m, a), self.mk_fun_ty([a], mon_m_b)],
+            mon_m_b,
+        ),
+    );
+    ReducIr::new(Item(
+        ReducIrTermName::gen(self.db, "__mon_bind", self.current.module(self.db)),
+        bind_type,
+    ))
+}*/
 
 #[cfg(test)]
 mod tests {
@@ -415,9 +627,8 @@ effect Reader {
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                 ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
-                  (((_mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} -> { {}
-                                                                                        , {}
-                                                                                        }))
+                  (((__mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} ->
+                  {{}, {}}))
                     (fun [V18]
                       ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
                         V18
@@ -427,11 +638,11 @@ effect Reader {
                             {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun [V7, V8, V9]
                               (V8 V9 V9))}}))
                         ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}})
-                          (let (V16 (V1[3][0] V0))
-                            (fun [V0]
+                          (fun [V0]
+                            (let (V16 (V1[3][0] V0))
                               <1: {V16[0], (fun [V17] (V16[1][1] {} V17)), (fun [V0] V0)}>))
                           (fun [V21] (fun [V0] <0: (fun [V14] {V14, V21})>))))))
-                  (fun [V23] (let (V24 (V23 {})) (fun [V0] <0: V24>))))))"#]];
+                  (fun [V23] (fun [V0] (let (V24 (V23 {})) <0: V24>))))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
@@ -485,10 +696,8 @@ effect Reader {
             expect![[r#"
                 (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                     ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
-                      (((_mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} -> { {}
-                                                                                            , {}
-                                                                                            }))
-                        (f_lam_9 V1 V0))
+                      (((__mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} ->
+                      {{}, {}})) (f_lam_9 V1))
                       f_lam_11)))"#]],
             // f_lam_0
             expect!["(fun [V10, V11, V12] (V11 {} V10))"],
@@ -501,7 +710,9 @@ effect Reader {
             // f_lam_4
             expect!["(fun [V0] V0)"],
             // f_lam_5
-            expect!["(fun [V16, V0] <1: {V16[0], (f_lam_3 V16), f_lam_4}>)"],
+            expect![
+                "(fun [V1, V0] (let (V16 (V1[3][0] V0)) <1: {V16[0], (f_lam_3 V16), f_lam_4}>))"
+            ],
             // f_lam_6
             expect!["(fun [V21, V14] {V14, V21})"],
             // f_lam_7
@@ -510,17 +721,15 @@ effect Reader {
             expect!["(fun [V21] (f_lam_7 V21))"],
             // f_lam_9
             expect![[r#"
-                (fun [V1, V0, V18]
+                (fun [V1, V18]
                   ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
                     V18
                     (f_lam_2 V1 V18)
-                    ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}})
-                      (f_lam_5 (V1[3][0] V0))
-                      f_lam_8)))"#]],
+                    ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}}) (f_lam_5 V1) f_lam_8)))"#]],
             // f_lam_10
-            expect!["(fun [V24, V0] <0: V24>)"],
+            expect!["(fun [V23, V0] (let (V24 (V23 {})) <0: V24>))"],
             // f_lam_11
-            expect!["(fun [V23] (f_lam_10 (V23 {})))"],
+            expect!["(fun [V23] (f_lam_10 V23))"],
         ];
 
         assert_eq!(ir_and_lifts.len(), expects.len());

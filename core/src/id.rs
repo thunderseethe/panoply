@@ -253,22 +253,40 @@ impl<I, T> DerefMut for IdGen<I, T> {
     }
 }
 
-#[macro_export]
-macro_rules! define_ids {
-    ($($(#[$attr:meta])* $vis:vis $name:ident ;)*) => {
-        $($(#[$attr])*
-        pub struct $name(pub usize);
+#[derive(Debug, PartialEq, Eq)]
+pub struct IdSupply<I> {
+    next: u32,
+    _marker: PhantomData<I>,
+}
+impl<I> Default for IdSupply<I> {
+    fn default() -> Self {
+        Self {
+            next: 0,
+            _marker: PhantomData,
+        }
+    }
+}
+impl<I, T> From<&IdGen<I, T>> for IdSupply<I> {
+    fn from(value: &IdGen<I, T>) -> Self {
+        Self {
+            next: value.len().try_into().unwrap(),
+            _marker: PhantomData,
+        }
+    }
+}
+impl<I: Id> IdSupply<I> {
+    pub fn start_from(prev: &Self) -> Self {
+        Self {
+            next: prev.next,
+            ..Default::default()
+        }
+    }
 
-        impl $crate::id::Id for $name {
-            fn from_raw(raw: usize) -> Self {
-                $name(raw)
-            }
-
-            fn raw(&self) -> usize {
-                self.0
-            }
-        })*
-    };
+    pub fn supply_id(&mut self) -> I {
+        let id = I::from_raw(self.next as usize);
+        self.next += 1;
+        id
+    }
 }
 
 /// An identifier for a name resolved term definition
@@ -290,6 +308,24 @@ pub struct EffectName {
 pub struct EffectOpName {
     pub name: Ident,
     pub effect: EffectName,
+}
+
+#[macro_export]
+macro_rules! define_ids {
+    ($($(#[$attr:meta])* $vis:vis $name:ident ;)*) => {
+        $($(#[$attr])*
+        pub struct $name(pub usize);
+
+        impl $crate::id::Id for $name {
+            fn from_raw(raw: usize) -> Self {
+                $name(raw)
+            }
+
+            fn raw(&self) -> usize {
+                self.0
+            }
+        })*
+    };
 }
 
 define_ids!(
