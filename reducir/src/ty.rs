@@ -101,6 +101,14 @@ impl ReducIrTy {
             _ => Err(self),
         }
     }
+
+    pub fn is_fun_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> bool {
+        match self.kind(db.as_ir_db()) {
+            ReducIrTyKind::FunTy(_, _) => true,
+            ReducIrTyKind::ForallTy(_, ty) => ty.is_fun_ty(db),
+            _ => false,
+        }
+    }
 }
 
 fn default_fold_tykind<'db>(

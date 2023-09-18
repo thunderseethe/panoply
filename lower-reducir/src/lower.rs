@@ -843,7 +843,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
     fn fresh_marker_item(&mut self) -> ReducIr {
         let ret_ty = self.mk_reducir_ty(VarTy(0));
         ReducIr::new(Item(
-            ReducIrTermName::gen(self.db, "_mon_freshm", self.current.module(self.db)),
+            ReducIrTermName::gen(self.db, "__mon_freshm", self.current.module(self.db)),
             self.mk_forall_ty(
                 [Kind::Type, Kind::Type],
                 self.mk_fun_ty(

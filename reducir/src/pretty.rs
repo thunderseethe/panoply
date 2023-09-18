@@ -4,7 +4,7 @@ use aiahr_core::pretty::PrettyWithCtx;
 use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 
 use crate::ty::{Kind, ReducIrVarTy};
-use crate::{DelimCont, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTyErr, ReducIrVar};
+use crate::{DelimCont, Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTyErr, ReducIrVar};
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
     fn pretty<'a>(&self, db: &DB, arena: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
@@ -55,6 +55,40 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
                 )
                 .parens(),
         }
+    }
+}
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Lets {
+    fn pretty<'a>(&self, ctx: &DB, alloc: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
+        let binds_len = self.binds.len();
+        let mut binds_iter = self.binds.iter().map(|(var, defn)| {
+            var.pretty(alloc)
+                .append(alloc.space())
+                .append(defn.deref().pretty(ctx, alloc))
+                .parens()
+        });
+        let binds = if binds_len == 1 {
+            binds_iter.next().unwrap()
+        } else {
+            alloc
+                .space()
+                .append(
+                    alloc.intersperse(binds_iter, alloc.line().append(",").append(alloc.space())),
+                )
+                .append(alloc.line())
+                .brackets()
+        };
+
+        docs![
+            alloc,
+            "let",
+            alloc.line().append(binds).nest(2).group(),
+            alloc
+                .line()
+                .append(self.body.deref().pretty(ctx, alloc))
+                .nest(2)
+                .group()
+        ]
+        .parens()
     }
 }
 

@@ -4,8 +4,24 @@ version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dev-dependencies]
+aiahr-ast.workspace = true
+aiahr-desugar.workspace = true
+aiahr-lower-reducir.workspace = true
+aiahr-nameres.workspace = true
+aiahr-parser.workspace = true
+aiahr-tc.workspace = true
+aiahr-ty.workspace = true
+aiahr-test.workspace = true
+expect-test.workspace = true
+pretty.workspace = true
+wasmprinter = "0.2.64"
+wasmparser = "0.112.0"
 
 [dependencies]
-wasm-encoder = "0.32.0"
+aiahr-core.workspace = true
 aiahr-reducir.workspace = true
 aiahr-optimize-reducir.workspace = true
+rustc-hash.workspace = true
+salsa.workspace = true
+wasm-encoder = "0.32.0"

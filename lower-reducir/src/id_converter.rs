@@ -1,9 +1,9 @@
-use aiahr_core::id::{Id, IdGen};
+use aiahr_core::id::{Id, IdSupply};
 use rustc_hash::FxHashMap;
 
 pub(crate) struct IdConverter<VarIn, VarOut> {
     cache: FxHashMap<VarIn, VarOut>,
-    gen: IdGen<VarOut, ()>,
+    gen: IdSupply<VarOut>,
 }
 impl<VarIn, VarOut> IdConverter<VarIn, VarOut>
 where
@@ -13,7 +13,7 @@ where
     pub(crate) fn new() -> Self {
         Self {
             cache: FxHashMap::default(),
-            gen: IdGen::new(),
+            gen: IdSupply::default(),
         }
     }
 
@@ -21,10 +21,16 @@ where
         *self
             .cache
             .entry(var_id)
-            .or_insert_with(|| self.gen.generate())
+            .or_insert_with(|| self.gen.supply_id())
     }
 
     pub(crate) fn generate(&mut self) -> VarOut {
-        self.gen.generate()
+        self.gen.supply_id()
+    }
+}
+
+impl<In, Out> From<IdConverter<In, Out>> for IdSupply<Out> {
+    fn from(value: IdConverter<In, Out>) -> Self {
+        value.gen
     }
 }

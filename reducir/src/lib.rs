@@ -135,7 +135,14 @@ pub enum DelimCont {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum ReducIrKind<Ext = DelimCont> {
+pub struct Lets {
+    pub binds: Vec<(ReducIrVar, ReducIr<Lets>)>,
+    pub body: P<ReducIr<Lets>>,
+    // TODO: Join points?
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum ReducIrKind<Ext = Infallible> {
     Int(usize),
     Var(ReducIrVar),
     Item(ReducIrTermName, ReducIrTy),
@@ -253,6 +260,10 @@ impl<Ext> ReducIr<Ext> {
         ))
     }
 
+    pub fn case(ty: ReducIrTy, discr: Self, cases: impl IntoIterator<Item = Self>) -> Self {
+        ReducIr::new(Case(ty, P::new(discr), cases.into_iter().collect()))
+    }
+
     pub fn local(var: ReducIrVar, value: Self, mut body: Self) -> Self {
         if let App(ref mut head, ref mut spine) = body.kind {
             if let Abs(ref mut vars, _) = head.as_mut().kind {
@@ -274,10 +285,68 @@ impl<Ext> ReducIr<Ext> {
     pub fn field_proj(indx: usize, target: Self) -> Self {
         ReducIr::new(FieldProj(indx, P::new(target)))
     }
+
+    pub fn try_top_level_def(&self) -> Result<TopLevelDef<Ext>, &Self> {
+        let mut ir = self;
+        let mut ty_vars = vec![];
+        while let TyAbs(ty_var, body) = ir.kind() {
+            ty_vars.push(*ty_var);
+            ir = body;
+        }
+        match ir.kind() {
+            Abs(args, body) => Ok(TopLevelDef {
+                ty_vars,
+                vars: args,
+                body: body.deref(),
+            }),
+            _ => Err(self),
+        }
+    }
+}
+
+pub struct TopLevelDef<'a, Ext> {
+    pub ty_vars: Vec<ReducIrVarTy>,
+    pub vars: &'a [ReducIrVar],
+    pub body: &'a ReducIr<Ext>,
+}
+
+impl ReducIr<Lets> {
+    pub fn locals(
+        binds: impl IntoIterator<Item = (ReducIrVar, ReducIr<Lets>)>,
+        body: ReducIr<Lets>,
+    ) -> Self {
+        let mut binds_iter = binds.into_iter().peekable();
+        if binds_iter.peek().is_none() {
+            body
+        } else {
+            ReducIr::new(X(Lets {
+                binds: binds_iter.collect(),
+                body: P::new(body),
+            }))
+        }
+    }
+}
+
+pub trait TraverseExtInPlace {
+    fn traverse_in_place<F: ?Sized + ReducIrInPlaceFold<Ext = Self>>(&mut self, fold: &mut F);
+}
+
+impl TraverseExtInPlace for Infallible {
+    fn traverse_in_place<F: ?Sized + ReducIrInPlaceFold<Ext = Self>>(&mut self, _: &mut F) {
+        unreachable!()
+    }
+}
+impl TraverseExtInPlace for Lets {
+    fn traverse_in_place<F: ?Sized + ReducIrInPlaceFold<Ext = Self>>(&mut self, fold: &mut F) {
+        for (_, defn) in self.binds.iter_mut() {
+            defn.fold_in_place(fold);
+        }
+        self.body.as_mut().fold_in_place(fold)
+    }
 }
 
 pub trait ReducIrInPlaceFold {
-    type Ext;
+    type Ext: TraverseExtInPlace;
 
     fn fold_ir_in_place(&mut self, _: &mut ReducIrKind<Self::Ext>) {}
 
@@ -307,6 +376,7 @@ pub trait ReducIrInPlaceFold {
             | TyApp(ref mut body, _) => {
                 body.as_mut().fold_in_place(self);
             }
+            X(ref mut ext) => ext.traverse_in_place(self),
             _ => {}
         };
         self.fold_ir_in_place(&mut ir.kind);
@@ -496,7 +566,7 @@ impl<Ext> ReducIr<Ext> {
     }
 }
 
-impl ReducIr {
+impl ReducIr<Lets> {
     fn free_var_aux(
         &self,
         in_scope: &mut FxHashSet<ReducIrLocal>,
@@ -536,7 +606,13 @@ impl ReducIr {
                     branch.free_var_aux(in_scope, bound);
                 }
             }
-            X(_) => unreachable!(),
+            X(Lets { binds, body }) => {
+                for (var, defn) in binds.iter() {
+                    defn.free_var_aux(in_scope, bound);
+                    in_scope.insert(var.var);
+                }
+                body.free_var_aux(in_scope, bound);
+            }
         }
     }
 
@@ -546,7 +622,9 @@ impl ReducIr {
         self.free_var_aux(&mut in_scope, &mut free_vars);
         free_vars
     }
+}
 
+impl ReducIr {
     pub fn free_vars<'a>(&'a self) -> Box<dyn Iterator<Item = ReducIrVar> + 'a> {
         match &self.kind {
             Int(_) | Item(_, _) => Box::new(std::iter::empty()),
@@ -610,6 +688,27 @@ impl TypeCheck for DelimCont {
                 Ok(*ty)
             }
         }
+    }
+}
+impl TypeCheck for Lets {
+    type Ext = Self;
+
+    fn type_check<'a>(
+        &'a self,
+        ctx: &dyn crate::Db,
+    ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>> {
+        for (var, defn) in self.binds.iter() {
+            let defn_ty = defn.type_check(ctx)?;
+            if var.ty != defn_ty {
+                return Err(ReducIrTyErr::TyMismatch {
+                    left_ty: var.ty,
+                    left_ir: Cow::Owned(ReducIr::var(*var)),
+                    right_ty: defn_ty,
+                    right_ir: Cow::Borrowed(defn),
+                });
+            }
+        }
+        self.body.type_check(ctx)
     }
 }
 impl TypeCheck for Infallible {

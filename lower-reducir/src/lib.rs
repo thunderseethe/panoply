@@ -1,6 +1,9 @@
 use aiahr_ast::{Ast, AstModule, AstTerm, Term};
 use aiahr_core::{
-    id::{EffectName, EffectOpName, Id, TermName, TyVarId, VarId},
+    id::{
+        EffectName, EffectOpName, Id, IdSupply, ReducIrTyVarId, ReducIrVarId, TermName, TyVarId,
+        VarId,
+    },
     ident::Ident,
     modules::Module,
 };
@@ -65,6 +68,11 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
         lower_item(self.as_lower_reducir_db(), ast_term)
     }
 
+    fn reducir_var_supply(&self, term_name: TermName) -> &IdSupply<ReducIrVarId> {
+        self.lower_item(term_name)
+            .var_supply(self.as_lower_reducir_db())
+    }
+
     fn lower_module_of(&self, module: Module) -> ReducIrModule {
         let ast_module = self.desugar_module_of(module);
         self.lower_module(ast_module)
@@ -107,6 +115,10 @@ pub struct ReducIrItem {
     // List of row evidence items that this item references
     #[return_ref]
     pub row_evs: Vec<ReducIrRowEv>,
+    #[return_ref]
+    pub var_supply: IdSupply<ReducIrVarId>,
+    #[return_ref]
+    pub tyvar_supply: IdSupply<ReducIrTyVarId>,
 }
 
 #[salsa::tracked]
@@ -265,8 +277,8 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
     let name = term.name(ast_db);
     let ast = term.data(ast_db);
     let typed_item = db.type_scheme_of(name);
-    let (ir, mon_ir, row_evs) = lower(db, name, typed_item, ast);
-    ReducIrItem::new(db, name, ir, mon_ir, row_evs)
+    let (ir, mon_ir, row_evs, var_supply, tyvar_supply) = lower(db, name, typed_item, ast);
+    ReducIrItem::new(db, name, ir, mon_ir, row_evs, var_supply, tyvar_supply)
 }
 
 #[salsa::tracked]
@@ -378,7 +390,13 @@ fn lower(
     name: TermName,
     typed_item: TypedItem,
     ast: &Ast<VarId>,
-) -> (DelimReducIr, ReducIr, Vec<ReducIrRowEv>) {
+) -> (
+    DelimReducIr,
+    ReducIr,
+    Vec<ReducIrRowEv>,
+    IdSupply<ReducIrVarId>,
+    IdSupply<ReducIrTyVarId>,
+) {
     let tc_db = db.as_tc_db();
     let mut var_conv = IdConverter::new();
     let mut tyvar_conv = IdConverter::new();
@@ -437,7 +455,7 @@ fn lower(
         ))
     });
     let mon_ir = lower_ctx.lower_monadic_entry(&ir);
-    (ir, mon_ir, ev_row_items)
+    (ir, mon_ir, ev_row_items, var_conv.into(), tyvar_conv.into())
 }
 
 #[cfg(test)]
@@ -704,7 +722,7 @@ effect Reader {
                         (fun [V10, V11, V12] (V11 {} V10)))
                       (fun [V13, V14] (V2[0] V14 V13))))
                     ]
-                    (((_mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} ->
+                    (((__mon_freshm @ (Marker {} -> {{}, {}})) @ {1} -> (Control {1} {} ->
                     {{}, {}}))
                       (fun [V18]
                         ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
