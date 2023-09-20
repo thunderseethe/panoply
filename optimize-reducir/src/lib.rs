@@ -133,6 +133,15 @@ mod subst {
                         needle: self.needle.clone().shift(self.db.as_ir_db(), 1),
                     })),
                 )),
+                ReducIrKind::TyApp(body, ty_app) => {
+                    let ty_app = match ty_app {
+                        ReducIrTyApp::Ty(ty) => {
+                            ReducIrTyApp::Ty(self.needle.clone().subst_into(self.db.as_ir_db(), ty))
+                        }
+                        _ => todo!(),
+                    };
+                    ReducIr::new(ReducIrKind::TyApp(body, ty_app))
+                }
                 ReducIrKind::Var(var) => ReducIr::var(ReducIrVar {
                     var: var.var,
                     ty: self.subst(var.ty),
@@ -665,7 +674,6 @@ effect Reader {
     }
 
     #[test]
-    #[ignore = "type error with new __mon_freshm inling"]
     fn simplify_state_get() {
         let db = TestDatabase::default();
 
@@ -685,7 +693,7 @@ effect Reader {
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                 ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
-                  (let (V18 ((__mon_generate_marker @ T1) {}))
+                  (let (V18 ((__mon_generate_marker @ {} -> {{}, {}}) {}))
                     ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
                       V18
                       (fun [V0]
@@ -752,7 +760,7 @@ effect Reader {
             expect![[r#"
                 (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                     ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
-                      (let (V18 ((__mon_generate_marker @ T1) {}))
+                      (let (V18 ((__mon_generate_marker @ {} -> {{}, {}}) {}))
                         ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
                           V18
                           (f_lam_2 V1 V18)
@@ -782,8 +790,6 @@ effect Reader {
             expect!["(fun [V23, V0] (let (V24 (V23 {})) <0: V24>))"],
             // f_lam_10
             expect!["(fun [V23] (f_lam_9 V23))"],
-            // f_lam_11
-            // expect!["(fun [V23] (f_lam_10 V23))"],
         ];
 
         assert_eq!(ir_and_lifts.len(), expects.len());
