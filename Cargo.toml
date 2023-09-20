@@ -42,6 +42,7 @@ members = [
     "emit-wasm",
     "interpreter",
     "lower-reducir",
+    "medir",
     "nameres",
     "optimize-reducir",
     "parser",
@@ -66,6 +67,7 @@ aiahr-emit-wasm = { path = "emit-wasm" }
 aiahr-nameres = { path = "nameres" }
 aiahr-interpreter = { path = "interpreter" }
 aiahr-lower-reducir = { path = "lower-reducir" }
+aiahr-medir = { path = "medir" }
 aiahr-optimize-reducir = { path = "optimize-reducir" }
 aiahr-parser = { path = "parser" }
 aiahr-reducir = { path = "reducir" }
