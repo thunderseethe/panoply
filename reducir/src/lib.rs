@@ -679,9 +679,7 @@ impl TypeCheck for DelimCont {
             DelimCont::Yield(ty, marker, body) => {
                 let marker_ty = marker.type_check(ctx)?;
                 let MarkerTy(_) = marker_ty.kind(ctx) else {
-                    return Err(ReducIrTyErr::ExpectedMarkerTy(
-                        marker_ty,
-                    ));
+                    return Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty));
                 };
                 // We want to make sure body type checks but we don't actually use the result
                 let _ = body.type_check(ctx)?;
