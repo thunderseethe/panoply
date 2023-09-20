@@ -340,13 +340,17 @@ pub TyVarId;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub VarId;
 
-/// Uniquely identifies variables in IR. Unique within a module.
+/// Uniquely identifies variables in ReducIR. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub ReducIrVarId;
 
 /// Uniquely identifies an IR type. Unique within a module.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
 pub ReducIrTyVarId;
+
+/// Uniquely identifies variables in MedIR. Unique within a module.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub MedIrVarId;
 );
 
 impl<'a, D, A: 'a> Pretty<'a, D, A> for VarId
