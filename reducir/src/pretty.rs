@@ -398,9 +398,9 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &ReducIrVa
 }
 impl ReducIrVar {
     #[allow(dead_code)]
-    fn pretty_with_type<'a>(
+    fn pretty_with_type<'a, DB: ?Sized + crate::Db>(
         &self,
-        db: &dyn crate::Db,
+        db: &DB,
         arena: &'a RcAllocator,
     ) -> DocBuilder<'a, RcAllocator> {
         arena

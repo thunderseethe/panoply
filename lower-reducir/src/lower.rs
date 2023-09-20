@@ -847,7 +847,10 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             self.mk_forall_ty(
                 [Kind::Type, Kind::Type],
                 self.mk_fun_ty(
-                    [self.mk_fun_ty([self.mk_reducir_ty(VarTy(1))], ret_ty)],
+                    [self.mk_fun_ty(
+                        [self.mk_reducir_ty(MarkerTy(self.mk_reducir_ty(VarTy(1))))],
+                        ret_ty,
+                    )],
                     ret_ty,
                 ),
             ),
@@ -1193,11 +1196,15 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             Item(item, ty) => ReducIr::new(Item(*item, *ty)),
             X(DelimCont::NewPrompt(mark_var, ir)) => {
                 let x = self.lower_monadic(evv_ty, ir);
+                let a_ty = match mark_var.ty.kind(self.db.as_ir_db()) {
+                    MarkerTy(a_ty) => a_ty,
+                    _ => unreachable!(),
+                };
                 let ir = ReducIr::app(
                     ReducIr::ty_app(
                         self.fresh_marker_item(),
                         [
-                            ReducIrTyApp::Ty(mark_var.ty),
+                            ReducIrTyApp::Ty(a_ty),
                             ReducIrTyApp::Ty(
                                 x.type_check(ir_db).map_err_pretty_with(ir_db).unwrap(),
                             ),
