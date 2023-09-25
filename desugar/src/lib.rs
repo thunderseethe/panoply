@@ -351,7 +351,7 @@ impl<'a> DesugarCtx<'a> {
                             .label
                             .join_spans(&self.arenas[fields.first.target].spanned(self.arenas)),
                     );
-                    fields.elems.iter().fold(Ok(head), |concat, (_, field)| {
+                    fields.elems.iter().try_fold(head, |concat, (_, field)| {
                         let term = self.ds_term(field.target)?;
                         let right = self.terms.alloc(Label {
                             label: field.label.value,
@@ -361,11 +361,11 @@ impl<'a> DesugarCtx<'a> {
                             .label
                             .join_spans(&self.arenas[field.target].spanned(self.arenas));
                         self.spans.insert(right, span);
-                        let span = self.spans[&concat?].join_spans(&span);
+                        let span = self.spans[&concat].join_spans(&span);
                         Ok(self.mk_term(
                             span,
                             Concat {
-                                left: concat?,
+                                left: concat,
                                 right,
                             },
                         ))

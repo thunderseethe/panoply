@@ -7,4 +7,7 @@ edition.workspace = true
 
 [dependencies]
 aiahr-core.workspace = true
+aiahr-medir.workspace = true
+aiahr-optimize-reducir.workspace = true
 aiahr-reducir.workspace = true
+salsa.workspace = true

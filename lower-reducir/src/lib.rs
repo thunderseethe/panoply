@@ -4,6 +4,7 @@ use aiahr_core::{
         EffectName, EffectOpName, Id, IdSupply, ReducIrTyVarId, ReducIrVarId, TermName, TyVarId,
         VarId,
     },
+    id_converter::IdConverter,
     ident::Ident,
     modules::Module,
 };
@@ -21,8 +22,6 @@ use aiahr_ty::{
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 
-pub(crate) mod id_converter;
-use id_converter::IdConverter;
 use rustc_hash::FxHashMap;
 
 use crate::lower::{LowerTyCtx, LowerTySchemeCtx};

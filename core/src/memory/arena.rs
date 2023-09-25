@@ -5,7 +5,7 @@ use bumpalo_herd::Member;
 pub trait Arena<T> {
     /// Stores the given value, persisting it for the lifetime of this object.
     fn alloc(&self, value: T) -> &T {
-        &self.alloc_slice_by_iter([value].into_iter())[0]
+        &self.alloc_slice_by_iter([value])[0]
     }
 
     /// Stores the given values in a slice, persisting them for the lifetime of this object.
