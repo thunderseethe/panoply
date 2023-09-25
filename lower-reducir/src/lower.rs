@@ -1,6 +1,7 @@
 use aiahr_ast::{Ast, Direction, Term};
 use aiahr_core::{
     id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
+    id_converter::IdConverter,
     modules::Module,
     pretty::PrettyErrorWithDb,
 };
@@ -23,7 +24,6 @@ use rustc_hash::FxHashMap;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv},
-    id_converter::IdConverter,
     lower_row_ev, ReducIrEffectInfo, ReducIrRowEv,
 };
 /// Unwrap a type into it a product and return the product's row.

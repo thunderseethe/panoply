@@ -6,6 +6,7 @@ pub mod displayer;
 pub mod file;
 pub mod graph;
 pub mod id;
+pub mod id_converter;
 pub mod indexed;
 pub mod loc;
 pub mod memory;
