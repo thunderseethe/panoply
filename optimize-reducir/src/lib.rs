@@ -608,8 +608,8 @@ effect Reader {
                         (fun [V0]
                           (let (V16 (V1[3][0] V0))
                             <1: {V16[0], (fun [V17] (V16[1][1] {} V17)), (fun [V0] V0)}>))
-                        (fun [V27] (fun [V0] <0: (fun [V14] {V14, V27})>)))))
-                  (fun [V29] (fun [V0] (let (V30 (V29 {})) <0: V30>))))))"#]];
+                        (fun [V21] (fun [V0] <0: (fun [V14] {V14, V21})>)))))
+                  (fun [V23] (fun [V0] (let (V24 (V23 {})) <0: V24>))))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
