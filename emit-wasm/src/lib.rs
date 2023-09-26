@@ -679,6 +679,7 @@ effect Reader {
     }
 
     #[test]
+    #[ignore = "Turn off this test until we can emit-wasm from medir"]
     fn test_simple_get() {
         let db = TestDatabase::default();
 

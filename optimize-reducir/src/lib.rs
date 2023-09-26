@@ -1,4 +1,4 @@
-use aiahr_core::id::ReducIrTyVarId;
+use aiahr_core::id::{ReducIrTyVarId, TermName};
 use aiahr_core::modules::Module;
 use aiahr_lower_reducir::{ReducIrItem, ReducIrModule};
 use aiahr_reducir::ty::{Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy};
@@ -25,7 +25,12 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 
-    fn simple_reducir_item(&self, item: ReducIrItem) -> Vec<ReducIrOptimizedItem> {
+    fn simplify_reducir_for_name(&self, name: TermName) -> ReducIrOptimizedItem {
+        let reducir_item = self.lower_item(name);
+        self.simple_reducir_item(reducir_item)
+    }
+
+    fn simple_reducir_item(&self, item: ReducIrItem) -> ReducIrOptimizedItem {
         simple_reducir_item(self.as_opt_reducir_db(), item)
     }
 
@@ -53,23 +58,11 @@ pub struct ReducIrOptimizedModule {
 }
 
 #[salsa::tracked]
-fn simple_reducir_item(db: &dyn crate::Db, item: ReducIrItem) -> Vec<ReducIrOptimizedItem> {
+fn simple_reducir_item(db: &dyn crate::Db, item: ReducIrItem) -> ReducIrOptimizedItem {
     let ir = simplify(db, item);
 
-    let core_db = db.as_core_db();
     let term_name = item.name(db.as_lower_reducir_db());
-    let (lam_ir, lifts) = lift::lambda_lift(db, term_name.module(core_db), term_name, ir);
-    std::iter::once(ReducIrOptimizedItem::new(
-        db,
-        ReducIrTermName::Term(item.name(db.as_lower_reducir_db())),
-        lam_ir,
-    ))
-    .chain(
-        lifts
-            .into_iter()
-            .map(|(name, ir)| ReducIrOptimizedItem::new(db, name, ir)),
-    )
-    .collect()
+    ReducIrOptimizedItem::new(db, ReducIrTermName::Term(term_name), ir)
 }
 
 #[salsa::tracked]
@@ -81,7 +74,7 @@ fn simple_reducir_module(db: &dyn crate::Db, ir_module: ReducIrModule) -> ReducI
         ir_module
             .items(lower_db)
             .iter()
-            .flat_map(|item| db.simple_reducir_item(*item))
+            .map(|item| db.simple_reducir_item(*item))
             .collect(),
     )
 }
@@ -740,67 +733,67 @@ effect Reader {
         expect_ty.assert_eq(&simple_ty.pretty_with(&db).pprint().pretty(80).to_string());
     }
 
-    #[test]
-    fn lambda_lift_state_get() {
-        let db = TestDatabase::default();
+    /*#[test]
+        fn lambda_lift_state_get() {
+            let db = TestDatabase::default();
 
-        let ir = lower_mon_snippet(
-            &db,
-            r#"
-(with {
-    get = |x| |k| |s| k(s)(s),
-    put = |x| |k| |s| k({})(x),
-    return = |x| |s| {state = s, value = x},
-} do State.get({}))({})"#,
-        );
-        let ir_and_lifts = db.simple_reducir_item(ir);
+            let ir = lower_mon_snippet(
+                &db,
+                r#"
+    (with {
+        get = |x| |k| |s| k(s)(s),
+        put = |x| |k| |s| k({})(x),
+        return = |x| |s| {state = s, value = x},
+    } do State.get({}))({})"#,
+            );
+            let ir_and_lifts = db.simple_reducir_item(ir);
 
-        let expects = vec![
-            // f ir
-            expect![[r#"
-                (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                    ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
-                      (let (V18 ((__mon_generate_marker @ {} -> {{}, {}}) {}))
-                        ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
-                          V18
-                          (f_lam_2 V1 V18)
-                          ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}}) (f_lam_5 V1) f_lam_8)))
-                      f_lam_10)))"#]],
-            // f_lam_0
-            expect!["(fun [V10, V11, V12] (V11 {} V10))"],
-            // f_lam_1
-            expect!["(fun [V7, V8, V9] (V8 V9 V9))"],
-            // f_lam_2
-            expect!["(fun [V1, V18, V0] (V1[0] V0 {V18, {f_lam_0, f_lam_1}}))"],
-            // f_lam_3
-            expect!["(fun [V16, V17] (V16[1][1] {} V17))"],
-            // f_lam_4
-            expect!["(fun [V0] V0)"],
-            // f_lam_5
-            expect![
-                "(fun [V1, V0] (let (V16 (V1[3][0] V0)) <1: {V16[0], (f_lam_3 V16), f_lam_4}>))"
-            ],
-            // f_lam_6
-            expect!["(fun [V21, V14] {V14, V21})"],
-            // f_lam_7
-            expect!["(fun [V21, V0] <0: (f_lam_6 V21)>)"],
-            // f_lam_8
-            expect!["(fun [V21] (f_lam_7 V21))"],
-            // f_lam_9
-            expect!["(fun [V23, V0] (let (V24 (V23 {})) <0: V24>))"],
-            // f_lam_10
-            expect!["(fun [V23] (f_lam_9 V23))"],
-        ];
+            let expects = vec![
+                // f ir
+                expect![[r#"
+                    (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
+                        ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
+                          (let (V18 ((__mon_generate_marker @ {} -> {{}, {}}) {}))
+                            ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
+                              V18
+                              (f_lam_2 V1 V18)
+                              ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}}) (f_lam_5 V1) f_lam_8)))
+                          f_lam_10)))"#]],
+                // f_lam_0
+                expect!["(fun [V10, V11, V12] (V11 {} V10))"],
+                // f_lam_1
+                expect!["(fun [V7, V8, V9] (V8 V9 V9))"],
+                // f_lam_2
+                expect!["(fun [V1, V18, V0] (V1[0] V0 {V18, {f_lam_0, f_lam_1}}))"],
+                // f_lam_3
+                expect!["(fun [V16, V17] (V16[1][1] {} V17))"],
+                // f_lam_4
+                expect!["(fun [V0] V0)"],
+                // f_lam_5
+                expect![
+                    "(fun [V1, V0] (let (V16 (V1[3][0] V0)) <1: {V16[0], (f_lam_3 V16), f_lam_4}>))"
+                ],
+                // f_lam_6
+                expect!["(fun [V21, V14] {V14, V21})"],
+                // f_lam_7
+                expect!["(fun [V21, V0] <0: (f_lam_6 V21)>)"],
+                // f_lam_8
+                expect!["(fun [V21] (f_lam_7 V21))"],
+                // f_lam_9
+                expect!["(fun [V23, V0] (let (V24 (V23 {})) <0: V24>))"],
+                // f_lam_10
+                expect!["(fun [V23] (f_lam_9 V23))"],
+            ];
 
-        assert_eq!(ir_and_lifts.len(), expects.len());
-        for (ir, expect) in ir_and_lifts.into_iter().zip(expects.into_iter()) {
-            let pretty_ir = ir
-                .item(&db)
-                .pretty_with(&db)
-                .pprint()
-                .pretty(80)
-                .to_string();
-            expect.assert_eq(&pretty_ir)
-        }
-    }
+            assert_eq!(ir_and_lifts.len(), expects.len());
+            for (ir, expect) in ir_and_lifts.into_iter().zip(expects.into_iter()) {
+                let pretty_ir = ir
+                    .item(&db)
+                    .pretty_with(&db)
+                    .pprint()
+                    .pretty(80)
+                    .to_string();
+                expect.assert_eq(&pretty_ir)
+            }
+        }*/
 }

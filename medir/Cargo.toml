@@ -8,3 +8,4 @@ edition.workspace = true
 [dependencies]
 aiahr-core.workspace = true
 aiahr-reducir.workspace = true
+pretty.workspace = true

@@ -4,7 +4,9 @@ use aiahr_core::pretty::PrettyWithCtx;
 use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 
 use crate::ty::{Kind, ReducIrVarTy};
-use crate::{DelimCont, Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTyErr, ReducIrVar};
+use crate::{
+    DelimCont, Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr, ReducIrVar,
+};
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
     fn pretty<'a>(&self, db: &DB, arena: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
@@ -410,5 +412,11 @@ impl ReducIrVar {
             .append(arena.softline())
             .append(self.ty.pretty_with(db).pretty(arena))
             .parens()
+    }
+}
+
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTermName {
+    fn pretty<'a>(&self, ctx: &DB, alloc: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
+        alloc.as_string(self.name(ctx).text(ctx.as_core_db()))
     }
 }
