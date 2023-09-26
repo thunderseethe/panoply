@@ -103,7 +103,7 @@ impl ReducIrTy {
     }
 
     pub fn is_fun_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> bool {
-        match self.kind(db.as_ir_db()) {
+        match self.kind(db.as_reducir_db()) {
             ReducIrTyKind::FunTy(_, _) => true,
             ReducIrTyKind::ForallTy(_, ty) => ty.is_fun_ty(db),
             _ => false,
@@ -353,7 +353,7 @@ where
     DB: ?Sized + crate::Db,
 {
     fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
-        ReducIrTy::new(self.as_ir_db(), kind)
+        ReducIrTy::new(self.as_reducir_db(), kind)
     }
 
     fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
@@ -378,7 +378,7 @@ where
         if args.peek().is_none() {
             ret
         } else {
-            match ret.kind(self.as_ir_db()) {
+            match ret.kind(self.as_reducir_db()) {
                 ReducIrTyKind::FunTy(iargs, ret) => self.mk_reducir_ty(ReducIrTyKind::FunTy(
                     args.chain(iargs.iter().copied()).collect(),
                     ret,

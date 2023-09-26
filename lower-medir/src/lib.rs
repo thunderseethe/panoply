@@ -3,7 +3,7 @@ use aiahr_core::id_converter::IdConverter;
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
 use aiahr_medir::{self as medir};
-use aiahr_optimize_reducir::{ReducIrOptimizedItem, ReducIrOptimizedModule};
+use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 use medir::{MedIrItem, MedIrModule};
 
 mod lower;
@@ -40,38 +40,32 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {}
 
 #[salsa::tracked]
-fn lower_item(db: &dyn crate::Db, term: ReducIrOptimizedItem) -> Vec<MedIrItem> {
-    let opt_db = db.as_opt_reducir_db();
+fn lower_item(db: &dyn crate::Db, term: OptimizedReducIrItem) -> Vec<MedIrItem> {
+    let reducir_db = db.as_reducir_db();
+    let medir_db = db.as_medir_db();
     let mut converter = IdConverter::new();
-    let mut ctx = lower::LowerCtx::new(db, term.name(opt_db), &mut converter);
-    let defn = ctx.lower_item(term.item(opt_db));
+    let mut ctx = lower::LowerCtx::new(db, term.name(reducir_db), &mut converter);
+    let defn = ctx.lower_item(term.item(reducir_db));
     // This is to make lifetimes work how we need them
     let lifts = ctx.lifts;
     let supply: IdSupply<_> = converter.into();
     let mut defns = lifts
         .into_iter()
-        .map(|defn| {
-            MedIrItem::new(
-                db.as_medir_db(),
-                defn.name,
-                defn,
-                IdSupply::start_from(&supply),
-            )
-        })
+        .map(|defn| MedIrItem::new(medir_db, defn.name, defn, IdSupply::start_from(&supply)))
         .collect::<Vec<_>>();
-    defns.insert(0, MedIrItem::new(db.as_medir_db(), defn.name, defn, supply));
+    defns.insert(0, MedIrItem::new(medir_db, defn.name, defn, supply));
     defns
 }
 
 #[salsa::tracked]
-fn lower_module(db: &dyn crate::Db, module: ReducIrOptimizedModule) -> MedIrModule {
-    let opt_db = db.as_opt_reducir_db();
+fn lower_module(db: &dyn crate::Db, module: OptimizedReducIrModule) -> MedIrModule {
+    let reducir_db = db.as_reducir_db();
     let items = module
-        .items(opt_db)
+        .items(reducir_db)
         .iter()
         .flat_map(|opt_item| lower_item(db, *opt_item))
         .collect();
-    let module = module.module(opt_db);
+    let module = module.module(reducir_db);
     MedIrModule::new(db.as_medir_db(), module, items)
 }
 

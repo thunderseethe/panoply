@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use aiahr_core::id::{IdSupply, ReducIrVarId};
 use aiahr_core::modules::Module;
-use aiahr_optimize_reducir::{ReducIrOptimizedItem, ReducIrOptimizedModule};
+use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 use aiahr_reducir::ty::{ReducIrTy, ReducIrTyKind};
 use aiahr_reducir::{
     Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck, P,
@@ -39,7 +39,7 @@ enum WasmType {
 }
 
 fn wasm_ty(db: &dyn crate::Db, ty: ReducIrTy) -> WasmType {
-    match ty.kind(db.as_ir_db()) {
+    match ty.kind(db.as_reducir_db()) {
         ReducIrTyKind::IntTy | ReducIrTyKind::MarkerTy(_) => WasmType::Val(ValType::I32),
         ReducIrTyKind::FunTy(args, _) => {
             WasmType::Comp(StructuralType::Func(wasm_encoder::FuncType::new(
@@ -111,7 +111,9 @@ fn anf(
             binds: &mut Vec<(ReducIrVar, ReducIr<Lets>)>,
             ir: &ReducIr<Lets>,
         ) -> ReducIrVar {
-            let ty = ir.type_check(self.db.as_ir_db()).expect("Arg to typecheck");
+            let ty = ir
+                .type_check(self.db.as_reducir_db())
+                .expect("Arg to typecheck");
             let (ir_binds, body) = self.aux(ir);
             binds.extend(ir_binds);
             let var = ReducIrVar {
@@ -303,9 +305,9 @@ impl TypeSect {
 
 fn emit_wasm_module(
     db: &dyn crate::Db,
-    opt_module: ReducIrOptimizedModule,
+    opt_module: OptimizedReducIrModule,
 ) -> wasm_encoder::Module {
-    let opt_db = db.as_opt_reducir_db();
+    let reducir_db = db.as_reducir_db();
     let mut funcs = wasm_encoder::FunctionSection::new();
     let mut types = wasm_encoder::TypeSection::new();
 
@@ -327,41 +329,33 @@ fn emit_wasm_module(
     imports.import("intrinsic", "__mon_bind", EntityType::Function(2));
     let num_imports = imports.len();
 
-    let items = opt_module.items(db.as_opt_reducir_db());
+    let items = opt_module.items(db.as_reducir_db());
     let mut type_sect = TypeSect::new(types);
     let mut item_indices = items
         .iter()
         .enumerate()
         .map(|(func_indx, item)| {
-            let ir = item.item(opt_db);
-            let ty = ir.type_check(db.as_ir_db()).unwrap();
+            let ir = item.item(reducir_db);
+            let ty = ir.type_check(reducir_db).unwrap();
             let ty_indx = type_sect.emit_fun_ty(db, ty);
             funcs.function(ty_indx);
             let indx: u32 = func_indx.try_into().unwrap();
-            let name = item.name(db.as_opt_reducir_db());
+            let name = item.name(reducir_db);
             name_map.append(indx + num_imports, name.name(db).text(db.as_core_db()));
             (name, indx + num_imports)
         })
         .collect::<FxHashMap<_, _>>();
 
     item_indices.insert(
-        ReducIrTermName::gen(
-            db,
-            "__mon_generate_marker",
-            opt_module.module(db.as_opt_reducir_db()),
-        ),
+        ReducIrTermName::gen(db, "__mon_generate_marker", opt_module.module(reducir_db)),
         0,
     );
     item_indices.insert(
-        ReducIrTermName::gen(db, "__mon_bind", opt_module.module(db.as_opt_reducir_db())),
+        ReducIrTermName::gen(db, "__mon_bind", opt_module.module(reducir_db)),
         1,
     );
     item_indices.insert(
-        ReducIrTermName::gen(
-            db,
-            "__mon_prompt",
-            opt_module.module(db.as_opt_reducir_db()),
-        ),
+        ReducIrTermName::gen(db, "__mon_prompt", opt_module.module(reducir_db)),
         2,
     );
 
@@ -373,7 +367,7 @@ fn emit_wasm_module(
 
     let mut names = NameSection::new();
     let core_db = db.as_core_db();
-    names.module(opt_module.module(opt_db).name(core_db).text(core_db));
+    names.module(opt_module.module(reducir_db).name(core_db).text(core_db));
     names.functions(&name_map);
 
     let mut globals = GlobalSection::new();
@@ -397,11 +391,11 @@ fn emit_wasm_module(
 
 fn emit_wasm_item(
     db: &dyn crate::Db,
-    opt_item: ReducIrOptimizedItem,
+    opt_item: OptimizedReducIrItem,
     item_indices: &FxHashMap<ReducIrTermName, u32>,
     type_sect: &mut TypeSect,
 ) -> Function {
-    let item = opt_item.item(db.as_opt_reducir_db());
+    let item = opt_item.item(db.as_reducir_db());
 
     struct InstrEmitter<'a, 'i> {
         db: &'a dyn crate::Db,
@@ -595,9 +589,9 @@ fn emit_wasm_item(
                 .enumerate()
                 .map(|(indx, var)| (var.var, indx.try_into().unwrap()))
                 .collect();
-            let opt_db = db.as_opt_reducir_db();
-            let name = opt_item.name(opt_db);
-            let mut supply = match opt_item.name(opt_db) {
+            let reducir_db = db.as_reducir_db();
+            let name = opt_item.name(reducir_db);
+            let mut supply = match opt_item.name(reducir_db) {
                 ReducIrTermName::Term(term_name) => {
                     IdSupply::start_from(db.reducir_var_supply(term_name))
                 }

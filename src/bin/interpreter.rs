@@ -15,7 +15,7 @@ fn main() -> eyre::Result<()> {
         canonicalize_path_set(args.files.iter().chain(std::iter::once(&args.main_file)))?;
     let _ = create_source_file_set(&db, uniq_paths)?;
 
-    let opt_ir = db.lower_item_for_file_name(args.main_file, db.ident_str("main"));
+    let opt_ir = db.lower_reducir_item_for_file_name(args.main_file, db.ident_str("main"));
 
     let ir = match opt_ir {
         Some(ir) => ir,
