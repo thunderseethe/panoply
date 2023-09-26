@@ -48,6 +48,7 @@ pub struct Jar(
     lower_item,
     lower_row_ev,
     lower_mon_item,
+    lower_mon_module,
     effect_handler_ir_ty,
 );
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
@@ -335,6 +336,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
     )
 }
 
+#[salsa::tracked]
 fn lower_mon_module(db: &dyn crate::Db, module: ReducIrModule) -> MonReducIrModule {
     let reducir_db = db.as_reducir_db();
     let items = module
