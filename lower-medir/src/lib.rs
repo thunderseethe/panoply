@@ -1,12 +1,14 @@
-use aiahr_core::id::{IdSupply, MedIrVarId, TermName};
+use aiahr_core::id::{IdSupply, TermName};
 use aiahr_core::id_converter::IdConverter;
 use aiahr_core::ident::Ident;
-use aiahr_medir::{self as medir, MedIrItemName};
-use aiahr_optimize_reducir::ReducIrOptimizedItem;
+use aiahr_core::modules::Module;
+use aiahr_medir::{self as medir};
+use aiahr_optimize_reducir::{ReducIrOptimizedItem, ReducIrOptimizedModule};
+use medir::{MedIrItem, MedIrModule};
 
 #[salsa::jar(db = Db)]
-pub struct Jar(MedIrItem, lower_item);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db {
+pub struct Jar(lower_item, lower_module);
+pub trait Db: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {
     fn as_lower_medir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -27,18 +29,13 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db {
         let opt_item = self.simplify_reducir_for_name(name);
         lower_item(self.as_lower_medir_db(), opt_item)
     }
-}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db {}
 
-#[salsa::tracked]
-pub struct MedIrItem {
-    #[id]
-    pub name: MedIrItemName,
-    #[return_ref]
-    pub item: medir::Defn,
-    #[return_ref]
-    pub var_supply: IdSupply<MedIrVarId>,
+    fn lower_medir_module(&self, module: Module) -> MedIrModule {
+        let opt_module = self.simple_reducir_module(module);
+        lower_module(self.as_lower_medir_db(), opt_module)
+    }
 }
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {}
 
 #[salsa::tracked]
 fn lower_item(db: &dyn crate::Db, term: ReducIrOptimizedItem) -> Vec<MedIrItem> {
@@ -51,10 +48,29 @@ fn lower_item(db: &dyn crate::Db, term: ReducIrOptimizedItem) -> Vec<MedIrItem> 
     let supply: IdSupply<_> = converter.into();
     let mut defns = lifts
         .into_iter()
-        .map(|defn| MedIrItem::new(db, defn.name, defn, IdSupply::start_from(&supply)))
+        .map(|defn| {
+            MedIrItem::new(
+                db.as_medir_db(),
+                defn.name,
+                defn,
+                IdSupply::start_from(&supply),
+            )
+        })
         .collect::<Vec<_>>();
-    defns.insert(0, MedIrItem::new(db, defn.name, defn, supply));
+    defns.insert(0, MedIrItem::new(db.as_medir_db(), defn.name, defn, supply));
     defns
+}
+
+#[salsa::tracked]
+fn lower_module(db: &dyn crate::Db, module: ReducIrOptimizedModule) -> MedIrModule {
+    let opt_db = db.as_opt_reducir_db();
+    let items = module
+        .items(opt_db)
+        .iter()
+        .flat_map(|opt_item| lower_item(db, *opt_item))
+        .collect();
+    let module = module.module(opt_db);
+    MedIrModule::new(db.as_medir_db(), module, items)
 }
 
 mod lower {
@@ -305,6 +321,7 @@ mod tests {
         aiahr_core::Jar,
         aiahr_desugar::Jar,
         aiahr_lower_reducir::Jar,
+        aiahr_medir::Jar,
         aiahr_nameres::Jar,
         aiahr_optimize_reducir::Jar,
         aiahr_parser::Jar,

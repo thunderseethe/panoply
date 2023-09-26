@@ -1,5 +1,33 @@
-use aiahr_core::id::MedIrVarId;
+use aiahr_core::id::{IdSupply, MedIrVarId};
+use aiahr_core::modules::Module;
 use aiahr_reducir::ReducIrTermName;
+
+#[salsa::jar(db = Db)]
+pub struct Jar(MedIrItem, MedIrModule);
+pub trait Db: salsa::DbWithJar<Jar> {
+    fn as_medir_db(&self) -> &dyn crate::Db {
+        <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
+    }
+}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
+
+#[salsa::tracked]
+pub struct MedIrItem {
+    #[id]
+    pub name: MedIrItemName,
+    #[return_ref]
+    pub item: Defn,
+    #[return_ref]
+    pub var_supply: IdSupply<MedIrVarId>,
+}
+
+#[salsa::tracked]
+pub struct MedIrModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub items: Vec<MedIrItem>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MedIrVar {
