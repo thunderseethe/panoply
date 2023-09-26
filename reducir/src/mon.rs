@@ -1,0 +1,40 @@
+use aiahr_core::id::{IdSupply, ReducIrVarId, TermName};
+use aiahr_core::modules::Module;
+
+use crate::{GeneratedReducIrName, ReducIr};
+
+#[salsa::tracked]
+pub struct MonReducIrModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub items: Vec<MonReducIrItem>,
+}
+
+#[salsa::tracked]
+pub struct MonReducIrItem {
+    #[id]
+    pub name: TermName,
+    #[return_ref]
+    pub item: ReducIr,
+    #[return_ref]
+    pub row_evs: Vec<MonReducIrRowEv>,
+    #[return_ref]
+    pub var_supply: IdSupply<ReducIrVarId>,
+}
+
+#[salsa::tracked]
+pub struct MonReducIrGenItem {
+    #[id]
+    pub name: GeneratedReducIrName,
+    #[return_ref]
+    pub item: ReducIr,
+    #[return_ref]
+    pub var_supply: IdSupply<ReducIrVarId>,
+}
+
+#[salsa::tracked]
+pub struct MonReducIrRowEv {
+    pub simple: MonReducIrGenItem,
+    pub scoped: MonReducIrGenItem,
+}

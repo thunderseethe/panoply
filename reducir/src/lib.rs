@@ -19,6 +19,9 @@ pub mod ty;
 pub mod zip_non_consuming;
 use zip_non_consuming::ZipNonConsuming;
 
+pub mod mon;
+pub mod optimized;
+
 #[salsa::jar(db = Db)]
 pub struct Jar(
     ty::ReducIrTy,
@@ -61,8 +64,6 @@ pub struct ReducIrGenItem {
     pub name: GeneratedReducIrName,
     #[return_ref]
     pub item: DelimReducIr,
-    #[return_ref]
-    pub mon_item: ReducIr,
 }
 
 #[salsa::tracked]
@@ -77,8 +78,6 @@ pub struct ReducIrItem {
     pub name: TermName,
     #[return_ref]
     pub item: DelimReducIr,
-    #[return_ref]
-    pub mon_item: ReducIr,
     // List of row evidence items that this item references
     #[return_ref]
     pub row_evs: Vec<ReducIrRowEv>,
@@ -86,71 +85,6 @@ pub struct ReducIrItem {
     pub var_supply: IdSupply<ReducIrVarId>,
     #[return_ref]
     pub tyvar_supply: IdSupply<ReducIrTyVarId>,
-}
-
-pub mod mon {
-    use aiahr_core::id::{IdSupply, ReducIrVarId, TermName};
-    use aiahr_core::modules::Module;
-
-    use crate::{GeneratedReducIrName, ReducIr};
-
-    #[salsa::tracked]
-    pub struct MonReducIrModule {
-        #[id]
-        pub module: Module,
-        #[return_ref]
-        pub items: Vec<MonReducIrItem>,
-    }
-
-    #[salsa::tracked]
-    pub struct MonReducIrItem {
-        #[id]
-        pub name: TermName,
-        #[return_ref]
-        pub item: ReducIr,
-        #[return_ref]
-        pub row_evs: Vec<MonReducIrRowEv>,
-        #[return_ref]
-        pub var_supply: IdSupply<ReducIrVarId>,
-    }
-
-    #[salsa::tracked]
-    pub struct MonReducIrGenItem {
-        #[id]
-        pub name: GeneratedReducIrName,
-        #[return_ref]
-        pub item: ReducIr,
-        #[return_ref]
-        pub var_supply: IdSupply<ReducIrVarId>,
-    }
-
-    #[salsa::tracked]
-    pub struct MonReducIrRowEv {
-        pub simple: MonReducIrGenItem,
-        pub scoped: MonReducIrGenItem,
-    }
-}
-
-pub mod optimized {
-    use aiahr_core::modules::Module;
-
-    use crate::{Lets, ReducIr, ReducIrTermName};
-
-    #[salsa::tracked]
-    pub struct OptimizedReducIrItem {
-        #[id]
-        pub name: ReducIrTermName,
-        #[return_ref]
-        pub item: ReducIr<Lets>,
-    }
-
-    #[salsa::tracked]
-    pub struct OptimizedReducIrModule {
-        #[id]
-        pub module: Module,
-        #[return_ref]
-        pub items: Vec<OptimizedReducIrItem>,
-    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
