@@ -258,13 +258,7 @@ mod lower {
                 .map(MedIrVar::new)
                 .collect::<Vec<_>>();
             free_vars.sort();
-            let num = self.lifts.len();
-            let current_name = self.current.name(self.db).text(self.db.as_core_db());
-            let module = self.current.module(self.db);
-            let lift_name =
-                ReducIrTermName::gen(self.db, format!("{}_lam_{}", current_name, num), module);
-            let old_curr = self.current;
-            self.current = lift_name;
+
             let params = free_vars
                 .iter()
                 .copied()
@@ -277,7 +271,12 @@ mod lower {
                 .collect();
             let mut binds = vec![];
             let body = self.lower_binds(body, &mut binds);
-            self.current = old_curr;
+
+            let num = self.lifts.len();
+            let current_name = self.current.name(self.db).text(self.db.as_core_db());
+            let module = self.current.module(self.db);
+            let lift_name =
+                ReducIrTermName::gen(self.db, format!("{}_lam_{}", current_name, num), module);
             let name = MedIrItemName::new(lift_name);
             self.lifts.push(medir::Defn {
                 name,
@@ -367,76 +366,76 @@ effect Reader {
                 defn f(V0, V1) {
                   let V2 = [];
                   let V3 = __mon_generate_marker(V2);
-                  let V16 = make_closure(f_lam_0,[V0, V3]);
-                  let V28 = make_closure(f_lam_3,[V0]);
-                  let V32 = make_closure(f_lam_6,[]);
+                  let V16 = make_closure(f_lam_2,[V0, V3]);
+                  let V28 = make_closure(f_lam_5,[V0]);
+                  let V32 = make_closure(f_lam_8,[]);
                   let V33 = __mon_bind(V28, V32);
                   let V34 = __mon_prompt(V3, V16, V33);
-                  let V38 = make_closure(f_lam_9,[]);
+                  let V38 = make_closure(f_lam_10,[]);
                   __mon_bind(V34, V38)
                 }"#]],
             expect![[r#"
-                defn f_lam_0_lam_0(V4, V5, V6) {
+                defn f_lam_0(V4, V5, V6) {
                   let V7 = [];
                   apply_closure(V5)(V7, V4)
                 }"#]],
             expect![[r#"
-                defn f_lam_0_lam_1(V9, V10, V11) {
+                defn f_lam_1(V9, V10, V11) {
                   apply_closure(V10)(V11, V11)
                 }"#]],
             expect![[r#"
-                defn f_lam_0(V0, V3, V1) {
-                  let V8 = make_closure(f_lam_0_lam_0,[]);
-                  let V12 = make_closure(f_lam_0_lam_1,[]);
+                defn f_lam_2(V0, V3, V1) {
+                  let V8 = make_closure(f_lam_0,[]);
+                  let V12 = make_closure(f_lam_1,[]);
                   let V13 = [V8, V12];
                   let V14 = [V3, V13];
                   let V15 = V0[0];
                   apply_closure(V15)(V1, V14)
                 }"#]],
             expect![[r#"
-                defn f_lam_3_lam_3(V19, V21) {
+                defn f_lam_3(V19, V21) {
                   let V22 = [];
                   let V23 = V19[1];
                   let V24 = V23[1];
                   apply_closure(V24)(V22, V21)
                 }"#]],
             expect![[r#"
-                defn f_lam_3_lam_4(V1) {
+                defn f_lam_4(V1) {
                   V1
                 }"#]],
             expect![[r#"
-                defn f_lam_3(V0, V1) {
+                defn f_lam_5(V0, V1) {
                   let V17 = V0[3];
                   let V18 = V17[0];
                   let V19 = apply_closure(V18)(V1);
                   let V20 = V19[0];
-                  let V25 = make_closure(f_lam_3_lam_3,[V19]);
-                  let V26 = make_closure(f_lam_3_lam_4,[]);
+                  let V25 = make_closure(f_lam_3,[V19]);
+                  let V26 = make_closure(f_lam_4,[]);
                   let V27 = [V20, V25, V26];
                   [1, V27]
                 }"#]],
             expect![[r#"
-                defn f_lam_6_lam_6_lam_6(V29, V30) {
+                defn f_lam_6(V29, V30) {
                   [V30, V29]
                 }"#]],
             expect![[r#"
-                defn f_lam_6_lam_6(V29, V1) {
-                  let V31 = make_closure(f_lam_6_lam_6_lam_6,[V29]);
+                defn f_lam_7(V29, V1) {
+                  let V31 = make_closure(f_lam_6,[V29]);
                   [0, V31]
                 }"#]],
             expect![[r#"
-                defn f_lam_6(V29) {
-                  make_closure(f_lam_6_lam_6,[V29])
+                defn f_lam_8(V29) {
+                  make_closure(f_lam_7,[V29])
                 }"#]],
             expect![[r#"
-                defn f_lam_9_lam_9(V35, V1) {
+                defn f_lam_9(V35, V1) {
                   let V36 = [];
                   let V37 = apply_closure(V35)(V36);
                   [0, V37]
                 }"#]],
             expect![[r#"
-                defn f_lam_9(V35) {
-                  make_closure(f_lam_9_lam_9,[V35])
+                defn f_lam_10(V35) {
+                  make_closure(f_lam_9,[V35])
                 }"#]],
         ];
 
