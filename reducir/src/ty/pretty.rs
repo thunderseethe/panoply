@@ -51,7 +51,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyKind {
             ReducIrTyKind::FunTy(args, ret) => {
                 let docs = args.iter().map(|arg| {
                     let mut arg_doc = arg.pretty_with(db).pretty(a);
-                    if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_ir_db()) {
+                    if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_reducir_db()) {
                         arg_doc = arg_doc.parens();
                     }
                     arg_doc
@@ -147,6 +147,6 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTy {
         db: &DB,
         a: &'a pretty::RcAllocator,
     ) -> DocBuilder<'a, pretty::RcAllocator> {
-        self.kind(db.as_ir_db()).pretty(db, a)
+        self.kind(db.as_reducir_db()).pretty(db, a)
     }
 }

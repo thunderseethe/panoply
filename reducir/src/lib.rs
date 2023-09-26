@@ -1,4 +1,4 @@
-use aiahr_core::id::{ReducIrVarId, TermName};
+use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
 use aiahr_core::pretty::PrettyWithCtx;
@@ -20,9 +20,22 @@ pub mod zip_non_consuming;
 use zip_non_consuming::ZipNonConsuming;
 
 #[salsa::jar(db = Db)]
-pub struct Jar(ty::ReducIrTy, GeneratedReducIrName);
+pub struct Jar(
+    ty::ReducIrTy,
+    GeneratedReducIrName,
+    ReducIrModule,
+    ReducIrItem,
+    ReducIrGenItem,
+    ReducIrRowEv,
+    mon::MonReducIrModule,
+    mon::MonReducIrItem,
+    mon::MonReducIrGenItem,
+    mon::MonReducIrRowEv,
+    optimized::OptimizedReducIrItem,
+    optimized::OptimizedReducIrModule,
+);
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {
-    fn as_ir_db(&self) -> &dyn crate::Db {
+    fn as_reducir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
@@ -32,6 +45,112 @@ impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::
 pub struct GeneratedReducIrName {
     pub name: Ident,
     pub module: Module,
+}
+
+#[salsa::tracked]
+pub struct ReducIrModule {
+    #[id]
+    pub module: Module,
+    #[return_ref]
+    pub items: Vec<ReducIrItem>,
+}
+
+#[salsa::tracked]
+pub struct ReducIrGenItem {
+    #[id]
+    pub name: GeneratedReducIrName,
+    #[return_ref]
+    pub item: DelimReducIr,
+    #[return_ref]
+    pub mon_item: ReducIr,
+}
+
+#[salsa::tracked]
+pub struct ReducIrRowEv {
+    pub simple: ReducIrGenItem,
+    pub scoped: ReducIrGenItem,
+}
+
+#[salsa::tracked]
+pub struct ReducIrItem {
+    #[id]
+    pub name: TermName,
+    #[return_ref]
+    pub item: DelimReducIr,
+    #[return_ref]
+    pub mon_item: ReducIr,
+    // List of row evidence items that this item references
+    #[return_ref]
+    pub row_evs: Vec<ReducIrRowEv>,
+    #[return_ref]
+    pub var_supply: IdSupply<ReducIrVarId>,
+    #[return_ref]
+    pub tyvar_supply: IdSupply<ReducIrTyVarId>,
+}
+
+pub mod mon {
+    use aiahr_core::id::{IdSupply, ReducIrVarId, TermName};
+    use aiahr_core::modules::Module;
+
+    use crate::{GeneratedReducIrName, ReducIr};
+
+    #[salsa::tracked]
+    pub struct MonReducIrModule {
+        #[id]
+        pub module: Module,
+        #[return_ref]
+        pub items: Vec<MonReducIrItem>,
+    }
+
+    #[salsa::tracked]
+    pub struct MonReducIrItem {
+        #[id]
+        pub name: TermName,
+        #[return_ref]
+        pub item: ReducIr,
+        #[return_ref]
+        pub row_evs: Vec<MonReducIrRowEv>,
+        #[return_ref]
+        pub var_supply: IdSupply<ReducIrVarId>,
+    }
+
+    #[salsa::tracked]
+    pub struct MonReducIrGenItem {
+        #[id]
+        pub name: GeneratedReducIrName,
+        #[return_ref]
+        pub item: ReducIr,
+        #[return_ref]
+        pub var_supply: IdSupply<ReducIrVarId>,
+    }
+
+    #[salsa::tracked]
+    pub struct MonReducIrRowEv {
+        pub simple: MonReducIrGenItem,
+        pub scoped: MonReducIrGenItem,
+    }
+}
+
+pub mod optimized {
+    use aiahr_core::modules::Module;
+
+    use crate::{Lets, ReducIr, ReducIrTermName};
+
+    #[salsa::tracked]
+    pub struct OptimizedReducIrItem {
+        #[id]
+        pub name: ReducIrTermName,
+        #[return_ref]
+        pub item: ReducIr<Lets>,
+    }
+
+    #[salsa::tracked]
+    pub struct OptimizedReducIrModule {
+        #[id]
+        pub module: Module,
+        #[return_ref]
+        pub items: Vec<OptimizedReducIrItem>,
+    }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash, Debug)]
@@ -52,7 +171,7 @@ impl ReducIrTermName {
 
     pub fn gen<DB: ?Sized + crate::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
         ReducIrTermName::Gen(GeneratedReducIrName::new(
-            db.as_ir_db(),
+            db.as_reducir_db(),
             db.ident(name.to_string()),
             module,
         ))
@@ -61,14 +180,14 @@ impl ReducIrTermName {
     pub fn name<DB: ?Sized + crate::Db>(&self, db: &DB) -> Ident {
         match self {
             ReducIrTermName::Term(term) => term.name(db.as_core_db()),
-            ReducIrTermName::Gen(gen) => gen.name(db.as_ir_db()),
+            ReducIrTermName::Gen(gen) => gen.name(db.as_reducir_db()),
         }
     }
 
     pub fn module<DB: ?Sized + crate::Db>(&self, db: &DB) -> Module {
         match self {
             ReducIrTermName::Term(term) => term.module(db.as_core_db()),
-            ReducIrTermName::Gen(gen) => gen.module(db.as_ir_db()),
+            ReducIrTermName::Gen(gen) => gen.module(db.as_reducir_db()),
         }
     }
 }
@@ -730,14 +849,14 @@ impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck
             App(func, args) => {
                 let func_ty = func.type_check(ctx)?;
                 let args_iter = args.iter();
-                match func_ty.kind(ctx.as_ir_db()) {
+                match func_ty.kind(ctx.as_reducir_db()) {
                     FunTy(fun_arg_tys, ret_ty) => {
                         debug_assert!(args.len() <= fun_arg_tys.len());
                         let mut fun_args = fun_arg_tys.iter().peekable();
                         for (fun_arg_ty, (arg_index, arg)) in
                             fun_args.zip_non_consuming(&mut args_iter.enumerate().peekable())
                         {
-                            let arg_ty = arg.type_check(ctx.as_ir_db())?;
+                            let arg_ty = arg.type_check(ctx.as_reducir_db())?;
                             if *fun_arg_ty != arg_ty {
                                 return Err(ReducIrTyErr::TyMismatch {
                                     left_ty: ctx.mk_fun_ty(fun_args.copied(), ret_ty),

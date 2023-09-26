@@ -1,6 +1,7 @@
 use aiahr_core::id::{ReducIrTyVarId, TermName};
 use aiahr_core::modules::Module;
-use aiahr_lower_reducir::{ReducIrItem, ReducIrModule};
+use aiahr_reducir::mon::{MonReducIrItem, MonReducIrModule};
+use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 use aiahr_reducir::ty::{Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy};
 use aiahr_reducir::zip_non_consuming::ZipNonConsuming;
 use rustc_hash::FxHashMap;
@@ -13,66 +14,48 @@ use aiahr_reducir::{
 use crate::subst::{Subst, SubstTy};
 
 #[salsa::jar(db = Db)]
-pub struct Jar(
-    ReducIrOptimizedItem,
-    ReducIrOptimizedModule,
-    simple_reducir_item,
-    simple_reducir_module,
-);
+pub struct Jar(simple_reducir_item, simple_reducir_module);
 
 pub trait Db: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {
     fn as_opt_reducir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 
-    fn simplify_reducir_for_name(&self, name: TermName) -> ReducIrOptimizedItem {
-        let reducir_item = self.lower_item(name);
+    fn simplify_reducir_for_name(&self, name: TermName) -> OptimizedReducIrItem {
+        let reducir_item = self.lower_reducir_mon_item_of(name);
         self.simple_reducir_item(reducir_item)
     }
 
-    fn simple_reducir_item(&self, item: ReducIrItem) -> ReducIrOptimizedItem {
+    fn simple_reducir_item(&self, item: MonReducIrItem) -> OptimizedReducIrItem {
         simple_reducir_item(self.as_opt_reducir_db(), item)
     }
 
-    fn simple_reducir_module(&self, module: Module) -> ReducIrOptimizedModule {
-        let ir_module = self.lower_module_of(module);
+    fn simple_reducir_module(&self, module: Module) -> OptimizedReducIrModule {
+        let ir_module = self.lower_reducir_mon_module_of(module);
         simple_reducir_module(self.as_opt_reducir_db(), ir_module)
     }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {}
 
 #[salsa::tracked]
-pub struct ReducIrOptimizedItem {
-    #[id]
-    pub name: ReducIrTermName,
-    #[return_ref]
-    pub item: ReducIr<Lets>,
-}
-
-#[salsa::tracked]
-pub struct ReducIrOptimizedModule {
-    #[id]
-    pub module: Module,
-    #[return_ref]
-    pub items: Vec<ReducIrOptimizedItem>,
-}
-
-#[salsa::tracked]
-fn simple_reducir_item(db: &dyn crate::Db, item: ReducIrItem) -> ReducIrOptimizedItem {
+fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedReducIrItem {
     let ir = simplify(db, item);
 
-    let term_name = item.name(db.as_lower_reducir_db());
-    ReducIrOptimizedItem::new(db, ReducIrTermName::Term(term_name), ir)
+    let term_name = item.name(db.as_reducir_db());
+    OptimizedReducIrItem::new(db.as_reducir_db(), ReducIrTermName::Term(term_name), ir)
 }
 
 #[salsa::tracked]
-fn simple_reducir_module(db: &dyn crate::Db, ir_module: ReducIrModule) -> ReducIrOptimizedModule {
-    let lower_db = db.as_lower_reducir_db();
-    ReducIrOptimizedModule::new(
-        db,
-        ir_module.module(lower_db),
+fn simple_reducir_module(
+    db: &dyn crate::Db,
+    ir_module: MonReducIrModule,
+) -> OptimizedReducIrModule {
+    let reducir_db = db.as_reducir_db();
+    OptimizedReducIrModule::new(
+        db.as_reducir_db(),
+        ir_module.module(reducir_db),
         ir_module
-            .items(lower_db)
+            .items(reducir_db)
             .iter()
             .map(|item| db.simple_reducir_item(*item))
             .collect(),
@@ -110,7 +93,7 @@ mod subst {
 
     impl SubstTy<'_> {
         fn subst(&self, ty: ReducIrTy) -> ReducIrTy {
-            self.needle.clone().subst_into(self.db.as_ir_db(), ty)
+            self.needle.clone().subst_into(self.db.as_reducir_db(), ty)
         }
     }
 
@@ -123,14 +106,14 @@ mod subst {
                     kind,
                     P::new(body.fold(&mut SubstTy {
                         db: self.db,
-                        needle: self.needle.clone().shift(self.db.as_ir_db(), 1),
+                        needle: self.needle.clone().shift(self.db.as_reducir_db(), 1),
                     })),
                 )),
                 ReducIrKind::TyApp(body, ty_app) => {
                     let ty_app = match ty_app {
-                        ReducIrTyApp::Ty(ty) => {
-                            ReducIrTyApp::Ty(self.needle.clone().subst_into(self.db.as_ir_db(), ty))
-                        }
+                        ReducIrTyApp::Ty(ty) => ReducIrTyApp::Ty(
+                            self.needle.clone().subst_into(self.db.as_reducir_db(), ty),
+                        ),
                         _ => todo!(),
                     };
                     ReducIr::new(ReducIrKind::TyApp(body, ty_app))
@@ -161,79 +144,6 @@ mod subst {
                 kind => ReducIr::new(kind),
             }
         }
-    }
-}
-
-mod lift {
-
-    use aiahr_core::id::TermName;
-    use aiahr_core::modules::Module;
-    use aiahr_reducir::{
-        Lets, ReducIr, ReducIrInPlaceFold, ReducIrKind, ReducIrTermName, TypeCheck,
-    };
-
-    struct EtaExpand;
-    impl ReducIrInPlaceFold for EtaExpand {
-        type Ext = Lets;
-
-        fn fold_ir_in_place(&mut self, kind: &mut ReducIrKind<Self::Ext>) {
-            if let ReducIrKind::Abs(_, _) = kind {
-                let lam = ReducIr::new(std::mem::replace(kind, ReducIrKind::Int(0)));
-                let free_vars = lam.free_var_set();
-                *kind = ReducIr::app(
-                    ReducIr::abss(free_vars.iter().copied(), lam),
-                    free_vars.iter().map(|v| ReducIr::var(*v)),
-                )
-                .kind;
-            }
-        }
-    }
-
-    struct LambdaLift<'a> {
-        db: &'a dyn crate::Db,
-        module: Module,
-        term_name: TermName,
-        lifts: Vec<(ReducIrTermName, ReducIr<Lets>)>,
-    }
-    impl ReducIrInPlaceFold for LambdaLift<'_> {
-        type Ext = Lets;
-
-        fn fold_ir_in_place(&mut self, kind: &mut ReducIrKind<Self::Ext>) {
-            if let ReducIrKind::Abs(_, _) = kind {
-                let core_db = self.db.as_core_db();
-                // Make up a name for our lambda's item
-                let i = self.lifts.len();
-                let name = ReducIrTermName::gen(
-                    self.db.as_ir_db(),
-                    format!("{}_lam_{}", self.term_name.name(core_db).text(core_db), i),
-                    self.module,
-                );
-                // Replace our kind in place by our freshly generated item
-                let lam = std::mem::replace(kind, ReducIrKind::Int(0));
-                let lam_ir = ReducIr { kind: lam };
-                let ty = lam_ir.type_check(self.db.as_ir_db()).unwrap();
-                *kind = ReducIrKind::Item(name, ty);
-                // Record our lifted lambda's name and body
-                self.lifts.push((name, lam_ir));
-            }
-        }
-    }
-
-    pub(crate) fn lambda_lift(
-        db: &dyn crate::Db,
-        module: Module,
-        term_name: TermName,
-        mut ir: ReducIr<Lets>,
-    ) -> (ReducIr<Lets>, Vec<(ReducIrTermName, ReducIr<Lets>)>) {
-        let mut lam_lift = LambdaLift {
-            db,
-            module,
-            term_name,
-            lifts: vec![],
-        };
-        ir.fold_in_place_inside_item(&mut EtaExpand);
-        ir.fold_in_place_inside_item(&mut lam_lift);
-        (ir, lam_lift.lifts)
     }
 }
 
@@ -379,29 +289,29 @@ impl ReducIrFold for Simplify<'_> {
     }
 }
 
-fn simplify(db: &dyn crate::Db, item: ReducIrItem) -> ReducIr<Lets> {
-    let lower_db = db.as_lower_reducir_db();
-    let row_evs = item.row_evs(lower_db);
-    let ir = item.mon_item(lower_db);
+fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
+    let reducir_db = db.as_reducir_db();
+    let row_evs = item.row_evs(reducir_db);
+    let ir = item.item(reducir_db);
     let mut builtin_evs = row_evs
         .iter()
         .flat_map(|row_ev| {
-            let simple_item = row_ev.simple(db.as_lower_reducir_db());
-            let scoped_item = row_ev.scoped(db.as_lower_reducir_db());
+            let simple_item = row_ev.simple(reducir_db);
+            let scoped_item = row_ev.scoped(reducir_db);
 
             let simple = (
-                ReducIrTermName::Gen(simple_item.name(lower_db)),
-                simple_item.mon_item(lower_db),
+                ReducIrTermName::Gen(simple_item.name(reducir_db)),
+                simple_item.item(reducir_db),
             );
             let scoped = (
-                ReducIrTermName::Gen(scoped_item.name(lower_db)),
-                scoped_item.mon_item(lower_db),
+                ReducIrTermName::Gen(scoped_item.name(reducir_db)),
+                scoped_item.item(reducir_db),
             );
             [simple, scoped]
         })
         .collect::<FxHashMap<_, _>>();
 
-    let module = item.name(db.as_lower_reducir_db()).module(db.as_core_db());
+    let module = item.name(reducir_db).module(db.as_core_db());
     let name = ReducIrTermName::gen(db, "__mon_freshm", module);
     let freshm_term = freshm_term(db, module, name);
     builtin_evs.insert(name, &freshm_term);
@@ -609,12 +519,12 @@ mod tests {
     use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
     use aiahr_core::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx};
     use aiahr_core::Db as CoreDb;
-    use aiahr_lower_reducir::{Db as LowerDb, ReducIrItem};
+    use aiahr_lower_reducir::Db as LowerDb;
     use aiahr_parser::Db as ParseDb;
-    use aiahr_reducir::TypeCheck;
+    use aiahr_reducir::{mon::MonReducIrItem, TypeCheck};
     use expect_test::expect;
 
-    use crate::{simplify, Db};
+    use crate::simplify;
 
     #[derive(Default)]
     #[salsa::db(
@@ -634,7 +544,7 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    fn lower_function(db: &TestDatabase, input: &str, fn_name: &str) -> ReducIrItem {
+    fn lower_function(db: &TestDatabase, input: &str, fn_name: &str) -> MonReducIrItem {
         let path = std::path::PathBuf::from("test.aiahr");
         let mut contents = r#"
 effect State {
@@ -652,7 +562,7 @@ effect Reader {
         let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
         SourceFileSet::new(db, vec![file]);
 
-        match db.lower_item_for_file_name(path, db.ident_str(fn_name)) {
+        match db.lower_reducir_mon_item_for_file_name(path, db.ident_str(fn_name)) {
             Some(term) => term,
             None => {
                 dbg!(db.all_parse_errors());
@@ -661,7 +571,7 @@ effect Reader {
         }
     }
 
-    fn lower_mon_snippet(db: &TestDatabase, input: &str) -> ReducIrItem {
+    fn lower_mon_snippet(db: &TestDatabase, input: &str) -> MonReducIrItem {
         let main = format!("f = {}", input);
         lower_function(db, &main, "f")
     }
@@ -698,8 +608,8 @@ effect Reader {
                         (fun [V0]
                           (let (V16 (V1[3][0] V0))
                             <1: {V16[0], (fun [V17] (V16[1][1] {} V17)), (fun [V0] V0)}>))
-                        (fun [V21] (fun [V0] <0: (fun [V14] {V14, V21})>)))))
-                  (fun [V23] (fun [V0] (let (V24 (V23 {})) <0: V24>))))))"#]];
+                        (fun [V27] (fun [V0] <0: (fun [V14] {V14, V27})>)))))
+                  (fun [V29] (fun [V0] (let (V30 (V29 {})) <0: V30>))))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
@@ -732,68 +642,4 @@ effect Reader {
         let simple_ty = simple_ir.type_check(&db).map_err_pretty_with(&db).unwrap();
         expect_ty.assert_eq(&simple_ty.pretty_with(&db).pprint().pretty(80).to_string());
     }
-
-    /*#[test]
-        fn lambda_lift_state_get() {
-            let db = TestDatabase::default();
-
-            let ir = lower_mon_snippet(
-                &db,
-                r#"
-    (with {
-        get = |x| |k| |s| k(s)(s),
-        put = |x| |k| |s| k({})(x),
-        return = |x| |s| {state = s, value = x},
-    } do State.get({}))({})"#,
-            );
-            let ir_and_lifts = db.simple_reducir_item(ir);
-
-            let expects = vec![
-                // f ir
-                expect![[r#"
-                    (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                        ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
-                          (let (V18 ((__mon_generate_marker @ {} -> {{}, {}}) {}))
-                            ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
-                              V18
-                              (f_lam_2 V1 V18)
-                              ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}}) (f_lam_5 V1) f_lam_8)))
-                          f_lam_10)))"#]],
-                // f_lam_0
-                expect!["(fun [V10, V11, V12] (V11 {} V10))"],
-                // f_lam_1
-                expect!["(fun [V7, V8, V9] (V8 V9 V9))"],
-                // f_lam_2
-                expect!["(fun [V1, V18, V0] (V1[0] V0 {V18, {f_lam_0, f_lam_1}}))"],
-                // f_lam_3
-                expect!["(fun [V16, V17] (V16[1][1] {} V17))"],
-                // f_lam_4
-                expect!["(fun [V0] V0)"],
-                // f_lam_5
-                expect![
-                    "(fun [V1, V0] (let (V16 (V1[3][0] V0)) <1: {V16[0], (f_lam_3 V16), f_lam_4}>))"
-                ],
-                // f_lam_6
-                expect!["(fun [V21, V14] {V14, V21})"],
-                // f_lam_7
-                expect!["(fun [V21, V0] <0: (f_lam_6 V21)>)"],
-                // f_lam_8
-                expect!["(fun [V21] (f_lam_7 V21))"],
-                // f_lam_9
-                expect!["(fun [V23, V0] (let (V24 (V23 {})) <0: V24>))"],
-                // f_lam_10
-                expect!["(fun [V23] (f_lam_9 V23))"],
-            ];
-
-            assert_eq!(ir_and_lifts.len(), expects.len());
-            for (ir, expect) in ir_and_lifts.into_iter().zip(expects.into_iter()) {
-                let pretty_ir = ir
-                    .item(&db)
-                    .pretty_with(&db)
-                    .pprint()
-                    .pretty(80)
-                    .to_string();
-                expect.assert_eq(&pretty_ir)
-            }
-        }*/
 }
