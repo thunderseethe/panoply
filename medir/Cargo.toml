@@ -9,3 +9,4 @@ edition.workspace = true
 aiahr-core.workspace = true
 aiahr-reducir.workspace = true
 pretty.workspace = true
+salsa.workspace = true
