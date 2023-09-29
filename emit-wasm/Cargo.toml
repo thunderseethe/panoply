@@ -20,8 +20,10 @@ wasmparser = "0.112.0"
 
 [dependencies]
 aiahr-core.workspace = true
-aiahr-reducir.workspace = true
+aiahr-lower-medir.workspace = true
+aiahr-medir.workspace = true
 aiahr-optimize-reducir.workspace = true
+aiahr-reducir.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
 wasm-encoder = "0.32.0"

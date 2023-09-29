@@ -24,15 +24,15 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {
         let term_name = self.id_for_name(module, item)?;
         // First index of lowering is always the item itself, the rest of the vector is our closure
         // conversions for that item
-        Some(self.lower_medir_item(term_name))
+        Some(self.lower_medir_item_of(term_name))
     }
 
-    fn lower_medir_item(&self, name: TermName) -> Vec<MedIrItem> {
+    fn lower_medir_item_of(&self, name: TermName) -> Vec<MedIrItem> {
         let opt_item = self.simplify_reducir_for_name(name);
         lower_item(self.as_lower_medir_db(), opt_item)
     }
 
-    fn lower_medir_module(&self, module: Module) -> MedIrModule {
+    fn lower_medir_module_of(&self, module: Module) -> MedIrModule {
         let opt_module = self.simple_reducir_module(module);
         lower_module(self.as_lower_medir_db(), opt_module)
     }
