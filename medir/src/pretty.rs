@@ -42,7 +42,7 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Call {
         alloc: &'a pretty::RcAllocator,
     ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
         match self {
-            Call::Known(item) => item.pretty(ctx, alloc),
+            Call::Known(item) => item.name.pretty(ctx, alloc),
             Call::Unknown(v) => alloc.text("apply_closure").append(v.pretty(alloc).parens()),
         }
     }
@@ -96,7 +96,8 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIrKind {
                     )
                     .brackets();
                 a.text("make_closure").append(
-                    item.pretty(ctx, a)
+                    item.name
+                        .pretty(ctx, a)
                         .append(a.text(","))
                         .append(env_doc)
                         .parens(),
