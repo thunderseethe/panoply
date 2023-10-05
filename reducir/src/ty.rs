@@ -109,6 +109,16 @@ impl ReducIrTy {
             _ => false,
         }
     }
+
+    /// Arity of this type for use in medir.
+    /// If the type isn't a function this arity is 0
+    pub fn medir_arity<DB: ?Sized + crate::Db>(&self, db: &DB) -> Option<u32> {
+        match self.kind(db.as_reducir_db()) {
+            ReducIrTyKind::FunTy(params, _) => Some(params.len().try_into().unwrap()),
+            ReducIrTyKind::ForallTy(_, ty) => ty.medir_arity(db),
+            _ => None,
+        }
+    }
 }
 
 fn default_fold_tykind<'db>(
