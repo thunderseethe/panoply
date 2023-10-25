@@ -134,9 +134,9 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyApp {
         a: &'a pretty::RcAllocator,
     ) -> DocBuilder<'a, pretty::RcAllocator> {
         match self {
-            ReducIrTyApp::Ty(ty) => ty.pretty_with(db).pretty(a),
-            ReducIrTyApp::DataRow(simp) => simp.pretty(db, a),
-            ReducIrTyApp::EffRow(scope) => scope.pretty(db, a),
+            ReducIrTyApp::Ty(ty) => a.text("Ty").append(ty.pretty_with(db).pretty(a).parens()),
+            ReducIrTyApp::DataRow(simp) => a.text("Data").append(simp.pretty(db, a).parens()),
+            ReducIrTyApp::EffRow(scope) => a.text("Eff").append(scope.pretty(db, a).parens()),
         }
     }
 }

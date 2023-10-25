@@ -818,17 +818,17 @@ where
         let ty_unifiers = ty_scheme
             .bound_ty
             .into_iter()
-            .map(|_| self.ty_unifiers.new_key(None))
+            .map(|key| (key, self.ty_unifiers.new_key(None)))
             .collect();
         let datarow_unifiers = ty_scheme
             .bound_data_row
             .into_iter()
-            .map(|_| self.data_row_unifiers.new_key(None))
+            .map(|key| (key, self.data_row_unifiers.new_key(None)))
             .collect();
         let effrow_unifiers = ty_scheme
             .bound_eff_row
             .into_iter()
-            .map(|_| self.eff_row_unifiers.new_key(None))
+            .map(|key| (key, self.eff_row_unifiers.new_key(None)))
             .collect();
         let mut inst = Instantiate {
             db: self.db,
@@ -863,10 +863,20 @@ where
                 tys: inst
                     .ty_unifiers
                     .into_iter()
-                    .map(|var| self.mk_ty(VarTy(var)))
-                    .collect(),
-                data_rows: inst.datarow_unifiers.into_iter().map(Row::Open).collect(),
-                eff_rows: inst.effrow_unifiers.into_iter().map(Row::Open).collect(),
+                    .map(|(_, var)| self.mk_ty(VarTy(var)))
+                    .collect::<Vec<_>>(),
+                data_rows: inst
+                    .datarow_unifiers
+                    .into_iter()
+                    .map(|(_, var)| var)
+                    .map(Row::Open)
+                    .collect::<Vec<_>>(),
+                eff_rows: inst
+                    .effrow_unifiers
+                    .into_iter()
+                    .map(|(_, var)| var)
+                    .map(Row::Open)
+                    .collect::<Vec<_>>(),
                 constrs,
             },
             res,
@@ -1262,17 +1272,17 @@ where
                         ty_unifiers: scheme
                             .bound_ty
                             .into_iter()
-                            .map(|_| ctx.ty_unifiers.new_key(None))
+                            .map(|key| (key, ctx.ty_unifiers.new_key(None)))
                             .collect(),
                         datarow_unifiers: scheme
                             .bound_data_row
                             .into_iter()
-                            .map(|_| ctx.data_row_unifiers.new_key(None))
+                            .map(|key| (key, ctx.data_row_unifiers.new_key(None)))
                             .collect(),
                         effrow_unifiers: scheme
                             .bound_eff_row
                             .into_iter()
-                            .map(|_| ctx.eff_row_unifiers.new_key(None))
+                            .map(|key| (key, ctx.eff_row_unifiers.new_key(None)))
                             .collect(),
                     };
 
@@ -1386,10 +1396,10 @@ where
                             ty_unifiers: scheme
                                 .bound_ty
                                 .into_iter()
-                                .map(|_| self.ty_unifiers.new_key(None))
+                                .map(|key| (key, self.ty_unifiers.new_key(None)))
                                 .collect(),
-                            datarow_unifiers: vec![],
-                            effrow_unifiers: vec![],
+                            datarow_unifiers: Default::default(),
+                            effrow_unifiers: Default::default(),
                         };
 
                         for constr in scheme.constrs {

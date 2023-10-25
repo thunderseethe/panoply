@@ -109,27 +109,25 @@ impl<'a, 'b> LowerTySchemeCtx<'a, 'b> {
         // We bind foralls in Type -> SimpleRow -> ScopedRow order
         // So we need to build our tyvar_env in reverse ordering so indices are correct
         let foralls = scheme
-            .bound_eff_row
+            .bound_ty
             .iter()
-            .rev()
-            .map(|tyvar| (*tyvar, Kind::ScopedRow))
+            .map(|tyvar| (*tyvar, Kind::Type))
+            .chain(
+                scheme
+                    .bound_eff_row
+                    .iter()
+                    .map(|tyvar| (*tyvar, Kind::ScopedRow)),
+            )
             .chain(
                 scheme
                     .bound_data_row
                     .iter()
-                    .rev()
                     .map(|tyvar| (*tyvar, Kind::SimpleRow)),
-            )
-            .chain(
-                scheme
-                    .bound_ty
-                    .iter()
-                    .rev()
-                    .map(|tyvar| (*tyvar, Kind::Type)),
             )
             .collect::<Vec<_>>();
         let tyvar_env = foralls
             .iter()
+            .rev()
             .enumerate()
             .map(|(i, (tyvar, _))| (*tyvar, i as i32))
             .collect::<FxHashMap<_, _>>();
@@ -965,19 +963,19 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
 
     fn apply_wrapper(&mut self, wrapper: &Wrapper, ir: DelimReducIr) -> DelimReducIr {
         // This needs to be done in the reverse order that we add our Abs and TyAbs when we lower
-        let ir = wrapper.tys.iter().rfold(ir, |body, ty| {
+        let ir = wrapper.tys.iter().fold(ir, |body, ty| {
             ReducIr::new(ReducIrKind::TyApp(
                 P::new(body),
                 ReducIrTyApp::Ty(self.ty_ctx.lower_ty(*ty)),
             ))
         });
-        let ir = wrapper.eff_rows.iter().rfold(ir, |body, row| {
+        let ir = wrapper.eff_rows.iter().fold(ir, |body, row| {
             ReducIr::new(ReducIrKind::TyApp(
                 P::new(body),
                 ReducIrTyApp::EffRow(self.ty_ctx.lower_row(*row)),
             ))
         });
-        let ir = wrapper.data_rows.iter().rfold(ir, |body, row| {
+        let ir = wrapper.data_rows.iter().fold(ir, |body, row| {
             ReducIr::new(ReducIrKind::TyApp(
                 P::new(body),
                 ReducIrTyApp::DataRow(self.ty_ctx.lower_row(*row)),

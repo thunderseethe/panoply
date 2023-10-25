@@ -302,7 +302,9 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, _include_all_fields: bool) -> fmt::Result {
         f.debug_struct("TyScheme")
-            .field("bound", &self.bound_ty)
+            .field("bound_ty", &self.bound_ty)
+            .field("bound_data", &self.bound_data_row)
+            .field("bound_eff", &self.bound_eff_row)
             .field("constrs", &self.constrs)
             .field("eff", &self.eff.debug(db))
             .field("ty", &self.ty.debug(db))

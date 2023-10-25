@@ -18,6 +18,66 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_reducir::Db {
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_reducir::Db {}
 
+pub trait MedIrFoldInPlace {
+    fn fold_atom(&mut self, _atom: &mut Atom) {}
+    fn fold_medir(&mut self, _kind: &mut MedIrKind) {}
+}
+pub trait MedIrVisit {
+    fn visit_atom(&mut self, _atom: &Atom) {}
+    fn visit_medir(&mut self, _kind: &MedIrKind) {}
+}
+pub trait MedIrTraversal {
+    fn fold<F: ?Sized + MedIrFoldInPlace>(&mut self, fold: &mut F);
+    fn visit<V: ?Sized + MedIrVisit>(&self, visitor: &mut V);
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+pub struct PartialAppArity {
+    pub arity: usize,
+    pub num_args: usize,
+}
+
+pub struct ClosureArities<'db> {
+    db: &'db dyn crate::Db,
+    arities: BTreeSet<PartialAppArity>,
+}
+impl<'db> ClosureArities<'db> {
+    pub fn new<DB: ?Sized + crate::Db>(db: &'db DB) -> Self {
+        Self {
+            db: db.as_medir_db(),
+            arities: Default::default(),
+        }
+    }
+}
+impl ClosureArities<'_> {
+    fn add_closure_arity_if_present(&mut self, kind: &MedIrKind) {
+        if let MedIrKind::Closure(item, elems) = kind {
+            let arity = match item.ty.kind(self.db) {
+                MedIrTyKind::FunTy(args, _) => args.len(), //args.iter()/*.filter(|a| !matches!(a.kind(self.db), MedIrTyKind::BlockTy(elems) if elems.is_empty()))*/.count(),
+                _ => panic!("Closure item must be a function type"),
+            };
+            self.arities.insert(PartialAppArity {
+                arity,
+                num_args: elems.len(),
+            });
+        }
+    }
+
+    pub fn into_arities(self) -> BTreeSet<PartialAppArity> {
+        self.arities
+    }
+}
+impl MedIrFoldInPlace for ClosureArities<'_> {
+    fn fold_medir(&mut self, kind: &mut MedIrKind) {
+        self.add_closure_arity_if_present(kind);
+    }
+}
+impl MedIrVisit for ClosureArities<'_> {
+    fn visit_medir(&mut self, kind: &MedIrKind) {
+        self.add_closure_arity_if_present(kind);
+    }
+}
+
 #[salsa::tracked]
 pub struct MedIrItem {
     #[id]
@@ -188,7 +248,17 @@ impl MedIr {
         }
     }
 }
+impl MedIrTraversal for MedIr {
+    fn fold<F: ?Sized + MedIrFoldInPlace>(&mut self, fold: &mut F) {
+        self.default_traverse_mut(fold)
+    }
 
+    fn visit<F: ?Sized + MedIrVisit>(&self, fold: &mut F) {
+        self.default_traverse(fold)
+    }
+}
+
+use std::collections::BTreeSet;
 use std::fmt;
 impl fmt::Debug for MedIr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -206,6 +276,74 @@ impl MedIr {
 
     pub fn var(var: MedIrVar) -> Self {
         MedIr::new(MedIrKind::Atom(Atom::Var(var)))
+    }
+
+    fn default_traverse_mut<F: ?Sized + MedIrFoldInPlace>(&mut self, fold: &mut F) {
+        match &mut self.kind {
+            MedIrKind::Atom(atom) => {
+                fold.fold_atom(atom);
+            }
+            MedIrKind::Blocks(atoms) => {
+                for atom in atoms.iter_mut() {
+                    fold.fold_atom(atom);
+                }
+            }
+            MedIrKind::BlockAccess(_, _) => {}
+            MedIrKind::Switch(atom, locals) => {
+                fold.fold_atom(atom);
+                locals.iter_mut().for_each(|local| local.fold(fold))
+            }
+            MedIrKind::Call(_, atoms) => {
+                atoms.iter_mut().for_each(|atom| {
+                    fold.fold_atom(atom);
+                });
+            }
+            MedIrKind::Closure(_, _) => {}
+        }
+        fold.fold_medir(&mut self.kind);
+    }
+
+    fn default_traverse<V: ?Sized + MedIrVisit>(&self, visit: &mut V) {
+        match &self.kind {
+            MedIrKind::Atom(atom) => {
+                visit.visit_atom(atom);
+            }
+            MedIrKind::Blocks(atoms) => {
+                for atom in atoms.iter() {
+                    visit.visit_atom(atom);
+                }
+            }
+            MedIrKind::BlockAccess(_, _) => {}
+            MedIrKind::Switch(atom, locals) => {
+                visit.visit_atom(atom);
+                for local in locals.iter() {
+                    local.visit(visit)
+                }
+            }
+            MedIrKind::Call(_, atoms) => {
+                for atom in atoms.iter() {
+                    visit.visit_atom(atom);
+                }
+            }
+            MedIrKind::Closure(_, _) => {}
+        }
+        visit.visit_medir(&self.kind);
+    }
+}
+
+impl MedIrTraversal for Locals {
+    fn fold<F: ?Sized + MedIrFoldInPlace>(&mut self, fold: &mut F) {
+        for (_, defn) in self.binds.iter_mut() {
+            defn.fold(fold)
+        }
+        self.body.fold(fold)
+    }
+
+    fn visit<V: ?Sized + MedIrVisit>(&self, visitor: &mut V) {
+        for (_, defn) in self.binds.iter() {
+            defn.visit(visitor)
+        }
+        self.body.visit(visitor)
     }
 }
 

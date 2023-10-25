@@ -9,5 +9,7 @@ pkgs.mkShell {
     rustfmt
     rust-analyzer
     rustc
+    wabt
+    wasmtime
   ];
 } 
