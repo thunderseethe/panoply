@@ -1,5 +1,5 @@
 use aiahr_core::id::{IdSupply, ReducIrVarId};
-use aiahr_core::pretty::PrettyErrorWithDb;
+use aiahr_core::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx};
 use aiahr_reducir::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, UnwrapMonTy};
 use aiahr_reducir::{
     DelimCont, DelimReducIr, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar,
@@ -317,6 +317,7 @@ impl LowerMonCtx<'_> {
                         // If we have no monadic args and our function isn't monadic return early
                         // with normal function application
                         if bind_args.is_empty() {
+                            //return ReducIr::new(ReducIrKind::Tag(reducir_db.mk_reducir_ty(ControlTy(evv_ty, ty)), 0, P::new(ReducIr::app(func_mon, mon_args))));
                             return ReducIr::app(func_mon, mon_args);
                         }
 
@@ -440,7 +441,21 @@ impl LowerMonCtx<'_> {
             }
             // TODO: do we need to handle this specially? item should be lowered monadically so it
             // already returns a monad when we call it here
-            Item(item, ty) => ReducIr::new(Item(*item, *ty)),
+            Item(item, ty) => match item {
+                ReducIrTermName::Term(term) => {
+                    let mon_item = self
+                        .db
+                        .lower_reducir_mon_item_of(*term)
+                        .item(self.db.as_reducir_db());
+                    let mon_ty = mon_item
+                        .type_check(self.db.as_reducir_db())
+                        .expect("Type checking must succeed for item to exist");
+                    ReducIr::new(Item(*item, mon_ty))
+                }
+                // Generated items don't have monadic type (they are row evidence).
+                // So they can reuse their type unmodified.
+                ReducIrTermName::Gen(_) => ReducIr::new(Item(*item, *ty)),
+            },
             X(DelimCont::NewPrompt(mark_var, ir)) => {
                 let x = self.lower_monadic(evv_ty, ir);
                 let a_ty = match mark_var.ty.kind(reducir_db) {
@@ -474,6 +489,11 @@ impl LowerMonCtx<'_> {
                     _ => unreachable!(),
                 };
                 let mon_body = self.lower_monadic(upd_evv_ty, body);
+                println!(
+                    "{}\nmonadic lower into:\n{}",
+                    body.pretty_with(self.db).pprint().pretty(80),
+                    mon_body.pretty_with(self.db).pprint().pretty(80)
+                );
                 let mon_marker = self.lower_monadic(evv_ty, marker);
                 let mon_body_ty = mon_body
                     .type_check(reducir_db)

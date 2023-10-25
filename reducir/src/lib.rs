@@ -1,7 +1,7 @@
 use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
-use aiahr_core::pretty::PrettyWithCtx;
+use aiahr_core::pretty::{PrettyPrint, PrettyWith, PrettyWithCtx};
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -283,22 +283,32 @@ impl<Ext> ReducIr<Ext> {
         }
     }
 
-    pub fn abss<I>(vars: I, mut body: Self) -> Self
+    pub fn abss_with_innermost(
+        vars: impl IntoIterator<Item = ReducIrVar>,
+        innermost_vars: impl IntoIterator<Item = ReducIrVar>,
+        mut body: Self,
+    ) -> Self {
+        let mut vars = vars.into_iter().peekable();
+        let mut innermost_vars = innermost_vars.into_iter().peekable();
+        if vars.peek().is_none() && innermost_vars.peek().is_none() {
+            body
+        } else {
+            if let Abs(ref mut ivars, _) = body.kind {
+                *ivars = vars
+                    .chain(ivars.iter().copied())
+                    .chain(innermost_vars)
+                    .collect();
+                return body;
+            }
+            ReducIr::new(Abs(vars.chain(innermost_vars).collect(), P::new(body)))
+        }
+    }
+
+    pub fn abss<I>(vars: I, body: Self) -> Self
     where
         I: IntoIterator<Item = ReducIrVar>,
     {
-        let mut vars = vars.into_iter().peekable();
-        // If vars is empty do not construct any abs
-        if vars.peek().is_none() {
-            body
-        } else {
-            // Otherwise try to prepend to an existing Abs
-            if let Abs(ref mut ivars, _) = body.kind {
-                *ivars = vars.chain(ivars.iter().copied()).collect();
-                return body;
-            }
-            ReducIr::new(Abs(vars.collect(), P::new(body)))
-        }
+        Self::abss_with_innermost(vars, [], body)
     }
 
     pub fn case_on_var(
@@ -704,18 +714,21 @@ impl ReducIr {
 
 pub trait TypeCheck {
     type Ext: Clone;
-    fn type_check<'a>(
+    fn type_check<'a, DB: ?Sized + crate::Db>(
         &'a self,
-        ctx: &dyn crate::Db,
+        ctx: &DB,
     ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>>;
 }
 impl TypeCheck for DelimCont {
     type Ext = Self;
-    fn type_check(&self, ctx: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+    fn type_check<DB: ?Sized + crate::Db>(
+        &self,
+        ctx: &DB,
+    ) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
         use ty::ReducIrTyKind::*;
         match self {
             DelimCont::NewPrompt(prompt, body) => {
-                if let MarkerTy(_) = prompt.ty.kind(ctx) {
+                if let MarkerTy(_) = prompt.ty.kind(ctx.as_reducir_db()) {
                     body.type_check(ctx)
                 } else {
                     Err(ReducIrTyErr::ExpectedMarkerTy(prompt.ty))
@@ -723,7 +736,7 @@ impl TypeCheck for DelimCont {
             }
             DelimCont::Prompt(marker, _upd_handler, body) => {
                 let marker_ty = marker.type_check(ctx)?;
-                if let MarkerTy(_) = marker_ty.kind(ctx) {
+                if let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) {
                     body.type_check(ctx)
                 } else {
                     Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty))
@@ -731,7 +744,7 @@ impl TypeCheck for DelimCont {
             }
             DelimCont::Yield(ty, marker, body) => {
                 let marker_ty = marker.type_check(ctx)?;
-                let MarkerTy(_) = marker_ty.kind(ctx) else {
+                let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) else {
                     return Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty));
                 };
                 // We want to make sure body type checks but we don't actually use the result
@@ -744,9 +757,9 @@ impl TypeCheck for DelimCont {
 impl TypeCheck for Lets {
     type Ext = Self;
 
-    fn type_check<'a>(
+    fn type_check<'a, DB: ?Sized + crate::Db>(
         &'a self,
-        ctx: &dyn crate::Db,
+        ctx: &DB,
     ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>> {
         for (var, defn) in self.binds.iter() {
             let defn_ty = defn.type_check(ctx)?;
@@ -764,14 +777,17 @@ impl TypeCheck for Lets {
 }
 impl TypeCheck for Infallible {
     type Ext = Self;
-    fn type_check(&self, _: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+    fn type_check<DB: ?Sized + crate::Db>(
+        &self,
+        _: &DB,
+    ) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
         unreachable!()
     }
 }
-impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck for ReducIr<Ext> {
+impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
     type Ext = Ext;
 
-    fn type_check(&self, ctx: &dyn crate::Db) -> Result<ReducIrTy, ReducIrTyErr<Ext>> {
+    fn type_check<DB: ?Sized + crate::Db>(&self, ctx: &DB) -> Result<ReducIrTy, ReducIrTyErr<Ext>> {
         use ty::ReducIrTyKind::*;
         match &self.kind {
             Int(_) => Ok(ctx.mk_reducir_ty(IntTy)),
@@ -815,12 +831,14 @@ impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck
             }
             TyApp(forall, ty_app) => {
                 let forall_ty = forall.type_check(ctx)?;
-                match forall_ty.kind(ctx) {
+                match forall_ty.kind(ctx.as_reducir_db()) {
                     ForallTy(kind, ret_ty) => match (kind, ty_app) {
-                        (Kind::Type, ReducIrTyApp::Ty(ty)) => Ok(ret_ty.subst_ty(ctx, *ty)),
+                        (Kind::Type, ReducIrTyApp::Ty(ty)) => {
+                            Ok(ret_ty.subst_ty(ctx.as_reducir_db(), *ty))
+                        }
                         (Kind::SimpleRow, ReducIrTyApp::DataRow(row))
                         | (Kind::ScopedRow, ReducIrTyApp::EffRow(row)) => {
-                            Ok(ret_ty.subst_row(ctx, row.clone()))
+                            Ok(ret_ty.subst_row(ctx.as_reducir_db(), row.clone()))
                         }
                         (k, ReducIrTyApp::Ty(_)) => Err(ReducIrTyErr::KindMistmatch(k, Kind::Type)),
                         (k, ReducIrTyApp::DataRow(_)) => {
@@ -842,14 +860,14 @@ impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck
             }
             FieldProj(indx, strukt) => {
                 let strukt_ty = strukt.type_check(ctx)?;
-                match strukt_ty.kind(ctx) {
+                match strukt_ty.kind(ctx.as_reducir_db()) {
                     ProductTy(tys) => Ok(tys[*indx]),
                     _ => Err(ReducIrTyErr::ExpectedProdTy(strukt_ty)),
                 }
             }
             Case(case_ty, discr, branches) => {
                 let coprod = discr.type_check(ctx)?;
-                let tys = match coprod.kind(ctx) {
+                let tys = match coprod.kind(ctx.as_reducir_db()) {
                     CoproductTy(tys) => tys,
                     _ => {
                         return Err(ReducIrTyErr::ExpectedCoprodTy(coprod));
@@ -857,7 +875,7 @@ impl<Ext: TypeCheck<Ext = Ext> + PrettyWithCtx<dyn crate::Db> + Clone> TypeCheck
                 };
                 for (branch, ty) in branches.iter().zip(tys.into_iter()) {
                     let branch_ty = branch.type_check(ctx)?;
-                    match branch_ty.kind(ctx) {
+                    match branch_ty.kind(ctx.as_reducir_db()) {
                         FunTy(arg_tys, ret_ty) => {
                             debug_assert!(arg_tys.len() == 1);
                             if arg_tys[0] != ty {

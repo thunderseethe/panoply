@@ -161,7 +161,13 @@ impl<'db> FoldReducIrTy<'db> for Subst<'db, ReducIrRow> {
     fn fold_prod_var(&mut self, var: i32) -> ReducIrTy {
         match self.has_subst(var, |row| match row {
             ReducIrRow::Open(v) => ReducIrTyKind::ProdVarTy(*v),
-            ReducIrRow::Closed(row) => ReducIrTyKind::ProductTy(row.clone()),
+            ReducIrRow::Closed(row) => {
+                if row.len() == 1 {
+                    row[0].kind(self.db)
+                } else {
+                    ReducIrTyKind::ProductTy(row.clone())
+                }
+            }
         }) {
             Some((bound, kind)) => {
                 let mut fold = Subst::<'db, ReducIrTy> {
@@ -179,7 +185,13 @@ impl<'db> FoldReducIrTy<'db> for Subst<'db, ReducIrRow> {
     fn fold_coprod_var(&mut self, var: i32) -> ReducIrTy {
         match self.has_subst(var, |row| match row {
             ReducIrRow::Open(v) => ReducIrTyKind::CoprodVarTy(*v),
-            ReducIrRow::Closed(row) => ReducIrTyKind::CoproductTy(row.clone()),
+            ReducIrRow::Closed(row) => {
+                if row.len() == 1 {
+                    row[0].kind(self.db)
+                } else {
+                    ReducIrTyKind::CoproductTy(row.clone())
+                }
+            }
         }) {
             Some((bound, kind)) => {
                 let mut fold = Subst::<'db, ReducIrTy> {

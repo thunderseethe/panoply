@@ -290,7 +290,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
         .rfold(body, |body, (arg, term)| ReducIr::local(arg, term, body));
     // Wrap our term in any unsolved row evidence params we need
     let evv_var = lower_ctx.evv_var(ast);
-    let body = ReducIr::abss(ev_params.into_iter().chain(std::iter::once(evv_var)), body);
+    let body = ReducIr::abss_with_innermost(ev_params.into_iter(), [evv_var], body);
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme
@@ -581,10 +581,10 @@ effect Reader {
         let ir = lower_snippet(&db, "|x| x");
         let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
-        let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V0, V1] V1))"];
+        let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V1, V0] V1))"];
         expect.assert_eq(&pretty_ir);
 
-        let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> T1"];
+        let expect_ty = expect!["forall Type . forall ScopedRow . T1 -> {0} -> T1"];
         let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
         expect_ty.assert_eq(&pretty_ir_ty);
     }
@@ -597,7 +597,7 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: Type) (T0: ScopedRow)] (fun [V0]
-                (let (V1 ((_row_simple_x_y @ T1) @ T1)) (fun [V2] (V1[0] V2 V2)))))"#]];
+                (let (V1 ((_row_simple_x_y @ Ty(T1)) @ Ty(T1))) (fun [V2] (V1[0] V2 V2)))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> {T1, T1}"];
@@ -614,7 +614,7 @@ effect Reader {
         let expect = expect![[r#"
             (forall
               [(T5: Type) (T4: ScopedRow) (T3: SimpleRow) (T2: SimpleRow) (T1: SimpleRow) (T0: SimpleRow)]
-              (fun [V1, V2, V0, V3, V4] (V2[3][0] (V1[0] V3 V4))))"#]];
+              (fun [V1, V2, V3, V4, V0] (V2[3][0] (V1[0] V3 V4))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
@@ -624,15 +624,15 @@ effect Reader {
                   forall SimpleRow .
                     forall SimpleRow .
                       forall SimpleRow .
-                        { {4} -> {3} -> {2}
-                        , forall Type . (<5> -> T0) -> (<4> -> T0) -> <3> -> T0
-                        , {{2} -> {4}, <4> -> <2>}
-                        , {{2} -> {3}, <3> -> <2>}
-                        } -> { {1} -> T5 -> {2}
-                             , forall Type . (<2> -> T0) -> (T6 -> T0) -> <3> -> T0
-                             , {{2} -> {1}, <1> -> <2>}
-                             , {{2} -> T5, T5 -> <2>}
-                             } -> {0} -> {4} -> {3} -> T5"#]];
+                        { {3} -> {2} -> {1}
+                        , forall Type . (<4> -> T0) -> (<3> -> T0) -> <2> -> T0
+                        , {{1} -> {3}, <3> -> <1>}
+                        , {{1} -> {2}, <2> -> <1>}
+                        } -> { {0} -> T5 -> {1}
+                             , forall Type . (<1> -> T0) -> (T6 -> T0) -> <2> -> T0
+                             , {{1} -> {0}, <0> -> <1>}
+                             , {{1} -> T5, T5 -> <1>}
+                             } -> {3} -> {2} -> {4} -> T5"#]];
         let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
         expect_ty.assert_eq(&pretty_ir_ty);
     }
@@ -655,17 +655,19 @@ effect Reader {
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                 ((let
-                  [ (V2 ((_row_simple_state_value @ {}) @ {}))
-                  , (V3 (((_row_simple_return_putget @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
-                  {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> {} ->
-                  {{}, {}}))
-                  , (V4 (((_row_simple_putget_return @ {} -> {} -> {{}, {}}) @ {} -> ({} ->
-                  {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} ->
-                  {{}, {}}))
-                  , (V5 ((_row_simple_get_put @ {} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
-                                                                                      , {}
-                                                                                      }) @ {}
-                  -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}))
+                  [ (V2 ((_row_simple_state_value @ Ty({})) @ Ty({})))
+                  , (V3 (((_row_simple_return_putget @ Ty({} -> ({} -> {} -> {{}, {}}) -> {}
+                  -> {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
+                                                                           , {}
+                                                                           })) @ Ty({} -> {}
+                  -> {{}, {}})))
+                  , (V4 (((_row_simple_putget_return @ Ty({} -> {} -> {{}, {}})) @ Ty({} ->
+                  ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})) @ Ty({} -> ({} -> {} -> { {}
+                                                                                     , {}
+                                                                                     }) ->
+                  {} -> {{}, {}})))
+                  , (V5 ((_row_simple_get_put @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
+                  {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})))
                   , (V6 (V4[0]
                     (V5[0] (fun [V7, V8, V9] (V8 V9 V9)) (fun [V10, V11, V12] (V11 {} V10)))
                     (fun [V13, V14] (V2[0] V14 V13))))
@@ -737,31 +739,32 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
+                ((((__mon_bind @ Ty({1})) @ Ty({} -> {{}, {}})) @ Ty({{}, {}}))
                   (let
-                    [ (V2 ((_row_simple_state_value @ {}) @ {}))
-                    , (V3 (((_row_simple_return_putget @ {} -> ({} -> {} -> {{}, {}}) -> {}
-                    -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} ->
-                    {} -> {{}, {}}))
-                    , (V4 (((_row_simple_putget_return @ {} -> {} -> {{}, {}}) @ {} -> ({}
-                    -> {} -> {{}, {}}) -> {} -> {{}, {}}) @ {} -> ({} -> {} -> {{}, {}}) ->
-                    {} -> {{}, {}}))
-                    , (V5 ((_row_simple_get_put @ {} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
-                                                                                        , {}
-                                                                                        }) @ {}
-                    -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}))
+                    [ (V2 ((_row_simple_state_value @ Ty({})) @ Ty({})))
+                    , (V3 (((_row_simple_return_putget @ Ty({} -> ({} -> {} -> {{}, {}}) ->
+                    {} -> {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
+                                                                                , {}
+                                                                                })) @ Ty({}
+                    -> {} -> {{}, {}})))
+                    , (V4 (((_row_simple_putget_return @ Ty({} -> {} -> {{}, {}})) @ Ty({}
+                    -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})) @ Ty({} -> ({} -> {} ->
+                    {{}, {}}) -> {} -> {{}, {}})))
+                    , (V5 ((_row_simple_get_put @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
+                    {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})))
                     , (V6 (V4[0]
                       (V5[0]
                         (fun [V7, V8, V9] (V8 V9 V9))
                         (fun [V10, V11, V12] (V11 {} V10)))
                       (fun [V13, V14] (V2[0] V14 V13))))
                     ]
-                    (((__mon_freshm @ {} -> {{}, {}}) @ {1} -> (Control {1} {} -> {{}, {}}))
+                    (((__mon_freshm @ Ty({} -> {{}, {}})) @ Ty({1} -> (Control {1} {} ->
+                    {{}, {}})))
                       (fun [V18]
-                        ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
+                        ((((__mon_prompt @ Ty({1})) @ Ty({0})) @ Ty({} -> {{}, {}}))
                           V18
                           (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
-                          ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}})
+                          ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({} -> {{}, {}}))
                             (let (V15 {})
                               (let (V16 (V1[3][0] V0))
                                 (fun [V0]

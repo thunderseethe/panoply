@@ -595,16 +595,16 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                ((((__mon_bind @ {1}) @ {} -> {{}, {}}) @ {{}, {}})
-                  (let (V18 ((__mon_generate_marker @ {} -> {{}, {}}) {}))
-                    ((((__mon_prompt @ {1}) @ {0}) @ {} -> {{}, {}})
+                ((((__mon_bind @ Ty({1})) @ Ty({} -> {{}, {}})) @ Ty({{}, {}}))
+                  (let (V18 ((__mon_generate_marker @ Ty({} -> {{}, {}})) {}))
+                    ((((__mon_prompt @ Ty({1})) @ Ty({0})) @ Ty({} -> {{}, {}}))
                       V18
                       (fun [V0]
                         (V1[0]
                           V0
                           {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun [V7, V8, V9]
                             (V8 V9 V9))}}))
-                      ((((__mon_bind @ {0}) @ {}) @ {} -> {{}, {}})
+                      ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({} -> {{}, {}}))
                         (fun [V0]
                           (let (V16 (V1[3][0] V0))
                             <1: {V16[0], (fun [V17] (V16[1][1] {} V17)), (fun [V0] V0)}>))

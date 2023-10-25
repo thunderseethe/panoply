@@ -156,6 +156,7 @@ pub(crate) mod normalize {
 
 pub(crate) mod instantiate {
 
+    use aiahr_core::id::TyVarId;
     use aiahr_ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TcVarToUnifierError, TypeK},
         row::{Row, ScopedRow, SimpleRow},
@@ -170,9 +171,9 @@ pub(crate) mod instantiate {
     pub(crate) struct Instantiate<'a, 'infer, I> {
         pub(crate) db: &'a dyn crate::Db,
         pub(crate) ctx: &'a I,
-        pub(crate) ty_unifiers: Vec<TcUnifierVar<'infer, TypeK>>,
-        pub(crate) datarow_unifiers: Vec<TcUnifierVar<'infer, SimpleRowK>>,
-        pub(crate) effrow_unifiers: Vec<TcUnifierVar<'infer, ScopedRowK>>,
+        pub(crate) ty_unifiers: Vec<(TyVarId, TcUnifierVar<'infer, TypeK>)>,
+        pub(crate) datarow_unifiers: Vec<(TyVarId, TcUnifierVar<'infer, SimpleRowK>)>,
+        pub(crate) effrow_unifiers: Vec<(TyVarId, TcUnifierVar<'infer, ScopedRowK>)>,
     }
 
     impl<'a, 'infer, I> Instantiate<'a, 'infer, I> {
@@ -209,21 +210,36 @@ pub(crate) mod instantiate {
             &mut self,
             var: TypeVarOf<InDb>,
         ) -> Result<Ty<InArena<'infer>>, Self::Error> {
-            Ok(self.ctx().mk_ty(TypeKind::VarTy(self.ty_unifiers[var.0])))
+            let uni_var = self
+                .ty_unifiers
+                .iter()
+                .find_map(|(key, val)| (key == &var).then_some(val))
+                .expect("ty_unifiers did not contain variable");
+            Ok(self.ctx().mk_ty(TypeKind::VarTy(*uni_var)))
         }
 
         fn try_fold_simple_row_var(
             &mut self,
             var: SimpleRowVarOf<InDb>,
         ) -> Result<SimpleRow<Self::Out>, Self::Error> {
-            Ok(Row::Open(self.datarow_unifiers[var.0]))
+            let uni_var = self
+                .datarow_unifiers
+                .iter()
+                .find_map(|(key, val)| (key == &var).then_some(val))
+                .expect("ty_unifiers did not contain variable");
+            Ok(Row::Open(*uni_var))
         }
 
         fn try_fold_scoped_row_var(
             &mut self,
             var: ScopedRowVarOf<Self::In>,
         ) -> Result<ScopedRow<Self::Out>, Self::Error> {
-            Ok(Row::Open(self.effrow_unifiers[var.0]))
+            let uni_var = self
+                .effrow_unifiers
+                .iter()
+                .find_map(|(key, val)| (key == &var).then_some(val))
+                .expect("ty_unifiers did not contain variable");
+            Ok(Row::Open(*uni_var))
         }
     }
 }
