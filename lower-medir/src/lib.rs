@@ -154,7 +154,7 @@ effect Reader {
                   let V33 = __mon_bind(V28, V32);
                   let V34 = __mon_prompt(V3, V16, V33);
                   let V38 = make_closure(f_lam_10,[]);
-                  __mon_bind(V34, V38)
+                  __mon_bind(V34, V38, V1)
                 }"#]],
             expect![[r#"
                 defn f_lam_0(V4, V5, V6) {

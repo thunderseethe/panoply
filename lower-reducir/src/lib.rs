@@ -491,7 +491,9 @@ mod tests {
         Db,
     };
     use aiahr_parser::Db as ParserDb;
-    use aiahr_reducir::{ty::ReducIrTy, DelimReducIr, ReducIr, ReducIrTyErr, TypeCheck};
+    use aiahr_reducir::{
+        mon::MonReducIrModule, ty::ReducIrTy, DelimReducIr, ReducIr, ReducIrTyErr, TypeCheck,
+    };
     use expect_test::expect;
     use pretty::RcAllocator;
 
@@ -551,6 +553,27 @@ effect Reader {
             db.lower_reducir_item_for_file_name(path, db.ident_str(fn_name))
         })
         .item(db)
+    }
+
+    fn lower_mon_module(db: &TestDatabase, input: &str) -> MonReducIrModule {
+        let path = std::path::PathBuf::from("test.aiahr");
+        let mut contents = r#"
+effect State {
+    put : {} -> {},
+    get : {} -> {}
+}
+
+effect Reader {
+    ask : {} -> {}
+}
+
+"#
+        .to_string();
+        contents.push_str(input);
+        let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
+        SourceFileSet::new(db, vec![file]);
+
+        db.lower_reducir_mon_module_of(db.root_module_for_file(file))
     }
 
     fn lower_mon_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
@@ -654,7 +677,7 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                ((let
+                (let
                   [ (V2 ((_row_simple_state_value @ Ty({})) @ Ty({})))
                   , (V3 (((_row_simple_return_putget @ Ty({} -> ({} -> {} -> {{}, {}}) -> {}
                   -> {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
@@ -668,16 +691,19 @@ effect Reader {
                   {} -> {{}, {}})))
                   , (V5 ((_row_simple_get_put @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
                   {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})))
-                  , (V6 (V4[0]
-                    (V5[0] (fun [V7, V8, V9] (V8 V9 V9)) (fun [V10, V11, V12] (V11 {} V10)))
-                    (fun [V13, V14] (V2[0] V14 V13))))
                   ]
-                  (new_prompt [V18] (prompt V18 (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
-                    (V4[3][0]
-                      V6
-                      (let (V15 {})
-                        (let (V16 (V1[3][0] V0))
-                          (yield V16[0] (fun [V17] (V16[1][1] V15 V17))))))))) {})))"#]];
+                  ((let
+                    (V6 (V4[0]
+                      (V5[0]
+                        (fun [V7, V8, V9] (V8 V9 V9))
+                        (fun [V10, V11, V12] (V11 {} V10)))
+                      (fun [V13, V14] (V2[0] V14 V13))))
+                    (new_prompt [V18] (prompt V18 (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
+                      (V4[3][0]
+                        V6
+                        (let (V15 {})
+                          (let (V16 (V1[3][0] V0))
+                            (yield V16[0] (fun [V17] (V16[1][1] V15 V17))))))))) {}))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
@@ -739,40 +765,43 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                ((((__mon_bind @ Ty({1})) @ Ty({} -> {{}, {}})) @ Ty({{}, {}}))
-                  (let
-                    [ (V2 ((_row_simple_state_value @ Ty({})) @ Ty({})))
-                    , (V3 (((_row_simple_return_putget @ Ty({} -> ({} -> {} -> {{}, {}}) ->
-                    {} -> {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
-                                                                                , {}
-                                                                                })) @ Ty({}
-                    -> {} -> {{}, {}})))
-                    , (V4 (((_row_simple_putget_return @ Ty({} -> {} -> {{}, {}})) @ Ty({}
-                    -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})) @ Ty({} -> ({} -> {} ->
-                    {{}, {}}) -> {} -> {{}, {}})))
-                    , (V5 ((_row_simple_get_put @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
-                    {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})))
-                    , (V6 (V4[0]
-                      (V5[0]
-                        (fun [V7, V8, V9] (V8 V9 V9))
-                        (fun [V10, V11, V12] (V11 {} V10)))
-                      (fun [V13, V14] (V2[0] V14 V13))))
-                    ]
-                    (((__mon_freshm @ Ty({} -> {{}, {}})) @ Ty({1} -> (Control {1} {} ->
-                    {{}, {}})))
-                      (fun [V18]
-                        ((((__mon_prompt @ Ty({1})) @ Ty({0})) @ Ty({} -> {{}, {}}))
-                          V18
-                          (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
-                          ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({} -> {{}, {}}))
-                            (let (V15 {})
-                              (let (V16 (V1[3][0] V0))
-                                (fun [V0]
-                                  <1: {V16[0], (fun [V17] (V16[1][1] V15 V17)), (fun [V0]
-                                      V0)}>)))
-                            (fun [V21]
-                              (let (V22 (V4[3][0] V6 V21)) (fun [V0] <0: V22>))))))))
-                  (fun [V23] (let (V24 (V23 {})) (fun [V0] <0: V24>))))))"#]];
+                ((let
+                  [ (V2 ((_row_simple_state_value @ Ty({})) @ Ty({})))
+                  , (V3 (((_row_simple_return_putget @ Ty({} -> ({} -> {} -> {{}, {}}) -> {}
+                  -> {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
+                                                                           , {}
+                                                                           })) @ Ty({} -> {}
+                  -> {{}, {}})))
+                  , (V4 (((_row_simple_putget_return @ Ty({} -> {} -> {{}, {}})) @ Ty({} ->
+                  ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})) @ Ty({} -> ({} -> {} -> { {}
+                                                                                     , {}
+                                                                                     }) ->
+                  {} -> {{}, {}})))
+                  , (V5 ((_row_simple_get_put @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
+                  {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})))
+                  ]
+                  ((((__mon_bind @ Ty({1})) @ Ty({} -> {{}, {}})) @ Ty({{}, {}}))
+                    (let
+                      (V6 (V4[0]
+                        (V5[0]
+                          (fun [V7, V8, V9] (V8 V9 V9))
+                          (fun [V10, V11, V12] (V11 {} V10)))
+                        (fun [V13, V14] (V2[0] V14 V13))))
+                      (((__mon_freshm @ Ty({} -> {{}, {}})) @ Ty({1} -> (Control {1} {} ->
+                      {{}, {}})))
+                        (fun [V18]
+                          ((((__mon_prompt @ Ty({1})) @ Ty({0})) @ Ty({} -> {{}, {}}))
+                            V18
+                            (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
+                            ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({} -> {{}, {}}))
+                              (let (V15 {})
+                                (let (V16 (V1[3][0] V0))
+                                  (fun [V0]
+                                    <1: {V16[0], (fun [V17] (V16[1][1] V15 V17)), (fun [V0]
+                                        V0)}>)))
+                              (fun [V21]
+                                (let (V22 (V4[3][0] V6 V21)) (fun [V0] <0: V22>))))))))
+                    (fun [V23] (let (V24 (V23 {})) (fun [V0] <0: V24>))))) V0)))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
@@ -801,7 +830,7 @@ effect Reader {
                       }
                     } -> <0>
                   }
-                } -> {1} -> {1} -> (Control {1} {{}, {}})"#]];
+                } -> {1} -> (Control {1} {{}, {}})"#]];
         let pretty_ty = ir
             .type_check(&db)
             .map_err_pretty_with(&db)
@@ -811,5 +840,73 @@ effect Reader {
             .pretty(80)
             .to_string();
         expect_ty.assert_eq(&pretty_ty);
+    }
+
+    #[test]
+    fn monadic_lower_applied_wand() {
+        let db = TestDatabase::default();
+        let module = lower_mon_module(
+            &db,
+            r#"
+            wand = |m| |n| (m ,, n).x
+            main = w = wand({ x = {} })({ y = {} }); {}
+            "#,
+        );
+
+        let items = vec![
+            // wand
+            expect![[r#"
+                (forall
+                  [(T5: Type) (T4: ScopedRow) (T3: SimpleRow) (T2: SimpleRow) (T1: SimpleRow) (T0: SimpleRow)]
+                  (fun [V1, V2, V3, V4, V0] <0: (V2[3][0] (V1[0] V3 V4))>))"#]],
+            // main
+            expect![[r#"
+                (forall [(T0: ScopedRow)] (fun [V0]
+                    ((let
+                      [ (V1 ((_row_simple_x_y @ Ty({})) @ Ty({})))
+                      , (V2 ((_row_simple_y_x @ Ty({})) @ Ty({})))
+                      ]
+                      ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({}))
+                        (((((((wand @ Ty({})) @ Eff(0)) @ Data([{}])) @ Data([{}])) @ Data([{},{}])) @ Data([{}]))
+                          V1
+                          V2
+                          {}
+                          {})
+                        (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) V0)))"#]],
+        ];
+        let tys = vec![
+            // wand
+            expect![[r#"
+                forall Type .
+                  forall ScopedRow .
+                    forall SimpleRow .
+                      forall SimpleRow .
+                        forall SimpleRow .
+                          forall SimpleRow .
+                            { {3} -> {2} -> {1}
+                            , forall Type . (<4> -> T0) -> (<3> -> T0) -> <2> -> T0
+                            , {{1} -> {3}, <3> -> <1>}
+                            , {{1} -> {2}, <2> -> <1>}
+                            } -> { {0} -> T5 -> {1}
+                                 , forall Type . (<1> -> T0) -> (T6 -> T0) -> <2> -> T0
+                                 , {{1} -> {0}, <0> -> <1>}
+                                 , {{1} -> T5, T5 -> <1>}
+                                 } -> {3} -> {2} -> {4} -> (Control {4} T5)"#]],
+            // main
+            expect!["forall ScopedRow . {0} -> (Control {0} {})"],
+        ];
+        for ((item, expect), expect_ty) in module
+            .items(&db)
+            .iter()
+            .zip(items.into_iter())
+            .zip(tys.into_iter())
+        {
+            let ir = item.item(&db);
+            let item_str = ir.pretty_with(&db).pprint().pretty(80).to_string();
+            expect.assert_eq(&item_str);
+
+            let item_ty_str = ir.type_check(&db).to_pretty(&db);
+            expect_ty.assert_eq(&item_ty_str)
+        }
     }
 }

@@ -6,10 +6,12 @@ pkgs.mkShell {
     clippy
     gdb
     glibc
+    jq
     rustfmt
     rust-analyzer
     rustc
     wabt
     wasmtime
+    rustc.llvmPackages.llvm
   ];
 } 

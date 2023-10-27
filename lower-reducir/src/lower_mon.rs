@@ -59,10 +59,41 @@ impl LowerMonCtx<'_> {
         match ir.kind() {
             ReducIrKind::Abs(vars, _) => {
                 match vars.iter().find(|var| var.var.id == self.evv_var_id) {
-                    Some(evv_var) => self.lower_monadic(evv_var.ty, ir),
+                    Some(evv_var) => {
+                        let reducir_db = self.db.as_reducir_db();
+                        println!("{}", ir.pretty_with(self.db).pprint().pretty(80));
+                        let mon_ir = self.lower_monadic(evv_var.ty, ir);
+                        mon_ir.map_within_abss(|body| {
+                            match body
+                                .type_check(reducir_db)
+                                .map_err_pretty_with(reducir_db)
+                                .expect("Monadic lowered IR to type check")
+                                .try_unwrap_monadic(reducir_db)
+                            {
+                                Ok(_) => {
+                                    // If our value is a monad then apply our evv to it
+                                    // We do this so the return value of our item is
+                                    // `Ctl m a` and not `evv -> Ctl m a`
+                                    // The latter would cause our item to have an overall type
+                                    // like:
+                                    // `evv -> evv -> Ctl m a` since our item already has evv as a
+                                    // paramter.
+                                    ReducIr::app(body, [ReducIr::var(*evv_var)])
+                                }
+                                Err(ty) => {
+                                    // If our type isn't already a monad wrap it as a Pure value
+                                    ReducIr::new(ReducIrKind::Tag(
+                                        reducir_db.mk_reducir_ty(ControlTy(evv_var.ty, ty)),
+                                        0,
+                                        P::new(body),
+                                    ))
+                                }
+                            }
+                        })
+                    }
                     None => {
                         println!("{:?}", ir);
-                        todo!()
+                        todo!("This shouldn't happen since we add evv explicitly to param list")
                     }
                 }
             }
