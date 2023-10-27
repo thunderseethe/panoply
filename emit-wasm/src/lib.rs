@@ -564,10 +564,22 @@ effect Reader {
               (import "intrinsic" "__mon_prompt" (func (;1;) (type 2)))
               (import "intrinsic" "__mon_bind" (func (;2;) (type 1)))
               (func $f (;3;) (type $fun_1_1) (param i32) (result i32)
-                (local i32)
+                (local i32 i32)
                 global.get 0
                 global.get 0
                 i32.const 0
+                i32.add
+                global.set 0
+                local.set 1
+                global.get 0
+                i32.const 0
+                i32.store align=2
+                global.get 0
+                local.get 1
+                i32.store offset=1 align=2
+                global.get 0
+                global.get 0
+                i32.const 2
                 i32.add
                 global.set 0
               )

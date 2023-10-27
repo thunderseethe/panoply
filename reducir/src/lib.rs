@@ -1,7 +1,6 @@
 use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
-use aiahr_core::pretty::{PrettyPrint, PrettyWith, PrettyWithCtx};
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -311,6 +310,27 @@ impl<Ext> ReducIr<Ext> {
         Self::abss_with_innermost(vars, [], body)
     }
 
+    pub fn map_within_abss(mut self, op: impl FnOnce(Self) -> Self) -> Self {
+        if let Abs(_, inner) = &mut self.kind {
+            let body = std::mem::replace(inner.as_mut(), ReducIr::new(ReducIrKind::Int(0)));
+            *inner.as_mut() = op(body);
+            self
+        } else {
+            op(self)
+        }
+    }
+
+    pub fn map_within_lets(mut self, op: impl FnOnce(Self) -> Self) -> Self {
+        if let App(head, _) = &mut self.kind {
+            if let Abs(_, inner) = &mut head.as_mut().kind {
+                let body = std::mem::replace(inner.as_mut(), ReducIr::new(ReducIrKind::Int(0)));
+                *inner.as_mut() = op(body);
+                return self;
+            }
+        }
+        op(self)
+    }
+
     pub fn case_on_var(
         ty: ReducIrTy,
         var: ReducIrVar,
@@ -327,12 +347,34 @@ impl<Ext> ReducIr<Ext> {
         ReducIr::new(Case(ty, P::new(discr), cases.into_iter().collect()))
     }
 
+    fn contains_var(&self, var: &ReducIrVar) -> bool {
+        match self.kind() {
+            Int(_) | Item(_, _) => false,
+            Var(v) => v == var,
+            Abs(_, body)
+            | TyAbs(_, body)
+            | TyApp(body, _)
+            | FieldProj(_, body)
+            | Tag(_, _, body) => body.contains_var(var),
+            App(head, spine) => {
+                head.contains_var(var) || spine.iter().any(|ir| ir.contains_var(var))
+            }
+            Struct(elems) => elems.iter().any(|ir| ir.contains_var(var)),
+            Case(_, discr, branches) => {
+                discr.contains_var(var) || branches.iter().any(|ir| ir.contains_var(var))
+            }
+            X(_) => todo!(),
+        }
+    }
+
     pub fn local(var: ReducIrVar, value: Self, mut body: Self) -> Self {
         if let App(ref mut head, ref mut spine) = body.kind {
-            if let Abs(ref mut vars, _) = head.as_mut().kind {
-                *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
-                spine.insert(0, value);
-                return body;
+            if spine.iter().all(|arg| !arg.contains_var(&var)) {
+                if let Abs(ref mut vars, _) = head.as_mut().kind {
+                    *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
+                    spine.insert(0, value);
+                    return body;
+                }
             }
         }
         if let Abs(ref mut vars, _) = body.kind {
