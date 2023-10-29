@@ -254,16 +254,17 @@ impl<'a> LowerCtx<'a> {
             .collect::<Vec<_>>();
         free_vars.sort();
 
-        let mut param_tys = vec![];
         let params = free_vars
             .iter()
             .copied()
             .chain(vars.iter().copied().map(|var| {
-                let medir_ty = from_reducir_ty(self.db, var.ty);
-                param_tys.push(medir_ty);
-                MedIrVar::new(self.var_converter.convert(var.var), medir_ty)
+                MedIrVar::new(
+                    self.var_converter.convert(var.var),
+                    from_reducir_ty(self.db, var.ty),
+                )
             }))
-            .collect();
+            .collect::<Vec<_>>();
+        let param_tys = params.iter().map(|var| var.ty).collect();
         let mut binds = vec![];
         let ty = body
             .type_check(self.db.as_reducir_db())

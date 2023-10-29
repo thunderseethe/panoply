@@ -61,7 +61,6 @@ impl LowerMonCtx<'_> {
                 match vars.iter().find(|var| var.var.id == self.evv_var_id) {
                     Some(evv_var) => {
                         let reducir_db = self.db.as_reducir_db();
-                        println!("{}", ir.pretty_with(self.db).pprint().pretty(80));
                         let mon_ir = self.lower_monadic(evv_var.ty, ir);
                         mon_ir.map_within_abss(|body| {
                             match body
@@ -92,8 +91,32 @@ impl LowerMonCtx<'_> {
                         })
                     }
                     None => {
-                        println!("{:?}", ir);
-                        todo!("This shouldn't happen since we add evv explicitly to param list")
+                        // TODO: Fix hack and handle entrypoint logic properly
+                        panic!("{}", ir.pretty_with(self.db).pprint().pretty(80));
+                        /*// If we don't have evv then this is main and evv is {}
+                        let unit = self.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]));
+                        let reducir_db = self.db.as_reducir_db();
+                        let mon_ir = self.lower_monadic(unit, ir);
+                        mon_ir.map_within_abss(|body| {
+                            match body
+                                .type_check(reducir_db)
+                                .map_err_pretty_with(reducir_db)
+                                .expect("Monadic lowered IR to type check")
+                                .try_unwrap_monadic(reducir_db)
+                            {
+                                Ok(_) => {
+                                    // If our value is a monad then apply our evv to it
+                                    // We do this so the return value of our item is
+                                    // `Ctl m a` and not `evv -> Ctl m a`
+                                    // The latter would cause our item to have an overall type
+                                    // like:
+                                    // `evv -> evv -> Ctl m a` since our item already has evv as a
+                                    // paramter.
+                                    ReducIr::app(body, [ReducIr::new(ReducIrKind::Struct(vec![]))])
+                                }
+                                Err(_) => body,
+                            }
+                        })*/
                     }
                 }
             }
@@ -106,6 +129,33 @@ impl LowerMonCtx<'_> {
                 ty_app.clone(),
             )),
             kind => panic!("{:?}", kind),
+            /* _ => {
+                // TODO: Fix hack and handle entrypoint logic properly
+                // If we don't have evv then this is main and evv is {}
+                let unit = self.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]));
+                let reducir_db = self.db.as_reducir_db();
+                let mon_ir = self.lower_monadic(unit, ir);
+                mon_ir.map_within_abss(|body| {
+                    match body
+                        .type_check(reducir_db)
+                        .map_err_pretty_with(reducir_db)
+                        .expect("Monadic lowered IR to type check")
+                        .try_unwrap_monadic(reducir_db)
+                    {
+                        Ok(_) => {
+                            // If our value is a monad then apply our evv to it
+                            // We do this so the return value of our item is
+                            // `Ctl m a` and not `evv -> Ctl m a`
+                            // The latter would cause our item to have an overall type
+                            // like:
+                            // `evv -> evv -> Ctl m a` since our item already has evv as a
+                            // paramter.
+                            ReducIr::app(body, [ReducIr::new(ReducIrKind::Struct(vec![]))])
+                        }
+                        Err(_) => body,
+                    }
+                })
+            }*/
         }
     }
 
@@ -520,11 +570,6 @@ impl LowerMonCtx<'_> {
                     _ => unreachable!(),
                 };
                 let mon_body = self.lower_monadic(upd_evv_ty, body);
-                println!(
-                    "{}\nmonadic lower into:\n{}",
-                    body.pretty_with(self.db).pprint().pretty(80),
-                    mon_body.pretty_with(self.db).pprint().pretty(80)
-                );
                 let mon_marker = self.lower_monadic(evv_ty, marker);
                 let mon_body_ty = mon_body
                     .type_check(reducir_db)

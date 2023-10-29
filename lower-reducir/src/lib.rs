@@ -290,7 +290,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
         .rfold(body, |body, (arg, term)| ReducIr::local(arg, term, body));
     // Wrap our term in any unsolved row evidence params we need
     let evv_var = lower_ctx.evv_var(ast);
-    let body = ReducIr::abss_with_innermost(ev_params.into_iter(), [evv_var], body);
+    let body = ReducIr::abss_with_innermost(ev_params.into_iter(), vec![evv_var], body);
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme

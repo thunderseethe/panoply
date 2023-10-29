@@ -53,7 +53,7 @@ impl ClosureArities<'_> {
     fn add_closure_arity_if_present(&mut self, kind: &MedIrKind) {
         if let MedIrKind::Closure(item, elems) = kind {
             let arity = match item.ty.kind(self.db) {
-                MedIrTyKind::FunTy(args, _) => args.len(), //args.iter()/*.filter(|a| !matches!(a.kind(self.db), MedIrTyKind::BlockTy(elems) if elems.is_empty()))*/.count(),
+                MedIrTyKind::FunTy(args, _) => args.len(),
                 _ => panic!("Closure item must be a function type"),
             };
             self.arities.insert(PartialAppArity {
