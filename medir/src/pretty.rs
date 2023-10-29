@@ -2,7 +2,9 @@ use aiahr_core::id::Id;
 use aiahr_core::pretty::PrettyWithCtx;
 use pretty::{DocAllocator, Pretty};
 
-use crate::{Atom, Call, Defn, Locals, MedIr, MedIrItemName, MedIrKind, MedIrVar};
+use crate::{
+    Atom, Call, Defn, Locals, MedIr, MedIrItemName, MedIrKind, MedIrTy, MedIrTyKind, MedIrVar,
+};
 
 impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIrItemName {
     fn pretty<'a>(
@@ -160,5 +162,37 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Defn {
             )
             .append(a.space())
             .append(self.body.pretty(ctx, a))
+    }
+}
+
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrTyKind {
+    fn pretty<'a>(
+        &self,
+        ctx: &DB,
+        alloc: &'a pretty::RcAllocator,
+    ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+        match self {
+            MedIrTyKind::IntTy => alloc.text("Int"),
+            MedIrTyKind::BlockTy(tys) => alloc
+                .intersperse(tys.iter().map(|ty| ty.pretty(ctx, alloc)), ",")
+                .brackets(),
+            MedIrTyKind::FunTy(args, ret) => alloc
+                .intersperse(args.iter().map(|ty| ty.pretty(ctx, alloc)), ",")
+                .parens()
+                .append(alloc.space())
+                .append("->")
+                .append(alloc.space())
+                .append(ret.pretty(ctx, alloc)),
+        }
+    }
+}
+
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrTy {
+    fn pretty<'a>(
+        &self,
+        ctx: &DB,
+        alloc: &'a pretty::RcAllocator,
+    ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+        self.kind(ctx).pretty(ctx, alloc)
     }
 }
