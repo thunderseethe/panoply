@@ -365,6 +365,7 @@ pub enum Term<'a> {
         term: &'a Term<'a>,
         rpar: Span,
     },
+    Int(SpanOf<usize>),
 }
 
 impl<'a> Spanned for Term<'a> {
@@ -381,6 +382,7 @@ impl<'a> Spanned for Term<'a> {
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
             Term::SymbolRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+            Term::Int(span_of_int) => span_of_int.span(),
         }
     }
 }
@@ -725,6 +727,7 @@ impl<'a> ReferenceAllocate<'a, CstRefAlloc<'a, '_>> for Idx<cst::Term> {
                 concat,
                 right: right.ref_alloc(alloc),
             },
+            cst::Term::Int(int) => Term::Int(int),
         };
         alloc.ref_arena().alloc(term) as &_
     }

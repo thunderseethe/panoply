@@ -14,6 +14,7 @@ pub enum Token {
     KwMatch,
     KwWith,
     KwDo,
+    Int(usize),
     Identifier(Ident),
     Plus,
     Equal,
@@ -44,6 +45,7 @@ impl Token {
             Token::KwEffect => "effect",
             Token::KwWith => "with",
             Token::KwDo => "do",
+            Token::Int(_) => "<integer>",
             Token::Identifier(..) => "<identifier>",
             Token::Plus => "+",
             Token::Equal => "=",
@@ -147,11 +149,9 @@ fn literal(text: &'static str, t: Token) -> (String, Option<TokenFactory>) {
 // Calls `f` on the entire match. Use this if you don't care about capture groups.
 fn whole<F>(f: F) -> Option<TokenFactory>
 where
-    F: Fn(Ident) -> Token + 'static,
+    F: Fn(&dyn crate::Db, &str) -> Token + 'static,
 {
-    Some(Box::new(move |c, db| {
-        f(db.ident_str(c.get(0).unwrap().as_str()))
-    }))
+    Some(Box::new(move |c, db| f(db, c.get(0).unwrap().as_str())))
 }
 
 /// Returns a lexer for the Aiahr language that uses the given interner.
@@ -168,7 +168,11 @@ pub fn aiahr_lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
             // Identifier
             (
                 r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),
-                whole(Token::Identifier),
+                whole(|db, s| Token::Identifier(db.ident_str(s))),
+            ),
+            (
+                r"\d+".to_string(),
+                whole(|_, s| Token::Int(s.parse().unwrap())),
             ),
             // Punctuation
             literal("+", Token::Plus),

@@ -106,6 +106,13 @@ fn ident() -> impl AiahrParser<SpanOf<Ident>> {
     .map_with_span(|s, span: Span| span.of(s))
 }
 
+fn int() -> impl AiahrParser<SpanOf<usize>> {
+    select! {
+        Token::Int(int) => int
+    }
+    .map_with_span(|s, span: Span| span.of(s))
+}
+
 // Returns a parser for one or more `T` values separated by `sep`, representing the sequence with
 // `Separated<T>`.
 fn separated<'a, T: 'static>(
@@ -504,6 +511,8 @@ pub fn term() -> impl AiahrIdxParser<Idx<cst::Term>> {
             );
 
         let atom = choice((
+            // integer
+            int().map_state(|i, alloc: &mut CstIndxAlloc| alloc.alloc(cst::Term::Int(i))),
             // variable
             ident().map_state(|s, alloc: &mut CstIndxAlloc| alloc.alloc(cst::Term::SymbolRef(s))),
             // explicit term precedence
@@ -674,6 +683,7 @@ mod tests {
     use std::path::PathBuf;
 
     use aiahr_core::file::FileId;
+    use aiahr_core::span::SpanOf;
     use aiahr_core::{file::SourceFile, ident::Ident, indexed::ReferenceAllocate};
     use aiahr_cst::CstIndxAlloc;
     use aiahr_test::{
@@ -942,6 +952,31 @@ mod tests {
             ) => {
                 assert_ident_text_matches_name!(db, [x, a, y]);
                 assert_eq!(x, x1);
+            }
+        );
+    }
+
+    #[test]
+    fn test_unsign_int() {
+        let db = TestDatabase::default();
+        assert_matches!(
+            parse_term_unwrap(&db, &Bump::new(), "12354"),
+            &Term::Int(SpanOf { value, .. }) => {
+                assert_eq!(value, 12354);
+            }
+        );
+
+        assert_matches!(
+            parse_term_unwrap(&db, &Bump::new(), "00101"),
+            &Term::Int(SpanOf { value, .. }) => {
+                assert_eq!(value, 101);
+            }
+        );
+
+        assert_matches!(
+            parse_term_unwrap(&db, &Bump::new(), "0"),
+            &Term::Int(SpanOf { value, .. }) => {
+                assert_eq!(value, 0);
             }
         );
     }

@@ -767,6 +767,7 @@ where
                 concat: *concat,
                 right: self.resolve_term(*right)?,
             },
+            cst::Term::Int(int) => nst::Term::Int(*int),
         };
         Some(self.mk_term(term))
     }

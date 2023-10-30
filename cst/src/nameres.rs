@@ -150,6 +150,7 @@ pub enum Term {
         term: Idx<Self>,
         rpar: Span,
     },
+    Int(SpanOf<usize>),
 }
 impl Term {
     pub fn spanned<'a>(&'a self, arenas: &'a NstIndxAlloc) -> SpanTerm<'a> {
@@ -186,6 +187,7 @@ impl Spanned for SpanTerm<'_> {
             Term::ItemRef(i) => i.span(),
             Term::VariableRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+            Term::Int(span_of_int) => span_of_int.span(),
         }
     }
 }
@@ -256,6 +258,10 @@ pub mod traverse {
     /// what it's looking for but does not break with a value.
     pub trait DfsTraverseNst: IdxView<Term> + IdxView<Type<TyVarId>> + IdxView<Pattern> {
         type Out;
+
+        fn traverse_int(&self, _: &SpanOf<usize>) -> ControlFlow<Self::Out> {
+            ControlFlow::Continue(())
+        }
 
         fn traverse_var(&self, _: &SpanOf<VarId>) -> ControlFlow<Self::Out> {
             ControlFlow::Continue(())
@@ -440,6 +446,7 @@ pub mod traverse {
                 Term::ItemRef(term) => self.traverse_term_name(term),
                 Term::VariableRef(var) => self.traverse_var(var),
                 Term::Parenthesized { term, .. } => self.traverse_term(*term),
+                Term::Int(int) => self.traverse_int(int),
             }
         }
     }

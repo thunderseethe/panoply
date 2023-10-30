@@ -423,6 +423,7 @@ impl<'a> DesugarCtx<'a> {
                 let right = self.ds_term(*right)?;
                 self.terms.alloc(ast::Term::Concat { left, right })
             }
+            nst::Term::Int(span_of_int) => self.terms.alloc(ast::Term::Int(span_of_int.value)),
         };
         self.spans.insert(ast, nst.spanned(self.arenas).span());
         Ok(ast)
@@ -820,6 +821,23 @@ mod tests {
                 .first()
                 .unwrap(),
         )
+    }
+
+    #[test]
+    fn test_desugar_int() {
+        let db = TestDatabase::default();
+
+        let (nst_item, ast_item) = ds_snippet(&db, "12354");
+        let ast = ast_item.data(&db);
+
+        assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));
+
+        let pretty_ast = ast
+            .pretty(&db, &pretty::BoxAllocator)
+            .pretty(WIDTH)
+            .to_string();
+        let expect = expect!["12354"];
+        expect.assert_eq(&pretty_ast);
     }
 
     #[test]
