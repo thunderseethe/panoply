@@ -475,6 +475,9 @@ mod tests {
     use std::io::Write;
 
     use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
+    use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
+    use aiahr_optimize_reducir::Db as OptDb;
+    use aiahr_parser::Db as ParseDb;
     use expect_test::expect;
     use wasmparser::Validator;
 
@@ -526,7 +529,7 @@ effect Reader {
     fn test_prj() {
         let db = TestDatabase::default();
 
-        let wasm_module = emit_module(&db, "f = { x = {}, y = {} }.x");
+        let wasm_module = emit_module(&db, "f = { x = 5678, y = 1234 }.x");
 
         let bytes = wasm_module.finish();
         let mut f = OpenOptions::new()
@@ -552,18 +555,12 @@ effect Reader {
               (import "intrinsic" "__mon_prompt" (func (;1;) (type 2)))
               (import "intrinsic" "__mon_bind" (func (;2;) (type 1)))
               (func $f (;3;) (type $fun_1_1) (param i32) (result i32)
-                (local i32 i32)
-                global.get 0
-                global.get 0
-                i32.const 0
-                i32.add
-                global.set 0
-                local.set 1
+                (local i32)
                 global.get 0
                 i32.const 0
                 i32.store align=2
                 global.get 0
-                local.get 1
+                i32.const 5678
                 i32.store offset=1 align=2
                 global.get 0
                 global.get 0

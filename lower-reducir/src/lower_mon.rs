@@ -91,32 +91,7 @@ impl LowerMonCtx<'_> {
                         })
                     }
                     None => {
-                        // TODO: Fix hack and handle entrypoint logic properly
                         panic!("{}", ir.pretty_with(self.db).pprint().pretty(80));
-                        /*// If we don't have evv then this is main and evv is {}
-                        let unit = self.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]));
-                        let reducir_db = self.db.as_reducir_db();
-                        let mon_ir = self.lower_monadic(unit, ir);
-                        mon_ir.map_within_abss(|body| {
-                            match body
-                                .type_check(reducir_db)
-                                .map_err_pretty_with(reducir_db)
-                                .expect("Monadic lowered IR to type check")
-                                .try_unwrap_monadic(reducir_db)
-                            {
-                                Ok(_) => {
-                                    // If our value is a monad then apply our evv to it
-                                    // We do this so the return value of our item is
-                                    // `Ctl m a` and not `evv -> Ctl m a`
-                                    // The latter would cause our item to have an overall type
-                                    // like:
-                                    // `evv -> evv -> Ctl m a` since our item already has evv as a
-                                    // paramter.
-                                    ReducIr::app(body, [ReducIr::new(ReducIrKind::Struct(vec![]))])
-                                }
-                                Err(_) => body,
-                            }
-                        })*/
                     }
                 }
             }
@@ -129,33 +104,6 @@ impl LowerMonCtx<'_> {
                 ty_app.clone(),
             )),
             kind => panic!("{:?}", kind),
-            /* _ => {
-                // TODO: Fix hack and handle entrypoint logic properly
-                // If we don't have evv then this is main and evv is {}
-                let unit = self.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]));
-                let reducir_db = self.db.as_reducir_db();
-                let mon_ir = self.lower_monadic(unit, ir);
-                mon_ir.map_within_abss(|body| {
-                    match body
-                        .type_check(reducir_db)
-                        .map_err_pretty_with(reducir_db)
-                        .expect("Monadic lowered IR to type check")
-                        .try_unwrap_monadic(reducir_db)
-                    {
-                        Ok(_) => {
-                            // If our value is a monad then apply our evv to it
-                            // We do this so the return value of our item is
-                            // `Ctl m a` and not `evv -> Ctl m a`
-                            // The latter would cause our item to have an overall type
-                            // like:
-                            // `evv -> evv -> Ctl m a` since our item already has evv as a
-                            // paramter.
-                            ReducIr::app(body, [ReducIr::new(ReducIrKind::Struct(vec![]))])
-                        }
-                        Err(_) => body,
-                    }
-                })
-            }*/
         }
     }
 
@@ -298,7 +246,7 @@ impl LowerMonCtx<'_> {
             )
         };
         match ir.kind() {
-            Int(i) => pure(ReducIr::new(Int(*i))),
+            Int(i) => ReducIr::new(Int(*i)),
             Var(v) => ReducIr::var(*v),
             Abs(vars, body) => {
                 let evv_ty = vars

@@ -2,7 +2,6 @@ use aiahr_core::id::{IdSupply, TermName};
 use aiahr_core::id_converter::IdConverter;
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
-use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
 use aiahr_medir::{self as medir};
 use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 use medir::{MedIrItem, MedIrModule};
