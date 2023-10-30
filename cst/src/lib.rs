@@ -441,6 +441,7 @@ pub enum Term {
         term: Idx<Self>,
         rpar: Span,
     },
+    Int(SpanOf<usize>),
 }
 impl Term {
     pub fn spanned<'a>(&'a self, arenas: &'a CstIndxAlloc) -> SpanTerm<'a> {
@@ -475,6 +476,7 @@ impl Spanned for SpanTerm<'_> {
             Term::Match { match_, rangle, .. } => Span::join(match_, rangle),
             Term::SymbolRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
+            Term::Int(span_of_int) => span_of_int.span(),
         }
     }
 }

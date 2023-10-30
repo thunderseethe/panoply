@@ -427,6 +427,7 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                         }
                         aiahr_cst::Term::SymbolRef(symbol) => self.search_ident(symbol)?,
                         aiahr_cst::Term::Parenthesized { term, .. } => self.search_term(*term)?,
+                        aiahr_cst::Term::Int(_) => {}
                     }
                     Err(None)
                 }

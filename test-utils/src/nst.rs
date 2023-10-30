@@ -89,6 +89,7 @@ pub enum Term<'a> {
         term: &'a Term<'a>,
         rpar: Span,
     },
+    Int(SpanOf<usize>),
 }
 
 impl<'a> Spanned for Term<'a> {
@@ -107,6 +108,7 @@ impl<'a> Spanned for Term<'a> {
             Term::VariableRef(v) => v.span(),
             Term::Parenthesized { lpar, rpar, .. } => Span::join(lpar, rpar),
             Term::Concat { left, right, .. } => Span::join(left, right),
+            Term::Int(span_of_int) => span_of_int.span(),
         }
     }
 }
@@ -365,6 +367,7 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for Idx<nst::Term> {
                 concat,
                 right: right.ref_alloc(alloc),
             },
+            nst::Term::Int(span_of_int) => Term::Int(span_of_int),
         };
         alloc.ref_arena().alloc(term) as &_
     }
