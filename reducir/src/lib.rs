@@ -1,6 +1,7 @@
 use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
+use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -203,7 +204,7 @@ pub enum ReducIrKind<Ext = Infallible> {
     App(P<ReducIr<Ext>>, Vec<ReducIr<Ext>>),
     // Type abstraction and application
     TyAbs(ReducIrVarTy, P<ReducIr<Ext>>),
-    TyApp(P<ReducIr<Ext>>, ReducIrTyApp),
+    TyApp(P<ReducIr<Ext>>, Vec<ReducIrTyApp>),
     // Trivial products
     Struct(Vec<ReducIr<Ext>>),         // Intro
     FieldProj(usize, P<ReducIr<Ext>>), // Elim
@@ -254,14 +255,35 @@ impl<Ext> ReducIr<Ext> {
         ReducIr::new(Var(var))
     }
 
+    pub fn tag(ty: ReducIrTy, tag: usize, value: Self) -> Self {
+        ReducIr::new(Tag(ty, tag, P::new(value)))
+    }
+
     pub fn ext(ext: Ext) -> Self {
         ReducIr::new(ReducIrKind::X(ext))
     }
 
-    pub fn ty_app(head: Self, spine: impl IntoIterator<Item = ReducIrTyApp>) -> Self {
-        spine.into_iter().fold(head, |head, ty_app| {
-            ReducIr::new(TyApp(P::new(head), ty_app))
-        })
+    pub fn ty_abs<II>(vars: II, body: Self) -> Self
+    where
+        II: IntoIterator<Item = ReducIrVarTy>,
+        II::IntoIter: DoubleEndedIterator,
+    {
+        vars.into_iter()
+            .rfold(body, |body, var| ReducIr::new(TyAbs(var, P::new(body))))
+    }
+
+    pub fn ty_app(mut head: Self, spine: impl IntoIterator<Item = ReducIrTyApp>) -> Self {
+        if let ReducIrKind::TyApp(_, ty_apps) = &mut head.kind {
+            ty_apps.extend(spine);
+            return head;
+        }
+        let mut spine = spine.into_iter().peekable();
+        if spine.peek().is_none() {
+            // If iterator is empty don't allocate TyApp
+            head
+        } else {
+            ReducIr::new(TyApp(P::new(head), spine.collect()))
+        }
     }
 
     pub fn app(mut head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
@@ -850,6 +872,10 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                         {
                             let arg_ty = arg.type_check(ctx.as_reducir_db())?;
                             if *fun_arg_ty != arg_ty {
+                                println!(
+                                    "it happened again: {}",
+                                    fun_arg_ty.pretty_with(ctx).pprint().pretty(80)
+                                );
                                 return Err(ReducIrTyErr::TyMismatch {
                                     left_ty: ctx.mk_fun_ty(fun_args.copied(), ret_ty),
                                     left_ir: Cow::Owned(ReducIr::app(
@@ -871,27 +897,31 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                 let ret_ty = body.type_check(ctx)?;
                 Ok(ctx.mk_reducir_ty(ForallTy(ty_arg.kind, ret_ty)))
             }
-            TyApp(forall, ty_app) => {
+            TyApp(forall, ty_apps) => {
                 let forall_ty = forall.type_check(ctx)?;
-                match forall_ty.kind(ctx.as_reducir_db()) {
-                    ForallTy(kind, ret_ty) => match (kind, ty_app) {
-                        (Kind::Type, ReducIrTyApp::Ty(ty)) => {
-                            Ok(ret_ty.subst_ty(ctx.as_reducir_db(), *ty))
-                        }
-                        (Kind::SimpleRow, ReducIrTyApp::DataRow(row))
-                        | (Kind::ScopedRow, ReducIrTyApp::EffRow(row)) => {
-                            Ok(ret_ty.subst_row(ctx.as_reducir_db(), row.clone()))
-                        }
-                        (k, ReducIrTyApp::Ty(_)) => Err(ReducIrTyErr::KindMistmatch(k, Kind::Type)),
-                        (k, ReducIrTyApp::DataRow(_)) => {
-                            Err(ReducIrTyErr::KindMistmatch(k, Kind::SimpleRow))
-                        }
-                        (k, ReducIrTyApp::EffRow(_)) => {
-                            Err(ReducIrTyErr::KindMistmatch(k, Kind::ScopedRow))
-                        }
-                    },
-                    _ => Err(ReducIrTyErr::ExpectedForallTy(forall_ty)),
-                }
+                ty_apps.iter().try_fold(forall_ty, |forall_ty, ty_app| {
+                    match forall_ty.kind(ctx.as_reducir_db()) {
+                        ForallTy(kind, ret_ty) => match (kind, ty_app) {
+                            (Kind::Type, ReducIrTyApp::Ty(ty)) => {
+                                Ok(ret_ty.subst_single(ctx.as_reducir_db(), *ty))
+                            }
+                            (Kind::SimpleRow, ReducIrTyApp::DataRow(row))
+                            | (Kind::ScopedRow, ReducIrTyApp::EffRow(row)) => {
+                                Ok(ret_ty.subst_single(ctx.as_reducir_db(), row.clone()))
+                            }
+                            (k, ReducIrTyApp::Ty(_)) => {
+                                Err(ReducIrTyErr::KindMistmatch(k, Kind::Type))
+                            }
+                            (k, ReducIrTyApp::DataRow(_)) => {
+                                Err(ReducIrTyErr::KindMistmatch(k, Kind::SimpleRow))
+                            }
+                            (k, ReducIrTyApp::EffRow(_)) => {
+                                Err(ReducIrTyErr::KindMistmatch(k, Kind::ScopedRow))
+                            }
+                        },
+                        _ => Err(ReducIrTyErr::ExpectedForallTy(forall_ty)),
+                    }
+                })
             }
             Struct(elems) => {
                 let elems = elems
@@ -904,15 +934,39 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                 let strukt_ty = strukt.type_check(ctx)?;
                 match strukt_ty.kind(ctx.as_reducir_db()) {
                     ProductTy(tys) => Ok(tys[*indx]),
-                    _ => Err(ReducIrTyErr::ExpectedProdTy(strukt_ty)),
+                    _ => Err(ReducIrTyErr::ExpectedProdTy(
+                        strukt_ty,
+                        Cow::Borrowed(strukt),
+                    )),
                 }
             }
             Case(case_ty, discr, branches) => {
                 let coprod = discr.type_check(ctx)?;
                 let tys = match coprod.kind(ctx.as_reducir_db()) {
                     CoproductTy(tys) => tys,
+                    // We have to coerce control to an enum type here
+                    // This is the toil we pay for special casing control
+                    ControlTy(m_ty, a_ty) => {
+                        let exists_b = ctx.mk_reducir_ty(VarTy(2));
+                        let exists_m = ctx.mk_reducir_ty(VarTy(1));
+                        let exists_r = ctx.mk_reducir_ty(VarTy(0));
+                        let exists_mon_m_r = ctx.mk_mon_ty(exists_m, exists_r);
+                        let exists_body_fun_ty = ctx.mk_mon_ty(m_ty, a_ty).shift(ctx, 3);
+                        let yield_ty = ctx.mk_forall_ty(
+                            [Kind::Type, Kind::Type, Kind::Type],
+                            ProductTy(vec![
+                                ctx.mk_reducir_ty(MarkerTy(exists_r)),
+                                ctx.mk_fun_ty(
+                                    [ctx.mk_fun_ty([exists_b], exists_mon_m_r)],
+                                    exists_mon_m_r,
+                                ),
+                                ctx.mk_fun_ty([exists_b], exists_body_fun_ty),
+                            ]),
+                        );
+                        vec![a_ty, yield_ty]
+                    }
                     _ => {
-                        return Err(ReducIrTyErr::ExpectedCoprodTy(coprod));
+                        return Err(ReducIrTyErr::ExpectedCoprodTy(coprod, Cow::Borrowed(discr)));
                     }
                 };
                 for (branch, ty) in branches.iter().zip(tys.into_iter()) {
@@ -984,8 +1038,8 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
         func: &'a ReducIr<Ext>,
     },
     ExpectedForallTy(ReducIrTy),
-    ExpectedProdTy(ReducIrTy),
-    ExpectedCoprodTy(ReducIrTy),
+    ExpectedProdTy(ReducIrTy, Cow<'a, ReducIr<Ext>>),
+    ExpectedCoprodTy(ReducIrTy, Cow<'a, ReducIr<Ext>>),
     ExpectedMarkerTy(ReducIrTy),
 }
 

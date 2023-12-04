@@ -1,225 +1,236 @@
-use super::{default_fold_tykind, FoldReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyKind};
+use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
+use pretty::DocAllocator;
 
-pub(super) struct Env<T> {
-    env: Vec<(i32, Option<T>)>,
+use super::{
+    default_fold_tykind, FoldReducIrTy, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp,
+    ReducIrTyKind,
+};
+
+#[derive(Debug, Clone)]
+pub enum SubstPayload {
+    Var(i32),
+    Ty(ReducIrTy),
+    // Only closed row
+    Row(Vec<ReducIrTy>),
 }
 
-impl<T> Env<T> {
-    pub(super) fn nil() -> Self {
-        Self { env: vec![] }
-    }
-
-    pub(super) fn with_entry((i, ty): (i32, T)) -> Self {
-        Self {
-            env: vec![(i, Some(ty))],
-        }
-    }
-
-    fn get(&self, n: i32) -> &(i32, Option<T>) {
-        // Index from the end of our vec
-        // because we're using it as a stack
-        let (res, overflow) = self.env.len().overflowing_sub(1);
-        if overflow {
-            panic!("Env length is 0");
-        }
-        let (indx, overflow) = res.overflowing_sub(n as usize);
-        if overflow {
-            panic!("env length is less than {}", n);
-        }
-        &self.env[indx]
-    }
-
-    fn is_empty(&self) -> bool {
-        self.env.is_empty()
-    }
-}
-pub(super) struct Subst<'db, Needle> {
-    pub(super) db: &'db dyn crate::Db,
-    pub(super) i: i32,
-    pub(super) j: i32,
-    pub(super) env: Env<Needle>,
-}
-
-impl<T> Subst<'_, T> {
-    fn with_forall<R>(&mut self, body: impl FnOnce(&mut Self) -> R) -> R {
-        self.env.env.push((self.j, None));
-        self.j += 1;
-        self.i += 1;
-        let out = body(self);
-        self.i -= 1;
-        self.j -= 1;
-        self.env.env.pop();
-        out
-    }
-
-    /// Adjust an unbound var based on how many foralls we've moved it under
-    fn adjust_unbound_var(&self, var: i32) -> i32 {
-        var - self.i + self.j
-    }
-
-    fn adjust_bound_var(&self, var: i32) -> i32 {
-        self.j - var - 1
-    }
-    /// Get nth variable out of environment and adjust it based on how many foralls we've moved
-    /// under during substitution
-    fn get_bound_var(&self, nth: i32) -> i32 {
-        let (bound, _) = self.env.get(nth);
-        self.adjust_bound_var(*bound)
-    }
-
-    /// Adjust a bound or unbound variable based on how many foralls we've moved under and return
-    /// its corresponding ReducIrTyKind
-    ///
-    /// This method never performs substitution
-    fn adjust_var(&self, var: i32, var_kind: impl FnOnce(i32) -> ReducIrTyKind) -> ReducIrTyKind {
-        let is_bound = var < self.i;
-        if is_bound {
-            var_kind(self.get_bound_var(var))
-        } else {
-            var_kind(self.adjust_unbound_var(var))
-        }
-    }
-}
-impl<'db> Subst<'db, ReducIrTy> {
-    fn has_subst(&self, var: i32) -> Option<(i32, ReducIrTy)> {
-        let is_bound = var < self.i;
-        if is_bound {
-            let (bound, ty) = self.env.get(var);
-            ty.map(|ty| (*bound, ty))
-        } else {
-            None
-        }
-    }
-}
-impl<'db> Subst<'db, ReducIrRow> {
-    fn has_subst(
+impl<DB> PrettyWithCtx<DB> for SubstPayload
+where
+    DB: ?Sized + crate::Db,
+{
+    fn pretty<'a>(
         &self,
-        var: i32,
-        row_to_ty: impl FnOnce(&ReducIrRow) -> ReducIrTyKind,
-    ) -> Option<(i32, ReducIrTyKind)> {
-        let is_bound = var < self.i;
-        if is_bound {
-            let (bound, row) = self.env.get(var);
-            row.as_ref().map(|row| (*bound, row_to_ty(row)))
-        } else {
-            None
+        ctx: &DB,
+        alloc: &'a pretty::RcAllocator,
+    ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+        match self {
+            SubstPayload::Var(v) => alloc.text("V").append(alloc.as_string(v)),
+            SubstPayload::Ty(ty) => ty.pretty(ctx, alloc),
+            SubstPayload::Row(row) => ReducIrRow::Closed(row.to_vec()).pretty(ctx, alloc),
         }
     }
 }
-impl<'db> FoldReducIrTy<'db> for Subst<'db, ReducIrTy> {
+
+pub trait IntoPayload {
+    fn into_payload<DB: ?Sized + crate::Db>(self, db: &DB) -> SubstPayload;
+}
+impl IntoPayload for ReducIrTy {
+    fn into_payload<DB: ?Sized + crate::Db>(self, db: &DB) -> SubstPayload {
+        match self.kind(db.as_reducir_db()) {
+            ReducIrTyKind::VarTy(var) => SubstPayload::Var(var),
+            _ => SubstPayload::Ty(self),
+        }
+    }
+}
+impl IntoPayload for ReducIrRow {
+    fn into_payload<DB: ?Sized + crate::Db>(self, _: &DB) -> SubstPayload {
+        match self {
+            ReducIrRow::Open(var) => SubstPayload::Var(var),
+            ReducIrRow::Closed(row) => SubstPayload::Row(row),
+        }
+    }
+}
+impl IntoPayload for ReducIrTyApp {
+    fn into_payload<DB: ?Sized + crate::Db>(self, db: &DB) -> SubstPayload {
+        match self {
+            ReducIrTyApp::Ty(ty) => ty.into_payload(db),
+            ReducIrTyApp::DataRow(row) | ReducIrTyApp::EffRow(row) => row.into_payload(db),
+        }
+    }
+}
+#[derive(Debug, Clone)]
+pub enum Subst {
+    Inc(i32),
+    Ext(SubstPayload, Box<Self>),
+    Compose(Box<Self>, Box<Self>),
+}
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Subst {
+    fn pretty<'a>(
+        &self,
+        ctx: &DB,
+        alloc: &'a pretty::RcAllocator,
+    ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+        match self {
+            Subst::Inc(i) => alloc
+                .text("inc")
+                .append(alloc.space())
+                .append(alloc.as_string(i)),
+            Subst::Ext(payload, subst) => alloc.text("ext").append(
+                payload
+                    .pretty(ctx, alloc)
+                    .append(",")
+                    .append(alloc.softline())
+                    .append(subst.pretty(ctx, alloc))
+                    .parens(),
+            ),
+            Subst::Compose(s1, s2) => s1
+                .pretty(ctx, alloc)
+                .append(alloc.softline())
+                .append(".")
+                .append(alloc.softline())
+                .append(s2.pretty(ctx, alloc)),
+        }
+    }
+}
+
+impl Subst {
+    pub fn single(payload: SubstPayload) -> Self {
+        Subst::Inc(0).cons(payload)
+    }
+
+    pub fn cons(self, payload: SubstPayload) -> Self {
+        Self::Ext(payload, Box::new(self))
+    }
+
+    fn compose(s1: Self, s2: Self) -> Self {
+        Self::Compose(Box::new(s1), Box::new(s2))
+    }
+
+    pub fn lift(self) -> Self {
+        Self::compose(self, Self::Inc(1)).cons(SubstPayload::Var(0))
+    }
+
+    fn apply_ty(&self, db: &dyn crate::Db, var: i32) -> ReducIrTy {
+        match self {
+            Subst::Inc(k) => db.mk_reducir_ty(ReducIrTyKind::VarTy(var + k)),
+            Subst::Ext(payload, _) if var == 0 => match payload {
+                SubstPayload::Var(v) => db.mk_reducir_ty(ReducIrTyKind::VarTy(*v)),
+                SubstPayload::Ty(ty) => *ty,
+                SubstPayload::Row(_) => panic!("Tried to subsitute a row into a type"),
+            },
+            Subst::Ext(_, subst) => subst.apply_ty(db, var - 1),
+            Subst::Compose(s1, s2) => {
+                let ty = s1.apply_ty(db, var);
+                let mut s2_subst = SubstFold {
+                    db,
+                    subst: (**s2).clone(),
+                };
+                s2_subst.fold_ty(ty)
+            }
+        }
+    }
+
+    fn apply_row(&self, db: &dyn crate::Db, var: i32) -> ReducIrRow {
+        match self {
+            Subst::Inc(k) => ReducIrRow::Open(var + k),
+            Subst::Ext(payload, _) if var == 0 => match payload {
+                SubstPayload::Var(v) => ReducIrRow::Open(*v),
+                SubstPayload::Row(row) => ReducIrRow::Closed(row.clone()),
+                SubstPayload::Ty(ty) => panic!(
+                    "Tried to substitute type into a row: {}",
+                    ty.pretty_with(db).pprint().pretty(80)
+                ),
+            },
+            Subst::Ext(_, subst) => subst.apply_row(db, var - 1),
+            Subst::Compose(s1, s2) => {
+                let row = s1.apply_row(db, var);
+                let mut s2_subst = SubstFold {
+                    db,
+                    subst: (**s2).clone(),
+                };
+                s2_subst.fold_row(row)
+            }
+        }
+    }
+}
+
+pub struct SubstFold<'db> {
+    pub db: &'db dyn crate::Db,
+    pub subst: Subst,
+}
+
+impl<'db> SubstFold<'db> {
+    fn fold_row(&mut self, row: ReducIrRow) -> ReducIrRow {
+        match row {
+            ReducIrRow::Open(var) => self.subst.apply_row(self.db, var),
+            ReducIrRow::Closed(tys) => {
+                ReducIrRow::Closed(tys.into_iter().map(|ty| self.fold_ty(ty)).collect())
+            }
+        }
+    }
+}
+
+impl<'db> FoldReducIrTy<'db> for SubstFold<'db> {
     fn db(&self) -> &'db dyn crate::Db {
         self.db
     }
 
+    fn fold_ty_var(&mut self, var: i32) -> ReducIrTy {
+        self.subst.apply_ty(self.db, var)
+    }
+
     fn fold_prod_var(&mut self, var: i32) -> ReducIrTy {
-        self.mk_ty(self.adjust_var(var, ReducIrTyKind::ProdVarTy))
+        self.subst.apply_row(self.db, var).into_prod_ty(self.db())
     }
 
     fn fold_coprod_var(&mut self, var: i32) -> ReducIrTy {
-        self.mk_ty(self.adjust_var(var, ReducIrTyKind::CoprodVarTy))
-    }
-
-    fn fold_ty_var(&mut self, var: i32) -> ReducIrTy {
-        match self.has_subst(var) {
-            Some((bound, ty)) => ty.fold(&mut Subst::<'db, ReducIrTy> {
-                db: self.db(),
-                i: 0,
-                j: self.j - bound,
-                env: Env::nil(),
-            }),
-            None => self.mk_ty(self.adjust_var(var, ReducIrTyKind::VarTy)),
-        }
+        self.subst.apply_row(self.db, var).into_coprod_ty(self.db())
     }
 
     fn fold_ty_kind(&mut self, kind: ReducIrTyKind) -> ReducIrTy {
         match kind {
             ReducIrTyKind::ForallTy(kind, ty) => {
-                let ty = self.with_forall(|this| ty.fold(this));
+                let ty = ty.fold(&mut Self {
+                    db: self.db,
+                    subst: self.subst.clone().lift(),
+                });
                 self.mk_ty(ReducIrTyKind::ForallTy(kind, ty))
             }
             kind => default_fold_tykind(self, kind),
         }
-    }
-
-    fn fold_ty(&mut self, ty: ReducIrTy) -> ReducIrTy {
-        if self.i == 0 && self.j == 0 && self.env.is_empty() {
-            return ty;
-        }
-        self.fold_ty_kind(ty.kind(self.db()))
     }
 }
 
-impl<'db> FoldReducIrTy<'db> for Subst<'db, ReducIrRow> {
-    fn db(&self) -> &'db dyn crate::Db {
-        self.db
-    }
+#[cfg(test)]
+mod test {
+    use crate::ty::{Kind, MkReducIrTy, ReducIrTyKind};
 
-    fn fold_ty_var(&mut self, var: i32) -> ReducIrTy {
-        self.mk_ty(self.adjust_var(var, ReducIrTyKind::VarTy))
-    }
+    use super::{IntoPayload, Subst};
 
-    fn fold_prod_var(&mut self, var: i32) -> ReducIrTy {
-        match self.has_subst(var, |row| match row {
-            ReducIrRow::Open(v) => ReducIrTyKind::ProdVarTy(*v),
-            ReducIrRow::Closed(row) => {
-                if row.len() == 1 {
-                    row[0].kind(self.db)
-                } else {
-                    ReducIrTyKind::ProductTy(row.clone())
-                }
-            }
-        }) {
-            Some((bound, kind)) => {
-                let mut fold = Subst::<'db, ReducIrTy> {
-                    db: self.db(),
-                    i: 0,
-                    j: self.j - bound,
-                    env: Env::nil(),
-                };
-                fold.fold_ty_kind(kind)
-            }
-            None => self.mk_ty(self.adjust_var(var, ReducIrTyKind::ProdVarTy)),
-        }
+    #[derive(Default)]
+    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_ty::Jar)]
+    struct TestDatabase {
+        storage: salsa::Storage<Self>,
     }
+    impl salsa::Database for TestDatabase {}
 
-    fn fold_coprod_var(&mut self, var: i32) -> ReducIrTy {
-        match self.has_subst(var, |row| match row {
-            ReducIrRow::Open(v) => ReducIrTyKind::CoprodVarTy(*v),
-            ReducIrRow::Closed(row) => {
-                if row.len() == 1 {
-                    row[0].kind(self.db)
-                } else {
-                    ReducIrTyKind::CoproductTy(row.clone())
-                }
-            }
-        }) {
-            Some((bound, kind)) => {
-                let mut fold = Subst::<'db, ReducIrTy> {
-                    db: self.db(),
-                    i: 0,
-                    j: self.j - bound,
-                    env: Env::nil(),
-                };
-                fold.fold_ty_kind(kind)
-            }
-            None => self.mk_ty(self.adjust_var(var, ReducIrTyKind::CoprodVarTy)),
-        }
-    }
+    #[test]
+    fn test_payload_prodvars_are_adjusted() {
+        let db = TestDatabase::default();
+        let haystack = db.mk_reducir_ty(ReducIrTyKind::ForallTy(
+            Kind::Type,
+            db.mk_reducir_ty(ReducIrTyKind::VarTy(1)),
+        ));
+        let needle = db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(0));
 
-    fn fold_ty_kind(&mut self, kind: ReducIrTyKind) -> ReducIrTy {
-        match kind {
-            ReducIrTyKind::ForallTy(kind, ty) => {
-                let ty = self.with_forall(|this| ty.fold(this));
-                self.mk_ty(ReducIrTyKind::ForallTy(kind, ty))
-            }
-            kind => default_fold_tykind(self, kind),
-        }
-    }
+        let res = haystack.subst(&db, Subst::single(needle.into_payload(&db)));
 
-    fn fold_ty(&mut self, ty: ReducIrTy) -> ReducIrTy {
-        if self.i == 0 && self.j == 0 && self.env.is_empty() {
-            return ty;
-        }
-        self.fold_ty_kind(ty.kind(self.db()))
+        assert_eq!(
+            res,
+            db.mk_reducir_ty(ReducIrTyKind::ForallTy(
+                Kind::Type,
+                db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(1))
+            ))
+        );
     }
 }

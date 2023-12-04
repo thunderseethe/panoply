@@ -620,7 +620,7 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: Type) (T0: ScopedRow)] (fun [V0]
-                (let (V1 ((_row_simple_x_y @ Ty(T1)) @ Ty(T1))) (fun [V2] (V1[0] V2 V2)))))"#]];
+                (let (V1 (_row_simple_x_y @ [Ty(T1), Ty(T1)])) (fun [V2] (V1[0] V2 V2)))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> {T1, T1}"];
@@ -678,19 +678,15 @@ effect Reader {
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                 (let
-                  [ (V2 ((_row_simple_state_value @ Ty({})) @ Ty({})))
-                  , (V3 (((_row_simple_return_putget @ Ty({} -> ({} -> {} -> {{}, {}}) -> {}
-                  -> {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
-                                                                           , {}
-                                                                           })) @ Ty({} -> {}
-                  -> {{}, {}})))
-                  , (V4 (((_row_simple_putget_return @ Ty({} -> {} -> {{}, {}})) @ Ty({} ->
-                  ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})) @ Ty({} -> ({} -> {} -> { {}
-                                                                                     , {}
-                                                                                     }) ->
-                  {} -> {{}, {}})))
-                  , (V5 ((_row_simple_get_put @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
-                  {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})))
+                  [ (V2 (_row_simple_state_value @ [Ty({}), Ty({})]))
+                  , (V3 (_row_simple_return_putget @ [Ty({} -> ({} -> {} -> {{}, {}}) -> {}
+                  -> {{}, {}}), Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}), Ty({} ->
+                  {} -> {{}, {}})]))
+                  , (V4 (_row_simple_putget_return @ [Ty({} -> {} -> {{}, {}}), Ty({} -> ({}
+                  -> {} -> {{}, {}}) -> {} -> {{}, {}}), Ty({} -> ({} -> {} -> {{}, {}}) ->
+                  {} -> {{}, {}})]))
+                  , (V5 (_row_simple_get_put @ [Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
+                  {{}, {}}), Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})]))
                   ]
                   ((let
                     (V6 (V4[0]
@@ -766,34 +762,30 @@ effect Reader {
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                 ((let
-                  [ (V2 ((_row_simple_state_value @ Ty({})) @ Ty({})))
-                  , (V3 (((_row_simple_return_putget @ Ty({} -> ({} -> {} -> {{}, {}}) -> {}
-                  -> {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> { {}
-                                                                           , {}
-                                                                           })) @ Ty({} -> {}
-                  -> {{}, {}})))
-                  , (V4 (((_row_simple_putget_return @ Ty({} -> {} -> {{}, {}})) @ Ty({} ->
-                  ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})) @ Ty({} -> ({} -> {} -> { {}
-                                                                                     , {}
-                                                                                     }) ->
-                  {} -> {{}, {}})))
-                  , (V5 ((_row_simple_get_put @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
-                  {{}, {}})) @ Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})))
+                  [ (V2 (_row_simple_state_value @ [Ty({}), Ty({})]))
+                  , (V3 (_row_simple_return_putget @ [Ty({} -> ({} -> {} -> {{}, {}}) -> {}
+                  -> {{}, {}}), Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}}), Ty({} ->
+                  {} -> {{}, {}})]))
+                  , (V4 (_row_simple_putget_return @ [Ty({} -> {} -> {{}, {}}), Ty({} -> ({}
+                  -> {} -> {{}, {}}) -> {} -> {{}, {}}), Ty({} -> ({} -> {} -> {{}, {}}) ->
+                  {} -> {{}, {}})]))
+                  , (V5 (_row_simple_get_put @ [Ty({} -> ({} -> {} -> {{}, {}}) -> {} ->
+                  {{}, {}}), Ty({} -> ({} -> {} -> {{}, {}}) -> {} -> {{}, {}})]))
                   ]
-                  ((((__mon_bind @ Ty({1})) @ Ty({} -> {{}, {}})) @ Ty({{}, {}}))
+                  ((__mon_bind @ [Ty({1}), Ty({} -> {{}, {}}), Ty({{}, {}})])
                     (let
                       (V6 (V4[0]
                         (V5[0]
                           (fun [V7, V8, V9] (V8 V9 V9))
                           (fun [V10, V11, V12] (V11 {} V10)))
                         (fun [V13, V14] (V2[0] V14 V13))))
-                      (((__mon_freshm @ Ty({} -> {{}, {}})) @ Ty({1} -> (Control {1} {} ->
-                      {{}, {}})))
+                      ((__mon_freshm @ [Ty({} -> {{}, {}}), Ty({1} -> (Control {1} {} ->
+                      {{}, {}}))])
                         (fun [V18]
-                          ((((__mon_prompt @ Ty({1})) @ Ty({0})) @ Ty({} -> {{}, {}}))
+                          ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
                             V18
                             (fun [V0] (V1[0] V0 {V18, (V4[2][0] V6)}))
-                            ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({} -> {{}, {}}))
+                            ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> {{}, {}})])
                               (let (V15 {})
                                 (let (V16 (V1[3][0] V0))
                                   (fun [V0]
@@ -863,11 +855,11 @@ effect Reader {
             expect![[r#"
                 (forall [(T0: ScopedRow)] (fun [V0]
                     ((let
-                      [ (V1 ((_row_simple_x_y @ Ty({})) @ Ty({})))
-                      , (V2 ((_row_simple_y_x @ Ty({})) @ Ty({})))
+                      [ (V1 (_row_simple_x_y @ [Ty({}), Ty({})]))
+                      , (V2 (_row_simple_y_x @ [Ty({}), Ty({})]))
                       ]
-                      ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({}))
-                        (((((((wand @ Ty({})) @ Eff(0)) @ Data([{}])) @ Data([{}])) @ Data([{},{}])) @ Data([{}]))
+                      ((__mon_bind @ [Ty({0}), Ty({}), Ty({})])
+                        ((wand @ [Ty({}), Eff(0), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
                           V1
                           V2
                           {}

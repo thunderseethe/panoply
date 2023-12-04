@@ -12,6 +12,7 @@ aiahr-tc.workspace = true
 aiahr-ty.workspace = true
 aiahr-test.workspace = true
 aiahr-nameres.workspace = true
+backtrace-on-stack-overflow = "0.3.0"
 expect-test.workspace = true
 pretty.workspace = true
 

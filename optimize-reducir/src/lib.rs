@@ -1,17 +1,21 @@
-use aiahr_core::id::{ReducIrTyVarId, TermName};
+use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use aiahr_core::modules::Module;
+use aiahr_core::pretty::PrettyErrorWithDb;
 use aiahr_reducir::mon::{MonReducIrItem, MonReducIrModule};
 use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
-use aiahr_reducir::ty::{Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy};
+use aiahr_reducir::ty::{
+    IntoPayload, Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
+};
 use aiahr_reducir::zip_non_consuming::ZipNonConsuming;
 use rustc_hash::FxHashMap;
 use std::convert::Infallible;
 
 use aiahr_reducir::{
-    Lets, ReducIr, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, P,
+    Lets, ReducIr, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr,
+    ReducIrVar, TypeCheck,
 };
 
-use crate::subst::{Subst, SubstTy};
+use crate::subst::{Inline, SubstTy};
 
 #[salsa::jar(db = Db)]
 pub struct Jar(simple_reducir_item, simple_reducir_module);
@@ -65,14 +69,16 @@ fn simple_reducir_module(
 mod subst {
     use std::convert::Infallible;
 
-    use aiahr_reducir::ty::{ReducIrTy, ReducIrTyApp};
-    use aiahr_reducir::{ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, ReducIrVar, P};
+    use aiahr_reducir::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
+    use aiahr_reducir::{
+        ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrVar, P,
+    };
     use rustc_hash::FxHashMap;
 
-    pub(crate) struct Subst<'a> {
+    pub(crate) struct Inline<'a> {
         pub(crate) env: &'a FxHashMap<ReducIrLocal, ReducIr>,
     }
-    impl ReducIrEndoFold for Subst<'_> {
+    impl ReducIrEndoFold for Inline<'_> {
         type Ext = Infallible;
 
         fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
@@ -88,12 +94,12 @@ mod subst {
 
     pub(crate) struct SubstTy<'a> {
         pub(crate) db: &'a dyn crate::Db,
-        pub(crate) needle: ReducIrTyApp,
+        pub(crate) subst: Subst,
     }
 
     impl SubstTy<'_> {
         fn subst(&self, ty: ReducIrTy) -> ReducIrTy {
-            self.needle.clone().subst_into(self.db.as_reducir_db(), ty)
+            ty.subst(self.db.as_reducir_db(), self.subst.clone())
         }
     }
 
@@ -102,21 +108,27 @@ mod subst {
 
         fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
             match kind {
-                ReducIrKind::TyAbs(kind, body) => ReducIr::new(ReducIrKind::TyAbs(
-                    kind,
-                    P::new(body.fold(&mut SubstTy {
-                        db: self.db,
-                        needle: self.needle.clone().shift(self.db.as_reducir_db(), 1),
-                    })),
-                )),
-                ReducIrKind::TyApp(body, ty_app) => {
-                    let ty_app = match ty_app {
-                        ReducIrTyApp::Ty(ty) => ReducIrTyApp::Ty(
-                            self.needle.clone().subst_into(self.db.as_reducir_db(), ty),
-                        ),
-                        _ => todo!(),
-                    };
-                    ReducIr::new(ReducIrKind::TyApp(body, ty_app))
+                ReducIrKind::TyApp(body, ty_apps) => {
+                    let ty_apps = ty_apps
+                        .into_iter()
+                        .map(|ty_app| match ty_app {
+                            ReducIrTyApp::Ty(ty) => ReducIrTyApp::Ty(self.subst(ty)),
+                            // Don't do anything for these
+                            ReducIrTyApp::DataRow(ReducIrRow::Open(_))
+                            | ReducIrTyApp::EffRow(ReducIrRow::Open(_)) => ty_app,
+                            ReducIrTyApp::EffRow(ReducIrRow::Closed(row)) => {
+                                ReducIrTyApp::EffRow(ReducIrRow::Closed(
+                                    row.into_iter().map(|ty| self.subst(ty)).collect(),
+                                ))
+                            }
+                            ReducIrTyApp::DataRow(ReducIrRow::Closed(row)) => {
+                                ReducIrTyApp::DataRow(ReducIrRow::Closed(
+                                    row.into_iter().map(|ty| self.subst(ty)).collect(),
+                                ))
+                            }
+                        })
+                        .collect();
+                    ReducIr::new(ReducIrKind::TyApp(body, ty_apps))
                 }
                 ReducIrKind::Var(var) => ReducIr::var(ReducIrVar {
                     var: var.var,
@@ -140,8 +152,57 @@ mod subst {
                 ReducIrKind::Case(ty, discr, branches) => {
                     ReducIr::new(ReducIrKind::Case(self.subst(ty), discr, branches))
                 }
-
                 kind => ReducIr::new(kind),
+            }
+        }
+
+        fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
+            use ReducIrKind::*;
+            match ir.kind() {
+                Abs(vars, body) => {
+                    let body = body.fold(self);
+                    self.fold_ir(Abs(vars.clone(), P::new(body)))
+                }
+                App(head, spine) => {
+                    let head = head.fold(self);
+                    let spine = spine.iter().map(|ir| ir.fold(self)).collect();
+                    self.fold_ir(App(P::new(head), spine))
+                }
+                TyAbs(ty_var, body) => {
+                    let subst = self.subst.clone();
+                    let subst = std::mem::replace(&mut self.subst, subst.lift());
+                    let body = body.fold(self);
+                    self.subst = subst;
+                    self.fold_ir(TyAbs(*ty_var, P::new(body)))
+                }
+                TyApp(body, ty_app) => {
+                    let body = body.fold(self);
+                    self.fold_ir(TyApp(P::new(body), ty_app.clone()))
+                }
+                Struct(elems) => {
+                    let elems = elems.iter().map(|e| e.fold(self)).collect();
+                    self.fold_ir(Struct(elems))
+                }
+                FieldProj(indx, body) => {
+                    let body = body.fold(self);
+                    self.fold_ir(FieldProj(*indx, P::new(body)))
+                }
+                Tag(ty, tag, body) => {
+                    let body = body.fold(self);
+                    self.fold_ir(Tag(*ty, *tag, P::new(body)))
+                }
+                Case(ty, discr, branches) => {
+                    let discr = discr.fold(self);
+                    let branches = branches.iter().map(|branch| branch.fold(self)).collect();
+                    self.fold_ir(Case(*ty, P::new(discr), branches))
+                }
+                Int(i) => self.fold_ir(Int(*i)),
+                Var(v) => self.fold_ir(Var(*v)),
+                Item(name, ty) => self.fold_ir(Item(*name, *ty)),
+
+                X(_) => {
+                    unreachable!()
+                }
             }
         }
     }
@@ -214,14 +275,40 @@ impl ReducIrFold for Simplify<'_> {
 
     fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
         use aiahr_reducir::ReducIrKind::*;
+        fn apply_tyabs<'a>(
+            body: &'a ReducIr,
+            in_app: &mut Vec<ReducIrTyApp>,
+            mut out_app: Vec<ReducIrTyApp>,
+        ) -> (&'a ReducIr, Vec<ReducIrTyApp>) {
+            match body.kind() {
+                TyAbs(_, inner) => match in_app.pop() {
+                    Some(app) => {
+                        out_app.push(app);
+                        apply_tyabs(inner, in_app, out_app)
+                    }
+                    None => (body, out_app),
+                },
+                _ => (body, out_app),
+            }
+        }
         match ir {
-            TyApp(body, ty_app) => match body.kind() {
-                TyAbs(_, body) => self.traverse_ir(&body.fold(&mut SubstTy {
-                    db: self.db,
-                    needle: ty_app,
-                })),
-                _ => ReducIr::new(TyApp(body, ty_app)),
-            },
+            TyApp(body, mut ty_app) => {
+                ty_app.reverse();
+                let (body, apps) = apply_tyabs(&body, &mut ty_app, vec![]);
+                ty_app.reverse();
+                let body = if !apps.is_empty() {
+                    // only perform a substitution if we actually applied types
+                    body.fold(&mut SubstTy {
+                        db: self.db,
+                        subst: apps.into_iter().fold(Subst::Inc(0), |subst, app| {
+                            subst.cons(app.into_payload(self.db))
+                        }),
+                    })
+                } else {
+                    body.clone()
+                };
+                ReducIr::ty_app(body, ty_app)
+            }
             FieldProj(indx, ref base) => match base.kind() {
                 Struct(elems) => self.traverse_ir(&elems[indx]),
                 _ => ReducIr::new(ir),
@@ -238,7 +325,7 @@ impl ReducIrFold for Simplify<'_> {
                     loop {
                         match (args_iter.next(), spine_iter.next()) {
                             (Some(var), Some(arg)) => {
-                                let arg = arg.fold(&mut Subst { env: &env }).fold(self);
+                                let arg = arg.fold(&mut Inline { env: &env }).fold(self);
                                 if is_value(&arg) {
                                     // Later args may refer to earlier args we're about to
                                     // substitute
@@ -265,7 +352,7 @@ impl ReducIrFold for Simplify<'_> {
                     ReducIr::app(
                         ReducIr::abss(
                             remaining_args,
-                            self.traverse_ir(&body.fold(&mut Subst { env: &env })),
+                            self.traverse_ir(&body.fold(&mut Inline { env: &env })),
                         ),
                         remaining_apps,
                     )
@@ -280,8 +367,8 @@ impl ReducIrFold for Simplify<'_> {
                 _ => ReducIr::new(Case(ty, discr, branches)),
             },
             // Always inline row evidence
-            Item(name, _) => match self.builtin_evs.get(&name) {
-                Some(ir) => self.traverse_ir(*ir),
+            Item(name, _) => match self.builtin_evs.remove(&name) {
+                Some(builtin) => self.traverse_ir(builtin),
                 None => ReducIr::new(ir),
             },
             ir => ReducIr::new(ir),
@@ -312,9 +399,24 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
         .collect::<FxHashMap<_, _>>();
 
     let module = item.name(reducir_db).module(db.as_core_db());
-    let name = ReducIrTermName::gen(db, "__mon_freshm", module);
-    let freshm_term = freshm_term(db, module, name);
-    builtin_evs.insert(name, &freshm_term);
+    let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
+    let bind = bind_term(db, bind_name);
+    bind.type_check(db)
+        .map_err_pretty_with(db)
+        .expect("bind should type check");
+    builtin_evs.insert(bind_name, &bind);
+
+    let prompt_name = ReducIrTermName::gen(db, "__mon_prompt", module);
+    let prompt = prompt_term(db, module, prompt_name);
+    prompt
+        .type_check(db)
+        .map_err_pretty_with(db)
+        .expect("prompt should type check");
+    builtin_evs.insert(prompt_name, &prompt);
+
+    let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
+    let freshm = freshm_term(db, module, freshm_name);
+    builtin_evs.insert(freshm_name, &freshm);
 
     ir.fold(&mut Simplify { db, builtin_evs })
         .fold(&mut InsertLet)
@@ -348,32 +450,31 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
             [Kind::Type],
             db.mk_fun_ty(
                 [db.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]))],
-                db.mk_reducir_ty(ReducIrTyKind::MarkerTy(var_ty0)),
+                db.mk_reducir_ty(ReducIrTyKind::MarkerTy(
+                    var_ty1.shift(db.as_reducir_db(), 1),
+                )),
             ),
         ),
     ));
 
-    ReducIr::new(ReducIrKind::TyAbs(
-        a,
-        P::new(ReducIr::new(ReducIrKind::TyAbs(
-            b,
-            P::new(ReducIr::abss(
-                [f],
-                ReducIr::app(
-                    ReducIr::var(f),
-                    [ReducIr::app(
-                        ReducIr::ty_app(marker, [ReducIrTyApp::Ty(var_ty1)]),
-                        [ReducIr::new(ReducIrKind::Struct(vec![]))],
-                    )],
-                ),
-            )),
-        ))),
-    ))
+    ReducIr::ty_abs(
+        [a, b],
+        ReducIr::abss(
+            [f],
+            ReducIr::app(
+                ReducIr::var(f),
+                [ReducIr::app(
+                    ReducIr::ty_app(marker, [ReducIrTyApp::Ty(var_ty1)]),
+                    [ReducIr::new(ReducIrKind::Struct(vec![]))],
+                )],
+            ),
+        ),
+    )
 }
 
-/*/// Prompt handles "installing" our prompt into the stack and running an action under an
+/// Prompt handles "installing" our prompt into the stack and running an action under an
 /// updated effect row
-fn prompt_term(db: &dyn crate::Db, module: Module) -> ReducIr {
+fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> ReducIr {
     use ReducIrTyKind::*;
     let m_ty = db.mk_reducir_ty(VarTy(2));
     let upd_m = db.mk_reducir_ty(VarTy(1));
@@ -381,7 +482,7 @@ fn prompt_term(db: &dyn crate::Db, module: Module) -> ReducIr {
 
     let mark_ty = db.mk_reducir_ty(MarkerTy(a));
     let upd_fun_ty = db.mk_fun_ty([m_ty], upd_m);
-    let body_fun_ty = db.mk_fun_ty([upd_m], db.mk_reducir_ty(ControlTy(upd_m, a)));
+    let body_fun_ty = db.mk_mon_ty(upd_m, a);
     let ret_ty = db.mk_reducir_ty(ControlTy(m_ty, a));
 
     let prompt_type = db.mk_forall_ty(
@@ -391,11 +492,11 @@ fn prompt_term(db: &dyn crate::Db, module: Module) -> ReducIr {
             db.mk_fun_ty([m_ty], ret_ty),
         ),
     );
-    let top_level = ReducIrTermName::gen(db, "__mon_prompt", module);
-    let mut var_gen = IdGen::new();
+
+    let mut var_gen = IdSupply::default();
     let mut gen_local = || ReducIrLocal {
-        top_level,
-        id: var_gen.generate(),
+        top_level: name,
+        id: var_gen.supply_id(),
     };
     let mark = ReducIrVar {
         var: gen_local(),
@@ -413,109 +514,294 @@ fn prompt_term(db: &dyn crate::Db, module: Module) -> ReducIr {
         var: gen_local(),
         ty: m_ty,
     };
+
+    let reinstall_prompt = || {
+        let prompt_item = ReducIr::new(ReducIrKind::Item(name, prompt_type));
+        ReducIr::app(
+            ReducIr::ty_app(
+                prompt_item,
+                [
+                    ReducIrTyApp::Ty(m_ty),
+                    ReducIrTyApp::Ty(upd_m),
+                    ReducIrTyApp::Ty(a),
+                ],
+            ),
+            [ReducIr::var(mark), ReducIr::var(upd)],
+        )
+    };
+
+    let exists_b = db.mk_reducir_ty(VarTy(2));
+    let exists_m = db.mk_reducir_ty(VarTy(1));
+    let exists_r = db.mk_reducir_ty(VarTy(0));
+    let exists_mon_m_r = db.mk_mon_ty(exists_m, exists_r);
+    let exists_body_fun_ty = db.mk_mon_ty(VarTy(4), VarTy(3)); //db.mk_mon_ty(upd_m, a);
+    let y_var = ReducIrVar {
+        var: gen_local(),
+        ty: db.mk_forall_ty(
+            [Kind::Type, Kind::Type, Kind::Type],
+            ProductTy(vec![
+                db.mk_reducir_ty(MarkerTy(exists_r)),
+                db.mk_fun_ty([db.mk_fun_ty([exists_b], exists_mon_m_r)], exists_mon_m_r),
+                db.mk_fun_ty([exists_b], exists_body_fun_ty),
+            ]),
+        ),
+    };
+    let y = ReducIr::ty_app(
+        ReducIr::var(y_var),
+        [
+            ReducIrTyApp::Ty(a),
+            ReducIrTyApp::Ty(m_ty),
+            ReducIrTyApp::Ty(a),
+        ],
+    );
+
+    let unit_ty = db.mk_reducir_ty(ProductTy(vec![]));
     let x = ReducIrVar {
         var: gen_local(),
         ty: a,
     };
-    let y = ReducIrVar {
+    let unused = ReducIrVar {
         var: gen_local(),
-        ty: db.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![mark_ty])),
+        ty: unit_ty,
     };
 
-    let unit = db.mk_reducir_ty(ProductTy(vec![]));
     let meq = ReducIr::new(ReducIrKind::Item(
         ReducIrTermName::gen(db, "__mon_eqm", module),
         db.mk_fun_ty(
-            [m_ty, m_ty],
-            db.mk_reducir_ty(CoproductTy(vec![unit, unit])),
+            [mark_ty, mark_ty],
+            db.mk_reducir_ty(CoproductTy(vec![unit_ty, unit_ty])),
         ),
     ));
 
+    fn compose<'a, DB: ?Sized + crate::Db>(
+        db: &DB,
+        mut gen_local: impl FnMut() -> ReducIrLocal,
+        a_fn: ReducIr,
+        b_fn: &'a ReducIr,
+    ) -> Result<ReducIr, ReducIrTyErr<'a, Infallible>> {
+        let b_fn_ty = b_fn.type_check(db)?;
+
+        let b_arg = match b_fn_ty.kind(db.as_reducir_db()) {
+            FunTy(args, _) => args[0],
+            _ => {
+                return Err(ReducIrTyErr::ExpectedFunTy {
+                    ty: b_fn_ty,
+                    func: b_fn,
+                })
+            }
+        };
+
+        let x = ReducIrVar {
+            var: gen_local(),
+            ty: b_arg,
+        };
+
+        Ok(ReducIr::abss(
+            [x],
+            ReducIr::app(a_fn, [ReducIr::app(b_fn.clone(), [ReducIr::var(x)])]),
+        ))
+    }
+
     /*
-      prompt : ∀𝜇 𝜇'. ∀𝛼 h. (𝜇 -> {Marker 𝜇 𝛼, h} -> Mon 𝜇' 𝛼) -> Marker 𝜇 𝛼 -> h -> Mon 𝜇' 𝛼 -> Mon 𝜇 𝛼
-      prompt upd m h e = 𝜆w. case e (upd w {m, h}) of
-        Pure x -> Pure x
-        Yield m' f k ->
-            case m == m' of
-                False -> Yield m' f (\x . prompt upd m h (k x))
-                True -> f (\x . prompt upd m h (k x)) w
+    prompt : ∀𝜇 𝜇'. ∀𝛼 h. (𝜇 -> {Marker 𝜇 𝛼, h} -> Mon 𝜇' 𝛼) -> Marker 𝜇 𝛼 -> h -> Mon 𝜇' 𝛼 -> Mon 𝜇 𝛼
+    prompt upd m h e = 𝜆w. case e (upd w {m, h}) of
+      Pure x -> Pure x
+      Yield m' f k ->
+        case m == m' of
+          False -> Yield m' f (\x . prompt upd m h (k x))
+          True -> f (\x . prompt upd m h (k x)) w
     */
-    let m_ = ReducIr::field_proj(0, ReducIr::var(y));
-    let f = ReducIr::field_proj(1, ReducIr::var(y));
-    let x = ReducIrVar { var: gen_local(), ty: db.mk_reducir_ty(ReducIrTyKind::IntTy) };
-    ReducIr::abss(
-        [mark, upd, body, evv],
-        ReducIr::case(
-            ret_ty,
-            ReducIr::app(
-                ReducIr::var(body),
-                [ReducIr::app(ReducIr::var(upd), [ReducIr::var(evv)])],
-            ),
-            [
-                ReducIr::abss(
-                    [x],
-                    ReducIr::new(ReducIrKind::Tag(ret_ty, 0, P::new(ReducIr::var(x)))),
+    let m_ = ReducIr::field_proj(0, y.clone());
+    let f = ReducIr::field_proj(1, y.clone());
+    let k = ReducIr::field_proj(2, y);
+    let mut tyvar_supply = IdSupply::default();
+    ReducIr::ty_abs(
+        [
+            ReducIrVarTy {
+                var: tyvar_supply.supply_id(),
+                kind: Kind::Type,
+            },
+            ReducIrVarTy {
+                var: tyvar_supply.supply_id(),
+                kind: Kind::Type,
+            },
+            ReducIrVarTy {
+                var: tyvar_supply.supply_id(),
+                kind: Kind::Type,
+            },
+        ],
+        ReducIr::abss(
+            [mark, upd, body, evv],
+            ReducIr::case(
+                ret_ty,
+                ReducIr::app(
+                    ReducIr::var(body),
+                    [ReducIr::app(ReducIr::var(upd), [ReducIr::var(evv)])],
                 ),
-                ReducIr::abss(
-                    [y],
-                    ReducIr::case(
-                        ret_ty,
-                        ReducIr::app(meq, [ReducIr::var(mark), m_]),
-                        [ReducIr::abss(
-                            [ReducIrVar {
-                                var: gen_local(),
-                                ty: unit,
-                            }],
-                            ReducIr::new(ReducIrKind::Tag(
-                                ret_ty,
-                                1,
-                                ReducIr::new(ReducIrKind::Struct(vec![
-                                    m_,
-                                    f,
-                                    ReducIr::abss(
-                                        [todo!()],
-                                        ReducIr::app(f, []),
+                [
+                    ReducIr::abss([x], ReducIr::tag(ret_ty, 0, ReducIr::var(x))),
+                    ReducIr::abss(
+                        [y_var],
+                        ReducIr::case(
+                            ret_ty,
+                            ReducIr::app(meq, [ReducIr::var(mark), m_.clone()]),
+                            [
+                                // False branch
+                                ReducIr::abss(
+                                    [unused],
+                                    ReducIr::tag(
+                                        ret_ty,
+                                        1,
+                                        ReducIr::new(ReducIrKind::Struct(vec![
+                                            m_,
+                                            f.clone(),
+                                            compose(db, &mut gen_local, reinstall_prompt(), &k)
+                                                .map_err_pretty_with(db)
+                                                .expect("Failed to compose"),
+                                        ])),
                                     ),
-                                ])),
-                            )),
-                        )],
+                                ),
+                                // True branch
+                                ReducIr::abss(
+                                    [unused],
+                                    ReducIr::app(
+                                        f,
+                                        [
+                                            compose(db, &mut gen_local, reinstall_prompt(), &k)
+                                                .expect("Failed to compose"),
+                                            ReducIr::var(evv),
+                                        ],
+                                    ),
+                                ),
+                            ],
+                        ),
                     ),
-                ),
-            ],
+                ],
+            ),
         ),
     )
 }
 
 /// TODO: Return an item representing the bind implementation of our delimited continuation
 /// monad
-fn bind_item(&mut self) -> ReducIr {
+fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> ReducIr {
+    use ReducIrTyKind::*;
     /*
     (e: Mon m a) |> (g : a -> Mon m b) : Mon m b =
        𝜆w. case e w of
            Pure x → g x w (monadic bind)
            Yield m f k → Yield m f (𝜆x. g x |> k)
     */
-    let m = self.mk_reducir_ty(VarTy(2));
-    let a = self.mk_reducir_ty(VarTy(1));
-    let b = self.mk_reducir_ty(VarTy(0));
-    let mon_m_b = self.mk_mon_ty(m, b);
-
-    let bind_type = self.mk_forall_ty(
+    let m = db.mk_reducir_ty(VarTy(2));
+    let a = db.mk_reducir_ty(VarTy(1));
+    let b = db.mk_reducir_ty(VarTy(0));
+    let ctl_m_b = db.mk_reducir_ty(ControlTy(m, b));
+    let mon_m_b = db.mk_mon_ty(m, b);
+    let bind_type = db.mk_forall_ty(
         [Kind::Type, Kind::Type, Kind::Type],
-        self.mk_fun_ty(
-            [self.mk_mon_ty(m, a), self.mk_fun_ty([a], mon_m_b)],
-            mon_m_b,
-        ),
+        db.mk_fun_ty([db.mk_mon_ty(m, a), db.mk_fun_ty([a], mon_m_b)], mon_m_b),
     );
-    ReducIr::new(Item(
-        ReducIrTermName::gen(self.db, "__mon_bind", self.current.module(self.db)),
-        bind_type,
-    ))
-}*/
+
+    let bind_item = ReducIr::new(ReducIrKind::Item(name, bind_type));
+    let mut tyvar_supply: IdSupply<ReducIrTyVarId> = IdSupply::default();
+
+    let mut supply: IdSupply<ReducIrVarId> = IdSupply::default();
+    let mut gen_local = |ty| ReducIrVar {
+        var: ReducIrLocal {
+            top_level: name,
+            id: supply.supply_id(),
+        },
+        ty,
+    };
+
+    let e = gen_local(db.mk_mon_ty(m, a));
+    let g = gen_local(db.mk_fun_ty([a], mon_m_b));
+    let w = gen_local(m);
+    let x = gen_local(a);
+
+    let exists_b = db.mk_reducir_ty(VarTy(2));
+    let exists_m = db.mk_reducir_ty(VarTy(1));
+    let exists_r = db.mk_reducir_ty(VarTy(0));
+    let exists_mon_m_r = db.mk_mon_ty(exists_m, exists_r);
+    let exists_body_fun_ty = db.mk_mon_ty(VarTy(5), VarTy(4));
+    let y_var = gen_local(db.mk_forall_ty(
+        [Kind::Type, Kind::Type, Kind::Type],
+        ProductTy(vec![
+            db.mk_reducir_ty(MarkerTy(exists_r)),
+            db.mk_fun_ty([db.mk_fun_ty([exists_b], exists_mon_m_r)], exists_mon_m_r),
+            db.mk_fun_ty([exists_b], exists_body_fun_ty),
+        ]),
+    ));
+    let y = ReducIr::ty_app(
+        ReducIr::var(y_var),
+        [
+            ReducIrTyApp::Ty(b),
+            ReducIrTyApp::Ty(m),
+            ReducIrTyApp::Ty(b),
+        ],
+    );
+
+    ReducIr::ty_abs(
+        [
+            ReducIrVarTy {
+                var: tyvar_supply.supply_id(),
+                kind: Kind::Type,
+            },
+            ReducIrVarTy {
+                var: tyvar_supply.supply_id(),
+                kind: Kind::Type,
+            },
+            ReducIrVarTy {
+                var: tyvar_supply.supply_id(),
+                kind: Kind::Type,
+            },
+        ],
+        ReducIr::abss(
+            [e, g, w],
+            ReducIr::case(
+                ctl_m_b,
+                ReducIr::app(ReducIr::var(e), [ReducIr::var(w)]),
+                [
+                    ReducIr::abss(
+                        [x],
+                        ReducIr::app(ReducIr::var(g), [ReducIr::var(x), ReducIr::var(w)]),
+                    ),
+                    ReducIr::abss([y_var], {
+                        let mon = ReducIr::field_proj(0, y.clone());
+                        let f = ReducIr::field_proj(1, y.clone());
+                        let k = ReducIr::field_proj(2, y);
+
+                        ReducIr::tag(
+                            ctl_m_b,
+                            1,
+                            ReducIr::new(ReducIrKind::Struct(vec![
+                                mon,
+                                f,
+                                ReducIr::abss(
+                                    [x],
+                                    ReducIr::app(
+                                        ReducIr::ty_app(
+                                            bind_item,
+                                            [
+                                                ReducIrTyApp::Ty(m),
+                                                ReducIrTyApp::Ty(b),
+                                                ReducIrTyApp::Ty(a),
+                                            ],
+                                        ),
+                                        [ReducIr::app(ReducIr::var(g), [ReducIr::var(x)]), k],
+                                    ),
+                                ),
+                            ])),
+                        )
+                    }),
+                ],
+            ),
+        ),
+    )
+}
 
 #[cfg(test)]
 mod tests {
-
     use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
     use aiahr_core::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx};
     use aiahr_core::Db as CoreDb;
@@ -595,22 +881,77 @@ effect Reader {
 
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                ((((__mon_bind @ Ty({1})) @ Ty({} -> {{}, {}})) @ Ty({{}, {}}))
-                  (let (V18 ((__mon_generate_marker @ Ty({} -> {{}, {}})) {}))
-                    ((((__mon_prompt @ Ty({1})) @ Ty({0})) @ Ty({} -> {{}, {}}))
-                      V18
-                      (fun [V0]
-                        (V1[0]
-                          V0
-                          {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun [V7, V8, V9]
-                            (V8 V9 V9))}}))
-                      ((((__mon_bind @ Ty({0})) @ Ty({})) @ Ty({} -> {{}, {}}))
-                        (fun [V0]
-                          (let (V16 (V1[3][0] V0))
-                            <1: {V16[0], (fun [V17] (V16[1][1] {} V17)), (fun [V0] V0)}>))
-                        (fun [V21] (fun [V0] <0: (fun [V14] {V14, V21})>)))))
-                  (fun [V23] (fun [V0] (let (V24 (V23 {})) <0: V24>)))
-                  V0)))"#]];
+                (let
+                  [ (V0:__mon_bind (let
+                    (V18:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
+                    (fun [V3]
+                      (let
+                        (V2:__mon_prompt ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> { {}
+                                                                                   , {}
+                                                                                   })])
+                          (fun [V0]
+                            (let (V16:f (V1[3][0] V0))
+                              <1: {V16[0], (fun [V17] (V16[1][1] {} V17)), (fun [V0] V0)}>))
+                          (fun [V21] (fun [V0] <0: (fun [V14] {V14, V21})>))))
+                        (case (V2
+                            (V1[0]
+                              V3
+                              {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun [V7, V8, V9]
+                                (V8 V9 V9))}}))
+                          (fun [V5] <0: V5>)
+                          (fun [V4]
+                            (case (__mon_eqm
+                                V18
+                                (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
+                              (fun [V6]
+                                <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                                  , {}
+                                                                                  })])[0], (V4 @ [Ty({}
+                                  -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
+                                    ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                                      V18
+                                      (fun [V0]
+                                        (V1[0]
+                                          V0
+                                          {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun
+                                            [V7
+                                            ,V8
+                                            ,V9] (V8 V9 V9))}}))
+                                      ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                                    , {}
+                                                                                    })])[2]
+                                        V7)))}>)
+                              (fun [V6]
+                                ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
+                                  (fun [V8]
+                                    ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                                      V18
+                                      (fun [V0]
+                                        (V1[0]
+                                          V0
+                                          {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun
+                                            [V7
+                                            ,V8
+                                            ,V9] (V8 V9 V9))}}))
+                                      ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                                    , {}
+                                                                                    })])[2]
+                                        V8)))
+                                  V3)))))))))
+                  , (V2:__mon_bind V0)
+                  ]
+                  (case (V0 V2)
+                    (fun [V3] (let (V24:f (V3 {})) <0: V24>))
+                    (fun [V4]
+                      <1: {(V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})])[0], (V4 @ [Ty({ {}
+                                                                                      , {}
+                                                                                      }), Ty({1}), Ty({ {}
+                                                                                                      , {}
+                                                                                                      })])[1], (fun
+                          [V3]
+                          ((__mon_bind @ [Ty({1}), Ty({{}, {}}), Ty({} -> {{}, {}})])
+                            (fun [V0] (let (V24:f (V3 {})) <0: V24>))
+                            (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})])[2]))}>)))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
