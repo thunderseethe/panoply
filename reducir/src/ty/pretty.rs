@@ -72,6 +72,18 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyKind {
                 let multi_line = a.line().append(ty.pretty(db, a)).nest(2);
                 preamble.append(multi_line.flat_alt(single_line).group())
             }
+            /*ReducIrTyKind::ExistsTy(kind, ty) => {
+                let preamble = a
+                    .text("exists")
+                    .append(a.space())
+                    .append(kind.pretty(a))
+                    .append(a.space())
+                    .append(a.text("."));
+
+                let single_line = a.space().append(ty.pretty(db, a));
+                let multi_line = a.line().append(ty.pretty(db, a)).nest(2);
+                preamble.append(multi_line.flat_alt(single_line).group())
+            }*/
             ReducIrTyKind::ProductTy(tys) => {
                 // I don't understand layout rules well enough to avoid this special case
                 if tys.is_empty() {

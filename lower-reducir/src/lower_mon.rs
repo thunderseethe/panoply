@@ -491,21 +491,17 @@ impl LowerMonCtx<'_> {
                     MarkerTy(a_ty) => a_ty,
                     _ => unreachable!(),
                 };
-                let ir = ReducIr::app(
+                let x_ty = x
+                    .type_check(reducir_db)
+                    .map_err_pretty_with(reducir_db)
+                    .unwrap();
+                ReducIr::app(
                     ReducIr::ty_app(
                         self.fresh_marker_item(),
-                        [
-                            ReducIrTyApp::Ty(a_ty),
-                            ReducIrTyApp::Ty(
-                                x.type_check(reducir_db)
-                                    .map_err_pretty_with(reducir_db)
-                                    .unwrap(),
-                            ),
-                        ],
+                        [ReducIrTyApp::Ty(a_ty), ReducIrTyApp::Ty(x_ty)],
                     ),
                     [ReducIr::abss([*mark_var], x)],
-                );
-                ir
+                )
             }
             X(DelimCont::Prompt(marker, upd_evv, body)) => {
                 let update_evv_fn_ty = upd_evv

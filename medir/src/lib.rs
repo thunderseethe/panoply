@@ -163,6 +163,9 @@ pub enum MedIrKind {
     Call(Call, Vec<Atom>),
     /// Allocate a closure capturing the listed vars
     Closure(WIPItem, Vec<MedIrVar>),
+    /// Cast a medirterm as a specific type.
+    /// This is erased at runtime and just exists for typechecking.
+    Typecast(MedIrTy, Box<MedIr>),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Hash)]
@@ -211,13 +214,24 @@ impl MedIr {
                 MedIrTyKind::BlockTy(blocks) => blocks[*indx],
                 _ => todo!(),
             },
-            MedIrKind::Switch(_, branches) => branches
+            MedIrKind::Switch(discr, branches) => branches
                 .iter()
                 .map(|branch| branch.type_of(db))
                 .reduce(|a, b| {
-                    (a == b)
-                        .then_some(a)
-                        .expect("All types of switch must be the same")
+                    (a == b).then_some(a).unwrap_or_else(|| {
+                        println!(
+                            "{}",
+                            MedIrKind::Switch(*discr, branches.to_vec())
+                                .pretty_with(db)
+                                .pprint()
+                                .pretty(80)
+                        );
+                        panic!(
+                            "All types of switch must be the same:\na: {}\nb: {}",
+                            a.pretty_with(db).pprint().pretty(80),
+                            b.pretty_with(db).pprint().pretty(80)
+                        )
+                    })
                 })
                 .expect("Switch should have atleast one branch"),
             MedIrKind::Call(fun, _) => match fun {
@@ -245,6 +259,7 @@ impl MedIr {
                     ))
                 }
             }
+            MedIrKind::Typecast(ty, _) => *ty,
         }
     }
 }
@@ -299,6 +314,7 @@ impl MedIr {
                 });
             }
             MedIrKind::Closure(_, _) => {}
+            MedIrKind::Typecast(_, term) => fold.fold_medir(&mut term.kind),
         }
         fold.fold_medir(&mut self.kind);
     }
@@ -326,6 +342,7 @@ impl MedIr {
                 }
             }
             MedIrKind::Closure(_, _) => {}
+            MedIrKind::Typecast(_, term) => visit.visit_medir(&term.kind),
         }
         visit.visit_medir(&self.kind);
     }

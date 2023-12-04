@@ -2,7 +2,10 @@ use aiahr_core::id::ReducIrTyVarId;
 use aiahr_ty::row::{RowSema, Scoped, Simple};
 
 mod subst;
-use subst::{Env, Subst};
+use salsa::DebugWithDb;
+
+use subst::SubstFold;
+pub use subst::{IntoPayload, Subst};
 
 mod pretty;
 
@@ -43,6 +46,7 @@ pub enum ReducIrTyKind {
     CoprodVarTy(i32),
     FunTy(Box<[ReducIrTy]>, ReducIrTy),
     ForallTy(Kind, ReducIrTy),
+    //ExistsTy(Kind, ReducIrTy),
     ProductTy(Vec<ReducIrTy>),
     CoproductTy(Vec<ReducIrTy>),
     // TODO: Figure out how to not build this in
@@ -204,31 +208,33 @@ impl ReducIrTy {
     /// This applies type substitution without having to create a TyApp ReducIr node.
     pub fn reduce_forall(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
         match self.kind(db) {
-            ReducIrTyKind::ForallTy(Kind::Type, ret_ty) => ret_ty.subst_ty(db, ty),
+            ReducIrTyKind::ForallTy(Kind::Type, ret_ty) => ret_ty.subst_single(db, ty),
             _ => panic!("reduce_forall called on non forall type"),
         }
     }
 
-    pub fn subst_ty(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
-        self.fold(&mut Subst {
-            db,
-            i: 1,
-            j: 0,
-            env: Env::with_entry((0, ty)),
-        })
+    pub fn subst(self, db: &dyn crate::Db, subst: Subst) -> Self {
+        self.fold(&mut SubstFold { db, subst })
     }
 
-    pub fn subst_row(self, db: &dyn crate::Db, row: ReducIrRow) -> ReducIrTy {
+    pub fn subst_single(self, db: &dyn crate::Db, payload: impl IntoPayload) -> Self {
+        self.subst(db, Subst::single(payload.into_payload(db)))
+    }
+
+    /*pub fn subst_row(self, db: &dyn crate::Db, (i, j): (i32, i32), row: ReducIrRow) -> ReducIrTy {
+        /*let mut env = vec![(0, Some(row))];
+        env.extend((1..=j).map(|j| (j, None)));
         self.fold(&mut Subst {
             db,
-            i: 1,
-            j: 0,
-            env: Env::with_entry((0, row)),
-        })
-    }
+            i,
+            j,
+            env: Env::new(env),
+        })*/
+        self.fold(f)
+    }*/
 
     /// Shift all the variables in a term by delta.
-    pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {
+    pub fn shift<DB: ?Sized + crate::Db>(self, db: &DB, delta: i32) -> Self {
         struct Shift<'db> {
             db: &'db dyn crate::Db,
             delta: i32,
@@ -261,7 +267,7 @@ impl ReducIrTy {
         }
 
         self.fold(&mut Shift {
-            db,
+            db: db.as_reducir_db(),
             delta,
             bound: 0,
         })
@@ -274,12 +280,55 @@ pub enum ReducIrRow {
     Closed(Vec<ReducIrTy>),
 }
 
+impl DebugWithDb<dyn crate::Db> for ReducIrRow {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        db: &dyn crate::Db,
+        include_all_fields: bool,
+    ) -> std::fmt::Result {
+        match self {
+            ReducIrRow::Open(var) => f.debug_tuple("Open").field(var).finish(),
+            ReducIrRow::Closed(tys) => f
+                .debug_tuple("Closed")
+                .field(&tys.debug_with(db, include_all_fields))
+                .finish(),
+        }
+    }
+}
+
 impl ReducIrRow {
     pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {
         match self {
             ReducIrRow::Open(var) => ReducIrRow::Open(var + delta),
             ReducIrRow::Closed(row) => {
                 ReducIrRow::Closed(row.into_iter().map(|ty| ty.shift(db, delta)).collect())
+            }
+        }
+    }
+
+    fn into_prod_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> ReducIrTy {
+        match self {
+            ReducIrRow::Open(var) => db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(var)),
+            ReducIrRow::Closed(tys) => {
+                if tys.len() == 1 {
+                    tys.into_iter().next().unwrap()
+                } else {
+                    db.mk_reducir_ty(ReducIrTyKind::ProductTy(tys))
+                }
+            }
+        }
+    }
+
+    fn into_coprod_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> ReducIrTy {
+        match self {
+            ReducIrRow::Open(var) => db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(var)),
+            ReducIrRow::Closed(tys) => {
+                if tys.len() == 1 {
+                    tys.into_iter().next().unwrap()
+                } else {
+                    db.mk_reducir_ty(ReducIrTyKind::CoproductTy(tys))
+                }
             }
         }
     }
@@ -296,12 +345,7 @@ pub enum ReducIrTyApp {
 }
 impl ReducIrTyApp {
     pub fn subst_into(self, db: &dyn crate::Db, haystack: ReducIrTy) -> ReducIrTy {
-        match self {
-            ReducIrTyApp::Ty(needle) => haystack.subst_ty(db, needle),
-            ReducIrTyApp::DataRow(needle) | ReducIrTyApp::EffRow(needle) => {
-                haystack.subst_row(db, needle)
-            }
-        }
+        haystack.subst_single(db, self)
     }
 
     pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {

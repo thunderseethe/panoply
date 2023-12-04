@@ -239,15 +239,11 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                 // We introduce an internal forall here so we have to manually shift our types
                 self.db.mk_fun_ty(
                     [
-                        self.db.mk_fun_ty(
-                            [left.coprod.shift(self.db.as_reducir_db(), 1)],
-                            branch_var_ty,
-                        ),
-                        self.db.mk_fun_ty(
-                            [right.coprod.shift(self.db.as_reducir_db(), 1)],
-                            branch_var_ty,
-                        ),
-                        goal.coprod.shift(self.db.as_reducir_db(), 1),
+                        self.db
+                            .mk_fun_ty([left.coprod.shift(self.db, 1)], branch_var_ty),
+                        self.db
+                            .mk_fun_ty([right.coprod.shift(self.db, 1)], branch_var_ty),
+                        goal.coprod.shift(self.db, 1),
                     ],
                     branch_var_ty,
                 ),
@@ -680,8 +676,8 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
             };
             let branch_var_ty = self.mk_reducir_ty(VarTy(0));
             let ir_db = self.db.as_reducir_db();
-            let left_coprod = left_ir.coprod.shift(self.db.as_reducir_db(), 1);
-            let right_coprod = right_ir.coprod.shift(self.db.as_reducir_db(), 1);
+            let left_coprod = left_ir.coprod.shift(self.db, 1);
+            let right_coprod = right_ir.coprod.shift(self.db, 1);
             let left_branch_var = ReducIrVar {
                 var: left_var_id,
                 ty: self.mk_fun_ty([left_coprod], branch_var_ty),
@@ -927,9 +923,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                 ReducIrTermName::Gen(ir_item.name(self.db.as_reducir_db())),
                 ir_ty,
             ));
-            let ir = ty_vals_iter.into_iter().rfold(ir, |ir, ty| {
-                ReducIr::new(TyApp(P::new(ir), ReducIrTyApp::Ty(ty)))
-            });
+
+            let ir = ReducIr::ty_app(ir, ty_vals_iter.into_iter().rev().map(ReducIrTyApp::Ty));
             solved.push((param, ir));
         }
 
@@ -963,24 +958,27 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
 
     fn apply_wrapper(&mut self, wrapper: &Wrapper, ir: DelimReducIr) -> DelimReducIr {
         // This needs to be done in the reverse order that we add our Abs and TyAbs when we lower
-        let ir = wrapper.tys.iter().fold(ir, |body, ty| {
-            ReducIr::new(ReducIrKind::TyApp(
-                P::new(body),
-                ReducIrTyApp::Ty(self.ty_ctx.lower_ty(*ty)),
-            ))
-        });
-        let ir = wrapper.eff_rows.iter().fold(ir, |body, row| {
-            ReducIr::new(ReducIrKind::TyApp(
-                P::new(body),
-                ReducIrTyApp::EffRow(self.ty_ctx.lower_row(*row)),
-            ))
-        });
-        let ir = wrapper.data_rows.iter().fold(ir, |body, row| {
-            ReducIr::new(ReducIrKind::TyApp(
-                P::new(body),
-                ReducIrTyApp::DataRow(self.ty_ctx.lower_row(*row)),
-            ))
-        });
+        let ir = ReducIr::ty_app(
+            ir,
+            wrapper
+                .tys
+                .iter()
+                .map(|ty| ReducIrTyApp::Ty(self.ty_ctx.lower_ty(*ty))),
+        );
+        let ir = ReducIr::ty_app(
+            ir,
+            wrapper
+                .eff_rows
+                .iter()
+                .map(|row| ReducIrTyApp::EffRow(self.ty_ctx.lower_row(*row))),
+        );
+        let ir = ReducIr::ty_app(
+            ir,
+            wrapper
+                .data_rows
+                .iter()
+                .map(|row| ReducIrTyApp::DataRow(self.ty_ctx.lower_row(*row))),
+        );
         let ir = ReducIr::app(
             ir,
             wrapper

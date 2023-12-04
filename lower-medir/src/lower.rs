@@ -1,5 +1,6 @@
 use aiahr_core::id::MedIrVarId;
 use aiahr_core::id_converter::IdConverter;
+use aiahr_core::pretty::PrettyErrorWithDb;
 use aiahr_medir as medir;
 use aiahr_medir::MedIrItemName;
 use aiahr_reducir::ty::{ReducIrTy, ReducIrTyKind};
@@ -41,7 +42,7 @@ fn from_reducir_ty<DB: ?Sized + crate::Db>(db: &DB, ty: ReducIrTy) -> MedIrTy {
             let int = db.mk_medir_ty(MedIrTyKind::IntTy);
             db.mk_medir_ty(MedIrTyKind::BlockTy(vec![int, int, int, int]))
         }
-        ReducIrTyKind::ForallTy(_, ty) => from_reducir_ty(db, ty),
+        ReducIrTyKind::ForallTy(_, ty) /*| ReducIrTyKind::ExistsTy(_, ty)*/ => from_reducir_ty(db, ty),
         // TODO: Remove this once we monomorphize
         ReducIrTyKind::VarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
         ReducIrTyKind::ProdVarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
@@ -178,11 +179,18 @@ impl<'a> LowerCtx<'a> {
                 };
                 MedIr::new(MedIrKind::BlockAccess(base_var, *indx))
             }
-            ReducIrKind::Tag(_, tag, body) => {
+            ReducIrKind::Tag(reducir_ty, tag, body) => {
                 // TODO: Flatten?
+                let medir_ty = from_reducir_ty(self.db, *reducir_ty);
                 let value = self.lower_binds(body, binds);
                 let value_atom = self.mk_atom(value, binds);
-                MedIr::new(MedIrKind::Blocks(vec![Atom::Int(*tag), value_atom]))
+                MedIr::new(MedIrKind::Typecast(
+                    medir_ty,
+                    Box::new(MedIr::new(MedIrKind::Blocks(vec![
+                        Atom::Int(*tag),
+                        value_atom,
+                    ]))),
+                ))
             }
             ReducIrKind::Case(_, scrutinee, branches) => {
                 let medir_scrutinee = self.lower_binds(scrutinee, binds);
@@ -266,8 +274,10 @@ impl<'a> LowerCtx<'a> {
             .collect::<Vec<_>>();
         let param_tys = params.iter().map(|var| var.ty).collect();
         let mut binds = vec![];
+
         let ty = body
             .type_check(self.db.as_reducir_db())
+            .map_err_pretty_with(self.db)
             .expect("ReducIR type_check should succeed in lower-medir");
         let body = self.lower_binds(body, &mut binds);
 

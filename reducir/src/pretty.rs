@@ -63,9 +63,9 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Lets {
     fn pretty<'a>(&self, ctx: &DB, alloc: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
         let binds_len = self.binds.len();
         let mut binds_iter = self.binds.iter().map(|(var, defn)| {
-            var.pretty(alloc)
+            var.pretty_with_local(ctx, alloc)
                 .append(alloc.space())
-                .append(defn.deref().pretty(ctx, alloc))
+                .append(defn.pretty(ctx, alloc))
                 .parens()
         });
         let binds = if binds_len == 1 {
@@ -86,7 +86,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Lets {
             alloc.line().append(binds).nest(2).group(),
             alloc
                 .line()
-                .append(self.body.deref().pretty(ctx, alloc))
+                .append(self.body.pretty(ctx, alloc))
                 .nest(2)
                 .group()
         ]
@@ -120,6 +120,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
         match self {
             Int(i) => i.to_string().pretty(arena),
             Var(v) => v.pretty(arena),
+            //Var(v) => v.pretty_with_type(db, arena),
             Abs(vars, body) => {
                 let param_single = arena.space().append(
                     arena
@@ -159,7 +160,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
                                 let mut binds_iter = binds.into_iter().map(|(var, defn)| {
                                     var.pretty(arena)
                                         .append(arena.space())
-                                        .append(defn.deref().pretty(db, arena))
+                                        .append(defn.pretty(db, arena))
                                         .parens()
                                 });
                                 let binds = if binds_len == 1 {
@@ -179,11 +180,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
                                     arena,
                                     "let",
                                     arena.line().append(binds).nest(2).group(),
-                                    arena
-                                        .line()
-                                        .append(body.deref().pretty(db, arena))
-                                        .nest(2)
-                                        .group()
+                                    arena.line().append(body.pretty(db, arena)).nest(2).group()
                                 ]
                                 .parens()
                             };
@@ -264,7 +261,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
             }
             Struct(elems) => arena
                 .intersperse(
-                    elems.iter().map(|elem| elem.deref().pretty(db, arena)),
+                    elems.iter().map(|elem| elem.pretty(db, arena)),
                     arena.text(",").append(arena.space()),
                 )
                 .enclose(arena.softline_(), arena.softline_())
@@ -282,24 +279,35 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
                 term.pretty(db, arena).nest(2)
             ]
             .angles(),
-            Case(_, discr, branches) => docs![
-                arena,
-                "case",
-                arena.space(),
-                discr.pretty(db, arena).nest(2).group(),
-                arena.space(),
-                arena.intersperse(
-                    branches.iter().map(|b| b.deref().pretty(db, arena)),
-                    arena.space()
-                )
-            ]
-            .parens(),
-            TyApp(body, ty) => body
+            Case(_, discr, branches) => {
+                docs![
+                    arena,
+                    "case",
+                    arena.space(),
+                    discr.pretty(db, arena).nest(2).group(),
+                    arena
+                        .line()
+                        .append(arena.intersperse(
+                            branches.iter().map(|b| b.pretty(db, arena)),
+                            arena.line()
+                        ))
+                        .nest(2)
+                ]
+                .parens()
+            }
+            TyApp(body, tys) => body
                 .pretty(db, arena)
                 .append(arena.space())
                 .append(arena.as_string("@"))
                 .append(arena.space())
-                .append(ty.pretty(db, arena))
+                .append(
+                    arena
+                        .intersperse(
+                            tys.iter().map(|ty| ty.pretty(db, arena)),
+                            arena.text(",").append(arena.space()),
+                        )
+                        .brackets(),
+                )
                 .parens(),
             X(xt) => xt.pretty(db, arena),
             Item(name, _) => arena.text(name.name(db).text(db.as_core_db()).clone()),
@@ -354,14 +362,19 @@ impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<
                 .text("Expected a forall type, but got:")
                 .append(a.softline())
                 .append(ty.pretty(db, a)),
-            ReducIrTyErr::ExpectedProdTy(ty) => a
+            ReducIrTyErr::ExpectedProdTy(ty, strukt) => a
                 .text("Expected a prod type, but got:")
                 .append(a.softline())
-                .append(ty.pretty(db, a)),
-            ReducIrTyErr::ExpectedCoprodTy(ty) => a
-                .text("Expected a coprod type, but got:")
+                .append(strukt.pretty(db, a))
+                .append(":")
                 .append(a.softline())
                 .append(ty.pretty(db, a)),
+            ReducIrTyErr::ExpectedCoprodTy(ty, discr) => a
+                .text("Expected a coprod type, but got:")
+                .append(a.softline())
+                .append(ty.pretty(db, a))
+                .append(a.text(" for discriminant "))
+                .append(discr.pretty(db, a)),
             ReducIrTyErr::ExpectedMarkerTy(ty) => a
                 .text("Expected a marker type, but got:")
                 .append(a.softline())
@@ -399,8 +412,20 @@ impl<'a, A: 'a, D: ?Sized + DocAllocator<'a, A>> Pretty<'a, D, A> for &ReducIrVa
     }
 }
 impl ReducIrVar {
+    pub fn pretty_with_local<'a, DB: ?Sized + crate::Db>(
+        &self,
+        db: &DB,
+        arena: &'a RcAllocator,
+    ) -> DocBuilder<'a, RcAllocator> {
+        arena
+            .text("V")
+            .append(arena.as_string(self.var.id.0))
+            .append(arena.text(":"))
+            .append(&self.var.top_level.pretty_with(db))
+    }
+
     #[allow(dead_code)]
-    fn pretty_with_type<'a, DB: ?Sized + crate::Db>(
+    pub fn pretty_with_type<'a, DB: ?Sized + crate::Db>(
         &self,
         db: &DB,
         arena: &'a RcAllocator,

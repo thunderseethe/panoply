@@ -50,7 +50,7 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Call {
     }
 }
 
-impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIrKind {
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrKind {
     fn pretty<'a>(
         &self,
         ctx: &DB,
@@ -64,8 +64,7 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIrKind {
             MedIrKind::BlockAccess(v, indx) => v.pretty(a).append(a.as_string(indx).brackets()),
             MedIrKind::Switch(scrutinee, branches) => a
                 .text("switch")
-                .append(a.space())
-                .append(scrutinee.pretty(a))
+                .append(scrutinee.pretty(a).enclose(a.space(), a.space()))
                 .append("<")
                 .append(
                     a.line()
@@ -105,11 +104,15 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIrKind {
                         .parens(),
                 )
             }
+            MedIrKind::Typecast(ty, term) => a
+                .text("typecast")
+                .append(ty.pretty(ctx, a).angles())
+                .append(term.pretty(ctx, a).parens()),
         }
     }
 }
 
-impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIr {
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIr {
     fn pretty<'a>(
         &self,
         ctx: &DB,
@@ -119,7 +122,7 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIr {
     }
 }
 
-impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Locals {
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Locals {
     fn pretty<'a>(
         &self,
         ctx: &DB,
@@ -144,7 +147,7 @@ impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Locals {
     }
 }
 
-impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Defn {
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Defn {
     fn pretty<'a>(
         &self,
         ctx: &DB,
