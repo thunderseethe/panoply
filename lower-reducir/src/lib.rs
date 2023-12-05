@@ -853,18 +853,18 @@ effect Reader {
                   (fun [V1, V2, V3, V4, V0] <0: (V2[3][0] (V1[0] V3 V4))>))"#]],
             // main
             expect![[r#"
-                (forall [(T0: ScopedRow)] (fun [V0]
-                    ((let
-                      [ (V1 (_row_simple_x_y @ [Ty({}), Ty({})]))
-                      , (V2 (_row_simple_y_x @ [Ty({}), Ty({})]))
-                      ]
-                      ((__mon_bind @ [Ty({0}), Ty({}), Ty({})])
-                        ((wand @ [Ty({}), Eff(0), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
-                          V1
-                          V2
-                          {}
-                          {})
-                        (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) V0)))"#]],
+                (fun [V0]
+                  ((let
+                    [ (V1 (_row_simple_x_y @ [Ty({}), Ty({})]))
+                    , (V2 (_row_simple_y_x @ [Ty({}), Ty({})]))
+                    ]
+                    ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
+                      ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
+                        V1
+                        V2
+                        {}
+                        {})
+                      (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) V0))"#]],
         ];
         let tys = vec![
             // wand
@@ -885,7 +885,7 @@ effect Reader {
                                  , {{1} -> T5, T5 -> <1>}
                                  } -> {3} -> {2} -> {4} -> (Control {4} T5)"#]],
             // main
-            expect!["forall ScopedRow . {0} -> (Control {0} {})"],
+            expect!["{} -> (Control {} {})"],
         ];
         for ((item, expect), expect_ty) in module
             .items(&db)
