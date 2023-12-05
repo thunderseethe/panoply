@@ -312,6 +312,12 @@ where
             _marker: std::marker::PhantomData,
         }
     }
+
+    pub fn entry_point_expected(&self) -> InferResult<'infer> {
+        let unit = self.mk_ty(ProdTy(Row::Closed(self.empty_row())));
+        InferResult::new(unit, Row::Closed(self.empty_row()))
+    }
+
     /// This is the entrypoint to the bidirectional type checker. Since our language uses
     /// damnas-milner type inference we will always begin type checking with a call to infer.
     pub(crate) fn infer(
@@ -325,6 +331,19 @@ where
         let res = self._infer(term);
         let (var_tys, infer_ctx) = InferCtx::with_generation(self);
         (infer_ctx, var_tys, res)
+    }
+
+    pub(crate) fn check(
+        mut self,
+        term: Idx<Term<VarId>>,
+        expected: InferResult<'infer>,
+    ) -> (
+        InferCtx<'a, 'infer, I, Solution>,
+        <Generation as InferState>::Storage<'infer>,
+    ) {
+        self._check(term, expected);
+        let (var_tys, infer_ctx) = InferCtx::with_generation(self);
+        (infer_ctx, var_tys)
     }
 
     fn add_effect_row_combine(

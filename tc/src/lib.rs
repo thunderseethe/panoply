@@ -19,7 +19,7 @@ use pretty::RcAllocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use aiahr_ty::{
-    infer::{InArena, TcUnifierVar, TyCtx, UnifierKind},
+    infer::{TcUnifierVar, TyCtx, UnifierKind},
     *,
 };
 
@@ -138,6 +138,7 @@ pub struct TypedItem {
 
 #[salsa::tracked]
 pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedItem {
+    let name = term_name.name(db.as_core_db());
     let module = term_name.module(db.as_core_db());
     let ast_db = db.as_ast_db();
     let ast_module = db.desugar_module_of(module);
@@ -152,7 +153,10 @@ pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedIt
             )
         });
 
-    let ty_chk_out = type_check(db, module, term.data(db.as_ast_db()));
+    // TODO: This should be more configurable  than just a hardcoded check for main
+    let is_entry_point = name == db.ident_str("main");
+
+    let ty_chk_out = type_check(db, module, term.data(db.as_ast_db()), is_entry_point);
 
     for diag in ty_chk_out.diags {
         AiahrcErrors::push(db, diag.into())
@@ -177,26 +181,27 @@ pub(crate) struct TypeCheckOutput {
     diags: Vec<TypeCheckDiagnostic>,
 }
 
-pub(crate) fn type_check(db: &dyn crate::Db, module: Module, ast: &Ast<VarId>) -> TypeCheckOutput {
-    let arena = Bump::new();
-    let infer_ctx = TyCtx::new(db.as_ty_db(), &arena);
-    tc_term(db, &infer_ctx, module, ast)
-}
-
-fn tc_term<'ty, 'infer, 's, 'eff, II>(
+pub(crate) fn type_check(
     db: &dyn crate::Db,
-    infer_ctx: &II,
     module: Module,
     ast: &Ast<VarId>,
-) -> TypeCheckOutput
-where
-    II: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
-{
+    is_entry_point: bool,
+) -> TypeCheckOutput {
+    let arena = Bump::new();
+    let infer_ctx = TyCtx::new(db.as_ty_db(), &arena);
+
+    let infer_ctx = &infer_ctx;
     let term = ast.root();
     let infer = InferCtx::new(db, infer_ctx, module, ast);
 
-    // Infer types for all our variables and the root term.
-    let (infer, gen_storage, result) = infer.infer(term);
+    let (infer, gen_storage, result) = if is_entry_point {
+        let expected = infer.entry_point_expected();
+        let (infer, gen_storage) = infer.check(term, expected);
+        (infer, gen_storage, expected)
+    } else {
+        // Infer types for all our variables and the root term.
+        infer.infer(term)
+    };
 
     // Solve constraints into the unifiers mapping.
     let (mut ty_unifiers, mut data_row_unifiers, mut eff_row_unifiers, unsolved_eqs, errors) =
@@ -365,28 +370,22 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use aiahr_ast::{Direction, Term::*};
     use aiahr_core::{
         diagnostic::tc::TypeCheckDiagnostic,
         file::{FileId, SourceFile, SourceFileSet},
-        id::{TermName, TyVarId, VarId},
-        modules::Module,
+        id::{TermName, TyVarId},
         Db,
     };
     use aiahr_parser::Db as ParserDb;
-    use aiahr_test::ast::{AstBuilder, MkTerm};
     use aiahr_ty::{
         row::{Row, RowOps},
-        AccessTy, TypeKind,
+        AccessTy, TyScheme, TypeKind,
         TypeKind::*,
     };
     use assert_matches::assert_matches;
-    use salsa::AsId;
 
-    use crate::{type_check, type_scheme_of};
-    use crate::{Evidence, TypeCheckOutput};
+    use crate::Db as TcDb;
+    use crate::Evidence;
 
     macro_rules! assert_matches_unit_ty {
         ($db:expr, $term:expr) => {
@@ -424,26 +423,43 @@ mod tests {
     }
     impl salsa::Database for TestDatabase {}
 
-    fn dummy_mod() -> Module {
-        Module::from_id(salsa::Id::from_u32(0))
+    fn type_errors(db: &TestDatabase) -> Vec<TypeCheckDiagnostic> {
+        let path = std::path::PathBuf::from("test.aiahr");
+        let file_id = FileId::new(db, path.clone());
+        db.type_check_errors(file_id)
+            .into_iter()
+            .map(|err| match err {
+                aiahr_core::diagnostic::aiahr::AiahrcError::TypeCheckError(err) => err,
+                _ => unreachable!(),
+            })
+            .collect()
+    }
+
+    fn type_check_file(db: &TestDatabase, name: &str, contents: impl ToString) -> TyScheme {
+        let path = std::path::PathBuf::from("test.aiahr");
+        let file_id = FileId::new(db, path.clone());
+        let file = SourceFile::new(db, file_id, contents.to_string());
+        SourceFileSet::new(db, vec![file]);
+
+        let module = db.root_module_for_path(path);
+        db.type_scheme_of(TermName::new(db, db.ident_str(name), module))
+            .ty_scheme(db)
+    }
+
+    fn type_check_snippet(db: &TestDatabase, snippet: &str) -> TyScheme {
+        let mut contents = "f = ".to_string();
+        contents.push_str(snippet);
+        type_check_file(db, "f", contents)
     }
 
     #[test]
     fn test_tc_unlabel() {
         let db = TestDatabase::default();
-        let x = VarId(0);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_abs(
-                x,
-                builder.mk_unlabel("start", builder.mk_label("start", Variable(x))),
-            )
-        });
-
-        let ty_chk_out = type_check(&db, dummy_mod(), &untyped_ast);
+        let scheme = type_check_snippet(&db, "|x| { start = x }.start");
 
         let db = &db;
         assert_matches!(
-            db.kind(&ty_chk_out.scheme.ty),
+            db.kind(&scheme.ty),
             FunTy(arg, ret) => {
                 assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(a), VarTy(b)) => {
                     assert_eq!(a, b);
@@ -455,18 +471,12 @@ mod tests {
     #[test]
     fn test_tc_unlabel_fails_on_wrong_label() {
         let db = TestDatabase::default();
-        let x = VarId(0);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_abs(
-                x,
-                builder.mk_unlabel("start", builder.mk_label("end", Variable(x))),
-            )
-        });
 
-        let ty_chk_out = type_check(&db, dummy_mod(), &untyped_ast);
+        let _ = type_check_snippet(&db, "|x| { end = x }.start");
+        let diags = type_errors(&db);
 
         assert_matches!(
-            ty_chk_out.diags[0],
+            diags[0],
             // TODO: Figure out how to check these errors
             TypeCheckDiagnostic {
                 name: "Data Rows Mismatch",
@@ -478,12 +488,7 @@ mod tests {
     #[test]
     fn test_tc_label() {
         let db = TestDatabase::default();
-        let x = VarId(0);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_abs(x, builder.mk_label("start", Variable(x)))
-        });
-
-        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
+        let scheme = type_check_snippet(&db, "|x| { start = x }");
 
         let db = &db;
         assert_matches!(
@@ -502,25 +507,10 @@ mod tests {
     #[test]
     fn test_tc_abs() {
         let db = TestDatabase::default();
-        let x = VarId(0);
-        let y = VarId(1);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_abs(x, builder.mk_abs(y, Variable(x)))
-        });
 
-        let TypeCheckOutput {
-            var_tys, scheme, ..
-        } = type_check(&db, dummy_mod(), &untyped_ast);
+        let scheme = type_check_snippet(&db, "|x||y| x");
 
         let db = &db;
-        assert_matches!(
-            var_tys.get(&VarId(0)).map(|ty| db.kind(ty)),
-            Some(&VarTy(TyVarId(0)))
-        );
-        assert_matches!(
-            var_tys.get(&VarId(1)).map(|ty| db.kind(ty)),
-            Some(&VarTy(TyVarId(1)))
-        );
         assert_matches!(
             db.kind(&scheme.ty),
             FunTy(arg, ret) => {
@@ -536,16 +526,15 @@ mod tests {
     #[test]
     fn test_tc_sum_literal() {
         let db = TestDatabase::default();
-        let t = VarId(0);
-        let f = VarId(1);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_branch(
-                builder.mk_abs(t, builder.mk_unlabel("true", Variable(t))),
-                builder.mk_abs(f, builder.mk_unlabel("false", Variable(f))),
-            )
-        });
 
-        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
+        let scheme = type_check_snippet(
+            &db,
+            r#"
+match <
+ <true = t> => t,
+ <false = f> => f
+>"#,
+        );
 
         let db = &db;
         assert_matches!(
@@ -572,24 +561,7 @@ mod tests {
     fn test_tc_product_literal() {
         let db = TestDatabase::default();
 
-        let x = VarId(0);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_abs(
-                x,
-                builder.mk_concat(
-                    builder.mk_concat(
-                        builder.mk_label("a", Variable(x)),
-                        builder.mk_label("b", Variable(x)),
-                    ),
-                    builder.mk_concat(
-                        builder.mk_label("c", Variable(x)),
-                        builder.mk_label("d", Variable(x)),
-                    ),
-                ),
-            )
-        });
-
-        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
+        let scheme = type_check_snippet(&db, "|x| { a = x, b = x } ,, { c = x, d = x }");
 
         let db = &db;
         assert_matches!(
@@ -616,22 +588,7 @@ mod tests {
     fn test_tc_product_wand() {
         let db = TestDatabase::default();
 
-        let m = VarId(0);
-        let n = VarId(1);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_abss(
-                [m, n],
-                builder.mk_unlabel(
-                    "x",
-                    builder.mk_project(
-                        Direction::Right,
-                        builder.mk_concat(Variable(m), Variable(n)),
-                    ),
-                ),
-            )
-        });
-
-        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
+        let scheme = type_check_snippet(&db, "|m||n| (m ,, n).x");
 
         let ty = assert_vec_matches!(
             scheme.constrs,
@@ -654,6 +611,7 @@ mod tests {
                 assert_matches!(closed.values(&&db), [ty] => ty)
             }
         );
+
         let db = &db;
         assert_matches!(
         db.kind(&scheme.ty),
@@ -670,25 +628,7 @@ mod tests {
     fn test_tc_applied_wand() {
         let db = TestDatabase::default();
 
-        let m = VarId(0);
-        let n = VarId(1);
-        let untyped_ast = AstBuilder::with_builder(&db, |builder| {
-            builder.mk_app(
-                builder.mk_abss(
-                    [m, n],
-                    builder.mk_unlabel(
-                        "x",
-                        builder.mk_project(
-                            Direction::Right,
-                            builder.mk_concat(Variable(m), Variable(n)),
-                        ),
-                    ),
-                ),
-                builder.mk_label("x", Unit),
-            )
-        });
-
-        let TypeCheckOutput { scheme, .. } = type_check(&db, dummy_mod(), &untyped_ast);
+        let scheme = type_check_snippet(&db, "(|m||n| (m ,, n).x)({ x = {} })");
 
         assert_vec_matches!(
             scheme.constrs,
@@ -725,17 +665,9 @@ effect State {
 f = State.get({})
 "#;
 
-        let file_id = FileId::new(&db, PathBuf::from("test"));
-        let source_file = SourceFile::new(&db, file_id, content.to_string());
-        let _ = SourceFileSet::new(&db, vec![source_file]);
-
-        let module = db.root_module_for_file(source_file);
-        let term_name = TermName::new(&db, db.ident_str("f"), module);
-        let typed_item = type_scheme_of(&db, term_name);
-
-        let scheme = typed_item.ty_scheme(&db);
-
         let db = &db;
+        let scheme = type_check_file(db, "f", content);
+
         assert_matches!(scheme.constrs.as_slice(), [
             Evidence::EffRow {
                 left: Row::Open(_),
@@ -769,16 +701,8 @@ f = with {
 } do State.put(Reader.ask({}))
 "#;
 
-        let file_id = FileId::new(&db, PathBuf::from("test"));
-        let source_file = SourceFile::new(&db, file_id, content.to_string());
-        let _ = SourceFileSet::new(&db, vec![source_file]);
-
-        let module = db.root_module_for_file(source_file);
-        let term_name = TermName::new(&db, db.ident_str("f"), module);
-        let typed_item = type_scheme_of(&db, term_name);
-
-        let scheme = typed_item.ty_scheme(&db);
         let db = &db;
+        let scheme = type_check_file(db, "f", content);
         assert_matches_unit_ty!(db, &scheme.ty);
         assert_matches!(scheme.constrs.as_slice(), [
             Evidence::EffRow {
@@ -800,18 +724,20 @@ f = with {
     }
 
     #[test]
-    fn test_tc_undefined_var_fails() {
+    fn test_entry_point_has_expected_type() {
         let db = TestDatabase::default();
-        let untyped_ast = AstBuilder::with_builder(&db, |_| Variable(VarId(0)));
 
-        let TypeCheckOutput { diags, .. } = type_check(&db, dummy_mod(), &untyped_ast);
-
-        assert_matches!(
-            &diags[0],
-            TypeCheckDiagnostic {
-                name: "Undefined Variable",
-                principal: _,
-            }
+        let scheme = type_check_file(
+            &db,
+            "main",
+            r#"
+main = (|x| x)({})
+"#,
         );
+        assert_matches_unit_ty!(&db, &scheme.ty);
+        assert_matches!(scheme.eff, Row::Closed(closed) => {
+            assert!(closed.fields(&&db).is_empty());
+            assert!(closed.values(&&db).is_empty());
+        })
     }
 }
