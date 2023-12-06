@@ -1,7 +1,6 @@
 use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use aiahr_core::ident::Ident;
 use aiahr_core::modules::Module;
-use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -872,10 +871,6 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                         {
                             let arg_ty = arg.type_check(ctx.as_reducir_db())?;
                             if *fun_arg_ty != arg_ty {
-                                println!(
-                                    "it happened again: {}",
-                                    fun_arg_ty.pretty_with(ctx).pprint().pretty(80)
-                                );
                                 return Err(ReducIrTyErr::TyMismatch {
                                     left_ty: ctx.mk_fun_ty(fun_args.copied(), ret_ty),
                                     left_ir: Cow::Owned(ReducIr::app(

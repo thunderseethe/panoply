@@ -734,7 +734,9 @@ f = with {
 main = (|x| x)({})
 "#,
         );
-        assert_matches_unit_ty!(&db, &scheme.ty);
+
+        assert_matches!((&db).kind(&scheme.ty), TypeKind::IntTy);
+        //assert_matches_unit_ty!(&db, &scheme.ty);
         assert_matches!(scheme.eff, Row::Closed(closed) => {
             assert!(closed.fields(&&db).is_empty());
             assert!(closed.values(&&db).is_empty());

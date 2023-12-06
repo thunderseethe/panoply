@@ -55,7 +55,31 @@ impl<'a> LowerMonCtx<'a> {
 }
 
 impl LowerMonCtx<'_> {
-    pub(crate) fn lower_monadic_entry(&mut self, ir: &DelimReducIr) -> ReducIr {
+    pub(crate) fn lower_monadic_entry_point(&mut self, ir: &DelimReducIr) -> ReducIr {
+        let evv_ty = self.db.mk_prod_ty(&[]);
+        let reducir_db = self.db.as_reducir_db();
+        let mon_ir = self.lower_monadic(evv_ty, ir);
+        match mon_ir
+            .type_check(reducir_db)
+            .map_err_pretty_with(reducir_db)
+            .expect("Monadic lowered IR to type check")
+            .try_unwrap_monadic(reducir_db)
+        {
+            Ok(_) => {
+                // If our value is a monad then apply our evv to it
+                // We do this so the return value of our item is
+                // `Ctl m a` and not `evv -> Ctl m a`
+                // The latter would cause our item to have an overall type
+                // like:
+                // `evv -> evv -> Ctl m a` since our item already has evv as a
+                // paramter.
+                ReducIr::app(mon_ir, [ReducIr::new(ReducIrKind::Struct(vec![]))])
+            }
+            Err(_) => mon_ir,
+        }
+    }
+
+    pub(crate) fn lower_monadic_top_level(&mut self, ir: &DelimReducIr) -> ReducIr {
         match ir.kind() {
             ReducIrKind::Abs(vars, _) => {
                 match vars.iter().find(|var| var.var.id == self.evv_var_id) {
@@ -97,10 +121,10 @@ impl LowerMonCtx<'_> {
             }
             ReducIrKind::TyAbs(ty_var, ir) => ReducIr::new(ReducIrKind::TyAbs(
                 *ty_var,
-                P::new(self.lower_monadic_entry(ir)),
+                P::new(self.lower_monadic_top_level(ir)),
             )),
             ReducIrKind::TyApp(ir, ty_app) => ReducIr::new(ReducIrKind::TyApp(
-                P::new(self.lower_monadic_entry(ir)),
+                P::new(self.lower_monadic_top_level(ir)),
                 ty_app.clone(),
             )),
             kind => panic!("{:?}", kind),

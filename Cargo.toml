@@ -13,14 +13,21 @@ name = "interpreter"
 [[bin]]
 name = "lsp"
 
+[[bin]]
+name = "wasm"
+
 [dependencies]
 aiahr-ast.workspace = true
 aiahr-core.workspace = true
 aiahr-desugar.workspace = true
+aiahr-emit-wasm.workspace = true
 aiahr-interpreter.workspace = true
 aiahr-reducir.workspace = true
 aiahr-lower-reducir.workspace = true
+aiahr-lower-medir.workspace = true
+aiahr-medir.workspace = true
 aiahr-nameres.workspace = true
+aiahr-optimize-reducir.workspace = true
 aiahr-parser.workspace = true
 aiahr-tc.workspace = true
 aiahr-ty.workspace = true
@@ -32,6 +39,8 @@ pretty.workspace = true
 salsa.workspace = true
 tower-lsp.workspace = true
 tokio.workspace = true
+wasmtime.workspace = true
+wasmprinter.workspace = true
 
 [workspace]
 members = [
@@ -101,3 +110,5 @@ salsa = { git = "https://github.com/salsa-rs/salsa/", branch = "master", package
 syn = "1.0"
 tower-lsp = "0.19.0"
 tokio = { version = "1.27", features = ["full"] }
+wasmtime = { version = "15.0.1", features = ["coredump"] }
+wasmprinter = "0.2.64"

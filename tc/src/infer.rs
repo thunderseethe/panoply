@@ -314,8 +314,8 @@ where
     }
 
     pub fn entry_point_expected(&self) -> InferResult<'infer> {
-        let unit = self.mk_ty(ProdTy(Row::Closed(self.empty_row())));
-        InferResult::new(unit, Row::Closed(self.empty_row()))
+        let ty = self.mk_ty(IntTy);
+        InferResult::new(ty, Row::Closed(self.empty_row()))
     }
 
     /// This is the entrypoint to the bidirectional type checker. Since our language uses

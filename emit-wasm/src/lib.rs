@@ -94,6 +94,7 @@ fn emit_wasm_module(db: &dyn crate::Db, medir_module: MedIrModule) -> wasm_encod
     let mut types = wasm_encoder::TypeSection::new();
 
     let mut name_map = wasm_encoder::NameMap::new();
+    let mut exports = wasm_encoder::ExportSection::new();
 
     let mut imports = wasm_encoder::ImportSection::new();
     types.function([], [ValType::I32]);
@@ -162,7 +163,12 @@ fn emit_wasm_module(db: &dyn crate::Db, medir_module: MedIrModule) -> wasm_encod
         let indx = funcs.len();
         funcs.function(ty_indx);
         let name = item.name(medir_db);
-        name_map.append(indx + num_imports, name.0.name(db).text(db.as_core_db()));
+        let text = name.0.name(db).text(db.as_core_db());
+        // TODO: Entry point detection. Fix this hack
+        if text == "main" {
+            exports.export(text, wasm_encoder::ExportKind::Func, indx + num_imports);
+        }
+        name_map.append(indx + num_imports, text);
         item_indices.insert(name, indx + num_imports);
     }
 
@@ -237,6 +243,7 @@ fn emit_wasm_module(db: &dyn crate::Db, medir_module: MedIrModule) -> wasm_encod
     module.section(&tables);
     module.section(&memory);
     module.section(&globals);
+    module.section(&exports);
     module.section(&elems);
     module.section(&codes);
     module.section(&names);
@@ -476,9 +483,6 @@ fn emit_wasm_item(
 #[cfg(test)]
 mod tests {
 
-    use std::fs::OpenOptions;
-    use std::io::Write;
-
     use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
     use expect_test::expect;
     use wasmparser::Validator;
@@ -534,13 +538,6 @@ effect Reader {
         let wasm_module = emit_module(&db, "f = { x = 5678, y = 1234 }.x");
 
         let bytes = wasm_module.finish();
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open("/home/thunderseethe/aiahr/testbed/prj.wasm")
-            .unwrap();
-        f.write_all(&bytes).unwrap();
         let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
             function_references: true,
             ..Default::default()
@@ -577,14 +574,6 @@ effect Reader {
             )"#]];
         expect.assert_eq(&string);
 
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open("/home/thunderseethe/aiahr/testbed/prj.wat")
-            .unwrap();
-        writeln!(f, "{}", string).unwrap();
-
         validate_res.expect("Validation Failed");
     }
 
@@ -601,13 +590,6 @@ g = f({ x = {} })({ y = {} })
         );
 
         let bytes = wasm_module.finish();
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open("/home/thunderseethe/aiahr/testbed/wand.wasm")
-            .unwrap();
-        f.write_all(&bytes).unwrap();
         let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
             function_references: true,
             ..Default::default()
@@ -1122,14 +1104,6 @@ g = f({ x = {} })({ y = {} })
             )"#]];
         expect.assert_eq(&string);
 
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open("/home/thunderseethe/aiahr/testbed/wand.wat")
-            .unwrap();
-        writeln!(f, "{}", string).unwrap();
-
         validate_res.expect("Validation Failed");
     }
 
@@ -1148,13 +1122,6 @@ f = (with {
         );
 
         let bytes = wasm_module.finish();
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open("/home/thunderseethe/aiahr/testbed/test.wasm")
-            .unwrap();
-        f.write_all(&bytes).unwrap();
         /*let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
             function_references: true,
             ..Default::default()
@@ -2092,14 +2059,6 @@ f = (with {
               (elem (;0;) (i32.const 0) func $__apply_1_0 $__apply_2_1 $__apply_3_0 $__apply_3_2 $__apply_4_3 $f $f_lam_0 $f_lam_1 $f_lam_2 $f_lam_3 $f_lam_4 $f_lam_5 $f_lam_6 $f_lam_7 $f_lam_8 $f_lam_9 $f_lam_10 $f_lam_11 $f_lam_12 $f_lam_13 $f_lam_14 $f_lam_15 $f_lam_16 $f_lam_17 $f_lam_18)
             )"#]];
         expect.assert_eq(&string);
-
-        let mut f = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open("/home/thunderseethe/aiahr/testbed/test.wat")
-            .unwrap();
-        writeln!(f, "{}", string).unwrap();
 
         /*match validate_res {
             Ok(_) => {},
