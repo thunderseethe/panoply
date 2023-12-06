@@ -214,18 +214,11 @@ impl MedIr {
                 MedIrTyKind::BlockTy(blocks) => blocks[*indx],
                 _ => todo!(),
             },
-            MedIrKind::Switch(discr, branches) => branches
+            MedIrKind::Switch(_, branches) => branches
                 .iter()
                 .map(|branch| branch.type_of(db))
                 .reduce(|a, b| {
                     (a == b).then_some(a).unwrap_or_else(|| {
-                        println!(
-                            "{}",
-                            MedIrKind::Switch(*discr, branches.to_vec())
-                                .pretty_with(db)
-                                .pprint()
-                                .pretty(80)
-                        );
                         panic!(
                             "All types of switch must be the same:\na: {}\nb: {}",
                             a.pretty_with(db).pprint().pretty(80),
@@ -233,7 +226,7 @@ impl MedIr {
                         )
                     })
                 })
-                .expect("Switch should have atleast one branch"),
+                .unwrap_or_else(|| db.mk_medir_ty(MedIrTyKind::BlockTy(vec![]))),
             MedIrKind::Call(fun, _) => match fun {
                 Call::Known(item) => item.ty,
                 Call::Unknown(var) => match var.ty.kind(db.as_medir_db()) {

@@ -289,8 +289,14 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
         .into_iter()
         .rfold(body, |body, (arg, term)| ReducIr::local(arg, term, body));
     // Wrap our term in any unsolved row evidence params we need
-    let evv_var = lower_ctx.evv_var(ast);
-    let body = ReducIr::abss_with_innermost(ev_params.into_iter(), vec![evv_var], body);
+    let is_entry_point = name.name(db.as_core_db()) == db.ident_str("main");
+    let evv_param = if is_entry_point {
+        vec![]
+    } else {
+        let evv_var = lower_ctx.evv_var(ast);
+        vec![evv_var]
+    };
+    let body = ReducIr::abss_with_innermost(ev_params.into_iter(), evv_param, body);
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme
@@ -326,6 +332,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
             P::new(acc),
         ))
     });
+
     ReducIrItem::new(
         db.as_reducir_db(),
         name,
@@ -359,7 +366,12 @@ fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
         ReducIrTermName::Term(name),
         ReducIrVarId(0),
     );
-    let mon_ir = ctx.lower_monadic_entry(item.item(reducir_db));
+    let is_entry_point = name.name(db.as_core_db()) == db.ident_str("main");
+    let mon_ir = if is_entry_point {
+        ctx.lower_monadic_entry_point(item.item(reducir_db))
+    } else {
+        ctx.lower_monadic_top_level(item.item(reducir_db))
+    };
     let row_evs = item
         .row_evs(reducir_db)
         .iter()
@@ -381,6 +393,7 @@ fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
             MonReducIrRowEv::new(reducir_db, mon_simple, mon_scoped)
         })
         .collect();
+
     MonReducIrItem::new(reducir_db, name, mon_ir, row_evs, supply)
 }
 
@@ -853,18 +866,17 @@ effect Reader {
                   (fun [V1, V2, V3, V4, V0] <0: (V2[3][0] (V1[0] V3 V4))>))"#]],
             // main
             expect![[r#"
-                (fun [V0]
-                  ((let
-                    [ (V1 (_row_simple_x_y @ [Ty({}), Ty({})]))
-                    , (V2 (_row_simple_y_x @ [Ty({}), Ty({})]))
-                    ]
-                    ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
-                      ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
-                        V1
-                        V2
-                        {}
-                        {})
-                      (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) V0))"#]],
+                ((let
+                  [ (V1 (_row_simple_x_y @ [Ty({}), Ty({})]))
+                  , (V2 (_row_simple_y_x @ [Ty({}), Ty({})]))
+                  ]
+                  ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
+                    ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
+                      V1
+                      V2
+                      {}
+                      {})
+                    (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) {})"#]],
         ];
         let tys = vec![
             // wand
@@ -885,7 +897,7 @@ effect Reader {
                                  , {{1} -> T5, T5 -> <1>}
                                  } -> {3} -> {2} -> {4} -> (Control {4} T5)"#]],
             // main
-            expect!["{} -> (Control {} {})"],
+            expect!["(Control {} {})"],
         ];
         for ((item, expect), expect_ty) in module
             .items(&db)

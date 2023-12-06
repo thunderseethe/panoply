@@ -11,9 +11,13 @@ use clap::Parser;
     aiahr_ast::Jar,
     aiahr_core::Jar,
     aiahr_desugar::Jar,
+    aiahr_emit_wasm::Jar,
     aiahr_reducir::Jar,
     aiahr_lower_reducir::Jar,
+    aiahr_lower_medir::Jar,
+    aiahr_medir::Jar,
     aiahr_nameres::Jar,
+    aiahr_optimize_reducir::Jar,
     aiahr_parser::Jar,
     aiahr_tc::Jar,
     aiahr_ty::Jar

@@ -1,6 +1,6 @@
 use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use aiahr_core::modules::Module;
-use aiahr_core::pretty::PrettyErrorWithDb;
+use aiahr_core::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx};
 use aiahr_reducir::mon::{MonReducIrItem, MonReducIrModule};
 use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 use aiahr_reducir::ty::{
@@ -46,6 +46,11 @@ fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedRed
     let ir = simplify(db, item);
 
     let term_name = item.name(db.as_reducir_db());
+    println!(
+        "{}: {}",
+        term_name.name(db.as_core_db()).text(db.as_core_db()),
+        ir.pretty_with(db).pprint().pretty(80)
+    );
     OptimizedReducIrItem::new(db.as_reducir_db(), ReducIrTermName::Term(term_name), ir)
 }
 

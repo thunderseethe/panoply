@@ -1,8 +1,3 @@
-fst = |c| (match <
-  {x = a, y = b} => a,
->)(c)
+wand = |m| m.x
 
-main = (match <
-  <and = y> => y,
-  <or = x> => x
->)(<and = {}>)(fst({x = {}, y = {}}))
+main = wand({ x = 56 })

@@ -15,7 +15,7 @@ aiahr-ty.workspace = true
 aiahr-test.workspace = true
 expect-test.workspace = true
 pretty.workspace = true
-wasmprinter = "0.2.64"
+wasmprinter.workspace = true
 wasmparser = "0.112.0"
 
 [dependencies]

@@ -36,7 +36,7 @@ fn from_reducir_ty<DB: ?Sized + crate::Db>(db: &DB, ty: ReducIrTy) -> MedIrTy {
                         (0..(ty.block_size(db) + 1)).map(|_| int).collect(),
                     ))
                 })
-                .expect("Handle void type")
+                .unwrap_or_else(|| db.mk_medir_ty(MedIrTyKind::BlockTy(vec![])))
         }
         ReducIrTyKind::ControlTy(_, _) => {
             let int = db.mk_medir_ty(MedIrTyKind::IntTy);
