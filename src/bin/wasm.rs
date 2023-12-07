@@ -19,13 +19,7 @@ fn main() -> eyre::Result<()> {
     let wat = wasmprinter::print_bytes(bytes).unwrap();
     println!("{}", wat);
 
-    let engine = Engine::new(
-        Config::new()
-            .debug_info(true)
-            .cranelift_debug_verifier(true)
-            .cranelift_pcc(true),
-    )
-    .unwrap();
+    let engine = Engine::new(&Config::new()).unwrap();
 
     let module = wasmtime::Module::new(&engine, wat).unwrap();
 
@@ -76,7 +70,9 @@ fn main() -> eyre::Result<()> {
         .unwrap();
 
     match main.call(&mut store, ()) {
-        Ok(val) => println!("We did it reddit! {}", val),
+        Ok(val) => {
+            println!("We did it reddit! {} {}", val, val << 8);
+        }
         Err(err) => eprintln!("{}", err),
     };
 

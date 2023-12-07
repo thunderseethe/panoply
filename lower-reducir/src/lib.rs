@@ -368,7 +368,7 @@ fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
     );
     let is_entry_point = name.name(db.as_core_db()) == db.ident_str("main");
     let mon_ir = if is_entry_point {
-        ctx.lower_monadic_entry_point(item.item(reducir_db))
+        ctx.lower_monadic_entry_point(ReducIrTermName::Term(name), item.item(reducir_db))
     } else {
         ctx.lower_monadic_top_level(item.item(reducir_db))
     };
@@ -866,17 +866,18 @@ effect Reader {
                   (fun [V1, V2, V3, V4, V0] <0: (V2[3][0] (V1[0] V3 V4))>))"#]],
             // main
             expect![[r#"
-                ((let
-                  [ (V1 (_row_simple_x_y @ [Ty({}), Ty({})]))
-                  , (V2 (_row_simple_y_x @ [Ty({}), Ty({})]))
-                  ]
-                  ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
-                    ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
-                      V1
-                      V2
-                      {}
-                      {})
-                    (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) {})"#]],
+                (case ((let
+                    [ (V1 (_row_simple_x_y @ [Ty({}), Ty({})]))
+                    , (V2 (_row_simple_y_x @ [Ty({}), Ty({})]))
+                    ]
+                    ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
+                      ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
+                        V1
+                        V2
+                        {}
+                        {})
+                      (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) {})
+                  (fun [V0] V0))"#]],
         ];
         let tys = vec![
             // wand
@@ -897,7 +898,7 @@ effect Reader {
                                  , {{1} -> T5, T5 -> <1>}
                                  } -> {3} -> {2} -> {4} -> (Control {4} T5)"#]],
             // main
-            expect!["(Control {} {})"],
+            expect!["{}"],
         ];
         for ((item, expect), expect_ty) in module
             .items(&db)
