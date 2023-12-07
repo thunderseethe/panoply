@@ -55,7 +55,11 @@ impl<'a> LowerMonCtx<'a> {
 }
 
 impl LowerMonCtx<'_> {
-    pub(crate) fn lower_monadic_entry_point(&mut self, ir: &DelimReducIr) -> ReducIr {
+    pub(crate) fn lower_monadic_entry_point(
+        &mut self,
+        name: ReducIrTermName,
+        ir: &DelimReducIr,
+    ) -> ReducIr {
         let evv_ty = self.db.mk_prod_ty(&[]);
         let reducir_db = self.db.as_reducir_db();
         let mon_ir = self.lower_monadic(evv_ty, ir);
@@ -65,7 +69,7 @@ impl LowerMonCtx<'_> {
             .expect("Monadic lowered IR to type check")
             .try_unwrap_monadic(reducir_db)
         {
-            Ok(_) => {
+            Ok(UnwrapMonTy { a_ty, .. }) => {
                 // If our value is a monad then apply our evv to it
                 // We do this so the return value of our item is
                 // `Ctl m a` and not `evv -> Ctl m a`
@@ -73,7 +77,21 @@ impl LowerMonCtx<'_> {
                 // like:
                 // `evv -> evv -> Ctl m a` since our item already has evv as a
                 // paramter.
-                ReducIr::app(mon_ir, [ReducIr::new(ReducIrKind::Struct(vec![]))])
+                ReducIr::case(
+                    a_ty,
+                    ReducIr::app(mon_ir, [ReducIr::new(ReducIrKind::Struct(vec![]))]),
+                    [{
+                        let mut supply = IdSupply::default();
+                        let x = ReducIrVar {
+                            var: ReducIrLocal {
+                                top_level: name,
+                                id: supply.supply_id(),
+                            },
+                            ty: a_ty,
+                        };
+                        ReducIr::abss([x], ReducIr::var(x))
+                    }],
+                )
             }
             Err(_) => mon_ir,
         }
