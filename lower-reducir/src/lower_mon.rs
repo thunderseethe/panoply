@@ -99,12 +99,12 @@ impl LowerMonCtx<'_> {
 
     pub(crate) fn lower_monadic_top_level(&mut self, ir: &DelimReducIr) -> ReducIr {
         match ir.kind() {
-            ReducIrKind::Abs(vars, _) => {
+            ReducIrKind::Abs(vars, body) => {
                 match vars.iter().find(|var| var.var.id == self.evv_var_id) {
                     Some(evv_var) => {
                         let reducir_db = self.db.as_reducir_db();
-                        let mon_ir = self.lower_monadic(evv_var.ty, ir);
-                        mon_ir.map_within_abss(|body| {
+                        let body = self.lower_monadic(evv_var.ty, body);
+                        ReducIr::abss(vars.iter().copied(), {
                             match body
                                 .type_check(reducir_db)
                                 .map_err_pretty_with(reducir_db)
@@ -145,7 +145,7 @@ impl LowerMonCtx<'_> {
                 P::new(self.lower_monadic_top_level(ir)),
                 ty_app.clone(),
             )),
-            kind => panic!("{:?}", kind),
+            kind => panic!("expected top level abs during monadic lowering: {:?}", kind),
         }
     }
 

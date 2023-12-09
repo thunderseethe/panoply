@@ -4,6 +4,7 @@ use aiahr_core::{
     id_converter::IdConverter,
     ident::Ident,
     modules::Module,
+    pretty::{PrettyPrint, PrettyWithCtx},
 };
 use aiahr_reducir::{
     mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule, MonReducIrRowEv},
@@ -297,6 +298,11 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
         vec![evv_var]
     };
     let body = ReducIr::abss_with_innermost(ev_params.into_iter(), evv_param, body);
+    println!(
+        "{}: {}",
+        name.name(db.as_core_db()).text(db.as_core_db()),
+        body.pretty_with(db).pprint().pretty(80)
+    );
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme
@@ -617,6 +623,20 @@ effect Reader {
         let ir = lower_snippet(&db, "|x| x");
         let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
+        let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V1, V0] V1))"];
+        expect.assert_eq(&pretty_ir);
+
+        let expect_ty = expect!["forall Type . forall ScopedRow . T1 -> {0} -> T1"];
+        let pretty_ir_ty = ir.type_check(&db).to_pretty(&db);
+        expect_ty.assert_eq(&pretty_ir_ty);
+    }
+
+    #[test]
+    fn lower_singleton_product() {
+        let db = TestDatabase::default();
+        let ir = lower_snippet(&db, "|m| { fst = m }");
+
+        let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
         let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V1, V0] V1))"];
         expect.assert_eq(&pretty_ir);
 
