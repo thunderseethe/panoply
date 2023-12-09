@@ -16,7 +16,9 @@ fn main() -> eyre::Result<()> {
 
     let bytes = wasm_module.finish();
 
-    let wat = wasmprinter::print_bytes(bytes).unwrap();
+    let mut printer = wasmprinter::Printer::default();
+    printer.print_offsets(true);
+    let wat = printer.print(&bytes).unwrap();
     println!("{}", wat);
 
     let engine = Engine::new(&Config::new()).unwrap();

@@ -1,3 +1,3 @@
-wand = |m| 56
+wand = |m| { x = 734, y = 5 }
 
-main = wand({})
+main = wand(2).x

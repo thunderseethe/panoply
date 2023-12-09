@@ -344,13 +344,11 @@ impl<'a> DesugarCtx<'a> {
                         label: fields.first.label.value,
                         term,
                     });
-                    self.spans.insert(
-                        head,
-                        fields
-                            .first
-                            .label
-                            .join_spans(&self.arenas[fields.first.target].spanned(self.arenas)),
-                    );
+                    let span = fields
+                        .first
+                        .label
+                        .join_spans(&self.arenas[fields.first.target].spanned(self.arenas));
+                    self.spans.insert(head, span);
                     fields.elems.iter().try_fold(head, |concat, (_, field)| {
                         let term = self.ds_term(field.target)?;
                         let right = self.terms.alloc(Label {
@@ -400,7 +398,6 @@ impl<'a> DesugarCtx<'a> {
                 };
                 self.terms.alloc(inj)
             }
-            // This is gonna take a little more work.
             nst::Term::Match { cases, .. } => {
                 let matrix = cases
                     .elements()
