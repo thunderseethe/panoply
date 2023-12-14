@@ -1,0 +1,391 @@
+(module
+  (type (;0;) (func (param i32 i32) (result i32)))
+  (type (;1;) (func (param i32 i32 i32) (result i32)))
+  (type (;2;) (func (param i32) (result i32)))
+  (type (;3;) (func (result i32)))
+  (type (;4;) (func (param i32 i32 i32 i32) (result i32)))
+  (type (;5;) (func (param i32 i32 i32 i32 i32) (result i32)))
+  (import "intrinsic" "__mon_generate_marker" (func (;0;) (type 3)))
+  (import "intrinsic" "__mon_prompt" (func (;1;) (type 1)))
+  (import "intrinsic" "__mon_bind" (func (;2;) (type 0)))
+  (import "intrinsic" "__mon_eqm" (func (;3;) (type 0)))
+  (func (;4;) (type 0) (param i32 i32) (result i32)
+    local.get 1
+    local.get 0
+    i32.load
+    call_indirect (type 2))
+  (func (;5;) (type 1) (param i32 i32 i32) (result i32)
+    local.get 1
+    local.get 2
+    local.get 0
+    i32.load
+    call_indirect (type 0))
+  (func (;6;) (type 4) (param i32 i32 i32 i32) (result i32)
+    local.get 1
+    local.get 2
+    local.get 3
+    local.get 0
+    i32.load
+    call_indirect (type 1))
+  (func (;7;) (type 5) (param i32 i32 i32 i32 i32) (result i32)
+    local.get 0
+    i32.load
+    local.tee 0
+    i32.const 4
+    i32.add
+    local.get 2
+    local.get 3
+    local.get 0
+    i32.load
+    call_indirect (type 1)
+    local.set 0
+    local.get 1
+    i32.load offset=12
+    i32.load
+    local.tee 1
+    i32.const 4
+    i32.add
+    local.get 0
+    local.get 1
+    i32.load
+    call_indirect (type 0)
+    local.set 1
+    global.get 0
+    local.tee 0
+    i32.const 0
+    i32.store
+    local.get 0
+    local.get 1
+    i32.store offset=4
+    local.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    local.get 0)
+  (func (;8;) (type 3) (result i32)
+    (local i32 i32 i32 i32 i32 i32)
+    global.get 0
+    local.tee 1
+    i32.const 5
+    i32.store
+    local.get 1
+    i32.const 9
+    i32.store offset=4
+    local.get 1
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 6
+    i32.store
+    global.get 0
+    i32.const 10
+    i32.store offset=4
+    global.get 0
+    local.set 2
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 11
+    i32.store offset=4
+    global.get 0
+    local.set 4
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 12
+    i32.store offset=4
+    global.get 0
+    local.set 0
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    local.get 4
+    i32.store
+    global.get 0
+    local.get 0
+    i32.store offset=4
+    global.get 0
+    local.set 4
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 13
+    i32.store offset=4
+    global.get 0
+    local.set 0
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 14
+    i32.store offset=4
+    global.get 0
+    local.set 3
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    local.get 0
+    i32.store
+    global.get 0
+    local.get 3
+    i32.store offset=4
+    global.get 0
+    local.set 0
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    local.get 1
+    i32.store
+    global.get 0
+    local.get 2
+    i32.store offset=4
+    global.get 0
+    local.get 4
+    i32.store offset=8
+    global.get 0
+    local.get 0
+    i32.store offset=12
+    global.get 0
+    global.get 0
+    i32.const 16
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 5
+    i32.store
+    global.get 0
+    i32.const 15
+    i32.store offset=4
+    global.get 0
+    local.set 2
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 6
+    i32.store
+    global.get 0
+    i32.const 16
+    i32.store offset=4
+    global.get 0
+    local.set 4
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 17
+    i32.store offset=4
+    global.get 0
+    local.set 0
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 18
+    i32.store offset=4
+    global.get 0
+    local.set 3
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    local.get 0
+    i32.store
+    global.get 0
+    local.get 3
+    i32.store offset=4
+    global.get 0
+    local.set 0
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 19
+    i32.store offset=4
+    global.get 0
+    local.set 3
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    i32.const 4
+    i32.store
+    global.get 0
+    i32.const 20
+    i32.store offset=4
+    global.get 0
+    local.set 5
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    local.get 3
+    i32.store
+    global.get 0
+    local.get 5
+    i32.store offset=4
+    global.get 0
+    local.set 3
+    global.get 0
+    i32.const 8
+    i32.add
+    global.set 0
+    global.get 0
+    local.get 2
+    i32.store
+    global.get 0
+    local.get 4
+    i32.store offset=4
+    global.get 0
+    local.get 0
+    i32.store offset=8
+    global.get 0
+    local.get 3
+    i32.store offset=12
+    global.get 0
+    global.get 0
+    i32.const 16
+    i32.add
+    global.set 0
+    i32.const 734
+    i32.const 568
+    global.get 0
+    call 7
+    local.tee 2
+    i32.load
+    local.tee 1
+    i32.eqz
+    if  ;; label = @1
+      local.get 2
+      i32.load offset=4
+      local.set 1
+    end
+    local.get 1)
+  (func (;9;) (type 0) (param i32 i32) (result i32)
+    (local i32)
+    global.get 0
+    local.tee 2
+    local.get 1
+    i32.store
+    local.get 2
+    local.get 0
+    i32.store offset=4
+    local.get 2
+    i32.const 8
+    i32.add
+    global.set 0
+    local.get 2)
+  (func (;10;) (type 1) (param i32 i32 i32) (result i32)
+    (local i32)
+    block  ;; label = @1
+      block  ;; label = @2
+        block  ;; label = @3
+          local.get 2
+          i32.load
+          local.tee 3
+          br_table 0 (;@3;) 1 (;@2;) 2 (;@1;)
+        end
+        local.get 1
+        i32.const 4
+        i32.add
+        local.get 2
+        i32.load offset=4
+        local.get 1
+        i32.load
+        call_indirect (type 0)
+        local.set 3
+        br 1 (;@1;)
+      end
+      local.get 0
+      i32.const 4
+      i32.add
+      local.get 2
+      i32.load offset=4
+      local.get 0
+      i32.load
+      call_indirect (type 0)
+      local.set 3
+    end
+    local.get 3)
+  (func (;11;) (type 2) (param i32) (result i32)
+    local.get 0
+    i32.load offset=4)
+  (func (;12;) (type 2) (param i32) (result i32)
+    (local i32)
+    global.get 0
+    local.tee 1
+    i32.const 1
+    i32.store
+    local.get 1
+    local.get 0
+    i32.store offset=4
+    local.get 1
+    i32.const 8
+    i32.add
+    global.set 0
+    local.get 1)
+  (func (;13;) (type 2) (param i32) (result i32)
+    local.get 0
+    i32.load)
+  (func (;14;) (type 2) (param i32) (result i32)
+    (local i32)
+    global.get 0
+    local.tee 1
+    i32.const 0
+    i32.store
+    local.get 1
+    local.get 0
+    i32.store offset=4
+    local.get 1
+    i32.const 8
+    i32.add
+    global.set 0
+    local.get 1)
+  (table (;0;) 21 21 funcref)
+  (memory (;0;) 1)
+  (global (;0;) (mut i32) (i32.const 0))
+  (export "main" (func 8))
+  (export "mem" (memory 0))
+  (elem (;0;) (i32.const 0) func 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 9 10 11 12 13 14))

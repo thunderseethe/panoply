@@ -383,7 +383,6 @@ mod tests {
         TypeKind::*,
     };
     use assert_matches::assert_matches;
-    use salsa::DebugWithDb;
 
     use crate::Db as TcDb;
     use crate::Evidence;

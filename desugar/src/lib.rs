@@ -520,7 +520,7 @@ impl<'a> DesugarCtx<'a> {
                     })
                     .collect::<Vec<_>>()
             })
-            .unwrap_or(vec![]);
+            .unwrap_or_default();
         let ty = self.ds_type(nst.type_);
         data_row_bound.extend(ty.row_vars(self.db.as_ty_db()));
 

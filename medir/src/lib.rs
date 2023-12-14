@@ -186,6 +186,13 @@ impl MedIrTy {
     pub fn kind<DB: ?Sized + crate::Db>(self, db: &DB) -> &MedIrTyKind {
         self.kind_(db.as_medir_db())
     }
+
+    pub fn try_as_fun_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> Option<(&[MedIrTy], MedIrTy)> {
+        match self.kind_(db.as_medir_db()) {
+            MedIrTyKind::IntTy | MedIrTyKind::BlockTy(_) => None,
+            MedIrTyKind::FunTy(args, ret) => Some((args, *ret)),
+        }
+    }
 }
 
 impl MedIrTy {

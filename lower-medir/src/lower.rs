@@ -139,12 +139,54 @@ impl<'a> LowerCtx<'a> {
                         MedIrKind::Call(medir::Call::Unknown(v), medir_spine)
                     }
                     MedIrKind::Closure(item, args) => {
+                        let (item_arg_tys, ret) = item
+                            .ty
+                            .try_as_fun_ty(self.db)
+                            .expect("Medir item should have function type when applied");
+                        let arity = item_arg_tys.len();
                         let args = args
                             .into_iter()
                             .map(medir::Atom::Var)
                             .chain(medir_spine)
-                            .collect();
-                        MedIrKind::Call(medir::Call::Known(item), args)
+                            .collect::<Vec<_>>();
+                        match args.len().cmp(&arity) {
+                            // Call isn't saturated return another closure
+                            std::cmp::Ordering::Less => {
+                                let args = args
+                                    .into_iter()
+                                    .map(|atom| match atom {
+                                        Atom::Var(v) => v,
+                                        Atom::Int(i) => {
+                                            let v = MedIrVar::new(
+                                                self.var_converter.generate(),
+                                                self.db.mk_medir_ty(MedIrTyKind::IntTy),
+                                            );
+                                            binds.push((
+                                                v,
+                                                MedIr::new(MedIrKind::Atom(Atom::Int(i))),
+                                            ));
+                                            v
+                                        }
+                                    })
+                                    .collect();
+                                MedIrKind::Closure(item, args)
+                            }
+                            // Call is saturated return result
+                            std::cmp::Ordering::Equal => {
+                                MedIrKind::Call(medir::Call::Known(item), args)
+                            }
+                            // Call is oversaturated allocate closure and apply
+                            std::cmp::Ordering::Greater => {
+                                let var = MedIrVar::new(self.var_converter.generate(), ret);
+                                let mut args = args;
+                                let oversat_args = args.split_off(arity);
+                                binds.push((
+                                    var,
+                                    MedIr::new(MedIrKind::Call(medir::Call::Known(item), args)),
+                                ));
+                                MedIrKind::Call(medir::Call::Unknown(var), oversat_args)
+                            }
+                        }
                     }
                     kind => {
                         let medir = MedIr::new(kind);
