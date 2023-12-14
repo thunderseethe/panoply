@@ -59,13 +59,7 @@ where
     A::RowValues: PartialOrd,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.fields
-            .partial_cmp(&other.fields)
-            .and_then(|field_cmp| {
-                self.values
-                    .partial_cmp(&other.values)
-                    .map(|val_cmp| field_cmp.then(val_cmp))
-            })
+        Some(self.cmp(other))
     }
 }
 impl<A: TypeAlloc> Ord for ClosedRow<A>

@@ -27,7 +27,7 @@ where
     ClosedRow<A>: PartialOrd,
 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
+        Some(self.cmp(other))
     }
 }
 impl<A: TypeAlloc> Ord for SimpleClosedRow<A>

@@ -41,6 +41,7 @@ tower-lsp.workspace = true
 tokio.workspace = true
 wasmtime.workspace = true
 wasmprinter.workspace = true
+wasmparser.workspace = true
 
 [workspace]
 members = [
@@ -112,3 +113,4 @@ tower-lsp = "0.19.0"
 tokio = { version = "1.27", features = ["full"] }
 wasmtime = { version = "15.0.1", features = ["coredump"] }
 wasmprinter = "0.2.64"
+wasmparser = "0.112.0"

@@ -4,7 +4,6 @@ use aiahr_core::{
     id_converter::IdConverter,
     ident::Ident,
     modules::Module,
-    pretty::{PrettyPrint, PrettyWithCtx},
 };
 use aiahr_reducir::{
     mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule, MonReducIrRowEv},
@@ -298,11 +297,6 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
         vec![evv_var]
     };
     let body = ReducIr::abss_with_innermost(ev_params.into_iter(), evv_param, body);
-    println!(
-        "{}: {}",
-        name.name(db.as_core_db()).text(db.as_core_db()),
-        body.pretty_with(db).pprint().pretty(80)
-    );
 
     // Finally wrap our term in any type/row variables it needs to bind
     let body = scheme
@@ -373,10 +367,11 @@ fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
         ReducIrVarId(0),
     );
     let is_entry_point = name.name(db.as_core_db()) == db.ident_str("main");
+    let ir = item.item(reducir_db);
     let mon_ir = if is_entry_point {
-        ctx.lower_monadic_entry_point(ReducIrTermName::Term(name), item.item(reducir_db))
+        ctx.lower_monadic_entry_point(ReducIrTermName::Term(name), ir)
     } else {
-        ctx.lower_monadic_top_level(item.item(reducir_db))
+        ctx.lower_monadic_top_level(ir)
     };
     let row_evs = item
         .row_evs(reducir_db)

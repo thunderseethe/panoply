@@ -20,7 +20,6 @@ use aiahr_ty::{
 };
 use la_arena::Idx;
 use rustc_hash::FxHashMap;
-use salsa::DebugWithDb;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv},
@@ -319,17 +318,16 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
 
     fn lower_ty(&mut self, ty: Ty) -> ReducIrTy {
         match self.db.kind(&ty) {
-            // This is a hack. When we have singleton products it produces an unadorned label term
-            // which is of RowTy.
-            // TODO: Fix this up so we actually don't produce row types instead of pretending we
-            // don't and casting them to product types.
             TypeKind::RowTy(row) => {
-                let elems = row
-                    .values(&self.db)
-                    .iter()
-                    .map(|ty| self.lower_ty(*ty))
-                    .collect::<Vec<_>>();
-                self.db.mk_prod_ty(elems.as_slice())
+                // This is a hack. When we have singleton products it produces an unadorned label term
+                // which is of RowTy.
+                // TODO: Fix this up so we actually don't produce row types instead of pretending we
+                // don't and casting them to product types.
+                if row.len(&self.db) == 1 {
+                    self.lower_ty(row.values(&self.db)[0])
+                } else {
+                    unreachable!()
+                }
             }
             TypeKind::ErrorTy => unreachable!(),
             TypeKind::IntTy => self.db.mk_reducir_ty(ReducIrTyKind::IntTy),

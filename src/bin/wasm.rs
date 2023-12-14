@@ -1,6 +1,7 @@
 use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase, Args};
 use aiahr_emit_wasm::Db as EmitWasmDb;
 use clap::Parser;
+use wasmparser::WasmFeatures;
 use wasmtime::{Config, Engine, FuncType, Linker, Store, Val, ValType};
 
 fn main() -> eyre::Result<()> {
@@ -16,10 +17,19 @@ fn main() -> eyre::Result<()> {
 
     let bytes = wasm_module.finish();
 
+    let mut validator = wasmparser::Validator::new_with_features(WasmFeatures::default());
+    let tys = validator.validate_all(&bytes);
     let mut printer = wasmprinter::Printer::default();
     printer.print_offsets(true);
     let wat = printer.print(&bytes).unwrap();
     println!("{}", wat);
+
+    match tys {
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("{}", err);
+        }
+    }
 
     let engine = Engine::new(&Config::new()).unwrap();
 
@@ -65,6 +75,18 @@ fn main() -> eyre::Result<()> {
         )
         .unwrap();
 
+    linker
+        .func_new(
+            "intrinsic",
+            "__mon_eqm",
+            FuncType::new([ValType::I32, ValType::I32], [ValType::I32]),
+            |_call, _args, ret| {
+                ret[0] = Val::I32(4);
+                Ok(())
+            },
+        )
+        .unwrap();
+
     let instance = linker.instantiate(&mut store, &module).unwrap();
 
     let main = instance
@@ -75,7 +97,10 @@ fn main() -> eyre::Result<()> {
         Ok(val) => {
             println!("We did it reddit! {} {}", val, val << 8);
         }
-        Err(err) => eprintln!("{}", err),
+        Err(err) => {
+            eprintln!("{}", err.root_cause());
+            eprintln!("{}", err);
+        }
     };
 
     Ok(())

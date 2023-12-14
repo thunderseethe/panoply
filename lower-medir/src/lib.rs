@@ -236,7 +236,7 @@ effect Reader {
                   let V52 = make_closure(f_lam_10,[V0, V3]);
                   let V53 = V38[2];
                   let V54 = apply_closure(V53)(V45);
-                  __mon_prompt(V3, V52, V54)
+                  make_closure(__mon_prompt,[V3, V52, V54])
                 }"#]],
             expect![[r#"
                 defn f_lam_12(V22, V23, V24) {
@@ -261,13 +261,13 @@ effect Reader {
                   let V64 = make_closure(f_lam_14,[V0, V3]);
                   let V65 = V38[2];
                   let V66 = apply_closure(V65)(V57);
-                  __mon_prompt(V3, V64, V66)
+                  make_closure(__mon_prompt,[V3, V64, V66])
                 }"#]],
             expect![[r#"
                 defn f_lam_16(V0, V3, V4) {
                   let V16 = make_closure(f_lam_2,[V0]);
                   let V20 = make_closure(f_lam_5,[]);
-                  let V21 = __mon_bind(V16, V20);
+                  let V21 = make_closure(__mon_bind,[V16, V20]);
                   let V26 = make_closure(f_lam_6,[]);
                   let V30 = make_closure(f_lam_7,[]);
                   let V31 = [V26, V30];
@@ -315,7 +315,7 @@ effect Reader {
                 defn f_lam_18(V76, V73) {
                   let V80 = make_closure(f_lam_17,[V73]);
                   let V81 = V76[2];
-                  __mon_bind(V80, V81)
+                  make_closure(__mon_bind,[V80, V81])
                 }"#]],
         ];
 
