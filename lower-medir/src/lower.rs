@@ -7,7 +7,7 @@ use aiahr_reducir::ty::{ReducIrTy, ReducIrTyKind};
 use aiahr_reducir::{
     Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
 };
-use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrVar, WIPItem};
+use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar};
 
 pub(crate) struct LowerCtx<'a> {
     db: &'a dyn crate::Db,
@@ -108,7 +108,10 @@ impl<'a> LowerCtx<'a> {
                 MedIr::var(MedIrVar::new(var, from_reducir_ty(self.db, v.ty)))
             }
             ReducIrKind::Item(name, ty) => MedIr::new(MedIrKind::Closure(
-                medir::WIPItem::new(MedIrItemName::new(*name), from_reducir_ty(self.db, *ty)),
+                medir::MedIrTypedItem::new(
+                    MedIrItemName::new(*name),
+                    from_reducir_ty(self.db, *ty),
+                ),
                 vec![],
             )),
             ReducIrKind::Abs(vars, body) => {
@@ -290,7 +293,7 @@ impl<'a> LowerCtx<'a> {
         &mut self,
         vars: &[ReducIrVar],
         body: &ReducIr<Lets>,
-    ) -> (WIPItem, Vec<MedIrVar>) {
+    ) -> (MedIrTypedItem, Vec<MedIrVar>) {
         let mut free_vars = body
             .free_var_set()
             .into_iter()
@@ -337,6 +340,6 @@ impl<'a> LowerCtx<'a> {
         let item_ty = self
             .db
             .mk_medir_ty(MedIrTyKind::FunTy(param_tys, from_reducir_ty(self.db, ty)));
-        (WIPItem::new(name, item_ty), free_vars)
+        (MedIrTypedItem::new(name, item_ty), free_vars)
     }
 }

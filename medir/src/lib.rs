@@ -118,12 +118,12 @@ impl MedIrVar {
 pub struct MedIrItemName(pub ReducIrTermName);
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct WIPItem {
+pub struct MedIrTypedItem {
     pub name: MedIrItemName,
     pub ty: MedIrTy,
 }
 
-impl WIPItem {
+impl MedIrTypedItem {
     pub fn new(name: MedIrItemName, ty: MedIrTy) -> Self {
         Self { name, ty }
     }
@@ -162,7 +162,7 @@ pub enum MedIrKind {
     /// Function call
     Call(Call, Vec<Atom>),
     /// Allocate a closure capturing the listed vars
-    Closure(WIPItem, Vec<MedIrVar>),
+    Closure(MedIrTypedItem, Vec<MedIrVar>),
     /// Cast a medirterm as a specific type.
     /// This is erased at runtime and just exists for typechecking.
     Typecast(MedIrTy, Box<MedIr>),
@@ -367,7 +367,7 @@ impl MedIrTraversal for Locals {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Call {
     /// A known function call we can dispatch statically
-    Known(WIPItem),
+    Known(MedIrTypedItem),
     /// An unknown function call that we have to apply
     Unknown(MedIrVar),
 }
