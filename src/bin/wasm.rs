@@ -1,6 +1,6 @@
 use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase, Args};
-use aiahr_emit_wasm::Db as EmitWasmDb;
 use clap::Parser;
+use emit_wasm::Db as EmitWasmDb;
 use wasmparser::WasmFeatures;
 use wasmtime::{Config, Engine, FuncType, Linker, Store, Val, ValType};
 

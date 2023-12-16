@@ -7,7 +7,7 @@ pub use super::{
     Constraint, EffectOp, ProductRow, Qualifiers, Row, RowAtom, Scheme, SchemeAnnotation,
     Separated, SumRow, Type, TypeAnnotation, TypeRow,
 };
-use aiahr_core::{
+use base::{
     id::{EffectName, EffectOpName, Ids, TermName, TyVarId, VarId},
     ident::Ident,
     indexed::{HasArenaMut, HasArenaRef, IdxAlloc, IdxView},
@@ -235,10 +235,12 @@ pub struct AllocItem<T> {
 pub mod traverse {
     use std::ops::ControlFlow;
 
-    use aiahr_core::id::{EffectOpName, TermName, TyVarId, VarId};
-    use aiahr_core::ident::Ident;
-    use aiahr_core::indexed::IdxView;
-    use aiahr_core::span::SpanOf;
+    use base::{
+        id::{EffectOpName, TermName, TyVarId, VarId},
+        ident::Ident,
+        indexed::IdxView,
+        span::SpanOf,
+    };
     use la_arena::Idx;
 
     use crate::{IdField, Row, Type};

@@ -1,4 +1,4 @@
-use aiahr_core::ident::Ident;
+use base::ident::Ident;
 
 use crate::{
     row::{NewRow, RowLabel, SimpleClosedRow},
@@ -123,10 +123,8 @@ impl<I: Iterator> IteratorSorted for I {
 }
 
 pub mod db {
-    use crate::alloc::IteratorSorted;
-    use aiahr_core::{id::TyVarId, ident::Ident};
-
-    use crate::{row::RowLabel, MkTy, Ty, TypeKind};
+    use crate::{alloc::IteratorSorted, row::RowLabel, MkTy, Ty, TypeKind};
+    use base::{id::TyVarId, ident::Ident};
 
     use super::{AccessTy, TypeAlloc};
 

@@ -1,10 +1,11 @@
-use aiahr_ast::{Ast, Direction, Term};
-use aiahr_core::{
+use ast::{Ast, Direction, Term};
+use base::{
     id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
     id_converter::IdConverter,
     modules::Module,
 };
-use aiahr_reducir::{
+use la_arena::Idx;
+use reducir::{
     ty::{
         Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*,
         ReducIrVarTy, RowReducIrKind,
@@ -13,13 +14,12 @@ use aiahr_reducir::{
     ReducIrKind::*,
     ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck, P,
 };
-use aiahr_tc::{EffectInfo, TyChkRes};
-use aiahr_ty::{
+use rustc_hash::FxHashMap;
+use tc::{EffectInfo, TyChkRes};
+use ty::{
     row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
     AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
 };
-use la_arena::Idx;
-use rustc_hash::FxHashMap;
 
 use crate::{
     evidence::{EvidenceMap, PartialEv},
@@ -407,8 +407,8 @@ impl<'a, 'b, S> MkReducIrTy for LowerCtx<'a, 'b, S> {
 
     fn mk_fun_ty(
         &self,
-        args: impl IntoIterator<Item = impl aiahr_reducir::ty::IntoReducIrTy>,
-        ret: impl aiahr_reducir::ty::IntoReducIrTy,
+        args: impl IntoIterator<Item = impl reducir::ty::IntoReducIrTy>,
+        ret: impl reducir::ty::IntoReducIrTy,
     ) -> ReducIrTy {
         self.db.mk_fun_ty(args, ret)
     }

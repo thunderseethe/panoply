@@ -1,24 +1,24 @@
 [package]
-name = "aiahr-optimize-reducir"
+name = "optimize-reducir"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dev-dependencies]
-aiahr-ast.workspace = true
-aiahr-parser.workspace = true
-aiahr-desugar.workspace = true
-aiahr-tc.workspace = true
-aiahr-ty.workspace = true
-aiahr-test.workspace = true
-aiahr-nameres.workspace = true
+ast.workspace = true
+parser.workspace = true
+desugar.workspace = true
+tc.workspace = true
+ty.workspace = true
+test-utils.workspace = true
+nameres.workspace = true
 backtrace-on-stack-overflow = "0.3.0"
 expect-test.workspace = true
 pretty.workspace = true
 
 [dependencies]
-aiahr-reducir.workspace = true
-aiahr-core.workspace = true
-aiahr-lower-reducir.workspace = true
+base.workspace = true
+lower-reducir.workspace = true
+reducir.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true

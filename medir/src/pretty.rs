@@ -1,12 +1,11 @@
-use aiahr_core::id::Id;
-use aiahr_core::pretty::PrettyWithCtx;
+use base::{id::Id, pretty::PrettyWithCtx};
 use pretty::{DocAllocator, Pretty};
 
 use crate::{
     Atom, Call, Defn, Locals, MedIr, MedIrItemName, MedIrKind, MedIrTy, MedIrTyKind, MedIrVar,
 };
 
-impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for MedIrItemName {
+impl<DB: ?Sized + reducir::Db> PrettyWithCtx<DB> for MedIrItemName {
     fn pretty<'a>(
         &self,
         ctx: &DB,
@@ -37,7 +36,7 @@ where
     }
 }
 
-impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Call {
+impl<DB: ?Sized + reducir::Db> PrettyWithCtx<DB> for Call {
     fn pretty<'a>(
         &self,
         ctx: &DB,

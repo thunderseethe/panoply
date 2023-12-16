@@ -1,16 +1,14 @@
-use aiahr_core::id::{EffectName, EffectOpName, TermName};
+use base::{
+    id::{EffectName, EffectOpName, TermName, TyVarId, VarId},
+    ident::Ident,
+    indexed::{HasArenaRef, HasRefArena, ReferenceAllocate},
+    span::{Span, SpanOf, Spanned},
+};
 use bumpalo::Bump;
 use la_arena::{Arena, Idx};
 
 use crate::cst::{EffectOp, ProductRow, SchemeAnnotation, Separated, SumRow, TypeAnnotation};
-use aiahr_core::span::{Span, SpanOf, Spanned};
-use aiahr_core::{
-    id::{TyVarId, VarId},
-    ident::Ident,
-    indexed::{HasArenaRef, HasRefArena, ReferenceAllocate},
-};
-use aiahr_cst::{
-    self as cst,
+use cst::{
     nameres::{self as nst, NstIndxAlloc},
     Field,
 };
@@ -562,7 +560,7 @@ macro_rules! npat_sum {
 #[macro_export]
 macro_rules! npat_var {
     ($var:pat) => {
-        &$crate::nst::Pattern::Whole(aiahr_core::span_of!($var))
+        &$crate::nst::Pattern::Whole(base::span_of!($var))
     };
 }
 
@@ -570,7 +568,7 @@ macro_rules! npat_var {
 macro_rules! nterm_local {
     ($var:pat, $value:pat, $expr:pat) => {
         &$crate::nst::Term::Binding {
-            var: aiahr_core::span_of!($var),
+            var: base::span_of!($var),
             value: $value,
             expr: $expr,
             ..
@@ -578,7 +576,7 @@ macro_rules! nterm_local {
     };
     ($var:pat, $type_:pat, $value:pat, $expr:pat) => {
         &$crate::nst::Term::Binding {
-            var: aiahr_core::span_of!($var),
+            var: base::span_of!($var),
             annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             value: $value,
             expr: $expr,
@@ -602,14 +600,14 @@ macro_rules! nterm_with {
 macro_rules! nterm_abs {
     ($arg:pat, $body:pat) => {
         &$crate::nst::Term::Abstraction {
-            arg: aiahr_core::span_of!($arg),
+            arg: ::base::span_of!($arg),
             body: $body,
             ..
         }
     };
     ($arg:pat, $type_:pat, $body:pat) => {
         &$crate::nst::Term::Abstraction {
-            arg: aiahr_core::span_of!($arg),
+            arg: ::base::span_of!($arg),
             annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             body: $body,
             ..
@@ -650,7 +648,7 @@ macro_rules! nterm_dot {
     ($base:pat, $field:pat) => {
         &$crate::nst::Term::FieldAccess {
             base: $base,
-            field: aiahr_core::span_of!($field),
+            field: ::base::span_of!($field),
             ..
         }
     };
@@ -666,21 +664,21 @@ macro_rules! nterm_match {
 #[macro_export]
 macro_rules! nterm_toplvl {
     ($mod_:pat, $item:pat) => {
-        &$crate::nst::Term::TopLevelRef(aiahr_core::span_of!(($mod_, $item)))
+        &$crate::nst::Term::TopLevelRef(::base::span_of!(($mod_, $item)))
     };
 }
 
 #[macro_export]
 macro_rules! nterm_item {
     ($item:pat) => {
-        &$crate::nst::Term::ItemRef(aiahr_core::span_of!($item))
+        &$crate::nst::Term::ItemRef(::base::span_of!($item))
     };
 }
 
 #[macro_export]
 macro_rules! nterm_var {
     ($var:pat) => {
-        &$crate::nst::Term::VariableRef(aiahr_core::span_of!($var))
+        &$crate::nst::Term::VariableRef(::base::span_of!($var))
     };
 }
 
@@ -695,7 +693,7 @@ macro_rules! nterm_paren {
 macro_rules! nitem_effect {
     ($name:pat, $($ops:pat),* $(,)?) => {
         $crate::nst::Item::Effect($crate::nst::EffectDefn {
-            name: aiahr_core::span_of!($name),
+            name: ::base::span_of!($name),
             ops: &[$($ops),*],
             ..
         })
@@ -706,14 +704,14 @@ macro_rules! nitem_effect {
 macro_rules! nitem_term {
     ($name:pat, $value:pat) => {
         $crate::nst::Item::Term($crate::nst::TermDefn {
-            name: aiahr_core::span_of!($name),
+            name: ::base::span_of!($name),
             value: $value,
             ..
         })
     };
     ($name:pat, $type_:pat, $value:pat) => {
         $crate::nst::Item::Term($crate::nst::TermDefn {
-            name: aiahr_core::span_of!($name),
+            name: ::base::span_of!($name),
             annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
             ..

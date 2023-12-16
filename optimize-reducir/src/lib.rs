@@ -1,26 +1,25 @@
-use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
-use aiahr_core::modules::Module;
-use aiahr_core::pretty::PrettyErrorWithDb;
-use aiahr_reducir::mon::{MonReducIrItem, MonReducIrModule};
-use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
-use aiahr_reducir::ty::{
-    IntoPayload, Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
+use base::{
+    id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
+    modules::Module,
+    pretty::PrettyErrorWithDb,
 };
-use aiahr_reducir::zip_non_consuming::ZipNonConsuming;
-use rustc_hash::FxHashMap;
-use std::convert::Infallible;
-
-use aiahr_reducir::{
+use reducir::{
+    mon::{MonReducIrItem, MonReducIrModule},
+    optimized::{OptimizedReducIrItem, OptimizedReducIrModule},
+    ty::{IntoPayload, Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst},
+    zip_non_consuming::ZipNonConsuming,
     Lets, ReducIr, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr,
     ReducIrVar, TypeCheck,
 };
+use rustc_hash::FxHashMap;
+use std::convert::Infallible;
 
 use crate::subst::{Inline, SubstTy};
 
 #[salsa::jar(db = Db)]
 pub struct Jar(simple_reducir_item, simple_reducir_module);
 
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {
+pub trait Db: salsa::DbWithJar<Jar> + lower_reducir::Db {
     fn as_opt_reducir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -39,7 +38,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {
         simple_reducir_module(self.as_opt_reducir_db(), ir_module)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_lower_reducir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + lower_reducir::Db {}
 
 #[salsa::tracked]
 fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedReducIrItem {
@@ -69,8 +68,8 @@ fn simple_reducir_module(
 mod subst {
     use std::convert::Infallible;
 
-    use aiahr_reducir::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
-    use aiahr_reducir::{
+    use reducir::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
+    use reducir::{
         ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrVar, P,
     };
     use rustc_hash::FxHashMap;
@@ -274,7 +273,7 @@ impl ReducIrFold for Simplify<'_> {
     }
 
     fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
-        use aiahr_reducir::ReducIrKind::*;
+        use reducir::ReducIrKind::*;
         fn apply_tyabs<'a>(
             body: &'a ReducIr,
             in_app: &mut Vec<ReducIrTyApp>,
@@ -436,7 +435,7 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
     let f = ReducIrVar {
         var: ReducIrLocal {
             top_level,
-            id: aiahr_core::id::ReducIrVarId(0),
+            id: ReducIrVarId(0),
         },
         ty: db.mk_fun_ty(
             [db.mk_reducir_ty(ReducIrTyKind::MarkerTy(var_ty1))],
@@ -802,28 +801,30 @@ fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> ReducIr 
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
-    use aiahr_core::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx};
-    use aiahr_core::Db as CoreDb;
-    use aiahr_lower_reducir::Db as LowerDb;
-    use aiahr_parser::Db as ParseDb;
-    use aiahr_reducir::{mon::MonReducIrItem, TypeCheck};
+    use base::{
+        file::{FileId, SourceFile, SourceFileSet},
+        pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
+        Db as BaseDb,
+    };
     use expect_test::expect;
+    use lower_reducir::Db as LowerDb;
+    use parser::Db as ParseDb;
+    use reducir::{mon::MonReducIrItem, TypeCheck};
 
     use crate::simplify;
 
     #[derive(Default)]
     #[salsa::db(
         crate::Jar,
-        aiahr_lower_reducir::Jar,
-        aiahr_ast::Jar,
-        aiahr_core::Jar,
-        aiahr_desugar::Jar,
-        aiahr_nameres::Jar,
-        aiahr_parser::Jar,
-        aiahr_reducir::Jar,
-        aiahr_tc::Jar,
-        aiahr_ty::Jar
+        ast::Jar,
+        base::Jar,
+        desugar::Jar,
+        lower_reducir::Jar,
+        nameres::Jar,
+        parser::Jar,
+        reducir::Jar,
+        tc::Jar,
+        ty::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,

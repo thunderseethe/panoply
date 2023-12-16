@@ -1,25 +1,25 @@
 [package]
-name = "aiahr-lower-reducir"
+name = "lower-reducir"
 version = "0.1.0"
 edition.workspace = true
 
 [dev-dependencies]
-aiahr-parser.workspace = true
-aiahr-desugar.workspace = true
-aiahr-test.workspace = true
+parser.workspace = true
+desugar.workspace = true
+test-utils.workspace = true
 assert_matches.workspace = true
 expect-test.workspace = true
 pretty.workspace = true
 
 [dependencies]
-aiahr-ast.workspace = true
-aiahr-core.workspace = true
-aiahr-reducir.workspace = true
-aiahr-tc.workspace = true
-aiahr-ty.workspace = true
-aiahr-nameres.workspace = true
+ast.workspace = true
 bumpalo.workspace = true
+base.workspace = true
 la-arena.workspace = true
+nameres.workspace = true
 pretty.workspace = true
+reducir.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
+tc.workspace = true
+ty.workspace = true

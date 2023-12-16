@@ -1,4 +1,4 @@
-use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
+use base::pretty::{PrettyPrint, PrettyWithCtx};
 use pretty::DocAllocator;
 
 use super::{
@@ -208,7 +208,7 @@ mod test {
     use super::{IntoPayload, Subst};
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_ty::Jar)]
+    #[salsa::db(crate::Jar, base::Jar, ty::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }

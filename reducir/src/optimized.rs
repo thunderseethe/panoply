@@ -1,4 +1,4 @@
-use aiahr_core::modules::Module;
+use base::modules::Module;
 
 use crate::{Lets, ReducIr, ReducIrTermName};
 

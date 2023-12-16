@@ -1,5 +1,5 @@
-use aiahr_core::id::ReducIrTyVarId;
-use aiahr_ty::row::{RowSema, Scoped, Simple};
+use base::id::ReducIrTyVarId;
+use ty::row::{RowSema, Scoped, Simple};
 
 mod subst;
 use salsa::DebugWithDb;

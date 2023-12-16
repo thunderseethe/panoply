@@ -123,7 +123,7 @@ pub(crate) mod arena {
         row::{NewRow, RowLabel},
         AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
     };
-    use aiahr_core::memory::{
+    use base::memory::{
         handle::RefHandle,
         intern::{Interner, InternerByRef, SyncInterner},
     };
@@ -457,11 +457,13 @@ impl<'ctx, A: 'ctx + Clone + TypeAlloc> TypeFoldable<'ctx> for Wrapper<A> {
 #[cfg(test)]
 mod tests {
     use crate::{row::Row, MkTy, TypeKind::*};
-    use aiahr_core::id::TyVarId;
-    use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
+    use base::{
+        id::TyVarId,
+        pretty::{PrettyPrint, PrettyWithCtx},
+    };
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    #[salsa::db(crate::Jar, base::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }

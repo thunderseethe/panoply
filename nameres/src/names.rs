@@ -1,12 +1,12 @@
 use std::fmt::Debug;
 
-use aiahr_core::{
+use ::base::{
     id::{EffectName, IdGen, TyVarId, VarId},
     ident::Ident,
     modules::Module,
     span::{SpanOf, Spanned},
 };
-use aiahr_cst::nameres::LocalIds;
+use cst::nameres::LocalIds;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{

@@ -4,7 +4,7 @@ use crate::{
     module::{ModuleNames, ModuleNamesBuilder},
     ops::InsertResult,
 };
-use aiahr_core::{
+use base::{
     diagnostic::{
         nameres::{NameKind, NameResolutionError},
         DiagnosticSink,
@@ -13,7 +13,7 @@ use aiahr_core::{
     modules::Module,
     span::Spanned,
 };
-use aiahr_cst::Item;
+use cst::Item;
 use rustc_hash::FxHashMap;
 
 /// Accumulates and publishes top-level names.

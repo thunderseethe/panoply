@@ -1,7 +1,7 @@
 //! Contains structs and functions for working with unsolved rows during type inference.
 use std::cmp::Ordering;
 
-use aiahr_ty::{
+use ty::{
     infer::InArena,
     row::{Row, RowSema, Scoped, Simple},
     Evidence, TypeAlloc,

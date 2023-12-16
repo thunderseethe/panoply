@@ -1,4 +1,4 @@
-use aiahr_core::{
+use base::{
     diagnostic::aiahr::{AiahrcError, AiahrcErrors},
     file::{file_for_id, FileId, SourceFile, SourceFileSet},
     ident::Ident,
@@ -6,8 +6,8 @@ use aiahr_core::{
     modules::Module,
     span::{SpanOf, Spanned},
 };
-use aiahr_cst::{CstIndxAlloc, CstModule, IdField, Pattern, Row, Term, Type};
 use chumsky::Parser;
+use cst::{CstIndxAlloc, CstModule, IdField, Pattern, Row, Term, Type};
 use la_arena::Idx;
 
 use crate::{
@@ -28,8 +28,7 @@ pub mod error {
     use std::fmt::Display;
 
     use crate::lexer::Token;
-    use aiahr_core::diagnostic::parser::ParseError;
-    use aiahr_core::span::Span;
+    use base::{diagnostic::parser::ParseError, span::Span};
 
     #[derive(Debug)]
     pub struct ParseErrors(pub LinkedList<ParseError>);
@@ -85,7 +84,7 @@ pub struct Jar(
     parse_module,
     ParseFile,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
+pub trait Db: salsa::DbWithJar<Jar> + base::Db {
     fn as_parser_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -96,7 +95,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
 
     fn root_module_for_path(&self, path: std::path::PathBuf) -> Module {
         let file_id = FileId::new(self.as_core_db(), path);
-        let file = aiahr_core::file::file_for_id(self.as_core_db(), file_id);
+        let file = base::file::file_for_id(self.as_core_db(), file_id);
         self.root_module_for_file(file)
     }
 
@@ -109,7 +108,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
     }
 
     fn parse_module_of(&self, module: Module) -> ParseFile {
-        let file = aiahr_core::file::module_source_file(self.as_core_db(), module);
+        let file = base::file::module_source_file(self.as_core_db(), module);
         self.parse_module(file)
     }
 
@@ -144,7 +143,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
         })
     }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_core::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + base::Db {}
 
 #[salsa::tracked]
 #[derive(DebugWithDb)]
@@ -239,7 +238,7 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
         })
         .ok()?;
     match &cst_module.items[item_idx] {
-        aiahr_cst::Item::Effect(eff) => {
+        cst::Item::Effect(eff) => {
             if eff.name.span().contains(loc) {
                 return Some(eff.name.value);
             }
@@ -248,7 +247,7 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                 .find(|op| op.name.span().contains(loc))
                 .map(|op| op.name.value)
         }
-        aiahr_cst::Item::Term(term) => {
+        cst::Item::Term(term) => {
             if term.name.span().contains(loc) {
                 return Some(term.name.value);
             }
@@ -283,18 +282,18 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                         return continue_search();
                     }
                     match row {
-                        aiahr_cst::Row::Concrete(closed) => {
+                        cst::Row::Concrete(closed) => {
                             for field in closed.elements() {
                                 self.search_ident(&field.label)?;
                                 self.search_type(field.target)?;
                             }
                         }
-                        aiahr_cst::Row::Variable(vars) => {
+                        cst::Row::Variable(vars) => {
                             for var in vars.elements() {
                                 self.search_ident(var)?;
                             }
                         }
-                        aiahr_cst::Row::Mixed {
+                        cst::Row::Mixed {
                             concrete,
                             variables,
                             ..
@@ -364,7 +363,7 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                         return continue_search();
                     }
                     match term {
-                        aiahr_cst::Term::Binding {
+                        cst::Term::Binding {
                             var,
                             annotation,
                             expr,
@@ -376,11 +375,11 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                             }
                             self.search_term(*expr)?;
                         }
-                        aiahr_cst::Term::Handle { handler, expr, .. } => {
+                        cst::Term::Handle { handler, expr, .. } => {
                             self.search_term(*handler)?;
                             self.search_term(*expr)?;
                         }
-                        aiahr_cst::Term::Abstraction {
+                        cst::Term::Abstraction {
                             arg,
                             annotation,
                             body,
@@ -392,11 +391,11 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                             }
                             self.search_term(*body)?;
                         }
-                        aiahr_cst::Term::Application { func, arg, .. } => {
+                        cst::Term::Application { func, arg, .. } => {
                             self.search_term(*func)?;
                             self.search_term(*arg)?;
                         }
-                        aiahr_cst::Term::ProductRow(prod) => {
+                        cst::Term::ProductRow(prod) => {
                             if let Some(fields) = &prod.fields {
                                 for field in fields.elements() {
                                     self.search_ident(&field.label)?;
@@ -404,19 +403,19 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                                 }
                             }
                         }
-                        aiahr_cst::Term::Concat { left, right, .. } => {
+                        cst::Term::Concat { left, right, .. } => {
                             self.search_term(*left)?;
                             self.search_term(*right)?;
                         }
-                        aiahr_cst::Term::SumRow(sum) => {
+                        cst::Term::SumRow(sum) => {
                             self.search_ident(&sum.field.label)?;
                             self.search_term(sum.field.target)?;
                         }
-                        aiahr_cst::Term::DotAccess { base, field, .. } => {
+                        cst::Term::DotAccess { base, field, .. } => {
                             self.search_ident(field)?;
                             self.search_term(*base)?;
                         }
-                        aiahr_cst::Term::Match { cases, .. } => {
+                        cst::Term::Match { cases, .. } => {
                             // TODO: Technically we could be a little smarter by skipping the field
                             // as one check if the entire field's span doesn't contain `needle`.
                             // Need benchmarks to tell if this is worth or not.
@@ -425,9 +424,9 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                                 self.search_term(field.target)?;
                             }
                         }
-                        aiahr_cst::Term::SymbolRef(symbol) => self.search_ident(symbol)?,
-                        aiahr_cst::Term::Parenthesized { term, .. } => self.search_term(*term)?,
-                        aiahr_cst::Term::Int(_) => {}
+                        cst::Term::SymbolRef(symbol) => self.search_ident(symbol)?,
+                        cst::Term::Parenthesized { term, .. } => self.search_term(*term)?,
+                        cst::Term::Int(_) => {}
                     }
                     Err(None)
                 }

@@ -1,26 +1,28 @@
 use std::path::{Path, PathBuf};
 
-use aiahr_core::displayer::Displayer;
-use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
-use aiahr_core::ident::Ident;
-use aiahr_core::modules::Module;
-use aiahr_core::Db;
+use base::{
+    displayer::Displayer,
+    file::{FileId, SourceFile, SourceFileSet},
+    ident::Ident,
+    modules::Module,
+    Db,
+};
 use clap::Parser;
 
 #[salsa::db(
-    aiahr_ast::Jar,
-    aiahr_core::Jar,
-    aiahr_desugar::Jar,
-    aiahr_emit_wasm::Jar,
-    aiahr_reducir::Jar,
-    aiahr_lower_reducir::Jar,
-    aiahr_lower_medir::Jar,
-    aiahr_medir::Jar,
-    aiahr_nameres::Jar,
-    aiahr_optimize_reducir::Jar,
-    aiahr_parser::Jar,
-    aiahr_tc::Jar,
-    aiahr_ty::Jar
+    ast::Jar,
+    base::Jar,
+    desugar::Jar,
+    emit_wasm::Jar,
+    reducir::Jar,
+    lower_reducir::Jar,
+    lower_medir::Jar,
+    medir::Jar,
+    nameres::Jar,
+    optimize_reducir::Jar,
+    parser::Jar,
+    tc::Jar,
+    ty::Jar
 )]
 #[derive(Default)]
 pub struct AiahrDatabase {

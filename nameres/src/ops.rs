@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use aiahr_core::{
+use ::base::{
     id::{Id, IdGen, Ids},
     ident::Ident,
     span::SpanOf,

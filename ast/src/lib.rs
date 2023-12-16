@@ -5,22 +5,22 @@ use la_arena::{Arena, Idx};
 use pretty::{docs, DocAllocator, Pretty};
 use rustc_hash::FxHashMap;
 
-use aiahr_core::{
+use base::{
     id::{EffectName, EffectOpName, TermName, VarId},
     ident::Ident,
     modules::Module,
     span::Span,
 };
-use aiahr_ty::{Ty, TyScheme};
+use ty::{Ty, TyScheme};
 
 #[salsa::jar(db = Db)]
 pub struct Jar(AstModule, AstTerm, AstEffect);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
+pub trait Db: salsa::DbWithJar<Jar> + base::Db {
     fn as_ast_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db {}
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Term<Var> {

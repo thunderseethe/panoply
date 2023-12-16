@@ -1,5 +1,7 @@
-use aiahr_core::id::{IdSupply, ReducIrVarId, TermName};
-use aiahr_core::modules::Module;
+use base::{
+    id::{IdSupply, ReducIrVarId, TermName},
+    modules::Module,
+};
 
 use crate::{GeneratedReducIrName, ReducIr};
 

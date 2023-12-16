@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use aiahr_core::pretty::PrettyWithCtx;
-use aiahr_reducir::{DelimCont, DelimReducIr, ReducIrKind, ReducIrLocal, ReducIrVar, P};
+use base::pretty::PrettyWithCtx;
+use reducir::{DelimCont, DelimReducIr, ReducIrKind, ReducIrLocal, ReducIrVar, P};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A Prompt that delimits the stack for delimited continuations
@@ -54,7 +54,7 @@ where
     .brackets()
 }
 
-impl<DB: ?Sized + aiahr_reducir::Db> PrettyWithCtx<DB> for Value {
+impl<DB: ?Sized + reducir::Db> PrettyWithCtx<DB> for Value {
     fn pretty<'a>(&self, db: &DB, a: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
         match self {
             Value::Int(i) => a.as_string(i),
@@ -449,24 +449,24 @@ impl Machine {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::id::{ReducIrVarId, TermName};
-    use aiahr_reducir::ty::{MkReducIrTy, ReducIrTyKind};
-    use aiahr_reducir::{ReducIr, ReducIrTermName};
+    use base::id::{ReducIrVarId, TermName};
+    use reducir::ty::{MkReducIrTy, ReducIrTyKind};
+    use reducir::{ReducIr, ReducIrTermName};
     use salsa::AsId;
 
     use super::*;
 
     #[derive(Default)]
     #[salsa::db(
-        aiahr_ast::Jar,
-        aiahr_core::Jar,
-        aiahr_desugar::Jar,
-        aiahr_reducir::Jar,
-        aiahr_lower_reducir::Jar,
-        aiahr_nameres::Jar,
-        aiahr_parser::Jar,
-        aiahr_tc::Jar,
-        aiahr_ty::Jar
+        ast::Jar,
+        base::Jar,
+        desugar::Jar,
+        reducir::Jar,
+        lower_reducir::Jar,
+        nameres::Jar,
+        parser::Jar,
+        tc::Jar,
+        ty::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,

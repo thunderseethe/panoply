@@ -1,4 +1,4 @@
-use aiahr_core::pretty::PrettyWithCtx;
+use base::pretty::PrettyWithCtx;
 use pretty::{docs, DocAllocator, DocBuilder, Pretty};
 
 use super::{Kind, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy};

@@ -1,16 +1,18 @@
-use aiahr_core::{
+use base::{
     ident::Ident,
     indexed::IdxAlloc,
     loc::Loc,
     span::{Span, SpanOf, Spanned},
 };
-use aiahr_cst::{self as cst, Annotation, CstIndxAlloc, Field, IdField};
 use chumsky::{
     combinator::Map,
     prelude::{choice, end, just, recursive},
     select, Parser, Stream,
 };
+use cst::{Annotation, CstIndxAlloc, Field, IdField};
 use la_arena::Idx;
+
+use std::option::Option;
 
 use super::lexer::Token;
 use crate::error::ParseErrors;
@@ -682,32 +684,35 @@ where
 mod tests {
     use std::path::PathBuf;
 
-    use aiahr_core::file::FileId;
-    use aiahr_core::span::SpanOf;
-    use aiahr_core::{file::SourceFile, ident::Ident, indexed::ReferenceAllocate};
-    use aiahr_cst::CstIndxAlloc;
-    use aiahr_test::{
+    use assert_matches::assert_matches;
+    use base::{
+        file::{FileId, SourceFile},
+        ident::Ident,
+        indexed::ReferenceAllocate,
+        span::SpanOf,
+    };
+    use bumpalo::Bump;
+    use chumsky::{prelude::end, Parser};
+    use cst::CstIndxAlloc;
+    use test_utils::{
+        assert_ident_text_matches_name,
+        cst::{CstRefAlloc, Scheme, Term, Type},
         ct_rowsum, field, id_field, pat_prod, pat_sum, pat_var, qual, row_concrete, row_mixed,
         row_variable, rwx_concrete, rwx_variable, scheme, term_abs, term_app, term_dot, term_local,
         term_match, term_paren, term_prod, term_sum, term_sym, term_with, type_func, type_named,
         type_par, type_prod, type_sum,
     };
-    use assert_matches::assert_matches;
-    use bumpalo::Bump;
-    use chumsky::{prelude::end, Parser};
 
-    use aiahr_test::cst::{Scheme, Term, Type};
-    use aiahr_test::{assert_ident_text_matches_name, cst::CstRefAlloc};
     use expect_test::expect;
 
     use crate::error::ParseErrors;
     use crate::locator::Locator;
-    use crate::{lexer::aiahr_lexer, Db};
+    use crate::{lexer::aiahr_lexer, Db as ParserDb};
 
     use super::{term, to_stream, type_};
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar)]
+    #[salsa::db(crate::Jar, base::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
@@ -1147,8 +1152,8 @@ mod tests {
         let db = TestDatabase::default();
         assert_matches!(
             parse_term_unwrap(&db, &Bump::new(), "x ,, y ,, z"),
-            aiahr_test::cst::Term::Concat {
-                left: aiahr_test::cst::Term::Concat {
+            test_utils::cst::Term::Concat {
+                left: test_utils::cst::Term::Concat {
                     left: term_sym!(x),
                     right: term_sym!(y),
                     ..

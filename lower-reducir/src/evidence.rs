@@ -1,9 +1,10 @@
 use std::ops::Index;
 
-use aiahr_reducir::ReducIrVar;
-use aiahr_ty::row::{Scoped, ScopedRow, Simple, SimpleClosedRow};
-use aiahr_ty::{row::Row, Evidence, InDb};
-use aiahr_ty::{RowFields, RowValues};
+use reducir::ReducIrVar;
+use ty::{
+    row::{Row, Scoped, ScopedRow, Simple, SimpleClosedRow},
+    Evidence, InDb, RowFields, RowValues,
+};
 
 use rustc_hash::FxHashMap;
 

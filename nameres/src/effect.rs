@@ -1,6 +1,6 @@
 use std::{collections::hash_map::Entry, iter::FusedIterator};
 
-use aiahr_core::{
+use base::{
     id::{EffectName, EffectOpName},
     ident::Ident,
     span::{SpanOf, Spanned},

@@ -1,13 +1,13 @@
 [package]
-name = "aiahr-reducir"
+name = "reducir"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aiahr-core.workspace = true
-aiahr-ty.workspace = true
+base.workspace = true
+ty.workspace = true
 rustc-hash.workspace = true
 pretty.workspace = true
 salsa.workspace = true

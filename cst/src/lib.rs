@@ -4,7 +4,7 @@ use std::ops::Index;
 
 use la_arena::{Arena, Idx};
 
-use aiahr_core::{
+use base::{
     ident::Ident,
     indexed::{HasArenaMut, HasArenaRef, IdxAlloc, IndexedAllocate, ReferenceAllocate},
     span::{Span, SpanOf, Spanned},

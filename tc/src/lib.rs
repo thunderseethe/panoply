@@ -1,7 +1,7 @@
 use std::any::type_name;
 
-use aiahr_ast::{self as ast, Ast, Term};
-use aiahr_core::{
+use ast::{self, Ast, Term};
+use base::{
     diagnostic::{
         aiahr::{AiahrcError, AiahrcErrors},
         tc::TypeCheckDiagnostic,
@@ -18,7 +18,7 @@ use la_arena::Idx;
 use pretty::RcAllocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use aiahr_ty::{
+use ty::{
     infer::{TcUnifierVar, TyCtx, UnifierKind},
     *,
 };
@@ -58,7 +58,7 @@ pub trait EffectInfo {
 
 #[salsa::jar(db = Db)]
 pub struct Jar(TypedItem, type_scheme_of);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_desugar::Db {
+pub trait Db: salsa::DbWithJar<Jar> + desugar::Db {
     fn as_tc_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -82,18 +82,18 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_desugar::Db {
             .collect()
     }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_desugar::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + desugar::Db {}
 
 impl<DB> EffectInfo for DB
 where
     DB: ?Sized + crate::Db,
 {
     fn effect_name(&self, effect: EffectName) -> Ident {
-        aiahr_nameres::effect_name(self.as_nameres_db(), effect)
+        nameres::effect_name(self.as_nameres_db(), effect)
     }
 
     fn effect_members(&self, effect: EffectName) -> &[EffectOpName] {
-        aiahr_nameres::effect_members(self.as_nameres_db(), effect).as_slice()
+        nameres::effect_members(self.as_nameres_db(), effect).as_slice()
     }
 
     fn lookup_effect_by_member_names(
@@ -101,7 +101,7 @@ where
         module: Module,
         members: &[Ident],
     ) -> Option<EffectName> {
-        aiahr_nameres::lookup_effect_by_member_names(
+        nameres::lookup_effect_by_member_names(
             self.as_nameres_db(),
             module,
             members.to_vec().into_boxed_slice(),
@@ -109,15 +109,15 @@ where
     }
 
     fn lookup_effect_by_name(&self, module: Module, name: Ident) -> Option<EffectName> {
-        aiahr_nameres::lookup_effect_by_name(self.as_nameres_db(), module, name)
+        nameres::lookup_effect_by_name(self.as_nameres_db(), module, name)
     }
 
     fn effect_member_sig(&self, effect_op: EffectOpName) -> TyScheme {
-        aiahr_desugar::effect_op_tyscheme_of(self.as_desugar_db(), effect_op)
+        desugar::effect_op_tyscheme_of(self.as_desugar_db(), effect_op)
     }
 
     fn effect_member_name(&self, effect_op: EffectOpName) -> Ident {
-        aiahr_nameres::effect_member_name(self.as_nameres_db(), effect_op)
+        nameres::effect_member_name(self.as_nameres_db(), effect_op)
     }
 }
 
@@ -294,9 +294,11 @@ fn print_root_unifiers<'ctx, K: UnifierKind>(
 }
 
 pub mod test_utils {
-    use aiahr_core::id::{EffectName, EffectOpName};
-    use aiahr_core::ident::Ident;
-    use aiahr_core::modules::Module;
+    use base::{
+        id::{EffectName, EffectOpName},
+        ident::Ident,
+        modules::Module,
+    };
 
     use crate::{EffectInfo, TyScheme};
 
@@ -370,19 +372,19 @@ pub mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::{
-        diagnostic::tc::TypeCheckDiagnostic,
+    use assert_matches::assert_matches;
+    use base::{
+        diagnostic::{aiahr::AiahrcError, tc::TypeCheckDiagnostic},
         file::{FileId, SourceFile, SourceFileSet},
         id::{TermName, TyVarId},
         Db,
     };
-    use aiahr_parser::Db as ParserDb;
-    use aiahr_ty::{
+    use parser::Db as ParserDb;
+    use ty::{
         row::{Row, RowOps},
         AccessTy, TyScheme, TypeKind,
         TypeKind::*,
     };
-    use assert_matches::assert_matches;
 
     use crate::Db as TcDb;
     use crate::Evidence;
@@ -411,12 +413,12 @@ mod tests {
     #[derive(Default)]
     #[salsa::db(
         crate::Jar,
-        aiahr_ast::Jar,
-        aiahr_core::Jar,
-        aiahr_desugar::Jar,
-        aiahr_nameres::Jar,
-        aiahr_parser::Jar,
-        aiahr_ty::Jar
+        ast::Jar,
+        base::Jar,
+        desugar::Jar,
+        nameres::Jar,
+        parser::Jar,
+        ty::Jar
     )]
     pub(crate) struct TestDatabase {
         storage: salsa::Storage<Self>,
@@ -429,7 +431,7 @@ mod tests {
         db.type_check_errors(file_id)
             .into_iter()
             .map(|err| match err {
-                aiahr_core::diagnostic::aiahr::AiahrcError::TypeCheckError(err) => err,
+                AiahrcError::TypeCheckError(err) => err,
                 _ => unreachable!(),
             })
             .collect()

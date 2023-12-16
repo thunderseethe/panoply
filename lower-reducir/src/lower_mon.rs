@@ -1,7 +1,9 @@
-use aiahr_core::id::{IdSupply, ReducIrVarId};
-use aiahr_core::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx};
-use aiahr_reducir::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, UnwrapMonTy};
-use aiahr_reducir::{
+use base::{
+    id::{IdSupply, ReducIrVarId},
+    pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
+};
+use reducir::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, UnwrapMonTy};
+use reducir::{
     DelimCont, DelimReducIr, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar,
     TypeCheck, P,
 };
@@ -23,8 +25,8 @@ impl MkReducIrTy for LowerMonCtx<'_> {
 
     fn mk_fun_ty(
         &self,
-        args: impl IntoIterator<Item = impl aiahr_reducir::ty::IntoReducIrTy>,
-        ret: impl aiahr_reducir::ty::IntoReducIrTy,
+        args: impl IntoIterator<Item = impl reducir::ty::IntoReducIrTy>,
+        ret: impl reducir::ty::IntoReducIrTy,
     ) -> ReducIrTy {
         self.db.mk_fun_ty(args, ret)
     }

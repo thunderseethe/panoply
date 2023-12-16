@@ -1,10 +1,10 @@
 [package]
-name = "aiahr-cst"
+name = "cst"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aiahr-core.workspace = true
+base.workspace = true
 la-arena.workspace = true

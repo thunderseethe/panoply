@@ -3,15 +3,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase};
-use aiahr_core::diagnostic::Diagnostic as AiahrDiagnostic;
-use aiahr_core::file::FileId;
-use aiahr_core::loc::Loc;
-use aiahr_core::span::Span;
-use aiahr_core::Db as CoreDb;
-use aiahr_nameres::Db as NameResDb;
-use aiahr_parser::Db;
-use aiahr_tc::Db as TcDb;
+use base::diagnostic::Diagnostic as AiahrDiagnostic;
+use base::file::FileId;
+use base::loc::Loc;
+use base::span::Span;
+use base::Db as CoreDb;
+use nameres::Db as NameResDb;
+use parser::Db;
 use salsa::{Durability, ParallelDatabase};
+use tc::Db as TcDb;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
     Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,

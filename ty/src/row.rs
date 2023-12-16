@@ -1,4 +1,4 @@
-use aiahr_core::ident::Ident;
+use base::ident::Ident;
 use salsa::DebugWithDb;
 
 use std::cmp::Ordering;

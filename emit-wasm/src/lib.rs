@@ -1,10 +1,9 @@
-use aiahr_core::id::MedIrVarId;
-use aiahr_core::modules::Module;
-use aiahr_medir::{
+use base::{id::MedIrVarId, modules::Module};
+use medir::{
     Atom, ClosureArities, Locals, MedIr, MedIrItem, MedIrItemName, MedIrKind, MedIrModule,
     MedIrTraversal, MedIrTy, MedIrTyKind,
 };
-use aiahr_reducir::ReducIrTermName;
+use reducir::ReducIrTermName;
 use rustc_hash::FxHashMap;
 use wasm_encoder::{
     CodeSection, ConstExpr, ElementSection, Elements, EntityType, FuncType, Function,
@@ -15,7 +14,7 @@ use wasm_encoder::{
 #[salsa::jar(db = Db)]
 pub struct Jar();
 
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_medir::Db + aiahr_lower_medir::Db {
+pub trait Db: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {
     fn as_emit_wasm_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -30,7 +29,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_medir::Db + aiahr_lower_medir::Db {
         self.emit_module(module)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_medir::Db + aiahr_lower_medir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {}
 
 struct TypeSect {
     section: TypeSection,
@@ -385,7 +384,7 @@ fn emit_wasm_item(
                     ]);
                 }
                 MedIrKind::Call(fun, args) => match fun {
-                    aiahr_medir::Call::Known(item) => {
+                    medir::Call::Known(item) => {
                         for arg in args.iter() {
                             self.ins(self.emit_atom(arg));
                         }
@@ -395,7 +394,7 @@ fn emit_wasm_item(
                             .expect("Item indices not found");
                         self.ins(Instruction::Call(*indx))
                     }
-                    aiahr_medir::Call::Unknown(v) => {
+                    medir::Call::Unknown(v) => {
                         let get_local = self.emit_atom(&Atom::Var(*v));
                         self.inss([
                             get_local.clone(),
@@ -467,7 +466,7 @@ fn emit_wasm_item(
 #[cfg(test)]
 mod tests {
 
-    use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
+    use base::file::{FileId, SourceFile, SourceFileSet};
     use expect_test::expect;
     use wasmparser::Validator;
 
@@ -476,18 +475,18 @@ mod tests {
     #[derive(Default)]
     #[salsa::db(
         crate::Jar,
-        aiahr_ast::Jar,
-        aiahr_core::Jar,
-        aiahr_desugar::Jar,
-        aiahr_lower_medir::Jar,
-        aiahr_lower_reducir::Jar,
-        aiahr_medir::Jar,
-        aiahr_nameres::Jar,
-        aiahr_optimize_reducir::Jar,
-        aiahr_parser::Jar,
-        aiahr_reducir::Jar,
-        aiahr_tc::Jar,
-        aiahr_ty::Jar
+        ast::Jar,
+        base::Jar,
+        desugar::Jar,
+        lower_medir::Jar,
+        lower_reducir::Jar,
+        medir::Jar,
+        nameres::Jar,
+        optimize_reducir::Jar,
+        parser::Jar,
+        reducir::Jar,
+        tc::Jar,
+        ty::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,

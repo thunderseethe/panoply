@@ -3,7 +3,7 @@
 //! Generally, if one type logically represents a subset of the possible objects as another, then
 //! there will be a `From` implementation on the larger type from the smaller one.
 
-use aiahr_core::{
+use ::base::{
     diagnostic::nameres::NameKind,
     id::{EffectName, EffectOpName, TermName, TyVarId, VarId},
     modules::Module,

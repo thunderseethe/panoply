@@ -4,7 +4,7 @@ use crate::{
     names::Names,
     ops::{IdOps, InsertResult},
 };
-use aiahr_core::{
+use ::base::{
     diagnostic::{
         nameres::{NameKind, NameKinds, NameResolutionError, RejectionReason, Suggestion},
         DiagnosticSink,
@@ -16,12 +16,11 @@ use aiahr_core::{
     option::Transpose,
     span::{Span, SpanOf, Spanned},
 };
-use aiahr_cst::{
-    self as cst,
+use bumpalo::Bump;
+use cst::{
     nameres::{self as nst, AllocItem, NstIndxAlloc},
     Annotation, CstIndxAlloc, Field, IdField,
 };
-use bumpalo::Bump;
 use la_arena::Idx;
 
 const TERM_KINDS: NameKinds = NameKinds::EFFECT_OP
@@ -882,20 +881,20 @@ where
 mod tests {
     use std::path::PathBuf;
 
-    use aiahr_core::{
+    use assert_matches::assert_matches;
+    use base::{
         diagnostic::nameres::{NameKind, NameResolutionError},
         file::{FileId, SourceFile, SourceFileSet},
         indexed::ReferenceAllocate,
         span::Span,
         span_of,
     };
-    use aiahr_cst::nameres::LocalIds;
-    use assert_matches::assert_matches;
     use bumpalo::Bump;
+    use cst::nameres::LocalIds;
 
     use crate::{module::ModuleNames, ops::IdOps, Db as NameResDb};
 
-    use aiahr_test::{
+    use test_utils::{
         assert_ident_text_matches_name, field, id_field, nitem_term, npat_prod, npat_var,
         nst::NstRefAlloc, nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match,
         nterm_prod, nterm_sum, nterm_var, nterm_with, quant, scheme, type_func, type_named,
@@ -903,13 +902,13 @@ mod tests {
     };
 
     #[derive(Default)]
-    #[salsa::db(crate::Jar, aiahr_core::Jar, aiahr_parser::Jar)]
+    #[salsa::db(crate::Jar, base::Jar, parser::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
     impl salsa::Database for TestDatabase {}
 
-    type TestNstItem<'a> = (aiahr_test::nst::Item<'a>, &'a LocalIds);
+    type TestNstItem<'a> = (test_utils::nst::Item<'a>, &'a LocalIds);
 
     fn parse_resolve_module<'a, S: ToString>(
         db: &'a TestDatabase,
@@ -929,7 +928,7 @@ mod tests {
             ot.map(|term| {
                 let mut ref_alloc = NstRefAlloc::new(arena, term.alloc(db));
                 (
-                    aiahr_test::nst::Item::Term(term.data(db).clone().ref_alloc(&mut ref_alloc)),
+                    test_utils::nst::Item::Term(term.data(db).clone().ref_alloc(&mut ref_alloc)),
                     term.locals(db),
                 )
             })
@@ -938,7 +937,7 @@ mod tests {
             oe.map(|effect| {
                 let mut ref_alloc = NstRefAlloc::new(arena, effect.alloc(db));
                 (
-                    aiahr_test::nst::Item::Effect(
+                    test_utils::nst::Item::Effect(
                         effect.data(db).clone().ref_alloc(&mut ref_alloc),
                     ),
                     effect.locals(db),
@@ -950,9 +949,7 @@ mod tests {
             .all_nameres_errors()
             .into_iter()
             .map(|err| match err {
-                aiahr_core::diagnostic::aiahr::AiahrcError::NameResolutionError(name_res) => {
-                    name_res
-                }
+                base::diagnostic::aiahr::AiahrcError::NameResolutionError(name_res) => name_res,
                 _ => unreachable!(),
             })
             .collect();
@@ -969,7 +966,7 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> (
-        Option<(&'a aiahr_test::nst::Term<'a>, &'a LocalIds)>,
+        Option<(&'a test_utils::nst::Term<'a>, &'a LocalIds)>,
         Vec<NameResolutionError>,
     ) {
         // Wrap our term in an item def
@@ -985,8 +982,8 @@ mod tests {
                 .as_ref()
                 .map(|(item, locals)| match item {
                     // We hard code wrap our input in an item def, an effect isn't possible here
-                    aiahr_test::nst::Item::Effect(_) => unreachable!(),
-                    aiahr_test::nst::Item::Term(term) => (term.value, *locals),
+                    test_utils::nst::Item::Effect(_) => unreachable!(),
+                    test_utils::nst::Item::Term(term) => (term.value, *locals),
                 }),
             errors,
         )

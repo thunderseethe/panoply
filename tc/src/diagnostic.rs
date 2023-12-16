@@ -1,13 +1,13 @@
 use std::convert::Infallible;
 
-use aiahr_core::{
+use base::{
     diagnostic::{tc::TypeCheckDiagnostic, Citation},
     id::VarId,
     ident::Ident,
     pretty::{PrettyPrint, PrettyWithCtx},
     span::Span,
 };
-use aiahr_ty::{
+use ty::{
     infer::{InArena, InferTy, ScopedInferRow, SimpleInferRow, UnifierToTcVarError},
     row::{Row, RowLabel, ScopedClosedRow, SimpleClosedRow},
     ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,

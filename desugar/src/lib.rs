@@ -1,10 +1,11 @@
 use std::ops::Not;
 
-use aiahr_ast::{
-    self as ast, Ast, AstModule, Direction,
+use ast::{
+    Ast, AstModule, Direction,
     Term::{self, *},
 };
-use aiahr_core::{
+use ast::{AstEffect, AstTerm};
+use base::{
     file::FileId,
     id::{EffectName, EffectOpName, Id, IdGen, TermName, TyVarId, VarId},
     ident::Ident,
@@ -12,20 +13,18 @@ use aiahr_core::{
     modules::Module,
     span::{Span, SpanOf, Spanned},
 };
-use aiahr_cst::{
-    self as cst,
+use cst::{
     nameres::{self as nst, NstIndxAlloc},
     Field,
 };
-use aiahr_nameres::{NameResEffect, NameResTerm};
-use aiahr_ty::{
+use la_arena::{Arena, Idx};
+use nameres::{NameResEffect, NameResTerm};
+use rustc_hash::{FxHashMap, FxHashSet};
+use salsa::AsId;
+use ty::{
     row::{Row, Simple},
     Evidence, MkTy, Ty, TyScheme, TypeKind,
 };
-use ast::{AstEffect, AstTerm};
-use la_arena::{Arena, Idx};
-use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::AsId;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
@@ -36,7 +35,7 @@ pub struct Jar(
     effect_of,
     effect_op_tyscheme_of,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_ty::Db {
+pub trait Db: salsa::DbWithJar<Jar> + nameres::Db + ast::Db + ty::Db {
     fn as_desugar_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
@@ -56,13 +55,12 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_
         desugar_effect(self.as_desugar_db(), nameres_eff)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_nameres::Db + aiahr_ast::Db + aiahr_ty::Db
-{}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + nameres::Db + ast::Db + ty::Db {}
 
 /// Desugar an NST Module into an AST module.
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
-pub fn desugar_module(db: &dyn crate::Db, module: aiahr_nameres::NameResModule) -> AstModule {
+pub fn desugar_module(db: &dyn crate::Db, module: nameres::NameResModule) -> AstModule {
     let nameres_db = db.as_nameres_db();
 
     AstModule::new(
@@ -725,7 +723,7 @@ enum Constructor {
 impl Constructor {
     fn matches(&self, pat: &nst::Pattern, alloc: &NstIndxAlloc) -> Option<Vec<nst::Pattern>> {
         let file = FileId::from_id(salsa::Id::from_u32(0));
-        let bogus_var_id = aiahr_core::span::SpanOf {
+        let bogus_var_id = base::span::SpanOf {
             start: Loc::start(file),
             value: VarId::from_raw(0),
             end: Loc::start(file),
@@ -781,20 +779,12 @@ mod tests {
     use crate::Db as DesugarDb;
 
     use super::*;
-    use aiahr_ast as ast;
-    use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
-    use aiahr_nameres::Db;
+    use base::file::{FileId, SourceFile, SourceFileSet};
     use expect_test::expect;
+    use nameres::Db;
 
     #[derive(Default)]
-    #[salsa::db(
-        crate::Jar,
-        aiahr_ast::Jar,
-        aiahr_core::Jar,
-        aiahr_nameres::Jar,
-        aiahr_parser::Jar,
-        aiahr_ty::Jar
-    )]
+    #[salsa::db(crate::Jar, ast::Jar, base::Jar, nameres::Jar, parser::Jar, ty::Jar)]
     struct TestDatabase {
         storage: salsa::Storage<Self>,
     }
@@ -805,7 +795,7 @@ mod tests {
     fn ds_snippet<'db>(
         db: &'db TestDatabase,
         input: &str,
-    ) -> (aiahr_nameres::NameResTerm, &'db ast::AstTerm) {
+    ) -> (nameres::NameResTerm, &'db ast::AstTerm) {
         let mut content = "item = ".to_string();
         content.push_str(input);
         let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test.aiahr")), content);

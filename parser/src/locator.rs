@@ -1,7 +1,6 @@
 use std::str::CharIndices;
 
-use aiahr_core::file::FileId;
-use aiahr_core::loc::Loc;
+use base::{file::FileId, loc::Loc};
 
 // A line of source text.
 #[derive(Debug, PartialEq, Eq)]
@@ -145,7 +144,7 @@ impl Locator {
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::file::FileId;
+    use base::file::FileId;
     use salsa::AsId;
 
     use super::Locator;

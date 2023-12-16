@@ -1,13 +1,15 @@
-use aiahr_core::id::{IdSupply, MedIrVarId};
-use aiahr_core::modules::Module;
-use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
-use aiahr_reducir::ReducIrTermName;
+use base::{
+    id::{IdSupply, MedIrVarId},
+    modules::Module,
+    pretty::{PrettyPrint, PrettyWithCtx},
+};
+use reducir::ReducIrTermName;
 
 mod pretty;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(MedIrItem, MedIrModule, MedIrTy);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_reducir::Db {
+pub trait Db: salsa::DbWithJar<Jar> + reducir::Db {
     fn as_medir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -16,7 +18,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_reducir::Db {
         MedIrTy::new(self.as_medir_db(), kind)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_reducir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + reducir::Db {}
 
 pub trait MedIrFoldInPlace {
     fn fold_atom(&mut self, _atom: &mut Atom) {}

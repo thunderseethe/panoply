@@ -1,9 +1,11 @@
 pub(crate) mod occurs_check {
-    use aiahr_ty::infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK, UnifierKind};
-    use aiahr_ty::row::{Row, ScopedRow};
-    use aiahr_ty::{FallibleEndoTypeFold, TypeVarOf};
+    use ty::{
+        infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK, UnifierKind},
+        row::{Row, ScopedRow},
+        FallibleEndoTypeFold, MkTy, TypeVarOf,
+    };
 
-    use crate::{AccessTy, MkTy, Ty, TypeKind};
+    use ty::{AccessTy, Ty, TypeKind};
 
     /// Check that a unification variable does not appear within the type the unification variable is
     /// mapped to. This prevents unification from solving to a substitution with a cycle.
@@ -50,8 +52,8 @@ pub(crate) mod occurs_check {
 
         fn try_endofold_simple_row_var(
             &mut self,
-            var: aiahr_ty::SimpleRowVarOf<Self::Alloc>,
-        ) -> Result<aiahr_ty::row::SimpleRow<Self::Alloc>, Self::Error> {
+            var: ty::SimpleRowVarOf<Self::Alloc>,
+        ) -> Result<ty::row::SimpleRow<Self::Alloc>, Self::Error> {
             if var == self.var {
                 Err(var)
             } else {
@@ -75,7 +77,7 @@ pub(crate) mod occurs_check {
 
         fn try_endofold_scoped_row_var(
             &mut self,
-            var: aiahr_ty::ScopedRowVarOf<Self::Alloc>,
+            var: ty::ScopedRowVarOf<Self::Alloc>,
         ) -> Result<ScopedRow<Self::Alloc>, Self::Error> {
             if var == self.var {
                 Err(var)
@@ -89,14 +91,14 @@ pub(crate) mod occurs_check {
 pub(crate) mod normalize {
     use std::convert::Infallible;
 
-    use aiahr_ty::{
+    use ena::unify::InPlaceUnificationTable;
+    use ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK},
         row::{Row, ScopedRow, SimpleRow},
         FallibleEndoTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
     };
-    use ena::unify::InPlaceUnificationTable;
 
-    use crate::{AccessTy, MkTy, Ty, TypeKind};
+    use ty::{AccessTy, MkTy, Ty, TypeKind};
 
     /// Normalize a type for unification.
     /// Walks a type and checks any variables it contains against current unifiers. Replacing
@@ -156,14 +158,14 @@ pub(crate) mod normalize {
 
 pub(crate) mod instantiate {
 
-    use aiahr_core::id::TyVarId;
-    use aiahr_ty::{
+    use base::id::TyVarId;
+    use ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TcVarToUnifierError, TypeK},
         row::{Row, ScopedRow, SimpleRow},
         FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
     };
 
-    use crate::{InDb, MkTy, Ty, TypeKind};
+    use ty::{InDb, MkTy, Ty, TypeKind};
 
     /// Instantiate a type scheme for type checking.
     /// This means replacing all it's TcVars with fresh unifiers and adding any constraints (post
@@ -245,15 +247,15 @@ pub(crate) mod instantiate {
 }
 
 pub(crate) mod zonker {
-    use aiahr_core::id::{Id, TyVarId};
-    use aiahr_ty::{
+    use base::id::{Id, TyVarId};
+    use ena::unify::InPlaceUnificationTable;
+    use ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK, UnifierToTcVarError},
         row::{Row, ScopedRow, SimpleRow},
         FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
     };
-    use ena::unify::InPlaceUnificationTable;
 
-    use crate::{InDb, MkTy, Ty, TypeKind};
+    use ty::{InDb, MkTy, Ty, TypeKind};
 
     /// Combine our different unifier variables as one enum during zonking
     #[derive(PartialEq, Eq)]
@@ -370,7 +372,7 @@ pub(crate) mod zonker {
         type Error = UnifierToTcVarError;
 
         type AccessTy = ();
-        type MkTy = dyn aiahr_ty::Db + 'a;
+        type MkTy = dyn ty::Db + 'a;
 
         fn access(&self) -> &Self::AccessTy {
             &()

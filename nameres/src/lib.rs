@@ -1,18 +1,24 @@
 use std::ops::ControlFlow;
 
-use aiahr_core::diagnostic::aiahr::{AiahrcError, AiahrcErrors};
-use aiahr_core::file::{FileId, SourceFile};
-use aiahr_core::id::{EffectName, EffectOpName, TermName, TyVarId, VarId};
-use aiahr_core::ident::Ident;
-use aiahr_core::indexed::IdxView;
-use aiahr_core::loc::Loc;
-use aiahr_core::modules::Module;
-use aiahr_core::span::{Span, SpanOf, Spanned};
-use aiahr_cst::nameres::traverse::DfsTraverseNst;
-use aiahr_cst::nameres::{self as nst, LocalIds, NstIndxAlloc, Pattern, Term};
-use aiahr_cst::{IdField, Row, Type};
-use aiahr_parser::ParseFile;
+use ::base::{
+    diagnostic::{
+        aiahr::{AiahrcError, AiahrcErrors},
+        nameres::NameResolutionError,
+    },
+    file::{FileId, SourceFile},
+    id::{EffectName, EffectOpName, TermName, TyVarId, VarId},
+    ident::Ident,
+    indexed::IdxView,
+    loc::Loc,
+    modules::Module,
+    span::{Span, SpanOf, Spanned},
+};
+use cst::{
+    nameres::{self as nst, traverse::DfsTraverseNst, LocalIds, NstIndxAlloc, Pattern, Term},
+    IdField, Row, Type,
+};
 use la_arena::Idx;
+use parser::ParseFile;
 use rustc_hash::FxHashMap;
 
 use crate::name::ModuleName;
@@ -55,7 +61,7 @@ pub struct Jar(
     nameres_module_of,
     term_defn,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
+pub trait Db: salsa::DbWithJar<Jar> + parser::Db {
     fn as_nameres_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
     }
@@ -70,7 +76,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
     }
 
     fn nameres_module_for_file_id(&self, file_id: FileId) -> NameResModule {
-        let file = aiahr_core::file::file_for_id(self.as_core_db(), file_id);
+        let file = ::base::file::file_for_id(self.as_core_db(), file_id);
         self.nameres_module_for_file(file)
     }
 
@@ -109,7 +115,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_parser::Db {
         nameres_module_of::accumulated::<AiahrcErrors>(self.as_nameres_db(), module)
     }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_parser::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + parser::Db {}
 
 #[salsa::tracked]
 fn effect_defn(db: &dyn crate::Db, eff_name: EffectName) -> NameResEffect {
@@ -194,7 +200,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
     let cst_module = parse_module.data(db.as_parser_db());
     let module = parse_module.module(db.as_parser_db());
 
-    let mut errors: Vec<aiahr_core::diagnostic::nameres::NameResolutionError> = vec![];
+    let mut errors: Vec<NameResolutionError> = vec![];
     let mut module_names = FxHashMap::default();
     let base = BaseBuilder::new(db)
         .add_slice(module, &cst_module.items, &mut errors)
@@ -315,7 +321,7 @@ pub fn lookup_effect_by_name(
 fn lookup_effect_by(
     db: &dyn crate::Db,
     module: Module,
-    mut find_by: impl FnMut(&(aiahr_core::span::SpanOf<Ident>, effect::EffectNames)) -> bool,
+    mut find_by: impl FnMut(&(::base::span::SpanOf<Ident>, effect::EffectNames)) -> bool,
 ) -> Option<EffectName> {
     let name_res = db.nameres_module_of(module);
 
@@ -466,7 +472,7 @@ pub enum InScopeName {
     EffectTyVar(EffectOpName, TyVarId),
 }
 impl InScopeName {
-    pub fn module(&self, db: &dyn aiahr_core::Db) -> Module {
+    pub fn module(&self, db: &dyn ::base::Db) -> Module {
         match self {
             InScopeName::Effect(eff) => eff.module(db),
             InScopeName::EffectOp(eff_op) | InScopeName::EffectTyVar(eff_op, _) => {

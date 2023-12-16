@@ -1,4 +1,4 @@
-use aiahr_core::id::TyVarId;
+use base::id::TyVarId;
 use salsa::DebugWithDb;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -26,12 +26,12 @@ pub mod infer;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(TyData, RowFields, RowValues);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db {
+pub trait Db: salsa::DbWithJar<Jar> + base::Db {
     fn as_ty_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db {}
 
 mod pretty;
 

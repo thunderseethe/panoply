@@ -1,26 +1,25 @@
 [package]
-name = "aiahr-lower-medir"
+name = "lower-medir"
 version = "0.1.0"
 edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dev-dependencies]
-aiahr-ast.workspace = true
-aiahr-desugar.workspace = true
-aiahr-lower-reducir.workspace = true
-aiahr-nameres.workspace = true
-aiahr-optimize-reducir.workspace = true
-aiahr-parser.workspace = true
-aiahr-test.workspace = true
-aiahr-tc.workspace = true
-aiahr-ty.workspace = true
+ast.workspace = true
+desugar.workspace = true
+lower-reducir.workspace = true
+nameres.workspace = true
+parser.workspace = true
+test-utils.workspace = true
+tc.workspace = true
+ty.workspace = true
 assert_matches.workspace = true
 expect-test.workspace = true
 pretty.workspace = true
 
 [dependencies]
-aiahr-core.workspace = true
-aiahr-medir.workspace = true
-aiahr-optimize-reducir.workspace = true
-aiahr-reducir.workspace = true
+base.workspace = true
+medir.workspace = true
+optimize-reducir.workspace = true
+reducir.workspace = true
 salsa.workspace = true

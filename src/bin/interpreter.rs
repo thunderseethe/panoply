@@ -1,10 +1,10 @@
 use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase, Args};
-use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
-use aiahr_core::Db as CoreDb;
-use aiahr_interpreter::Machine;
-use aiahr_lower_reducir::Db as LowerReducIrDb;
-use aiahr_parser::Db;
+use base::pretty::{PrettyPrint, PrettyWithCtx};
+use base::Db as BaseDb;
 use clap::Parser;
+use interpreter::Machine;
+use lower_reducir::Db as LowerReducIrDb;
+use parser::Db;
 
 fn main() -> eyre::Result<()> {
     let args = Args::parse();

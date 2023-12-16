@@ -17,20 +17,20 @@ name = "lsp"
 name = "wasm"
 
 [dependencies]
-aiahr-ast.workspace = true
-aiahr-core.workspace = true
-aiahr-desugar.workspace = true
-aiahr-emit-wasm.workspace = true
-aiahr-interpreter.workspace = true
-aiahr-reducir.workspace = true
-aiahr-lower-reducir.workspace = true
-aiahr-lower-medir.workspace = true
-aiahr-medir.workspace = true
-aiahr-nameres.workspace = true
-aiahr-optimize-reducir.workspace = true
-aiahr-parser.workspace = true
-aiahr-tc.workspace = true
-aiahr-ty.workspace = true
+ast.workspace = true
+base.workspace = true
+desugar.workspace = true
+emit-wasm.workspace = true
+interpreter.workspace = true
+reducir.workspace = true
+lower-reducir.workspace = true
+lower-medir.workspace = true
+medir.workspace = true
+nameres.workspace = true
+optimize-reducir.workspace = true
+parser.workspace = true
+tc.workspace = true
+ty.workspace = true
 clap = { workspace = true, features = ["derive"] }
 eyre.workspace = true
 fern.workspace = true
@@ -46,7 +46,7 @@ wasmparser.workspace = true
 [workspace]
 members = [
     "ast",
-    "core",
+    "base",
     "cst",
     "desugar",
     "emit-wasm",
@@ -71,22 +71,25 @@ edition = "2021"
 # Unless necessary, don't specify patch numbers for dependencies whose major version number is
 # non-zero.
 [workspace.dependencies]
-aiahr-ast = { path = "ast" }
-aiahr-core = { path = "core" }
-aiahr-cst = { path = "cst" }
-aiahr-desugar = { path = "desugar" }
-aiahr-emit-wasm = { path = "emit-wasm" }
-aiahr-nameres = { path = "nameres" }
-aiahr-interpreter = { path = "interpreter" }
-aiahr-lower-medir = { path = "lower-medir" }
-aiahr-lower-reducir = { path = "lower-reducir" }
-aiahr-medir = { path = "medir" }
-aiahr-optimize-reducir = { path = "optimize-reducir" }
-aiahr-parser = { path = "parser" }
-aiahr-reducir = { path = "reducir" }
-aiahr-tc = { path = "tc" }
-aiahr-test = { path = "test-utils" }
-aiahr-ty = { path = "ty" }
+# Our crates
+ast = { path = "ast" }
+base = { path = "base" }
+cst = { path = "cst" }
+desugar = { path = "desugar" }
+emit-wasm = { path = "emit-wasm" }
+interpreter = { path = "interpreter" }
+lower-medir = { path = "lower-medir" }
+lower-reducir = { path = "lower-reducir" }
+medir = { path = "medir" }
+nameres = { path = "nameres" }
+optimize-reducir = { path = "optimize-reducir" }
+parser = { path = "parser" }
+reducir = { path = "reducir" }
+tc = { path = "tc" }
+test-utils = { path = "test-utils" }
+ty = { path = "ty" }
+
+# External crates
 assert_matches = "1.5" # TODO: use `std` version when stabilized.
 bitflags = "1.3"
 bumpalo = "3.10"

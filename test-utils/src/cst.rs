@@ -1,10 +1,12 @@
 use std::iter::FusedIterator;
 
-use aiahr_core::ident::Ident;
-use aiahr_core::indexed::{HasArenaRef, HasRefArena, ReferenceAllocate};
-use aiahr_core::span::{Span, SpanOf, Spanned};
-use aiahr_cst::{self as cst, CstIndxAlloc, Field, IdField};
+use base::{
+    ident::Ident,
+    indexed::{HasArenaRef, HasRefArena, ReferenceAllocate},
+    span::{Span, SpanOf, Spanned},
+};
 use bumpalo::Bump;
+use cst::{self, CstIndxAlloc, Field, IdField};
 use la_arena::{Arena, Idx};
 
 /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
@@ -797,7 +799,7 @@ macro_rules! separated {
 #[macro_export]
 macro_rules! field {
     ($label:pat, $target:pat) => {
-        aiahr_cst::Field {
+        ::cst::Field {
             label: $label,
             target: $target,
             ..
@@ -808,7 +810,7 @@ macro_rules! field {
 #[macro_export]
 macro_rules! id_field {
     ($label:pat, $target:pat) => {
-        $crate::field!(aiahr_core::span_of!($label), $target)
+        $crate::field!(::base::span_of!($label), $target)
     };
 }
 
@@ -845,7 +847,7 @@ macro_rules! row_concrete {
 #[macro_export]
 macro_rules! row_variable {
     ($($vars:pat),+ $(,)?) => {
-        $crate::cst::Row::Variable($crate::separated!($(aiahr_core::span_of!($vars)),+))
+        $crate::cst::Row::Variable($crate::separated!($(::base::span_of!($vars)),+))
     };
 }
 
@@ -854,7 +856,7 @@ macro_rules! row_mixed {
     (($($fields:pat),+ $(,)?), ($($vars:pat),+ $(,)?)) => {
         $crate::cst::Row::Mixed {
             concrete: $crate::separated!($($fields),+),
-            variables: $crate::separated!($(aiahr_core::span_of!($vars)),+),
+            variables: $crate::separated!($(::base::span_of!($vars)),+),
             ..
         }
     };
@@ -863,10 +865,10 @@ macro_rules! row_mixed {
 #[macro_export]
 macro_rules! type_named {
     ($name:literal) => {
-        &$crate::cst::Type::Named(aiahr_core::span_of!($crate::h!($name)))
+        &$crate::cst::Type::Named(::base::span_of!($crate::h!($name)))
     };
     ($name:pat) => {
-        &$crate::cst::Type::Named(aiahr_core::span_of!($name))
+        &$crate::cst::Type::Named(::base::span_of!($name))
     };
 }
 
@@ -883,13 +885,13 @@ macro_rules! type_sum {
 #[macro_export]
 macro_rules! type_prod {
     ($fields:pat) => {
-        &aiahr_test::cst::Type::Product {
+        &::test_utils::cst::Type::Product {
             fields: Some($fields),
             ..
         }
     };
     () => {
-        &aiahr_test::cst::Type::Product { fields: None, .. }
+        &::test_utils::cst::Type::Product { fields: None, .. }
     };
 }
 
@@ -924,7 +926,7 @@ macro_rules! rwx_concrete {
 #[macro_export]
 macro_rules! rwx_variable {
     ($var:pat) => {
-        $crate::cst::RowAtom::Variable(aiahr_core::span_of!($var))
+        $crate::cst::RowAtom::Variable(::base::span_of!($var))
     };
 }
 
@@ -943,10 +945,10 @@ macro_rules! ct_rowsum {
 #[macro_export]
 macro_rules! quant {
     ($($vars:literal),* $(,)?) => { &[$(
-        aiahr_cst::Quantifier { var: aiahr_core::span_of!($crate::h!($vars)), .. }
+        ::cst::Quantifier { var: ::base::span_of!($crate::h!($vars)), .. }
     ),*] };
     ($($vars:pat),* $(,)?) => { &[$(
-        aiahr_cst::Quantifier { var: aiahr_core::span_of!($vars), .. }
+        ::cst::Quantifier { var: ::base::span_of!($vars), .. }
     ),*] };
 }
 
@@ -1027,7 +1029,7 @@ macro_rules! pat_sum {
 #[macro_export]
 macro_rules! pat_var {
     ($var:pat) => {
-        &$crate::cst::Pattern::Whole(aiahr_core::span_of!($var))
+        &$crate::cst::Pattern::Whole(::base::span_of!($var))
     };
 }
 
@@ -1035,7 +1037,7 @@ macro_rules! pat_var {
 macro_rules! term_local {
     ($var:pat, $value:pat, $expr:pat) => {
         &$crate::cst::Term::Binding {
-            var: aiahr_core::span_of!($var),
+            var: ::base::span_of!($var),
             annotation: None,
             value: $value,
             expr: $expr,
@@ -1044,7 +1046,7 @@ macro_rules! term_local {
     };
     ($var:pat, $type_:pat, $value:pat, $expr:pat) => {
         &$crate::cst::Term::Binding {
-            var: aiahr_core::span_of!($var),
+            var: ::base::span_of!($var),
             annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             value: $value,
             expr: $expr,
@@ -1068,7 +1070,7 @@ macro_rules! term_with {
 macro_rules! term_abs {
     ($arg:pat, $body:pat) => {
         &$crate::cst::Term::Abstraction {
-            arg: aiahr_core::span_of!($arg),
+            arg: ::base::span_of!($arg),
             annotation: None,
             body: $body,
             ..
@@ -1076,7 +1078,7 @@ macro_rules! term_abs {
     };
     ($arg:pat, $type_:pat, $body:pat) => {
         &$crate::cst::Term::Abstraction {
-            arg: aiahr_core::span_of!($arg),
+            arg: ::base::span_of!($arg),
             annotation: Some($crate::cst::TypeAnnotation { type_: $type_, .. }),
             body: $body,
             ..
@@ -1117,7 +1119,7 @@ macro_rules! term_dot {
     ($base:pat, $field:pat) => {
         &$crate::cst::Term::DotAccess {
             base: $base,
-            field: aiahr_core::span_of!($field),
+            field: ::base::span_of!($field),
             ..
         }
     };
@@ -1133,7 +1135,7 @@ macro_rules! term_match {
 #[macro_export]
 macro_rules! term_sym {
     ($var:pat) => {
-        &$crate::cst::Term::SymbolRef(aiahr_core::span_of!($var))
+        &$crate::cst::Term::SymbolRef(::base::span_of!($var))
     };
 }
 
@@ -1148,7 +1150,7 @@ macro_rules! term_paren {
 macro_rules! item_effect {
     ($name:pat, $($ops:pat),* $(,)?) => {
         $crate::cst::Item::Effect {
-            name: aiahr_core::span_of!($name),
+            name: ::base::span_of!($name),
             ops: &[$($ops),*],
             ..
         }
@@ -1159,7 +1161,7 @@ macro_rules! item_effect {
 macro_rules! item_term {
     ($name:pat, $value:pat) => {
         $crate::cst::Item::Term {
-            name: aiahr_core::span_of!($name),
+            name: ::base::span_of!($name),
             annotation: None,
             value: $value,
             ..
@@ -1167,7 +1169,7 @@ macro_rules! item_term {
     };
     ($name:pat, $type_:pat, $value:pat) => {
         $crate::cst::Item::Term {
-            name: aiahr_core::span_of!($name),
+            name: ::base::span_of!($name),
             annotation: Some($crate::cst::SchemeAnnotation { type_: $type_, .. }),
             value: $value,
             ..

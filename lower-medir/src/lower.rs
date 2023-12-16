@@ -1,13 +1,8 @@
-use aiahr_core::id::MedIrVarId;
-use aiahr_core::id_converter::IdConverter;
-use aiahr_core::pretty::PrettyErrorWithDb;
-use aiahr_medir as medir;
-use aiahr_medir::MedIrItemName;
-use aiahr_reducir::ty::{ReducIrTy, ReducIrTyKind};
-use aiahr_reducir::{
-    Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
-};
+use base::{id::MedIrVarId, id_converter::IdConverter, pretty::PrettyErrorWithDb};
+use medir::MedIrItemName;
 use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar};
+use reducir::ty::{ReducIrTy, ReducIrTyKind};
+use reducir::{Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck};
 
 pub(crate) struct LowerCtx<'a> {
     db: &'a dyn crate::Db,

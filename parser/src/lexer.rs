@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 
 use crate::locator::Locator;
-use aiahr_core::{diagnostic::lexer::LexError, ident::Ident, loc::Loc, span::SpanOf};
+use base::{diagnostic::lexer::LexError, ident::Ident, loc::Loc, span::SpanOf};
 use regex::{Captures, Regex, RegexSet};
 
 use std::fmt::Debug;

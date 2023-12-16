@@ -1,13 +1,13 @@
 [package]
-name = "aiahr-parser"
+name = "parser"
 version = "0.1.0"
 edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aiahr-core.workspace = true
-aiahr-cst.workspace = true
+base.workspace = true
+cst.workspace = true
 bumpalo.workspace = true
 chumsky.workspace = true
 expect-test.workspace = true
@@ -17,4 +17,4 @@ salsa.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true
-aiahr-test.workspace = true
+test-utils.workspace = true

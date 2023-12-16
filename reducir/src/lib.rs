@@ -1,6 +1,8 @@
-use aiahr_core::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
-use aiahr_core::ident::Ident;
-use aiahr_core::modules::Module;
+use base::{
+    id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
+    ident::Ident,
+    modules::Module,
+};
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::convert::Infallible;
@@ -36,12 +38,12 @@ pub struct Jar(
     optimized::OptimizedReducIrItem,
     optimized::OptimizedReducIrModule,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {
+pub trait Db: salsa::DbWithJar<Jar> + base::Db + ::ty::Db {
     fn as_reducir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_core::Db + aiahr_ty::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db + ::ty::Db {}
 
 #[salsa::interned]
 pub struct GeneratedReducIrName {
@@ -94,7 +96,7 @@ pub enum ReducIrTermName {
     Gen(GeneratedReducIrName),
 }
 impl ReducIrTermName {
-    pub fn term<DB: ?Sized + aiahr_core::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
+    pub fn term<DB: ?Sized + base::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
         ReducIrTermName::Term(TermName::new(
             db.as_core_db(),
             db.ident(name.to_string()),

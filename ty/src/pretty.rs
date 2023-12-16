@@ -1,4 +1,4 @@
-use aiahr_core::pretty::PrettyWithCtx;
+use base::pretty::PrettyWithCtx;
 use pretty::{docs, DocAllocator, Pretty, RcAllocator};
 
 use crate::{AccessTy, Ty, TypeAlloc, TypeKind};

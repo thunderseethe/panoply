@@ -1,24 +1,24 @@
-use aiahr_ast::{AstModule, AstTerm, Term};
-use aiahr_core::{
+use ast::{AstModule, AstTerm, Term};
+use base::{
     id::{EffectName, EffectOpName, Id, IdSupply, ReducIrVarId, TermName, TyVarId, VarId},
     id_converter::IdConverter,
     ident::Ident,
     modules::Module,
 };
-use aiahr_reducir::{
+use la_arena::Idx;
+use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
+use reducir::{
     mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule, MonReducIrRowEv},
     ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
     GeneratedReducIrName, ReducIr, ReducIrGenItem, ReducIrItem,
     ReducIrKind::*,
     ReducIrModule, ReducIrRowEv, ReducIrTermName, P,
 };
-use aiahr_tc::EffectInfo;
-use aiahr_ty::{
+use tc::EffectInfo;
+use ty::{
     row::{Scoped, Simple},
     InDb, MkTy, RowFields, Ty, TyScheme, Wrapper,
 };
-use la_arena::Idx;
-use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 
 use rustc_hash::FxHashMap;
 
@@ -51,7 +51,7 @@ pub struct Jar(
     lower_mon_module,
     effect_handler_ir_ty,
 );
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
+pub trait Db: salsa::DbWithJar<Jar> + tc::Db + reducir::Db {
     fn as_lower_reducir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -131,7 +131,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {
         Some(self.lower_reducir_mon_item_of(term_name))
     }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + aiahr_tc::Db + aiahr_reducir::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + tc::Db + reducir::Db {}
 
 #[salsa::tracked]
 fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
@@ -211,13 +211,13 @@ where
         left_fields.iter().copied(),
         left_values
             .iter()
-            .map(|id| db.mk_ty(aiahr_ty::TypeKind::VarTy(*id))),
+            .map(|id| db.mk_ty(ty::TypeKind::VarTy(*id))),
     );
     let right_row = db.mk_row_iter::<Sema::Closed<InDb>>(
         right_fields.iter().copied(),
         right_values
             .iter()
-            .map(|id| db.mk_ty(aiahr_ty::TypeKind::VarTy(*id))),
+            .map(|id| db.mk_ty(ty::TypeKind::VarTy(*id))),
     );
 
     let goal_row_indices = Sema::merge(db, left_row, right_row);
@@ -446,7 +446,7 @@ where
     DB: ?Sized + crate::Db,
 {
     fn effect_handler_op_index(&self, effect_op: EffectOpName) -> usize {
-        aiahr_nameres::effect_handler_op_index(self.as_nameres_db(), effect_op)
+        nameres::effect_handler_op_index(self.as_nameres_db(), effect_op)
     }
 
     fn effect_handler_ir_ty(&self, effect: EffectName) -> ReducIrTy {
@@ -486,7 +486,7 @@ impl<DB> TermTys for DB
 where
     DB: ?Sized + crate::Db,
 {
-    fn lookup_term(&self, name: TermName, term: Idx<Term<VarId>>) -> aiahr_tc::TyChkRes<InDb> {
+    fn lookup_term(&self, name: TermName, term: Idx<Term<VarId>>) -> tc::TyChkRes<InDb> {
         let typed_item = self.type_scheme_of(name);
         typed_item.term_to_tys(self.as_tc_db())[&term]
     }
@@ -499,29 +499,29 @@ mod tests {
 
     use crate::Db as LowerIrDb;
 
-    use aiahr_core::{
+    use base::{
         file::{FileId, SourceFile, SourceFileSet},
         pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
         Db,
     };
-    use aiahr_parser::Db as ParserDb;
-    use aiahr_reducir::{
+    use expect_test::expect;
+    use parser::Db as ParserDb;
+    use pretty::RcAllocator;
+    use reducir::{
         mon::MonReducIrModule, ty::ReducIrTy, DelimReducIr, ReducIr, ReducIrTyErr, TypeCheck,
     };
-    use expect_test::expect;
-    use pretty::RcAllocator;
 
     #[derive(Default)]
     #[salsa::db(
         crate::Jar,
-        aiahr_ast::Jar,
-        aiahr_core::Jar,
-        aiahr_desugar::Jar,
-        aiahr_reducir::Jar,
-        aiahr_nameres::Jar,
-        aiahr_parser::Jar,
-        aiahr_tc::Jar,
-        aiahr_ty::Jar
+        ast::Jar,
+        base::Jar,
+        desugar::Jar,
+        reducir::Jar,
+        nameres::Jar,
+        parser::Jar,
+        tc::Jar,
+        ty::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,

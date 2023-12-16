@@ -1,6 +1,6 @@
 use std::{collections::hash_map::Entry, slice::Iter};
 
-use aiahr_core::{
+use ::base::{
     id::{EffectName, TermName},
     ident::Ident,
     modules::Module,

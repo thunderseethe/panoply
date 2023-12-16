@@ -1,9 +1,14 @@
-use aiahr_ast::{Ast, Direction, Term, Term::*};
-use aiahr_core::{
+use ast::{Ast, Direction, Term, Term::*};
+use base::{
     diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, memory::handle, modules::Module,
     span::Span,
 };
-use aiahr_ty::{
+use ena::unify::InPlaceUnificationTable;
+use la_arena::Idx;
+use rustc_hash::{FxHashMap, FxHashSet};
+use salsa::DebugWithDb;
+use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
+use ty::{
     infer::{
         InArena, InferTy, ScopedInferRow, ScopedRowK, SimpleInferRow, SimpleRowK, TcUnifierVar,
         TypeK,
@@ -12,11 +17,6 @@ use aiahr_ty::{
     TypeKind::*,
     *,
 };
-use ena::unify::InPlaceUnificationTable;
-use la_arena::Idx;
-use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::DebugWithDb;
-use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
 
 use crate::{
     diagnostic::{into_diag, TypeCheckError},
@@ -155,7 +155,7 @@ where
 }
 impl<Db> DebugWithDb<Db> for TyChkRes<InDb>
 where
-    Db: ?Sized + aiahr_ty::Db,
+    Db: ?Sized + ty::Db,
 {
     fn fmt(
         &self,

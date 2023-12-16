@@ -1,16 +1,17 @@
-use aiahr_core::id::{IdSupply, TermName};
-use aiahr_core::id_converter::IdConverter;
-use aiahr_core::ident::Ident;
-use aiahr_core::modules::Module;
-use aiahr_medir::{self as medir};
-use aiahr_reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
+use base::{
+    id::{IdSupply, TermName},
+    id_converter::IdConverter,
+    ident::Ident,
+    modules::Module,
+};
 use medir::{MedIrItem, MedIrModule};
+use reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 
 mod lower;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(lower_item, lower_module);
-pub trait Db: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {
+pub trait Db: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {
     fn as_lower_medir_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
     }
@@ -37,7 +38,7 @@ pub trait Db: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {
         lower_module(self.as_lower_medir_db(), opt_module)
     }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + aiahr_optimize_reducir::Db + medir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {}
 
 #[salsa::tracked]
 fn lower_item(db: &dyn crate::Db, term: OptimizedReducIrItem) -> Vec<MedIrItem> {
@@ -71,28 +72,30 @@ fn lower_module(db: &dyn crate::Db, module: OptimizedReducIrModule) -> MedIrModu
 
 #[cfg(test)]
 mod tests {
-    use aiahr_core::file::{FileId, SourceFile, SourceFileSet};
-    use aiahr_core::pretty::{PrettyPrint, PrettyWithCtx};
-    use aiahr_core::Db as CoreDb;
-    use aiahr_parser::Db as ParseDb;
+    use base::{
+        file::{FileId, SourceFile, SourceFileSet},
+        pretty::{PrettyPrint, PrettyWithCtx},
+        Db as BaseDb,
+    };
     use expect_test::expect;
+    use parser::Db as ParseDb;
 
     use crate::{Db, MedIrItem};
 
     #[derive(Default)]
     #[salsa::db(
         crate::Jar,
-        aiahr_ast::Jar,
-        aiahr_core::Jar,
-        aiahr_desugar::Jar,
-        aiahr_lower_reducir::Jar,
-        aiahr_medir::Jar,
-        aiahr_nameres::Jar,
-        aiahr_optimize_reducir::Jar,
-        aiahr_parser::Jar,
-        aiahr_reducir::Jar,
-        aiahr_tc::Jar,
-        aiahr_ty::Jar
+        ast::Jar,
+        base::Jar,
+        desugar::Jar,
+        lower_reducir::Jar,
+        medir::Jar,
+        nameres::Jar,
+        optimize_reducir::Jar,
+        parser::Jar,
+        reducir::Jar,
+        tc::Jar,
+        ty::Jar
     )]
     struct TestDatabase {
         storage: salsa::Storage<Self>,

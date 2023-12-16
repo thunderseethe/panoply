@@ -1,12 +1,12 @@
 [package]
-name = "aiahr-medir"
+name = "medir"
 version = "0.1.0"
 edition.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aiahr-core.workspace = true
-aiahr-reducir.workspace = true
+base.workspace = true
+reducir.workspace = true
 pretty.workspace = true
 salsa.workspace = true
