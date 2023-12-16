@@ -37,7 +37,7 @@ fn from_reducir_ty<DB: ?Sized + crate::Db>(db: &DB, ty: ReducIrTy) -> MedIrTy {
             let int = db.mk_medir_ty(MedIrTyKind::IntTy);
             db.mk_medir_ty(MedIrTyKind::BlockTy(vec![int, int, int, int]))
         }
-        ReducIrTyKind::ForallTy(_, ty) /*| ReducIrTyKind::ExistsTy(_, ty)*/ => from_reducir_ty(db, ty),
+        ReducIrTyKind::ForallTy(_, ty) => from_reducir_ty(db, ty),
         // TODO: Remove this once we monomorphize
         ReducIrTyKind::VarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
         ReducIrTyKind::ProdVarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),

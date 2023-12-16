@@ -221,18 +221,6 @@ impl ReducIrTy {
         self.subst(db, Subst::single(payload.into_payload(db)))
     }
 
-    /*pub fn subst_row(self, db: &dyn crate::Db, (i, j): (i32, i32), row: ReducIrRow) -> ReducIrTy {
-        /*let mut env = vec![(0, Some(row))];
-        env.extend((1..=j).map(|j| (j, None)));
-        self.fold(&mut Subst {
-            db,
-            i,
-            j,
-            env: Env::new(env),
-        })*/
-        self.fold(f)
-    }*/
-
     /// Shift all the variables in a term by delta.
     pub fn shift<DB: ?Sized + crate::Db>(self, db: &DB, delta: i32) -> Self {
         struct Shift<'db> {

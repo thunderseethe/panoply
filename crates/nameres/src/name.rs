@@ -30,16 +30,6 @@ impl From<ModuleName> for BaseName {
     }
 }
 
-impl ModuleName {
-    /*/// Converts the name to one scoped to the given module.
-    pub fn based_in(&self, m: Module) -> BaseName {
-        match self {
-            ModuleName::Effect(e) => BaseName::Effect(m, *e),
-            ModuleName::Item(i) => BaseName::Item(m, *i),
-        }
-    }*/
-}
-
 impl From<EffectName> for ModuleName {
     fn from(e: EffectName) -> Self {
         ModuleName::Effect(e)

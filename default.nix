@@ -2,10 +2,9 @@
 pkgs.mkShell {
   buildInputs = with pkgs; [ 
     cargo
-    #cargo-expand
+    cargo-tarpaulin
     clippy
     gdb
-    #glibc
     rust-analyzer
     rustc
     jq
