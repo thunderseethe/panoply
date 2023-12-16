@@ -45,22 +45,23 @@ wasmparser.workspace = true
 
 [workspace]
 members = [
-    "ast",
-    "base",
-    "cst",
-    "desugar",
-    "emit-wasm",
-    "interpreter",
-    "lower-medir",
-    "lower-reducir",
-    "medir",
-    "nameres",
-    "optimize-reducir",
-    "parser",
-    "reducir",
-    "tc",
-    "test-utils",
-    "ty",
+    "crates/*",
+    #"ast",
+    #"base",
+    #"cst",
+    #"desugar",
+    #"emit-wasm",
+    #"interpreter",
+    #"lower-medir",
+    #"lower-reducir",
+    #"medir",
+    #"nameres",
+    #"optimize-reducir",
+    #"parser",
+    #"reducir",
+    #"tc",
+    #"test-utils",
+    #"ty",
 ]
 
 [workspace.package]
@@ -72,22 +73,22 @@ edition = "2021"
 # non-zero.
 [workspace.dependencies]
 # Our crates
-ast = { path = "ast" }
-base = { path = "base" }
-cst = { path = "cst" }
-desugar = { path = "desugar" }
-emit-wasm = { path = "emit-wasm" }
-interpreter = { path = "interpreter" }
-lower-medir = { path = "lower-medir" }
-lower-reducir = { path = "lower-reducir" }
-medir = { path = "medir" }
-nameres = { path = "nameres" }
-optimize-reducir = { path = "optimize-reducir" }
-parser = { path = "parser" }
-reducir = { path = "reducir" }
-tc = { path = "tc" }
-test-utils = { path = "test-utils" }
-ty = { path = "ty" }
+ast = { path = "crates/ast" }
+base = { path = "crates/base" }
+cst = { path = "crates/cst" }
+desugar = { path = "crates/desugar" }
+emit-wasm = { path = "crates/emit-wasm" }
+interpreter = { path = "crates/interpreter" }
+lower-medir = { path = "crates/lower-medir" }
+lower-reducir = { path = "crates/lower-reducir" }
+medir = { path = "crates/medir" }
+nameres = { path = "crates/nameres" }
+optimize-reducir = { path = "crates/optimize-reducir" }
+parser = { path = "crates/parser" }
+reducir = { path = "crates/reducir" }
+tc = { path = "crates/tc" }
+test-utils = { path = "crates/test-utils" }
+ty = { path = "crates/ty" }
 
 # External crates
 assert_matches = "1.5" # TODO: use `std` version when stabilized.
