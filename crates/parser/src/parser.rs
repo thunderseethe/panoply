@@ -17,12 +17,12 @@ use std::option::Option;
 use super::lexer::Token;
 use crate::error::ParseErrors;
 
-/// A trait alias for a cloneable parser for Aiahr syntax.
-pub trait AiahrParser<T>: Clone + Parser<Token, T, Error = ParseErrors> {}
-impl<T, A> AiahrParser<T> for A where A: Clone + Parser<Token, T, Error = ParseErrors> {}
+/// A trait alias for a cloneable parser for syntax.
+pub trait PanoplyParser<T>: Clone + Parser<Token, T, Error = ParseErrors> {}
+impl<T, A> PanoplyParser<T> for A where A: Clone + Parser<Token, T, Error = ParseErrors> {}
 
-pub trait AiahrIdxParser<T>: AiahrParser<IdxState<T>> {}
-impl<T, A> AiahrIdxParser<T> for A where A: AiahrParser<IdxState<T>> {}
+pub trait PanoplyIdxParser<T>: PanoplyParser<IdxState<T>> {}
+impl<T, A> PanoplyIdxParser<T> for A where A: PanoplyParser<IdxState<T>> {}
 
 pub enum StateM<S, T> {
     /// A pure value that does not depend on S.
@@ -95,20 +95,20 @@ where
 }
 
 // Returns a spanned parser that matches just the given token and returns ().
-fn lit(token: Token) -> impl AiahrParser<Span> {
+fn lit(token: Token) -> impl PanoplyParser<Span> {
     just(token).map_with_span(|_, span| span)
 }
 
 // Returns a spanned parser that matches any `Token::Identifier` and unwraps it to the contained
 // `&str`.
-fn ident() -> impl AiahrParser<SpanOf<Ident>> {
+fn ident() -> impl PanoplyParser<SpanOf<Ident>> {
     select! {
         Token::Identifier(id) => id,
     }
     .map_with_span(|s, span: Span| span.of(s))
 }
 
-fn int() -> impl AiahrParser<SpanOf<usize>> {
+fn int() -> impl PanoplyParser<SpanOf<usize>> {
     select! {
         Token::Int(int) => int
     }
@@ -118,9 +118,9 @@ fn int() -> impl AiahrParser<SpanOf<usize>> {
 // Returns a parser for one or more `T` values separated by `sep`, representing the sequence with
 // `Separated<T>`.
 fn separated<'a, T: 'static>(
-    elem: impl AiahrIdxParser<T> + 'a,
-    sep: impl AiahrParser<Span> + 'a,
-) -> impl AiahrIdxParser<cst::Separated<T>> + 'a {
+    elem: impl PanoplyIdxParser<T> + 'a,
+    sep: impl PanoplyParser<Span> + 'a,
+) -> impl PanoplyIdxParser<cst::Separated<T>> + 'a {
     elem.clone()
         .then(sep.clone().then(elem).repeated())
         .then(sep.or_not())
@@ -137,10 +137,10 @@ fn separated<'a, T: 'static>(
 
 // Returns a parser for a field with a label, separator, and target.
 fn field<'a, L: 'static, T: 'static>(
-    label: impl AiahrIdxParser<L> + 'a,
+    label: impl PanoplyIdxParser<L> + 'a,
     sep: Token,
-    target: impl AiahrIdxParser<T> + 'a,
-) -> impl AiahrIdxParser<Field<L, T>> + 'a {
+    target: impl PanoplyIdxParser<T> + 'a,
+) -> impl PanoplyIdxParser<Field<L, T>> + 'a {
     label
         .then(lit(sep))
         .then(target)
@@ -155,15 +155,15 @@ fn field<'a, L: 'static, T: 'static>(
 // Returns a parser for a field with an identifier label, separator, and target.
 fn id_field<'a, T: 'static>(
     sep: Token,
-    target: impl AiahrIdxParser<T> + 'a,
-) -> impl AiahrIdxParser<IdField<T>> + 'a {
+    target: impl PanoplyIdxParser<T> + 'a,
+) -> impl PanoplyIdxParser<IdField<T>> + 'a {
     field(ident().pure_state(), sep, target)
 }
 
 // Returns a parser for a product row with terms in `term`.
 fn product_row<'a, T: 'static>(
-    term: impl AiahrIdxParser<T> + 'a,
-) -> impl AiahrIdxParser<cst::ProductRow<T>> + 'a {
+    term: impl PanoplyIdxParser<T> + 'a,
+) -> impl PanoplyIdxParser<cst::ProductRow<T>> + 'a {
     lit(Token::LBrace)
         .then(separated(id_field(Token::Equal, term), lit(Token::Comma)).or_not())
         .then(lit(Token::RBrace))
@@ -177,8 +177,8 @@ fn product_row<'a, T: 'static>(
 
 // Returns a parser for a sum row with terms in `term`.
 fn sum_row<'a, T: 'static>(
-    term: impl AiahrIdxParser<T> + 'a,
-) -> impl AiahrIdxParser<cst::SumRow<T>> + 'a {
+    term: impl PanoplyIdxParser<T> + 'a,
+) -> impl PanoplyIdxParser<cst::SumRow<T>> + 'a {
     lit(Token::LAngle)
         .then(id_field(Token::Equal, term))
         .then(lit(Token::RAngle))
@@ -192,8 +192,8 @@ fn sum_row<'a, T: 'static>(
 
 // Returns a parser for a non-empty row of `C` in an explicit type.
 fn row<'a, C: 'static>(
-    field: impl AiahrIdxParser<C> + 'a,
-) -> impl AiahrIdxParser<cst::Row<Ident, C>> + 'a {
+    field: impl PanoplyIdxParser<C> + 'a,
+) -> impl PanoplyIdxParser<cst::Row<Ident, C>> + 'a {
     let concrete = separated(field, lit(Token::Comma));
     let variables = separated(ident().pure_state(), lit(Token::Plus));
     choice((
@@ -212,8 +212,8 @@ fn row<'a, C: 'static>(
     .boxed()
 }
 
-/// Returns a parser for an Aiahr (mono-)type.
-pub fn type_() -> impl AiahrIdxParser<Idx<cst::Type<Ident>>> {
+/// Returns a parser for an (mono-)type.
+pub fn type_() -> impl PanoplyIdxParser<Idx<cst::Type<Ident>>> {
     recursive(|type_| {
         let type_row = row(id_field(Token::Colon, type_.clone())).boxed();
 
@@ -278,7 +278,7 @@ pub fn type_() -> impl AiahrIdxParser<Idx<cst::Type<Ident>>> {
 }
 
 // Returns a parser for a row type expression.
-fn row_atom() -> impl AiahrIdxParser<cst::RowAtom<Ident>> {
+fn row_atom() -> impl PanoplyIdxParser<cst::RowAtom<Ident>> {
     choice((
         lit(Token::LParen)
             .then(separated(
@@ -297,7 +297,7 @@ fn row_atom() -> impl AiahrIdxParser<cst::RowAtom<Ident>> {
 }
 
 // Returns a parser for a type constraint.
-fn constraint() -> impl AiahrIdxParser<cst::Constraint<Ident>> {
+fn constraint() -> impl PanoplyIdxParser<cst::Constraint<Ident>> {
     row_atom()
         .then(lit(Token::Plus))
         .then(row_atom())
@@ -316,7 +316,7 @@ fn constraint() -> impl AiahrIdxParser<cst::Constraint<Ident>> {
 }
 
 /// Returns a parser for a scheme (polymorphic type).
-pub fn scheme() -> impl AiahrIdxParser<cst::Scheme<Ident>> {
+pub fn scheme() -> impl PanoplyIdxParser<cst::Scheme<Ident>> {
     lit(Token::KwForall)
         .then(ident())
         .then(lit(Token::Dot))
@@ -341,7 +341,7 @@ pub fn scheme() -> impl AiahrIdxParser<cst::Scheme<Ident>> {
 }
 
 // Returns a parser for an effect operation.
-fn effect_op() -> impl AiahrIdxParser<cst::EffectOp<Ident, Ident>> {
+fn effect_op() -> impl PanoplyIdxParser<cst::EffectOp<Ident, Ident>> {
     ident()
         .then(lit(Token::Colon))
         .then(type_())
@@ -355,8 +355,8 @@ fn effect_op() -> impl AiahrIdxParser<cst::EffectOp<Ident, Ident>> {
 
 /// Returns a parser for an annotation with a given type syntax.
 pub fn annotation<'a, T: 'static>(
-    ty: impl AiahrIdxParser<T> + 'a,
-) -> impl AiahrIdxParser<Annotation<T>> + 'a {
+    ty: impl PanoplyIdxParser<T> + 'a,
+) -> impl PanoplyIdxParser<Annotation<T>> + 'a {
     lit(Token::Colon)
         .then(ty)
         .map_state(|(colon, type_), alloc| {
@@ -367,7 +367,7 @@ pub fn annotation<'a, T: 'static>(
 }
 
 /// Returns a parser for a pattern.
-pub fn pattern() -> impl AiahrIdxParser<Idx<cst::Pattern>> {
+pub fn pattern() -> impl PanoplyIdxParser<Idx<cst::Pattern>> {
     recursive(|pattern| {
         choice((
             product_row(pattern.clone()).map_state(|p, alloc: &mut CstIndxAlloc| {
@@ -475,7 +475,7 @@ impl TermPostfix {
 }
 
 /// Returns a parser for terms.
-pub fn term() -> impl AiahrIdxParser<Idx<cst::Term>> {
+pub fn term() -> impl PanoplyIdxParser<Idx<cst::Term>> {
     recursive(|term| {
         // intermediary we use in atom and app
         let paren_term = lit(Token::LParen)
@@ -625,8 +625,8 @@ pub fn term() -> impl AiahrIdxParser<Idx<cst::Term>> {
     })
 }
 
-/// Returns a parser for the Aiahr language, using the given arena to allocate CST nodes.
-pub fn aiahr_parser() -> impl Parser<Token, IdxState<Vec<cst::Item>>, Error = ParseErrors> {
+/// Returns a parser for the language, using the given arena to allocate CST nodes.
+pub fn parser() -> impl Parser<Token, IdxState<Vec<cst::Item>>, Error = ParseErrors> {
     let effect = lit(Token::KwEffect)
         .then(ident())
         .then(lit(Token::LBrace))
@@ -707,7 +707,7 @@ mod tests {
 
     use crate::error::ParseErrors;
     use crate::locator::Locator;
-    use crate::{lexer::aiahr_lexer, Db as ParserDb};
+    use crate::{lexer::lexer, Db as ParserDb};
 
     use super::{term, to_stream, type_};
 
@@ -723,8 +723,8 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> Result<&'a Term<'a>, Vec<ParseErrors>> {
-        let file_id = FileId::new(db.as_core_db(), PathBuf::from("test.aiahr"));
-        let (tokens, eoi) = aiahr_lexer(db)
+        let file_id = FileId::new(db.as_core_db(), PathBuf::from("test"));
+        let (tokens, eoi) = lexer(db)
             .lex(&Locator::new(file_id, input), input)
             .expect("Lexing input failed");
 
@@ -741,12 +741,9 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> &'a Type<'a, Ident> {
-        let (tokens, eoi) = aiahr_lexer(db)
+        let (tokens, eoi) = lexer(db)
             .lex(
-                &Locator::new(
-                    FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
-                    input,
-                ),
+                &Locator::new(FileId::new(db.as_core_db(), PathBuf::from("test")), input),
                 input,
             )
             .unwrap();
@@ -765,12 +762,9 @@ mod tests {
         arena: &'a Bump,
         input: &str,
     ) -> &'a Scheme<'a, Ident> {
-        let (tokens, eoi) = aiahr_lexer(db)
+        let (tokens, eoi) = lexer(db)
             .lex(
-                &Locator::new(
-                    FileId::new(db.as_core_db(), PathBuf::from("test.aiahr")),
-                    input,
-                ),
+                &Locator::new(FileId::new(db.as_core_db(), PathBuf::from("test")), input),
                 input,
             )
             .unwrap();
@@ -1207,7 +1201,7 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
-            FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
+            FileId::new(&db, PathBuf::from("eff_foo")),
             "effect foo { foo: a -> a }".to_string(),
         );
         let module = db.parse_module(file);
@@ -1367,7 +1361,7 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
-            FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
+            FileId::new(&db, PathBuf::from("eff_foo")),
             "x = a\ny = |b| b\nz = t = x; t".to_string(),
         );
         let module = db.parse_module(file);
@@ -1640,7 +1634,7 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
-            FileId::new(&db, PathBuf::from("/eff_foo.aiahr")),
+            FileId::new(&db, PathBuf::from("eff_foo")),
             "x: a = a\ny: forall b. b -> b = |b| b".to_string(),
         );
         let module = db.parse_module(file);

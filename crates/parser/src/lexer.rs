@@ -6,7 +6,7 @@ use regex::{Captures, Regex, RegexSet};
 
 use std::fmt::Debug;
 
-/// A token in Aiahr.
+/// A token
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Token {
     KwForall,
@@ -154,8 +154,8 @@ where
     Some(Box::new(move |c, db| f(db, c.get(0).unwrap().as_str())))
 }
 
-/// Returns a lexer for the Aiahr language that uses the given interner.
-pub fn aiahr_lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
+/// Returns a lexer for the language that uses the given interner.
+pub fn lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
     // TODO: Do something with comments, or at least doc comments.
     Lexer::new(
         vec![

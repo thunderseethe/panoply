@@ -133,7 +133,7 @@ impl NameKinded for LocalName {
     }
 }
 
-/// Any kind of name in Aiahr.
+/// Every kind of name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Name {
     Module(Module),

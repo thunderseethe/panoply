@@ -1,15 +1,17 @@
-use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase, Args};
-use base::pretty::{PrettyPrint, PrettyWithCtx};
-use base::Db as BaseDb;
+use base::{
+    pretty::{PrettyPrint, PrettyWithCtx},
+    Db as BaseDb,
+};
 use clap::Parser;
 use interpreter::Machine;
 use lower_reducir::Db as LowerReducIrDb;
+use panoply::{canonicalize_path_set, create_source_file_set, Args, PanoplyDatabase};
 use parser::Db;
 
 fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
-    let db = AiahrDatabase::default();
+    let db = PanoplyDatabase::default();
 
     let uniq_paths =
         canonicalize_path_set(args.files.iter().chain(std::iter::once(&args.main_file)))?;

@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 use ::base::{
     diagnostic::{
-        aiahr::{AiahrcError, AiahrcErrors},
+        error::{PanoplyError, PanoplyErrors},
         nameres::NameResolutionError,
     },
     file::{FileId, SourceFile},
@@ -100,19 +100,19 @@ pub trait Db: salsa::DbWithJar<Jar> + parser::Db {
         name_at_loc(self.as_nameres_db(), file, line, col)
     }
 
-    fn all_nameres_errors(&self) -> Vec<AiahrcError> {
+    fn all_nameres_errors(&self) -> Vec<PanoplyError> {
         self.all_modules()
             .iter()
             .flat_map(|module| {
-                nameres_module_of::accumulated::<AiahrcErrors>(self.as_nameres_db(), *module)
+                nameres_module_of::accumulated::<PanoplyErrors>(self.as_nameres_db(), *module)
                     .into_iter()
             })
             .collect()
     }
 
-    fn nameres_errors(&self, file_id: FileId) -> Vec<AiahrcError> {
+    fn nameres_errors(&self, file_id: FileId) -> Vec<PanoplyError> {
         let module = self.root_module_for_file(self.file_for_id(file_id));
-        nameres_module_of::accumulated::<AiahrcErrors>(self.as_nameres_db(), module)
+        nameres_module_of::accumulated::<PanoplyErrors>(self.as_nameres_db(), module)
     }
 }
 impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + parser::Db {}
@@ -208,7 +208,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
     let ModuleResolution { terms, effects } = resolve_module(&arena, cst_module, base, &mut errors);
 
     for error in errors {
-        AiahrcErrors::push(db.as_core_db(), AiahrcError::from(error));
+        PanoplyErrors::push(db.as_core_db(), PanoplyError::from(error));
     }
     NameResModule::new(
         db,

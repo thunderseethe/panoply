@@ -94,7 +94,7 @@ impl Spanned for Pattern {
     }
 }
 
-/// An Aiahr term with names resolved.
+/// A term with names resolved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Term {
     Binding {

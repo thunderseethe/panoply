@@ -312,7 +312,7 @@ where
         self.alloc.alloc(type_)
     }
 
-    /// Resolves an Aiahr type.
+    /// Resolves a type.
     pub fn resolve_type(
         &mut self,
         type_: Idx<cst::Type<Ident>>,
@@ -919,7 +919,7 @@ mod tests {
         &'a ModuleNames,
         Vec<NameResolutionError>,
     ) {
-        let file_id = FileId::new(db, PathBuf::from("test.aiahr"));
+        let file_id = FileId::new(db, PathBuf::from("test"));
         let file = SourceFile::new(db, file_id, input.to_string());
         let _ = SourceFileSet::new(db, vec![file]);
 
@@ -949,7 +949,7 @@ mod tests {
             .all_nameres_errors()
             .into_iter()
             .map(|err| match err {
-                base::diagnostic::aiahr::AiahrcError::NameResolutionError(name_res) => name_res,
+                base::diagnostic::error::PanoplyError::NameResolutionError(name_res) => name_res,
                 _ => unreachable!(),
             })
             .collect();

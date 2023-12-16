@@ -494,7 +494,7 @@ mod tests {
     impl salsa::Database for TestDatabase {}
 
     fn emit_module(db: &TestDatabase, input: &str) -> wasm_encoder::Module {
-        let path = std::path::PathBuf::from("test.aiahr");
+        let path = std::path::PathBuf::from("test");
         let mut contents = r#"
 effect State {
     put : {} -> {},

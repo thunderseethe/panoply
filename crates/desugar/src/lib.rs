@@ -798,7 +798,7 @@ mod tests {
     ) -> (nameres::NameResTerm, &'db ast::AstTerm) {
         let mut content = "item = ".to_string();
         content.push_str(input);
-        let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test.aiahr")), content);
+        let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test")), content);
         SourceFileSet::new(db, vec![file]);
         let namesres_module = db.nameres_module_for_file(file);
         (

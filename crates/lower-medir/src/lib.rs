@@ -103,7 +103,7 @@ mod tests {
     impl salsa::Database for TestDatabase {}
 
     fn lower_function(db: &TestDatabase, input: &str, fn_name: &str) -> Vec<MedIrItem> {
-        let path = std::path::PathBuf::from("test.aiahr");
+        let path = std::path::PathBuf::from("test");
         let mut contents = r#"
 effect State {
     put : {} -> {},

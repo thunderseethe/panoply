@@ -1,7 +1,7 @@
 //! This module defines types and traits for diagnostic messages (i.e., errors and warnings).
 
-pub mod aiahr;
 mod english;
+pub mod error;
 pub mod lexer;
 pub mod nameres;
 pub mod parser;

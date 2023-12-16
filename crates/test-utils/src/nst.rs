@@ -31,7 +31,7 @@ impl<'a> Spanned for Pattern<'a> {
     }
 }
 
-/// An Aiahr term with names resolved.
+/// An term with names resolved.
 #[derive(Clone, Copy, Debug)]
 pub enum Term<'a> {
     Binding {
@@ -138,7 +138,7 @@ impl<'a> Spanned for TermDefn<'a> {
     }
 }
 
-/// A top-level item in an Aiahr source file with names resolved.
+/// A top-level item in a source file with names resolved.
 #[derive(Clone, Copy, Debug)]
 pub enum Item<'a> {
     Effect(EffectDefn<'a>),

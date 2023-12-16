@@ -155,7 +155,7 @@ impl<'a, V, C: Spanned> Spanned for Row<'a, V, C> {
 /// A row of types.
 pub type TypeRow<'a, V> = Row<'a, V, IdField<&'a Type<'a, V>>>;
 
-/// An unqualified Aiahr type.
+/// An unqualified type.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Type<'a, V> {
     Named(SpanOf<V>),
@@ -248,7 +248,7 @@ impl<'a, V> Spanned for Qualifiers<'a, V> {
     }
 }
 
-/// A polymorphic Aiahr type.
+/// A polymorphic type.
 #[derive(Clone, Copy, Debug)]
 pub struct Scheme<'a, V> {
     pub quantifiers: &'a [cst::Quantifier<V>],
@@ -289,7 +289,7 @@ impl<'a, O, V> Spanned for EffectOp<'a, O, V> {
     }
 }
 
-/// An Aiahr pattern.
+/// A pattern.
 #[derive(Clone, Copy, Debug)]
 pub enum Pattern<'a> {
     ProductRow(ProductRow<'a, &'a Pattern<'a>>),
@@ -313,7 +313,7 @@ pub type TypeAnnotation<'a, V> = cst::Annotation<&'a Type<'a, V>>;
 /// A scheme annotation.
 pub type SchemeAnnotation<'a, V> = cst::Annotation<&'a Scheme<'a, V>>;
 
-/// An Aiahr term.
+/// A term.
 #[derive(Clone, Copy, Debug)]
 pub enum Term<'a> {
     Binding {
@@ -389,7 +389,7 @@ impl<'a> Spanned for Term<'a> {
     }
 }
 
-/// A top-level item in an Aiahr source file.
+/// A top-level item in an source file.
 #[derive(Clone, Copy, Debug)]
 pub enum Item<'a> {
     Effect {
@@ -990,24 +990,6 @@ macro_rules! scheme {
             quantifiers: $quantifiers,
             qualifiers: Some($qualifiers),
             type_: $type_,
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! eff_op {
-    ($name:literal, $type_:pat) => {
-        $crate::cst::EffectOp {
-            name: aiahr_core::span_of!($crate::h!($name)),
-            type_: $type_,
-            ..
-        }
-    };
-    ($name:pat, $type_:pat) => {
-        $crate::cst::EffectOp {
-            name: aiahr_core::span_of!($name),
-            type_: $type_,
-            ..
         }
     };
 }

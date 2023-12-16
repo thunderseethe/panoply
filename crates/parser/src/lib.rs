@@ -1,5 +1,5 @@
 use base::{
-    diagnostic::aiahr::{AiahrcError, AiahrcErrors},
+    diagnostic::error::{PanoplyError, PanoplyErrors},
     file::{file_for_id, FileId, SourceFile, SourceFileSet},
     ident::Ident,
     loc::Loc,
@@ -11,8 +11,8 @@ use cst::{CstIndxAlloc, CstModule, IdField, Pattern, Row, Term, Type};
 use la_arena::Idx;
 
 use crate::{
-    lexer::aiahr_lexer,
-    parser::{aiahr_parser, to_stream},
+    lexer::lexer,
+    parser::{parser, to_stream},
 };
 
 use self::locator::Locator;
@@ -112,20 +112,20 @@ pub trait Db: salsa::DbWithJar<Jar> + base::Db {
         self.parse_module(file)
     }
 
-    fn all_parse_errors(&self) -> Vec<AiahrcError> {
+    fn all_parse_errors(&self) -> Vec<PanoplyError> {
         let file_set = SourceFileSet::get(self.as_core_db());
         file_set
             .files(self.as_core_db())
             .into_iter()
             .flat_map(|file| {
-                parse_module::accumulated::<AiahrcErrors>(self.as_parser_db(), file).into_iter()
+                parse_module::accumulated::<PanoplyErrors>(self.as_parser_db(), file).into_iter()
             })
             .collect()
     }
 
-    fn parse_errors(&self, file_id: FileId) -> Vec<AiahrcError> {
+    fn parse_errors(&self, file_id: FileId) -> Vec<PanoplyError> {
         let file = self.file_for_id(file_id);
-        parse_module::accumulated::<AiahrcErrors>(self.as_parser_db(), file)
+        parse_module::accumulated::<PanoplyErrors>(self.as_parser_db(), file)
     }
 
     fn ident_starting_at(&self, file_id: FileId, line: u32, col: u32) -> Option<Ident> {
@@ -187,20 +187,20 @@ fn parse_module(db: &dyn crate::Db, file: SourceFile) -> ParseFile {
         .expect("Expected file name to exist and be valid UTF8");
     let mod_name = db.ident_str(file_name);
     let module = Module::new(core_db, mod_name, file_id);
-    let lexer = aiahr_lexer(db);
+    let lexer = lexer(db);
     let (tokens, eoi) = match lexer.lex(locator_of_file(db, file), file.contents(core_db)) {
         Ok(tokens) => tokens,
         Err(err) => {
-            AiahrcErrors::push(db, AiahrcError::from(err));
+            PanoplyErrors::push(db, PanoplyError::from(err));
             return ParseFile::new(db, file_id, module, CstModule::default());
         }
     };
 
-    let cst_module = aiahr_parser()
+    let cst_module = parser()
         .parse(to_stream(tokens, eoi))
         .map_err(|errs| {
             for err in errs.into_iter().flat_map(|list| list.0.into_iter()) {
-                AiahrcErrors::push(db, AiahrcError::from(err))
+                PanoplyErrors::push(db, PanoplyError::from(err))
             }
         })
         .map(|items| {

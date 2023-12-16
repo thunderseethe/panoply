@@ -3,7 +3,7 @@ use std::any::type_name;
 use ast::{self, Ast, Term};
 use base::{
     diagnostic::{
-        aiahr::{AiahrcError, AiahrcErrors},
+        error::{PanoplyError, PanoplyErrors},
         tc::TypeCheckDiagnostic,
     },
     file::FileId,
@@ -67,14 +67,14 @@ pub trait Db: salsa::DbWithJar<Jar> + desugar::Db {
         type_scheme_of(self.as_tc_db(), term_name)
     }
 
-    fn type_check_errors(&self, file_id: FileId) -> Vec<AiahrcError> {
+    fn type_check_errors(&self, file_id: FileId) -> Vec<PanoplyError> {
         let nameres_module = self.nameres_module_for_file_id(file_id);
         nameres_module
             .terms(self.as_nameres_db())
             .iter()
             .filter_map(|term| term.as_ref())
             .flat_map(|term| {
-                type_scheme_of::accumulated::<AiahrcErrors>(
+                type_scheme_of::accumulated::<PanoplyErrors>(
                     self.as_tc_db(),
                     term.name(self.as_nameres_db()),
                 )
@@ -159,7 +159,7 @@ pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedIt
     let ty_chk_out = type_check(db, module, term.data(db.as_ast_db()), is_entry_point);
 
     for diag in ty_chk_out.diags {
-        AiahrcErrors::push(db, diag.into())
+        PanoplyErrors::push(db, diag.into())
     }
     TypedItem::new(
         db,
@@ -374,7 +374,7 @@ pub mod test_utils {
 mod tests {
     use assert_matches::assert_matches;
     use base::{
-        diagnostic::{aiahr::AiahrcError, tc::TypeCheckDiagnostic},
+        diagnostic::{error::PanoplyError, tc::TypeCheckDiagnostic},
         file::{FileId, SourceFile, SourceFileSet},
         id::{TermName, TyVarId},
         Db,
@@ -426,19 +426,19 @@ mod tests {
     impl salsa::Database for TestDatabase {}
 
     fn type_errors(db: &TestDatabase) -> Vec<TypeCheckDiagnostic> {
-        let path = std::path::PathBuf::from("test.aiahr");
+        let path = std::path::PathBuf::from("test");
         let file_id = FileId::new(db, path.clone());
         db.type_check_errors(file_id)
             .into_iter()
             .map(|err| match err {
-                AiahrcError::TypeCheckError(err) => err,
+                PanoplyError::TypeCheckError(err) => err,
                 _ => unreachable!(),
             })
             .collect()
     }
 
     fn type_check_file(db: &TestDatabase, name: &str, contents: impl ToString) -> TyScheme {
-        let path = std::path::PathBuf::from("test.aiahr");
+        let path = std::path::PathBuf::from("test");
         let file_id = FileId::new(db, path.clone());
         let file = SourceFile::new(db, file_id, contents.to_string());
         SourceFileSet::new(db, vec![file]);

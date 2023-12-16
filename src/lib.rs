@@ -25,11 +25,11 @@ use clap::Parser;
     ty::Jar
 )]
 #[derive(Default)]
-pub struct AiahrDatabase {
+pub struct PanoplyDatabase {
     storage: salsa::Storage<Self>,
 }
-impl salsa::Database for AiahrDatabase {}
-impl salsa::ParallelDatabase for AiahrDatabase {
+impl salsa::Database for PanoplyDatabase {}
+impl salsa::ParallelDatabase for PanoplyDatabase {
     fn snapshot(&self) -> salsa::Snapshot<Self> {
         salsa::Snapshot::new(Self {
             storage: self.storage.snapshot(),
@@ -37,7 +37,7 @@ impl salsa::ParallelDatabase for AiahrDatabase {
     }
 }
 
-impl Displayer<Module> for AiahrDatabase {
+impl Displayer<Module> for PanoplyDatabase {
     type Output<'a> = String;
 
     fn show<'a>(&self, value: &'a Module) -> Self::Output<'a> {
@@ -47,7 +47,7 @@ impl Displayer<Module> for AiahrDatabase {
             .clone()
     }
 }
-impl Displayer<Ident> for AiahrDatabase {
+impl Displayer<Ident> for PanoplyDatabase {
     type Output<'a> = String;
 
     fn show<'a>(&self, value: &'a Ident) -> Self::Output<'a> {
@@ -78,7 +78,7 @@ pub fn canonicalize_path_set<P: AsRef<Path>>(
 }
 
 pub fn create_source_file_set(
-    db: &AiahrDatabase,
+    db: &PanoplyDatabase,
     paths: impl IntoIterator<Item = PathBuf>,
 ) -> eyre::Result<SourceFileSet> {
     let files = paths

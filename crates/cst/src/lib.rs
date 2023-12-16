@@ -277,7 +277,7 @@ impl<V> Row<V, IdField<Idx<Type<V>>>> {
 /// A row of types.
 pub type TypeRow<V> = Row<V, IdField<Idx<Type<V>>>>;
 
-/// An unqualified Aiahr syntactic type.
+/// An unqualified syntactic type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Type<V> {
     Named(SpanOf<V>),
@@ -352,7 +352,7 @@ pub struct Qualifiers<V> {
     pub arrow: Span,
 }
 
-/// A polymorphic Aiahr type.
+/// A polymorphic type.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Scheme<V> {
     pub quantifiers: Vec<Quantifier<V>>,
@@ -368,7 +368,7 @@ pub struct EffectOp<O, V> {
     pub type_: Idx<Type<V>>,
 }
 
-/// An Aiahr pattern.
+/// A pattern.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Pattern {
     ProductRow(ProductRow<Idx<Self>>),
@@ -385,7 +385,7 @@ impl Spanned for Pattern {
     }
 }
 
-/// An Aiahr term.
+/// A term.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Term {
     Binding {
@@ -504,7 +504,7 @@ pub struct TermDefn {
     pub value: Idx<Term>,
 }
 
-/// A top-level item in an Aiahr source file.
+/// A top-level item in an source file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 // Clippy thinks our second largest variant is 0 bytes which is clearly wrong.
 #[allow(clippy::large_enum_variant)]

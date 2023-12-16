@@ -390,7 +390,7 @@ impl<Var: Hash> std::hash::Hash for Ast<Var> {
     }
 }
 
-/// A top-level effect in an Aiahr module
+/// A top-level effect in a module
 #[salsa::tracked]
 pub struct AstEffect {
     #[id]
@@ -399,7 +399,7 @@ pub struct AstEffect {
     pub data: EffectDefn,
 }
 
-/// A top-level term in an Aiahr module
+/// A top-level term in a module
 #[salsa::tracked]
 pub struct AstTerm {
     #[id]

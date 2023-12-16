@@ -42,7 +42,7 @@ pub mod ident {
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
-    diagnostic::aiahr::AiahrcErrors,
+    diagnostic::error::PanoplyErrors,
     file::FileId,
     file::SourceFile,
     file::SourceFileSet,

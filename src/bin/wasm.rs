@@ -1,13 +1,13 @@
-use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase, Args};
 use clap::Parser;
 use emit_wasm::Db as EmitWasmDb;
+use panoply::{canonicalize_path_set, create_source_file_set, Args, PanoplyDatabase};
 use wasmparser::WasmFeatures;
 use wasmtime::{Config, Engine, FuncType, Linker, Store, Val, ValType};
 
 fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
-    let db = AiahrDatabase::default();
+    let db = PanoplyDatabase::default();
 
     let uniq_paths =
         canonicalize_path_set(args.files.iter().chain(std::iter::once(&args.main_file)))?;

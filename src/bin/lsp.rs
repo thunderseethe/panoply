@@ -2,13 +2,11 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use aiahr::{canonicalize_path_set, create_source_file_set, AiahrDatabase};
-use base::diagnostic::Diagnostic as AiahrDiagnostic;
-use base::file::FileId;
-use base::loc::Loc;
-use base::span::Span;
-use base::Db as CoreDb;
+use base::{
+    diagnostic::Diagnostic as PanoplyDiagnostic, file::FileId, loc::Loc, span::Span, Db as CoreDb,
+};
 use nameres::Db as NameResDb;
+use panoply::{canonicalize_path_set, create_source_file_set, PanoplyDatabase};
 use parser::Db;
 use salsa::{Durability, ParallelDatabase};
 use tc::Db as TcDb;
@@ -23,7 +21,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 struct Backend {
     client: Client,
-    db: Arc<Mutex<AiahrDatabase>>,
+    db: Arc<Mutex<PanoplyDatabase>>,
 }
 
 fn from_loc(loc: Loc) -> Position {
@@ -41,7 +39,7 @@ fn from_span(span: Span) -> Range {
 }
 
 fn init_lsp(
-    db: &AiahrDatabase,
+    db: &PanoplyDatabase,
     paths: impl IntoIterator<Item = std::result::Result<PathBuf, ()>>,
 ) -> eyre::Result<()> {
     let paths = paths.into_iter().flat_map(|path| {
@@ -53,7 +51,7 @@ fn init_lsp(
                             let file_type = dir_entry.file_type()?;
                             let path = dir_entry.path();
                             Ok((file_type.is_file()
-                                && path.extension().map(|ext| ext == "aiahr").unwrap_or(false))
+                                && path.extension().map(|ext| ext == "pan").unwrap_or(false))
                             .then_some(path))
                         })
                         .unwrap_or(None)
@@ -219,7 +217,7 @@ async fn main() -> eyre::Result<()> {
         .chain(std::io::stdout())
         .chain(fern::log_file("output.log")?)
         .apply()?;
-    let db = AiahrDatabase::default();
+    let db = PanoplyDatabase::default();
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();

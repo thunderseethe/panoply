@@ -534,7 +534,7 @@ mod tests {
         fn_name: &str,
         op: impl FnOnce(&TestDatabase, PathBuf, &str) -> Option<R>,
     ) -> R {
-        let path = std::path::PathBuf::from("test.aiahr");
+        let path = std::path::PathBuf::from("test");
         let mut contents = r#"
 effect State {
     put : {} -> {},
@@ -570,7 +570,7 @@ effect Reader {
     }
 
     fn lower_mon_module(db: &TestDatabase, input: &str) -> MonReducIrModule {
-        let path = std::path::PathBuf::from("test.aiahr");
+        let path = std::path::PathBuf::from("test");
         let mut contents = r#"
 effect State {
     put : {} -> {},
