@@ -13,15 +13,11 @@ name = "interpreter"
 [[bin]]
 name = "lsp"
 
-[[bin]]
-name = "wasm"
-
 [dependencies]
 ast.workspace = true
 base.workspace = true
 desugar.workspace = true
 emit-wasm.workspace = true
-interpreter.workspace = true
 reducir.workspace = true
 lower-reducir.workspace = true
 lower-medir.workspace = true
@@ -45,23 +41,7 @@ wasmparser.workspace = true
 
 [workspace]
 members = [
-    "crates/*",
-    #"ast",
-    #"base",
-    #"cst",
-    #"desugar",
-    #"emit-wasm",
-    #"interpreter",
-    #"lower-medir",
-    #"lower-reducir",
-    #"medir",
-    #"nameres",
-    #"optimize-reducir",
-    #"parser",
-    #"reducir",
-    #"tc",
-    #"test-utils",
-    #"ty",
+  "crates/*",
 ]
 
 [workspace.package]
@@ -78,7 +58,6 @@ base = { path = "crates/base" }
 cst = { path = "crates/cst" }
 desugar = { path = "crates/desugar" }
 emit-wasm = { path = "crates/emit-wasm" }
-interpreter = { path = "crates/interpreter" }
 lower-medir = { path = "crates/lower-medir" }
 lower-reducir = { path = "crates/lower-reducir" }
 medir = { path = "crates/medir" }
