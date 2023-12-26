@@ -1,3 +1,0 @@
-wand = |m||n| (m ,, n).x
-
-main = wand({ x = 734 })({ y = 568 })

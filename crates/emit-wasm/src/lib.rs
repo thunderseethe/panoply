@@ -320,12 +320,11 @@ fn emit_wasm_item(
                 ]),
                 MedIrKind::Switch(scrutinee, branches) => {
                     let end: u32 = branches.len().try_into().unwrap();
-                    self.inss((0..=end).map(|_| {
+                    self.inss((0..=end + 1).map(|_| {
                         Instruction::Block(wasm_encoder::BlockType::Result(ValType::I32))
                     }));
                     let atom = self.emit_atom(scrutinee);
                     self.inss([
-                        //Instruction::I32Const(5678),
                         atom.clone(),
                         atom,
                         Instruction::BrTable((0u32..end).collect(), end),
@@ -334,8 +333,10 @@ fn emit_wasm_item(
                     for (i, branch) in branches.iter().enumerate() {
                         let i: u32 = i.try_into().unwrap();
                         self.emit_locals(branch);
-                        self.inss([Instruction::Br(end - i - 1), Instruction::End]);
+                        // Only emit the break if this isn't the outermost block
+                        self.inss([Instruction::Br(end - i), Instruction::End]);
                     }
+                    self.inss([Instruction::Unreachable, Instruction::End]);
                 }
                 MedIrKind::Closure(item, env) => {
                     let fun_ty = try_wasm_fun_ty(self.db, item.ty)
@@ -497,8 +498,8 @@ mod tests {
         let path = std::path::PathBuf::from("test");
         let mut contents = r#"
 effect State {
-    put : {} -> {},
-    get : {} -> {}
+    put : Int -> {},
+    get : {} -> Int
 }
 
 effect Reader {
@@ -919,33 +920,36 @@ g = f({ x = {} })({ y = {} })
                 block (result i32) ;; label = @1
                   block (result i32) ;; label = @2
                     block (result i32) ;; label = @3
-                      local.get 3
-                      local.get 3
-                      br_table 0 (;@3;) 1 (;@2;) 2 (;@1;)
+                      block (result i32) ;; label = @4
+                        local.get 3
+                        local.get 3
+                        br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
+                      end
+                      local.get 2
+                      i32.load offset=4
+                      local.set 4
+                      local.get 0
+                      i32.const 4
+                      i32.add
+                      local.get 4
+                      local.get 0
+                      i32.load
+                      call_indirect (type $fun_2_1)
+                      br 2 (;@1;)
                     end
                     local.get 2
                     i32.load offset=4
                     local.set 4
-                    local.get 0
+                    local.get 1
                     i32.const 4
                     i32.add
                     local.get 4
-                    local.get 0
+                    local.get 1
                     i32.load
                     call_indirect (type $fun_2_1)
                     br 1 (;@1;)
                   end
-                  local.get 2
-                  i32.load offset=4
-                  local.set 4
-                  local.get 1
-                  i32.const 4
-                  i32.add
-                  local.get 4
-                  local.get 1
-                  i32.load
-                  call_indirect (type $fun_2_1)
-                  br 0 (;@1;)
+                  unreachable
                 end
               )
               (func $g_lam_2 (;11;) (type $fun_1_1) (param i32) (result i32)
@@ -1008,33 +1012,36 @@ g = f({ x = {} })({ y = {} })
                 block (result i32) ;; label = @1
                   block (result i32) ;; label = @2
                     block (result i32) ;; label = @3
-                      local.get 3
-                      local.get 3
-                      br_table 0 (;@3;) 1 (;@2;) 2 (;@1;)
+                      block (result i32) ;; label = @4
+                        local.get 3
+                        local.get 3
+                        br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
+                      end
+                      local.get 2
+                      i32.load offset=4
+                      local.set 4
+                      local.get 1
+                      i32.const 4
+                      i32.add
+                      local.get 4
+                      local.get 1
+                      i32.load
+                      call_indirect (type $fun_2_1)
+                      br 2 (;@1;)
                     end
                     local.get 2
                     i32.load offset=4
                     local.set 4
-                    local.get 1
+                    local.get 0
                     i32.const 4
                     i32.add
                     local.get 4
-                    local.get 1
+                    local.get 0
                     i32.load
                     call_indirect (type $fun_2_1)
                     br 1 (;@1;)
                   end
-                  local.get 2
-                  i32.load offset=4
-                  local.set 4
-                  local.get 0
-                  i32.const 4
-                  i32.add
-                  local.get 4
-                  local.get 0
-                  i32.load
-                  call_indirect (type $fun_2_1)
-                  br 0 (;@1;)
+                  unreachable
                 end
               )
               (func $g_lam_8 (;17;) (type $fun_1_1) (param i32) (result i32)
@@ -1097,7 +1104,7 @@ f = (with {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
-} do State.get({}))({})"#,
+} do State.get({}))(825)"#,
         );
 
         let bytes = wasm_module.finish();
@@ -1165,7 +1172,7 @@ f = (with {
                 call_indirect (type $fun_4_1)
               )
               (func $f (;9;) (type $fun_2_1) (param i32 i32) (result i32)
-                (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
+                (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
                 global.get 0
                 local.set 2
                 local.get 2
@@ -1205,28 +1212,79 @@ f = (with {
                 block (result i32) ;; label = @1
                   block (result i32) ;; label = @2
                     block (result i32) ;; label = @3
-                      local.get 7
-                      local.get 7
-                      br_table 0 (;@3;) 1 (;@2;) 2 (;@1;)
+                      block (result i32) ;; label = @4
+                        local.get 7
+                        local.get 7
+                        br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
+                      end
+                      local.get 6
+                      i32.load offset=4
+                      local.set 8
+                      local.get 8
+                      i32.const 4
+                      i32.add
+                      i32.const 825
+                      local.get 8
+                      i32.load
+                      call_indirect (type $fun_2_1)
+                      local.set 9
+                      global.get 0
+                      i32.const 0
+                      i32.store
+                      global.get 0
+                      local.get 9
+                      i32.store offset=4
+                      global.get 0
+                      global.get 0
+                      i32.const 8
+                      i32.add
+                      global.set 0
+                      br 2 (;@1;)
                     end
                     local.get 6
                     i32.load offset=4
-                    local.set 8
-                    global.get 0
-                    local.set 9
-                    local.get 8
-                    i32.const 4
-                    i32.add
-                    local.get 9
-                    local.get 8
-                    i32.load
-                    call_indirect (type $fun_2_1)
                     local.set 10
+                    local.get 10
+                    i32.load
+                    local.set 11
+                    local.get 10
+                    i32.load offset=4
+                    local.set 12
                     global.get 0
-                    i32.const 0
+                    i32.const 5
                     i32.store
                     global.get 0
+                    i32.const 28
+                    i32.store offset=4
+                    global.get 0
                     local.get 10
+                    i32.store offset=8
+                    global.get 0
+                    global.get 0
+                    i32.const 12
+                    i32.add
+                    global.set 0
+                    local.set 13
+                    global.get 0
+                    local.get 11
+                    i32.store
+                    global.get 0
+                    local.get 12
+                    i32.store offset=4
+                    global.get 0
+                    local.get 13
+                    i32.store offset=8
+                    global.get 0
+                    global.get 0
+                    i32.const 12
+                    i32.add
+                    global.set 0
+                    local.set 14
+                    global.get 0
+                    i32.const 1
+                    i32.store
+                    global.get 0
+                    local.get 14
                     i32.store offset=4
                     global.get 0
                     global.get 0
@@ -1235,57 +1293,7 @@ f = (with {
                     global.set 0
                     br 1 (;@1;)
                   end
-                  local.get 6
-                  i32.load offset=4
-                  local.set 11
-                  local.get 11
-                  i32.load
-                  local.set 12
-                  local.get 11
-                  i32.load offset=4
-                  local.set 13
-                  global.get 0
-                  i32.const 5
-                  i32.store
-                  global.get 0
-                  i32.const 28
-                  i32.store offset=4
-                  global.get 0
-                  local.get 11
-                  i32.store offset=8
-                  global.get 0
-                  global.get 0
-                  i32.const 12
-                  i32.add
-                  global.set 0
-                  local.set 14
-                  global.get 0
-                  local.get 12
-                  i32.store
-                  global.get 0
-                  local.get 13
-                  i32.store offset=4
-                  global.get 0
-                  local.get 14
-                  i32.store offset=8
-                  global.get 0
-                  global.get 0
-                  i32.const 12
-                  i32.add
-                  global.set 0
-                  local.set 15
-                  global.get 0
-                  i32.const 1
-                  i32.store
-                  global.get 0
-                  local.get 15
-                  i32.store offset=4
-                  global.get 0
-                  global.get 0
-                  i32.const 8
-                  i32.add
-                  global.set 0
-                  br 0 (;@1;)
+                  unreachable
                 end
               )
               (func $f_lam_0 (;10;) (type $fun_2_1) (param i32 i32) (result i32)
@@ -1865,161 +1873,165 @@ f = (with {
                 block (result i32) ;; label = @1
                   block (result i32) ;; label = @2
                     block (result i32) ;; label = @3
-                      local.get 13
-                      local.get 13
-                      br_table 0 (;@3;) 1 (;@2;) 2 (;@1;)
+                      block (result i32) ;; label = @4
+                        local.get 13
+                        local.get 13
+                        br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
+                      end
+                      local.get 12
+                      i32.load offset=4
+                      local.set 14
+                      global.get 0
+                      i32.const 0
+                      i32.store
+                      global.get 0
+                      local.get 14
+                      i32.store offset=4
+                      global.get 0
+                      global.get 0
+                      i32.const 8
+                      i32.add
+                      global.set 0
+                      br 2 (;@1;)
                     end
                     local.get 12
                     i32.load offset=4
-                    local.set 14
-                    global.get 0
-                    i32.const 0
-                    i32.store
-                    global.get 0
-                    local.get 14
-                    i32.store offset=4
-                    global.get 0
-                    global.get 0
-                    i32.const 8
-                    i32.add
-                    global.set 0
-                    br 1 (;@1;)
-                  end
-                  local.get 12
-                  i32.load offset=4
-                  local.set 15
-                  local.get 15
-                  i32.load
-                  local.set 16
-                  local.get 1
-                  local.get 16
-                  call 3
-                  local.set 17
-                  local.get 17
-                  i32.load
-                  local.set 18
-                  block (result i32) ;; label = @2
+                    local.set 15
+                    local.get 15
+                    i32.load
+                    local.set 16
+                    local.get 1
+                    local.get 16
+                    call 3
+                    local.set 17
+                    local.get 17
+                    i32.load
+                    local.set 18
                     block (result i32) ;; label = @3
                       block (result i32) ;; label = @4
-                        local.get 18
-                        local.get 18
-                        br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
+                        block (result i32) ;; label = @5
+                          block (result i32) ;; label = @6
+                            local.get 18
+                            local.get 18
+                            br_table 0 (;@6;) 1 (;@5;) 2 (;@4;)
+                          end
+                          local.get 17
+                          i32.load offset=4
+                          local.set 19
+                          local.get 15
+                          i32.load
+                          local.set 20
+                          local.get 15
+                          i32.load offset=4
+                          local.set 21
+                          global.get 0
+                          i32.const 8
+                          i32.store
+                          global.get 0
+                          i32.const 21
+                          i32.store offset=4
+                          global.get 0
+                          local.get 15
+                          i32.store offset=8
+                          global.get 0
+                          local.get 1
+                          i32.store offset=12
+                          global.get 0
+                          local.get 0
+                          i32.store offset=16
+                          global.get 0
+                          global.get 0
+                          i32.const 20
+                          i32.add
+                          global.set 0
+                          local.set 22
+                          global.get 0
+                          local.get 20
+                          i32.store
+                          global.get 0
+                          local.get 21
+                          i32.store offset=4
+                          global.get 0
+                          local.get 22
+                          i32.store offset=8
+                          global.get 0
+                          global.get 0
+                          i32.const 12
+                          i32.add
+                          global.set 0
+                          local.set 23
+                          global.get 0
+                          i32.const 1
+                          i32.store
+                          global.get 0
+                          local.get 23
+                          i32.store offset=4
+                          global.get 0
+                          global.get 0
+                          i32.const 8
+                          i32.add
+                          global.set 0
+                          br 2 (;@3;)
+                        end
+                        local.get 17
+                        i32.load offset=4
+                        local.set 19
+                        global.get 0
+                        i32.const 8
+                        i32.store
+                        global.get 0
+                        i32.const 25
+                        i32.store offset=4
+                        global.get 0
+                        local.get 15
+                        i32.store offset=8
+                        global.get 0
+                        local.get 1
+                        i32.store offset=12
+                        global.get 0
+                        local.get 0
+                        i32.store offset=16
+                        global.get 0
+                        global.get 0
+                        i32.const 20
+                        i32.add
+                        global.set 0
+                        local.set 24
+                        local.get 15
+                        i32.load offset=4
+                        local.set 25
+                        local.get 25
+                        i32.const 4
+                        i32.add
+                        local.get 24
+                        local.get 2
+                        local.get 25
+                        i32.load
+                        call_indirect (type $fun_3_1)
+                        br 1 (;@3;)
                       end
-                      local.get 17
-                      i32.load offset=4
-                      local.set 19
-                      local.get 15
-                      i32.load
-                      local.set 20
-                      local.get 15
-                      i32.load offset=4
-                      local.set 21
-                      global.get 0
-                      i32.const 8
-                      i32.store
-                      global.get 0
-                      i32.const 21
-                      i32.store offset=4
-                      global.get 0
-                      local.get 15
-                      i32.store offset=8
-                      global.get 0
-                      local.get 1
-                      i32.store offset=12
-                      global.get 0
-                      local.get 0
-                      i32.store offset=16
-                      global.get 0
-                      global.get 0
-                      i32.const 20
-                      i32.add
-                      global.set 0
-                      local.set 22
-                      global.get 0
-                      local.get 20
-                      i32.store
-                      global.get 0
-                      local.get 21
-                      i32.store offset=4
-                      global.get 0
-                      local.get 22
-                      i32.store offset=8
-                      global.get 0
-                      global.get 0
-                      i32.const 12
-                      i32.add
-                      global.set 0
-                      local.set 23
-                      global.get 0
-                      i32.const 1
-                      i32.store
-                      global.get 0
-                      local.get 23
-                      i32.store offset=4
-                      global.get 0
-                      global.get 0
-                      i32.const 8
-                      i32.add
-                      global.set 0
-                      br 1 (;@2;)
+                      unreachable
                     end
-                    local.get 17
-                    i32.load offset=4
-                    local.set 19
-                    global.get 0
-                    i32.const 8
-                    i32.store
-                    global.get 0
-                    i32.const 25
-                    i32.store offset=4
-                    global.get 0
-                    local.get 15
-                    i32.store offset=8
-                    global.get 0
-                    local.get 1
-                    i32.store offset=12
-                    global.get 0
-                    local.get 0
-                    i32.store offset=16
-                    global.get 0
-                    global.get 0
-                    i32.const 20
-                    i32.add
-                    global.set 0
-                    local.set 24
-                    local.get 15
-                    i32.load offset=4
-                    local.set 25
-                    local.get 25
-                    i32.const 4
-                    i32.add
-                    local.get 24
-                    local.get 2
-                    local.get 25
-                    i32.load
-                    call_indirect (type $fun_3_1)
-                    br 0 (;@2;)
+                    br 1 (;@1;)
                   end
-                  br 0 (;@1;)
+                  unreachable
                 end
               )
               (func $f_lam_17 (;27;) (type $fun_2_1) (param i32 i32) (result i32)
-                (local i32 i32 i32)
-                global.get 0
-                local.set 2
+                (local i32 i32)
                 local.get 0
                 i32.const 4
                 i32.add
-                local.get 2
+                i32.const 825
                 local.get 0
                 i32.load
                 call_indirect (type $fun_2_1)
-                local.set 3
+                local.set 2
                 global.get 0
                 i32.const 0
                 i32.store
                 global.get 0
-                local.get 3
+                local.get 2
                 i32.store offset=4
                 global.get 0
                 global.get 0

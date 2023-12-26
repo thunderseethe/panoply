@@ -28,7 +28,7 @@ impl Copy for PartialEv where InDb: Copy {}
 #[derive(Default, Debug)]
 pub(crate) struct EvidenceMap {
     /// Unique list of parameters we've generated so far
-    params: Vec<ReducIrVar>,
+    params: Vec<(ReducIrVar, Evidence)>,
     // Find evidence when we only have partial information about it.
     // Like when we encounter a Project or Inject node.
     partial_map: FxHashMap<PartialEv, usize>,
@@ -39,10 +39,10 @@ impl EvidenceMap {
         let idx = self
             .params
             .iter()
-            .position(|p| p == &param)
+            .position(|p| p.0 == param)
             .unwrap_or_else(|| {
                 let idx = self.params.len();
-                self.params.push(param);
+                self.params.push((param, ev));
                 idx
             });
 
@@ -91,7 +91,7 @@ impl EvidenceMap {
         &self,
         right: RowFields,
         goal: ScopedRow,
-    ) -> Option<(RowValues, ReducIrVar)> {
+    ) -> Option<(RowValues, ReducIrVar, &Evidence)> {
         self.partial_map
             .iter()
             .find_map(|(ev, indx)| {
@@ -106,7 +106,10 @@ impl EvidenceMap {
                     None
                 }
             })
-            .map(|(vals, indx)| (vals, self.params[indx]))
+            .map(|(vals, indx)| {
+                let (id, ev) = &self.params[indx];
+                (vals, *id, ev)
+            })
     }
 }
 impl Index<&Evidence> for EvidenceMap {
@@ -119,10 +122,11 @@ impl Index<&Evidence> for EvidenceMap {
                 index, self.complete_map
             )
         })]
+        .0
     }
 }
 impl Index<&PartialEv> for EvidenceMap {
-    type Output = ReducIrVar;
+    type Output = (ReducIrVar, Evidence);
 
     fn index(&self, index: &PartialEv) -> &Self::Output {
         &self.params[*self.partial_map.get(index).unwrap_or_else(|| {

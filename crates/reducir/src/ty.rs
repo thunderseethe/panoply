@@ -298,26 +298,14 @@ impl ReducIrRow {
     fn into_prod_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> ReducIrTy {
         match self {
             ReducIrRow::Open(var) => db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(var)),
-            ReducIrRow::Closed(tys) => {
-                if tys.len() == 1 {
-                    tys.into_iter().next().unwrap()
-                } else {
-                    db.mk_reducir_ty(ReducIrTyKind::ProductTy(tys))
-                }
-            }
+            ReducIrRow::Closed(tys) => db.mk_prod_ty(tys),
         }
     }
 
     fn into_coprod_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> ReducIrTy {
         match self {
             ReducIrRow::Open(var) => db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(var)),
-            ReducIrRow::Closed(tys) => {
-                if tys.len() == 1 {
-                    tys.into_iter().next().unwrap()
-                } else {
-                    db.mk_reducir_ty(ReducIrTyKind::CoproductTy(tys))
-                }
-            }
+            ReducIrRow::Closed(tys) => db.mk_coprod_ty(tys),
         }
     }
 }
@@ -352,8 +340,30 @@ pub trait MkReducIrTy {
         args: impl IntoIterator<Item = impl IntoReducIrTy>,
         ret: impl IntoReducIrTy,
     ) -> ReducIrTy;
-    fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
-    fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy;
+
+    fn mk_prod_ty_ref(&self, elems: &[ReducIrTy]) -> ReducIrTy {
+        self.mk_prod_ty(elems.to_owned())
+    }
+
+    fn mk_prod_ty(&self, elems: Vec<ReducIrTy>) -> ReducIrTy {
+        if elems.len() == 1 {
+            elems.into_iter().next().unwrap()
+        } else {
+            self.mk_reducir_ty(ReducIrTyKind::ProductTy(elems))
+        }
+    }
+
+    fn mk_coprod_ty_ref(&self, elems: &[ReducIrTy]) -> ReducIrTy {
+        self.mk_coprod_ty(elems.to_owned())
+    }
+
+    fn mk_coprod_ty(&self, elems: Vec<ReducIrTy>) -> ReducIrTy {
+        if elems.len() == 1 {
+            elems.into_iter().next().unwrap()
+        } else {
+            self.mk_reducir_ty(ReducIrTyKind::CoproductTy(elems))
+        }
+    }
 
     fn mk_forall_ty<I>(&self, kinds: I, ty: impl IntoReducIrTy) -> ReducIrTy
     where
@@ -396,14 +406,6 @@ where
 {
     fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
         ReducIrTy::new(self.as_reducir_db(), kind)
-    }
-
-    fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
-        self.mk_reducir_ty(ReducIrTyKind::ProductTy(elems.to_owned()))
-    }
-
-    fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
-        self.mk_reducir_ty(ReducIrTyKind::CoproductTy(elems.to_owned()))
     }
 
     fn mk_fun_ty(

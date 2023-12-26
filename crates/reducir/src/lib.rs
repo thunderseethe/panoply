@@ -2,6 +2,7 @@ use base::{
     id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
     ident::Ident,
     modules::Module,
+    pretty::PrettyWithCtx,
 };
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
@@ -243,6 +244,49 @@ where
         self.kind.fmt(f)
     }
 }
+
+pub trait ContainsVar {
+    fn contains_var(&self, var: &ReducIrVar) -> bool;
+}
+impl ContainsVar for Infallible {
+    fn contains_var(&self, _: &ReducIrVar) -> bool {
+        // easy
+        false
+    }
+}
+impl ContainsVar for DelimCont {
+    fn contains_var(&self, var: &ReducIrVar) -> bool {
+        match self {
+            DelimCont::NewPrompt(v, ir) => v == var || ir.contains_var(var),
+            DelimCont::Prompt(marker, upd_handler, body) => {
+                marker.contains_var(var) || upd_handler.contains_var(var) || body.contains_var(var)
+            }
+            DelimCont::Yield(_, marker, body) => marker.contains_var(var) || body.contains_var(var),
+        }
+    }
+}
+impl<Ext: ContainsVar> ContainsVar for ReducIr<Ext> {
+    fn contains_var(&self, var: &ReducIrVar) -> bool {
+        match self.kind() {
+            Int(_) | Item(_, _) => false,
+            Var(v) => v == var,
+            Abs(_, body)
+            | TyAbs(_, body)
+            | TyApp(body, _)
+            | FieldProj(_, body)
+            | Tag(_, _, body) => body.contains_var(var),
+            App(head, spine) => {
+                head.contains_var(var) || spine.iter().any(|ir| ir.contains_var(var))
+            }
+            Struct(elems) => elems.iter().any(|ir| ir.contains_var(var)),
+            Case(_, discr, branches) => {
+                discr.contains_var(var) || branches.iter().any(|ir| ir.contains_var(var))
+            }
+            X(ext) => ext.contains_var(var),
+        }
+    }
+}
+
 impl<Ext> ReducIr<Ext> {
     pub fn new(kind: ReducIrKind<Ext>) -> Self {
         Self { kind }
@@ -370,46 +414,6 @@ impl<Ext> ReducIr<Ext> {
         ReducIr::new(Case(ty, P::new(discr), cases.into_iter().collect()))
     }
 
-    fn contains_var(&self, var: &ReducIrVar) -> bool {
-        match self.kind() {
-            Int(_) | Item(_, _) => false,
-            Var(v) => v == var,
-            Abs(_, body)
-            | TyAbs(_, body)
-            | TyApp(body, _)
-            | FieldProj(_, body)
-            | Tag(_, _, body) => body.contains_var(var),
-            App(head, spine) => {
-                head.contains_var(var) || spine.iter().any(|ir| ir.contains_var(var))
-            }
-            Struct(elems) => elems.iter().any(|ir| ir.contains_var(var)),
-            Case(_, discr, branches) => {
-                discr.contains_var(var) || branches.iter().any(|ir| ir.contains_var(var))
-            }
-            X(_) => todo!(),
-        }
-    }
-
-    pub fn local(var: ReducIrVar, value: Self, mut body: Self) -> Self {
-        if let App(ref mut head, ref mut spine) = body.kind {
-            if spine.iter().all(|arg| !arg.contains_var(&var)) {
-                if let Abs(ref mut vars, _) = head.as_mut().kind {
-                    *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
-                    spine.insert(0, value);
-                    return body;
-                }
-            }
-        }
-        if let Abs(ref mut vars, _) = body.kind {
-            *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
-            return ReducIr::app(body, std::iter::once(value));
-        }
-        ReducIr::app(
-            ReducIr::abss(std::iter::once(var), body),
-            std::iter::once(value),
-        )
-    }
-
     pub fn field_proj(indx: usize, target: Self) -> Self {
         ReducIr::new(FieldProj(indx, P::new(target)))
     }
@@ -429,6 +433,28 @@ impl<Ext> ReducIr<Ext> {
             }),
             _ => Err(self),
         }
+    }
+}
+
+impl<Ext: ContainsVar> ReducIr<Ext> {
+    pub fn local(var: ReducIrVar, value: Self, mut body: Self) -> Self {
+        if let App(ref mut head, ref mut spine) = body.kind {
+            if spine.iter().all(|arg| !arg.contains_var(&var)) {
+                if let Abs(ref mut vars, _) = head.as_mut().kind {
+                    *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
+                    spine.insert(0, value);
+                    return body;
+                }
+            }
+        }
+        if let Abs(ref mut vars, _) = body.kind {
+            *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
+            return ReducIr::app(body, std::iter::once(value));
+        }
+        ReducIr::app(
+            ReducIr::abss(std::iter::once(var), body),
+            std::iter::once(value),
+        )
     }
 }
 
@@ -782,7 +808,9 @@ pub trait TypeCheck {
     fn type_check<'a, DB: ?Sized + crate::Db>(
         &'a self,
         ctx: &DB,
-    ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>>;
+    ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>>
+    where
+        Self::Ext: PrettyWithCtx<DB>;
 }
 impl TypeCheck for DelimCont {
     type Ext = Self;
@@ -852,7 +880,10 @@ impl TypeCheck for Infallible {
 impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
     type Ext = Ext;
 
-    fn type_check<DB: ?Sized + crate::Db>(&self, ctx: &DB) -> Result<ReducIrTy, ReducIrTyErr<Ext>> {
+    fn type_check<DB: ?Sized + crate::Db>(&self, ctx: &DB) -> Result<ReducIrTy, ReducIrTyErr<Ext>>
+    where
+        Ext: PrettyWithCtx<DB>,
+    {
         use ty::ReducIrTyKind::*;
         match &self.kind {
             Int(_) => Ok(ctx.mk_reducir_ty(IntTy)),
@@ -871,10 +902,13 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                         for (fun_arg_ty, (arg_index, arg)) in
                             fun_args.zip_non_consuming(&mut args_iter.enumerate().peekable())
                         {
-                            let arg_ty = arg.type_check(ctx.as_reducir_db())?;
+                            let arg_ty = arg.type_check(ctx)?;
                             if *fun_arg_ty != arg_ty {
                                 return Err(ReducIrTyErr::TyMismatch {
-                                    left_ty: ctx.mk_fun_ty(fun_args.copied(), ret_ty),
+                                    left_ty: ctx.mk_fun_ty(
+                                        std::iter::once(*fun_arg_ty).chain(fun_args.copied()),
+                                        ret_ty,
+                                    ),
                                     left_ir: Cow::Owned(ReducIr::app(
                                         func.deref().clone(),
                                         args[0..arg_index].to_vec(),
@@ -925,7 +959,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                     .iter()
                     .map(|e| e.type_check(ctx))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(ctx.mk_prod_ty(&elems))
+                Ok(ctx.mk_prod_ty(elems))
             }
             FieldProj(indx, strukt) => {
                 let strukt_ty = strukt.type_check(ctx)?;

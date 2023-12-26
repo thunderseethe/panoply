@@ -28,6 +28,7 @@ const TERM_KINDS: NameKinds = NameKinds::EFFECT_OP
     .union(NameKinds::VAR);
 
 pub(crate) struct NameResCtx<'a, 'b, 'c, E> {
+    int_ty_ident: Ident,
     cst_alloc: &'b CstIndxAlloc,
     arena: &'a Bump,
     alloc: &'b mut NstIndxAlloc,
@@ -318,6 +319,8 @@ where
         type_: Idx<cst::Type<Ident>>,
     ) -> Option<Idx<nst::Type<TyVarId>>> {
         let type_ = match self.view(type_) {
+            cst::Type::Int(_) => unreachable!("We parse Int as a Named type"),
+            cst::Type::Named(var) if var.value == self.int_ty_ident => nst::Type::Int(var.span()),
             cst::Type::Named(var) => nst::Type::Named(self.resolve_type_symbol(*var)?),
             cst::Type::Sum {
                 langle,
@@ -460,6 +463,7 @@ where
     fn subscope<A>(&mut self, body: impl FnOnce(&mut NameResCtx<'a, '_, '_, E>) -> A) -> A {
         self.names.subscope(|names| {
             let mut ctx = NameResCtx {
+                int_ty_ident: self.int_ty_ident,
                 cst_alloc: self.cst_alloc,
                 arena: self.arena,
                 alloc: self.alloc,
@@ -833,6 +837,7 @@ pub(crate) struct ModuleResolution {
 
 /// Resolves the given module.
 pub(crate) fn resolve_module<'a, 'b: 'a, E>(
+    db: &'a dyn crate::Db,
     arena: &'a Bump,
     module: &cst::CstModule,
     base: BaseNames<'_>,
@@ -847,6 +852,7 @@ where
         let mut names = Names::new(&base);
         let mut alloc = NstIndxAlloc::default();
         let mut ctx = NameResCtx {
+            int_ty_ident: db.ident_str("Int"),
             cst_alloc: &module.indices,
             arena,
             errors,
@@ -896,9 +902,9 @@ mod tests {
 
     use test_utils::{
         assert_ident_text_matches_name, field, id_field, nitem_term, npat_prod, npat_var,
-        nst::NstRefAlloc, nterm_abs, nterm_app, nterm_dot, nterm_item, nterm_local, nterm_match,
-        nterm_prod, nterm_sum, nterm_var, nterm_with, quant, scheme, type_func, type_named,
-        type_prod,
+        nst::NstRefAlloc, nterm_abs, nterm_app, nterm_dot, nterm_int, nterm_item, nterm_local,
+        nterm_match, nterm_prod, nterm_sum, nterm_var, nterm_with, quant, scheme, type_func,
+        type_int, type_named, type_prod,
     };
 
     #[derive(Default)]
@@ -1476,6 +1482,23 @@ mod tests {
                 assert_eq!(a1, a);
                 assert_eq!(a2, a);
                 assert_eq!(x1, x);
+            }
+        );
+    }
+
+    #[test]
+    fn test_int_ty() {
+        let arena = Bump::new();
+        let db = TestDatabase::default();
+        let (res, ids, errs) = parse_resolve_module(&db, &arena, "foobar : Int = 5");
+
+        assert_matches!(errs[..], []);
+        assert_matches!(
+            res[..],
+            [
+                Some((nitem_term!(foobar, scheme!(type_int!()), nterm_int!(5)), _))
+            ] => {
+                assert_eq!(ids.get(foobar).value.text(&db), "foobar");
             }
         );
     }

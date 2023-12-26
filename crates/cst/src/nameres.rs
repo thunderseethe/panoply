@@ -331,6 +331,7 @@ pub mod traverse {
                 return ControlFlow::Continue(());
             }
             match ty {
+                Type::Int(_) => ControlFlow::Continue(()),
                 Type::Named(ty_var) => self.traverse_ty_var(ty_var),
                 Type::Sum { variants, .. } => self.traverse_row(variants),
                 Type::Product { fields, .. } => match fields {

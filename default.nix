@@ -4,7 +4,9 @@ pkgs.mkShell {
     cargo
     cargo-tarpaulin
     clippy
+    clang
     gdb
+    mold
     rust-analyzer
     rustc
     jq

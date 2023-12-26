@@ -1,7 +1,6 @@
 use ast::{Ast, Direction, Term, Term::*};
 use base::{
-    diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, memory::handle, modules::Module,
-    span::Span,
+    diagnostic::tc::TypeCheckDiagnostic, id::VarId, memory::handle, modules::Module, span::Span,
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
@@ -739,29 +738,16 @@ where
 
                 self.state.item_wrappers.insert(term, wrapper);
 
+                let core_db = self.db.as_core_db();
+                let eff_name = op_name.effect(core_db);
+                let ret_ty = self.fresh_var();
+                let eff = Row::Closed(self.single_row(eff_name.name(core_db), ret_ty));
+
                 let unused = self.fresh_scoped_row();
                 let goal = self.fresh_scoped_row();
-
-                let ret_ty = self.fresh_var();
-                let eff = Row::Closed(
-                    self.single_row(
-                        op_name
-                            .effect(self.db.as_core_db())
-                            .name(self.db.as_core_db()),
-                        ret_ty,
-                    ),
-                );
-
-                // Mark our op function with our effect type
-                // This is our version of koka's `open` rule.
-                let mut ty = sig.ty;
-                if let FunTy(arg, ret) = self.kind(&ty) {
-                    ty = self.mk_ty(FunTy(*arg, *ret))
-                }
-
                 self.add_effect_row_combine(unused, eff, goal, current_span());
 
-                InferResult::new(ty, goal)
+                InferResult::new(sig.ty, goal)
             }
             Term::Handle { handler, body } => {
                 let ret_ty = self.fresh_var();
@@ -1258,79 +1244,51 @@ where
         let normal_eff = self.normalize_row(eff);
         let normal_ret = self.normalize_ty(ret);
 
-        let transform_to_cps_handler_ty = |ctx: &mut Self, ty: InferTy<'infer>| {
-            // Transform our ty into the type a handler should have
-            // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
-            match *ty {
-                FunTy(a, b) => {
-                    let kont_ty = ctx.mk_ty(FunTy(b, normal_ret));
-                    Ok(ctx.mk_ty(FunTy(a, ctx.mk_ty(FunTy(kont_ty, normal_ret)))))
-                }
-                _ => {
-                    // TODO: report a better error here.
-                    // We should specialize the error so it's clear it was an
-                    // effect signature with an invalid type that caused it
-                    Err((ty, ctx.mk_ty(FunTy(ctx.mk_ty(ErrorTy), ctx.mk_ty(ErrorTy)))))
-                }
-            }
-        };
-
         let unify_sig_handler =
-            |ctx: &mut Self,
-             members_sig: Vec<(Ident, TyScheme)>,
-             sig: SimpleClosedRow<InArena<'infer>>| {
-                let sig_unify = members_sig.into_iter().zip(sig.iter());
-                for ((member_name, scheme), (field_name, ty)) in sig_unify {
-                    // Sanity check that our handler fields and effect members line up the way we
-                    // expect them to.
-                    debug_assert_eq!(&member_name, field_name);
+            |ctx: &mut Self, scheme: &TyScheme, sig: SimpleClosedRow<InArena<'infer>>| {
+                let ty_unifiers = scheme
+                    .bound_ty
+                    .iter()
+                    .map(|key| (*key, ctx.ty_unifiers.new_key(None)))
+                    .collect::<Vec<_>>();
+                let ret_tyvar = ty_unifiers[0].1;
+                let mut inst = Instantiate {
+                    db: ctx.db,
+                    ctx: ctx.ctx,
+                    ty_unifiers,
+                    datarow_unifiers: scheme
+                        .bound_data_row
+                        .iter()
+                        .map(|key| (*key, ctx.data_row_unifiers.new_key(None)))
+                        .collect(),
+                    effrow_unifiers: scheme
+                        .bound_eff_row
+                        .iter()
+                        .map(|key| (*key, ctx.eff_row_unifiers.new_key(None)))
+                        .collect(),
+                };
 
-                    let mut inst = Instantiate {
-                        db: ctx.db,
-                        ctx: ctx.ctx,
-                        ty_unifiers: scheme
-                            .bound_ty
-                            .into_iter()
-                            .map(|key| (key, ctx.ty_unifiers.new_key(None)))
-                            .collect(),
-                        datarow_unifiers: scheme
-                            .bound_data_row
-                            .into_iter()
-                            .map(|key| (key, ctx.data_row_unifiers.new_key(None)))
-                            .collect(),
-                        effrow_unifiers: scheme
-                            .bound_eff_row
-                            .into_iter()
-                            .map(|key| (key, ctx.eff_row_unifiers.new_key(None)))
-                            .collect(),
-                    };
+                // Transform our scheme ty into the type a handler should have
+                // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+                let member_ty = scheme.ty.try_fold_with(&mut inst).unwrap();
 
-                    // Transform our scheme ty into the type a handler should have
-                    // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
-                    let member_ty = transform_to_cps_handler_ty(
-                        ctx,
-                        scheme.ty.try_fold_with(&mut inst).unwrap(),
-                    )?;
+                ctx.unify(ret_tyvar, normal_ret)?;
+                // Unify our instantiated and transformed member type agaisnt the handler field
+                // type.
+                ctx.unify(member_ty, ctx.mk_ty(RowTy(sig)))?;
 
-                    // Unify our instantiated and transformed member type agaisnt the handler field
-                    // type.
-                    ctx.unify(member_ty, *ty)?;
-
-                    // We want to check constrs after we unify our scheme type so that we've alread
-                    // unified as many fresh variables into handler field variables as possible.
-                    for constrs in scheme.constrs {
-                        match constrs.try_fold_with(&mut inst).unwrap() {
-                            Evidence::DataRow { left, right, goal } => {
-                                ctx.unify_row_combine(left, right, goal)?
-                            }
-                            Evidence::EffRow { left, right, goal } => {
-                                ctx.unify_row_combine(left, right, goal)?
-                            }
+                for constrs in scheme.constrs.iter() {
+                    match constrs.try_fold_with(&mut inst).unwrap() {
+                        Evidence::DataRow { left, right, goal } => {
+                            ctx.unify_row_combine(left, right, goal)?
+                        }
+                        Evidence::EffRow { left, right, goal } => {
+                            ctx.unify_row_combine(left, right, goal)?
                         }
                     }
-                    // TODO: We should check scheme.eff here as well, at least to confirm they are
-                    // all the same
                 }
+                // TODO: We should check scheme.eff here as well, at least to confirm they are
+                // all the same
                 Ok(())
             };
 
@@ -1340,24 +1298,9 @@ where
                     .db
                     .lookup_effect_by_member_names(self.module, handler.fields(self))
                     .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
-                let mut members_sig = self
-                    .db
-                    .effect_members(eff_name)
-                    .iter()
-                    .map(|eff_op_id| {
-                        (
-                            self.db.effect_member_name(*eff_op_id),
-                            self.db.effect_member_sig(*eff_op_id),
-                        )
-                    })
-                    .collect::<Vec<_>>();
 
-                // Sort our members so they are in the same order as sig.fields
-                // TODO: Should we have an invariant that effect_members returns members "in
-                // order"?
-                members_sig.sort_by(|(a, _), (b, _)| a.cmp(b));
-
-                unify_sig_handler(self, members_sig, handler)?;
+                let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+                unify_sig_handler(self, handler_scheme, handler)?;
 
                 // We succesfully unified the handler against it's expected signature.
                 // That means we can unify our eff_var against our effect
@@ -1375,24 +1318,9 @@ where
                     .db
                     .lookup_effect_by_name(self.module, eff_ident)
                     .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
-                let mut members_sig = self
-                    .db
-                    .effect_members(eff_name)
-                    .iter()
-                    .map(|eff_op_id| {
-                        (
-                            self.db.effect_member_name(*eff_op_id),
-                            self.db.effect_member_sig(*eff_op_id),
-                        )
-                    })
-                    .collect::<Vec<_>>();
 
-                // Sort our members so they are in the same order as sig.fields
-                // TODO: Should we have an invariant that effect_members returns members "in
-                // order"?
-                members_sig.sort_by_key(|(id, _)| *id);
-
-                unify_sig_handler(self, members_sig, handler)
+                let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+                unify_sig_handler(self, handler_scheme, handler)
             }
             (Row::Open(handler_var), Row::Closed(eff)) => {
                 debug_assert!(eff.len(self) == 1);
@@ -1403,46 +1331,41 @@ where
                     .db
                     .lookup_effect_by_name(self.module, eff_ident)
                     .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
-                let members_sig = self
-                    .db
-                    .effect_members(eff_name)
+
+                let scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+                let ty_unifiers = scheme
+                    .bound_ty
                     .iter()
-                    .map(|eff_op_id| {
-                        let scheme = self.db.effect_member_sig(*eff_op_id);
-                        let mut inst = Instantiate {
-                            db: self.db,
-                            ctx: self.ctx,
-                            ty_unifiers: scheme
-                                .bound_ty
-                                .into_iter()
-                                .map(|key| (key, self.ty_unifiers.new_key(None)))
-                                .collect(),
-                            datarow_unifiers: Default::default(),
-                            effrow_unifiers: Default::default(),
-                        };
-
-                        for constr in scheme.constrs {
-                            match constr.try_fold_with(&mut inst).unwrap() {
-                                Evidence::DataRow { left, right, goal } => {
-                                    self.unify_row_combine(left, right, goal)?
-                                }
-                                Evidence::EffRow { left, right, goal } => {
-                                    self.unify_row_combine(left, right, goal)?
-                                }
-                            }
-                        }
-
-                        let member_ty = transform_to_cps_handler_ty(
-                            self,
-                            scheme.ty.try_fold_with(&mut inst).unwrap(),
-                        )?;
-
-                        Ok((self.db.effect_member_name(*eff_op_id), member_ty))
-                    })
-                    .collect::<Result<Vec<_>, TypeCheckError<'infer>>>()?;
-
-                let member_row = self.construct_simple_row(members_sig);
-                self.unify(handler_var, member_row)
+                    .map(|key| (*key, self.ty_unifiers.new_key(None)))
+                    .collect::<Vec<_>>();
+                let ret_tyvar = ty_unifiers[0].1;
+                self.unify(ret_tyvar, normal_ret)?;
+                let mut inst = Instantiate {
+                    db: self.db,
+                    ctx: self.ctx,
+                    ty_unifiers,
+                    datarow_unifiers: scheme
+                        .bound_data_row
+                        .iter()
+                        .map(|key| (*key, self.data_row_unifiers.new_key(None)))
+                        .collect(),
+                    effrow_unifiers: scheme
+                        .bound_eff_row
+                        .iter()
+                        .map(|key| (*key, self.eff_row_unifiers.new_key(None)))
+                        .collect(),
+                };
+                let ty = scheme.ty.try_fold_with(&mut inst).unwrap();
+                let handler_row = match *ty {
+                    ProdTy(Row::Closed(handler_row)) => handler_row,
+                    _ => {
+                        return Err(TypeCheckError::TypeMismatch(
+                            ty,
+                            self.ctx.mk_ty(ProdTy(Row::Open(handler_var))),
+                        ))
+                    }
+                };
+                self.unify(handler_var, handler_row)
             }
             // We didn't learn enough info to solve our handle term, this is an error
             (Row::Open(handler_var), Row::Open(eff_var)) => Err(TypeCheckError::UnsolvedHandle {

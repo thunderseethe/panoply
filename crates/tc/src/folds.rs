@@ -156,8 +156,63 @@ pub(crate) mod normalize {
     }
 }
 
-pub(crate) mod instantiate {
+pub(crate) mod tyvar_subst {
+    use std::convert::Infallible;
 
+    use base::id::TyVarId;
+    use rustc_hash::FxHashMap;
+    use ty::row::{Row, ScopedRow, SimpleRow};
+    use ty::{
+        FallibleTypeFold, InDb, MkTy, ScopedRowVarOf, SimpleRowVarOf, Ty, TypeKind, TypeVarOf,
+    };
+
+    pub(crate) struct TyVarIdSubst<'a, DB: ?Sized> {
+        pub(crate) db: &'a DB,
+        pub(crate) subst: FxHashMap<TyVarId, TyVarId>,
+    }
+    impl<'a, DB: ?Sized + crate::Db> FallibleTypeFold<'a> for TyVarIdSubst<'a, DB> {
+        type In = InDb;
+
+        type Out = InDb;
+
+        type Error = Infallible;
+
+        type AccessTy = &'a DB;
+
+        type MkTy = DB;
+
+        fn access(&self) -> &Self::AccessTy {
+            &self.db
+        }
+
+        fn ctx(&self) -> &Self::MkTy {
+            self.db
+        }
+
+        fn try_fold_var(&mut self, var: TypeVarOf<Self::In>) -> Result<Ty<Self::Out>, Self::Error> {
+            let var = self.subst.get(&var).copied().unwrap_or(var);
+            Ok(self.ctx().mk_ty(TypeKind::VarTy(var)))
+        }
+
+        fn try_fold_simple_row_var(
+            &mut self,
+            var: SimpleRowVarOf<Self::In>,
+        ) -> Result<SimpleRow<Self::Out>, Self::Error> {
+            let var = self.subst.get(&var).copied().unwrap_or(var);
+            Ok(Row::Open(var))
+        }
+
+        fn try_fold_scoped_row_var(
+            &mut self,
+            var: ScopedRowVarOf<Self::In>,
+        ) -> Result<ScopedRow<Self::Out>, Self::Error> {
+            let var = self.subst.get(&var).copied().unwrap_or(var);
+            Ok(Row::Open(var))
+        }
+    }
+}
+
+pub(crate) mod instantiate {
     use base::id::TyVarId;
     use ty::{
         infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TcVarToUnifierError, TypeK},

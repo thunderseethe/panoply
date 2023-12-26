@@ -280,6 +280,7 @@ pub type TypeRow<V> = Row<V, IdField<Idx<Type<V>>>>;
 /// An unqualified syntactic type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Type<V> {
+    Int(Span),
     Named(SpanOf<V>),
     Sum {
         langle: Span,
@@ -309,6 +310,7 @@ impl<V> Type<V> {
         A: HasArenaRef<Self>,
     {
         match self {
+            Type::Int(span) => *span,
             Type::Named(var) => var.span(),
             Type::Sum { langle, rangle, .. } => Span::join(langle, rangle),
             Type::Product { lbrace, rbrace, .. } => Span::join(lbrace, rbrace),

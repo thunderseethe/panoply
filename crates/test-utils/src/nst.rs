@@ -378,6 +378,7 @@ impl<'a> ReferenceAllocate<'a, NstRefAlloc<'a, '_>> for Idx<nst::Type<TyVarId>> 
 
     fn ref_alloc(&self, alloc: &mut NstRefAlloc<'a, '_>) -> Self::Out {
         let type_ = match alloc.arena()[*self].clone() {
+            nst::Type::Int(span) => Type::Int(span),
             nst::Type::Named(var) => Type::Named(var.ref_alloc(alloc)),
             nst::Type::Sum {
                 langle,
@@ -561,6 +562,13 @@ macro_rules! npat_sum {
 macro_rules! npat_var {
     ($var:pat) => {
         &$crate::nst::Pattern::Whole(base::span_of!($var))
+    };
+}
+
+#[macro_export]
+macro_rules! nterm_int {
+    ($var:pat) => {
+        &$crate::nst::Term::Int(base::span_of!($var))
     };
 }
 

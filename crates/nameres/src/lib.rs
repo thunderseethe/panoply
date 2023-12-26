@@ -205,7 +205,8 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
     let base = BaseBuilder::new(db)
         .add_slice(module, &cst_module.items, &mut errors)
         .build(module, db, &mut module_names);
-    let ModuleResolution { terms, effects } = resolve_module(&arena, cst_module, base, &mut errors);
+    let ModuleResolution { terms, effects } =
+        resolve_module(db, &arena, cst_module, base, &mut errors);
 
     for error in errors {
         PanoplyErrors::push(db.as_core_db(), PanoplyError::from(error));

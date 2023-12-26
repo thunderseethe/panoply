@@ -158,6 +158,7 @@ pub type TypeRow<'a, V> = Row<'a, V, IdField<&'a Type<'a, V>>>;
 /// An unqualified type.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Type<'a, V> {
+    Int(Span),
     Named(SpanOf<V>),
     Sum {
         langle: Span,
@@ -184,6 +185,7 @@ pub enum Type<'a, V> {
 impl<'a, V> Spanned for Type<'a, V> {
     fn span(&self) -> Span {
         match self {
+            Type::Int(span) => *span,
             Type::Named(n) => n.span(),
             Type::Sum { langle, rangle, .. } => Span::join(langle, rangle),
             Type::Product { lbrace, rbrace, .. } => Span::join(lbrace, rbrace),
@@ -502,6 +504,7 @@ impl<'a> ReferenceAllocate<'a, CstRefAlloc<'a, '_>> for Idx<cst::Type<Ident>> {
 
     fn ref_alloc(&self, alloc: &mut CstRefAlloc<'a, '_>) -> Self::Out {
         let type_ = match alloc.arena()[*self].clone() {
+            cst::Type::Int(span) => Type::Int(span),
             cst::Type::Named(var) => Type::Named(var.ref_alloc(alloc)),
             cst::Type::Sum {
                 langle,
@@ -903,6 +906,13 @@ macro_rules! type_func {
             codomain: $cod,
             ..
         }
+    };
+}
+
+#[macro_export]
+macro_rules! type_int {
+    () => {
+        &$crate::cst::Type::Int(_)
     };
 }
 

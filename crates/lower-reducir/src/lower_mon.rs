@@ -30,14 +30,6 @@ impl MkReducIrTy for LowerMonCtx<'_> {
     ) -> ReducIrTy {
         self.db.mk_fun_ty(args, ret)
     }
-
-    fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
-        self.db.mk_prod_ty(elems)
-    }
-
-    fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
-        self.db.mk_coprod_ty(elems)
-    }
 }
 
 impl<'a> LowerMonCtx<'a> {
@@ -62,7 +54,7 @@ impl LowerMonCtx<'_> {
         name: ReducIrTermName,
         ir: &DelimReducIr,
     ) -> ReducIr {
-        let evv_ty = self.db.mk_prod_ty(&[]);
+        let evv_ty = self.db.mk_prod_ty(vec![]);
         let reducir_db = self.db.as_reducir_db();
         let mon_ir = self.lower_monadic(evv_ty, ir);
         match mon_ir
@@ -313,10 +305,15 @@ impl LowerMonCtx<'_> {
                     .iter()
                     .map(|arg| {
                         let mon_arg = self.lower_monadic(evv_ty, arg);
-                        let mon_arg_ty = mon_arg
+                        let mon_arg_ty = match mon_arg
                             .type_check(reducir_db)
                             .map_err_pretty_with(reducir_db)
-                            .unwrap();
+                        {
+                            Ok(ty) => ty,
+                            Err(err) => {
+                                panic!("{:?}", err);
+                            }
+                        };
                         match mon_arg_ty.try_unwrap_monadic(reducir_db) {
                             Ok(_) => {
                                 let arg_ty = arg
@@ -516,10 +513,8 @@ impl LowerMonCtx<'_> {
             // already returns a monad when we call it here
             Item(item, ty) => match item {
                 ReducIrTermName::Term(term) => {
-                    let mon_item = self
-                        .db
-                        .lower_reducir_mon_item_of(*term)
-                        .item(self.db.as_reducir_db());
+                    let mi = self.db.lower_reducir_mon_item_of(*term);
+                    let mon_item = mi.item(self.db.as_reducir_db());
                     let mon_ty = mon_item
                         .type_check(self.db.as_reducir_db())
                         .expect("Type checking must succeed for item to exist");

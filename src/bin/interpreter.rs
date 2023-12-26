@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use clap::Parser;
 use emit_wasm::Db as EmitWasmDb;
 use panoply::{canonicalize_path_set, create_source_file_set, Args, PanoplyDatabase};
@@ -23,6 +25,13 @@ fn main() -> eyre::Result<()> {
     printer.print_offsets(true);
     let wat = printer.print(&bytes).unwrap();
     println!("{}", wat);
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open("./testbed/wand.wat")
+        .unwrap();
+    writeln!(&mut file, "{}", wat).unwrap();
 
     match tys {
         Ok(_) => {}

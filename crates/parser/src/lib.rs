@@ -316,6 +316,7 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
                         return continue_search();
                     }
                     match ty {
+                        Type::Int(_) => {}
                         Type::Named(var) => self.search_ident(var)?,
                         Type::Sum { variants, .. } => self.search_row(variants)?,
                         Type::Product { fields, .. } => {

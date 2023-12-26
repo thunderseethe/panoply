@@ -3,6 +3,7 @@ use base::{
     id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
     id_converter::IdConverter,
     modules::Module,
+    pretty::PrettyErrorWithDb,
 };
 use la_arena::Idx;
 use reducir::{
@@ -201,16 +202,9 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
                 // Unwrap singleton rows
-                if elems.len() == 1 {
-                    RowEvIrTy {
-                        prod: elems[0],
-                        coprod: elems[0],
-                    }
-                } else {
-                    RowEvIrTy {
-                        prod: self.db.mk_prod_ty(elems.as_slice()),
-                        coprod: self.db.mk_coprod_ty(elems.as_slice()),
-                    }
+                RowEvIrTy {
+                    prod: self.db.mk_prod_ty(elems.clone()),
+                    coprod: self.db.mk_coprod_ty(elems),
                 }
             }
         }
@@ -232,7 +226,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
 
         let branch_var_ty = self.db.mk_reducir_ty(VarTy(0));
 
-        self.db.mk_prod_ty(&[
+        self.db.mk_prod_ty_ref(&[
             self.db.mk_fun_ty([left.prod, right.prod], goal.prod),
             self.db.mk_reducir_ty(ForallTy(
                 Kind::Type,
@@ -248,11 +242,11 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                     branch_var_ty,
                 ),
             )),
-            self.db.mk_prod_ty(&[
+            self.db.mk_prod_ty(vec![
                 self.db.mk_fun_ty([goal.prod], left.prod),
                 self.db.mk_fun_ty([left.coprod], goal.coprod),
             ]),
-            self.db.mk_prod_ty(&[
+            self.db.mk_prod_ty(vec![
                 self.db.mk_fun_ty([goal.prod], right.prod),
                 self.db.mk_fun_ty([right.coprod], goal.coprod),
             ]),
@@ -269,8 +263,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                 coprod: self.db.mk_reducir_ty(CoprodVarTy(self.tyvar_env[&v])),
             },
             Row::Closed(row) => {
-                let row_len = row.len(&self.db);
-                let mut iter = row
+                let elems = row
                     .fields(&self.db)
                     .iter()
                     .zip(row.values(&self.db).iter())
@@ -283,19 +276,11 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                         self.db
                             .effect_handler_ir_ty(eff)
                             .reduce_forall(self.db.as_reducir_db(), ret_ty)
-                    });
-                if row_len == 1 {
-                    let elem = iter.next().unwrap();
-                    RowEvIrTy {
-                        prod: elem,
-                        coprod: elem,
-                    }
-                } else {
-                    let elems = iter.collect::<Vec<_>>();
-                    RowEvIrTy {
-                        prod: self.db.mk_prod_ty(elems.as_slice()),
-                        coprod: self.db.mk_coprod_ty(elems.as_slice()),
-                    }
+                    })
+                    .collect::<Vec<_>>();
+                RowEvIrTy {
+                    prod: self.db.mk_prod_ty(elems.clone()),
+                    coprod: self.db.mk_coprod_ty(elems),
                 }
             }
         }
@@ -356,7 +341,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
-                self.db.mk_prod_ty(elems.as_slice())
+                self.db.mk_prod_ty(elems)
             }
             TypeKind::SumTy(Row::Closed(row)) => {
                 let elems = row
@@ -364,7 +349,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
-                self.db.mk_coprod_ty(elems.as_slice())
+                self.db.mk_coprod_ty(elems)
             }
         }
     }
@@ -395,14 +380,6 @@ impl RowVarConvert<Scoped> for LowerTyCtx<'_, '_> {
 impl<'a, 'b, S> MkReducIrTy for LowerCtx<'a, 'b, S> {
     fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
         self.db.mk_reducir_ty(kind)
-    }
-
-    fn mk_prod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
-        self.db.mk_prod_ty(elems)
-    }
-
-    fn mk_coprod_ty(&self, elems: &[ReducIrTy]) -> ReducIrTy {
-        self.db.mk_coprod_ty(elems)
     }
 
     fn mk_fun_ty(
@@ -450,7 +427,7 @@ impl<'a, S> LowerCtx<'a, '_, S> {
             },
             ty: match self.ty_ctx.lower_row(term_infer.eff) {
                 ReducIrRow::Open(i) => self.db.mk_reducir_ty(ProdVarTy(i)),
-                ReducIrRow::Closed(tys) => self.mk_reducir_ty(ProductTy(tys)),
+                ReducIrRow::Closed(tys) => self.mk_prod_ty(tys),
             },
         }
     }
@@ -1109,7 +1086,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let goal = expect_prod_ty(&self.db, self.lookup_term(*subterm).ty);
                 let other = expect_prod_ty(&self.db, self.lookup_term(term).ty);
 
-                let param = self.ev_map[&PartialEv::Data { goal, other }];
+                let (param, _) = self.ev_map[&PartialEv::Data { goal, other }];
                 let idx = match direction {
                     Direction::Left => 2,
                     Direction::Right => 3,
@@ -1128,7 +1105,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let goal = expect_sum_ty(&self.db, self.lookup_term(term).ty);
                 let other = expect_sum_ty(&self.db, self.lookup_term(*subterm).ty);
 
-                let param = self.ev_map[&PartialEv::Data { other, goal }];
+                let (param, _) = self.ev_map[&PartialEv::Data { other, goal }];
                 let idx = match direction {
                     Direction::Left => 2,
                     Direction::Right => 3,
@@ -1154,7 +1131,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let eff = op.effect(self.db.as_core_db());
 
                 let eff_name = eff.name(self.db.as_core_db());
-                let (eff_vals, eff_ev) = self
+                let (eff_vals, eff_ev_param, _) = self
                     .ev_map
                     .match_right_eff_ev(
                         RowFields::new(self.db.as_ty_db(), vec![eff_name]),
@@ -1179,7 +1156,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     ty: self.mk_fun_ty([op_ret], kont_ret_ty),
                 };
 
-                let prj = ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(eff_ev)));
+                // Always project out the right one for row evidence because we want the innermost
+                // scoped effect handler.
+                let prj =
+                    ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(eff_ev_param)));
                 let eff_var = ReducIrVar {
                     var: ReducIrLocal {
                         top_level: self.current,
@@ -1192,6 +1172,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 };
                 let eff_handler = ReducIr::app(prj, [ReducIr::var(eff_var)]);
 
+                // TODO: How do we get rows here to determine this?
                 let handler_index = self.db.effect_handler_op_index(*op);
                 let handler = ReducIr::field_proj(
                     handler_index,
@@ -1234,21 +1215,40 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                     });
                 let handler_ret_ty = handler_row.values(&self.db)[ret_idx];
                 let handler_ret_row = self.db.single_row(ret_label, handler_ret_ty);
-                let handler_ret_ev = self.ev_map[&PartialEv::Data {
+                let (handler_ret_param, handler_ret_ev) = self.ev_map[&PartialEv::Data {
                     other: Row::Closed(handler_ret_row),
                     goal: Row::Closed(handler_row),
                 }];
+
+                let (handler_ret_idx, handler_sig_idx) = match handler_ret_ev {
+                    Evidence::DataRow { left, right, .. } => {
+                        if left == Row::Closed(handler_ret_row) {
+                            (2, 3)
+                        } else if right == Row::Closed(handler_ret_row) {
+                            (3, 2)
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    Evidence::EffRow { .. } => unreachable!(),
+                };
 
                 let handler_var = ReducIrVar {
                     var: self.generate_local(),
                     ty: self.ty_ctx.lower_ty(handler_infer.ty),
                 };
                 let handler_prj_ret = ReducIr::app(
-                    ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(handler_ret_ev))),
+                    ReducIr::field_proj(
+                        0,
+                        ReducIr::field_proj(handler_ret_idx, ReducIr::var(handler_ret_param)),
+                    ),
                     [ReducIr::var(handler_var)],
                 );
                 let handler_prj_sig = ReducIr::app(
-                    ReducIr::field_proj(0, ReducIr::field_proj(2, ReducIr::var(handler_ret_ev))),
+                    ReducIr::field_proj(
+                        0,
+                        ReducIr::field_proj(handler_sig_idx, ReducIr::var(handler_ret_param)),
+                    ),
                     [ReducIr::var(handler_var)],
                 );
                 let handler_ir = self.lower_term(ast, *handler);
@@ -1265,7 +1265,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let prompt_var = ReducIrVar {
                     var: self.generate_local(),
                     ty: self.mk_reducir_ty(MarkerTy(
-                        return_.type_check(self.db.as_reducir_db()).unwrap(),
+                        return_
+                            .type_check(self.db.as_reducir_db())
+                            .map_err_pretty_with(self.db)
+                            .unwrap(),
                     )),
                 };
                 let update_evv = {

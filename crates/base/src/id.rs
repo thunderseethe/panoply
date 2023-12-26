@@ -296,6 +296,13 @@ pub struct TermName {
     pub module: Module,
 }
 
+impl TermName {
+    pub fn name_text<Db: ?Sized + crate::Db>(self, db: &Db) -> &str {
+        let core_db = db.as_core_db();
+        self.name(core_db).text(core_db)
+    }
+}
+
 /// An identifier for a name resolved effect definition
 #[salsa::interned]
 pub struct EffectName {

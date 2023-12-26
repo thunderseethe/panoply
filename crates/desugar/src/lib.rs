@@ -451,6 +451,7 @@ impl<'a> DesugarCtx<'a> {
 
     fn ds_type(&mut self, nst: Idx<cst::Type<TyVarId>>) -> Ty {
         match &self.arenas[nst] {
+            cst::Type::Int(_) => self.db.as_ty_db().mk_ty(TypeKind::IntTy),
             cst::Type::Named(ty_var) => self.db.as_ty_db().mk_ty(TypeKind::VarTy(ty_var.value)),
             cst::Type::Sum { variants, .. } => self
                 .db

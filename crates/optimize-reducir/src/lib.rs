@@ -1,7 +1,7 @@
 use base::{
     id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
     modules::Module,
-    pretty::PrettyErrorWithDb,
+    pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
 };
 use reducir::{
     mon::{MonReducIrItem, MonReducIrModule},
@@ -448,7 +448,7 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
         db.mk_forall_ty(
             [Kind::Type],
             db.mk_fun_ty(
-                [db.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]))],
+                [db.mk_prod_ty(vec![])],
                 db.mk_reducir_ty(ReducIrTyKind::MarkerTy(
                     var_ty1.shift(db.as_reducir_db(), 1),
                 )),
@@ -538,7 +538,7 @@ fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> Red
         var: gen_local(),
         ty: db.mk_forall_ty(
             [Kind::Type, Kind::Type, Kind::Type],
-            ProductTy(vec![
+            db.mk_prod_ty(vec![
                 db.mk_reducir_ty(MarkerTy(exists_r)),
                 db.mk_fun_ty([db.mk_fun_ty([exists_b], exists_mon_m_r)], exists_mon_m_r),
                 db.mk_fun_ty([exists_b], exists_body_fun_ty),
@@ -554,7 +554,7 @@ fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> Red
         ],
     );
 
-    let unit_ty = db.mk_reducir_ty(ProductTy(vec![]));
+    let unit_ty = db.mk_prod_ty(vec![]);
     let x = ReducIrVar {
         var: gen_local(),
         ty: a,
@@ -725,7 +725,7 @@ fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> ReducIr 
     let exists_body_fun_ty = db.mk_mon_ty(VarTy(5), VarTy(4));
     let y_var = gen_local(db.mk_forall_ty(
         [Kind::Type, Kind::Type, Kind::Type],
-        ProductTy(vec![
+        db.mk_prod_ty(vec![
             db.mk_reducir_ty(MarkerTy(exists_r)),
             db.mk_fun_ty([db.mk_fun_ty([exists_b], exists_mon_m_r)], exists_mon_m_r),
             db.mk_fun_ty([exists_b], exists_body_fun_ty),

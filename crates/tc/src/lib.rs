@@ -7,7 +7,7 @@ use base::{
         tc::TypeCheckDiagnostic,
     },
     file::FileId,
-    id::{EffectName, EffectOpName, TermName, VarId},
+    id::{EffectName, EffectOpName, IdSupply, TermName, TyVarId, VarId},
     ident::Ident,
     modules::Module,
     pretty::{PrettyPrint, PrettyWithCtx},
@@ -20,12 +20,16 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use ty::{
     infer::{TcUnifierVar, TyCtx, UnifierKind},
+    row::Row,
     *,
 };
 
 mod unsolved_row;
 
-use crate::{folds::zonker::FreeTyVars, infer::InferCtx};
+use crate::{
+    folds::{tyvar_subst::TyVarIdSubst, zonker::FreeTyVars},
+    infer::InferCtx,
+};
 
 mod diagnostic;
 
@@ -57,7 +61,12 @@ pub trait EffectInfo {
 }
 
 #[salsa::jar(db = Db)]
-pub struct Jar(TypedItem, type_scheme_of);
+pub struct Jar(
+    TypedItem,
+    SalsaTypeScheme,
+    type_scheme_of,
+    effect_handler_scheme,
+);
 pub trait Db: salsa::DbWithJar<Jar> + desugar::Db {
     fn as_tc_db(&self) -> &dyn crate::Db {
         <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
@@ -65,6 +74,10 @@ pub trait Db: salsa::DbWithJar<Jar> + desugar::Db {
 
     fn type_scheme_of(&self, term_name: TermName) -> TypedItem {
         type_scheme_of(self.as_tc_db(), term_name)
+    }
+
+    fn effect_handler_scheme(&self, eff_name: EffectName) -> SalsaTypeScheme {
+        effect_handler_scheme(self.as_tc_db(), eff_name)
     }
 
     fn type_check_errors(&self, file_id: FileId) -> Vec<PanoplyError> {
@@ -169,6 +182,108 @@ pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedIt
         ty_chk_out.required_ev,
         ty_chk_out.item_wrappers,
         ty_chk_out.scheme,
+    )
+}
+
+#[salsa::tracked]
+pub struct SalsaTypeScheme {
+    #[return_ref]
+    _scheme: TyScheme,
+}
+impl SalsaTypeScheme {
+    fn scheme<DB: ?Sized + crate::Db>(self, db: &DB) -> &TyScheme {
+        self._scheme(db.as_tc_db())
+    }
+}
+
+/// Convert the signature of an effect into the type scheme of it's handler
+#[salsa::tracked]
+pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) -> SalsaTypeScheme {
+    let mut supply = IdSupply::<TyVarId>::default();
+    let ret_ty_id = supply.supply_id();
+    let ret_ty = db.mk_ty(TypeKind::VarTy(ret_ty_id));
+
+    let transform_to_cps_handler_ty = |db: &dyn crate::Db, ty: Ty<InDb>| {
+        // Transform our ty into the type a handler should have
+        // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+        match db.kind(&ty) {
+            TypeKind::FunTy(a, b) => {
+                let kont_ty = db.mk_ty(TypeKind::FunTy(*b, ret_ty));
+                Ok(db.mk_ty(TypeKind::FunTy(
+                    *a,
+                    db.mk_ty(TypeKind::FunTy(kont_ty, ret_ty)),
+                )))
+            }
+            _ => {
+                // TODO: report a better error here.
+                // We should specialize the error so it's clear it was an
+                // effect signature with an invalid type that caused it
+                Err((
+                    ty,
+                    db.mk_ty(TypeKind::FunTy(
+                        db.mk_ty(TypeKind::ErrorTy),
+                        db.mk_ty(TypeKind::ErrorTy),
+                    )),
+                ))
+            }
+        }
+    };
+
+    let mut tys = vec![ret_ty_id];
+    let mut datas = vec![];
+    let mut effs = vec![];
+
+    let mut constrs = vec![];
+    let mut row = vec![];
+
+    for eff_op_id in db.effect_members(eff_name).iter() {
+        let scheme = db.effect_member_sig(*eff_op_id);
+
+        // Build substition that renumbers variables within scheme
+        let mut subst = FxHashMap::default();
+        for ty_id in scheme.bound_ty.iter() {
+            let new_ty_id = supply.supply_id();
+            tys.push(new_ty_id);
+            subst.insert(*ty_id, new_ty_id);
+        }
+        for data_id in scheme.bound_data_row.iter() {
+            let new_data_id = supply.supply_id();
+            datas.push(new_data_id);
+            subst.insert(*data_id, new_data_id);
+        }
+        for eff_id in scheme.bound_eff_row.iter() {
+            let new_eff_id = supply.supply_id();
+            effs.push(new_eff_id);
+            subst.insert(*eff_id, new_eff_id);
+        }
+
+        let mut tyvarid_subst = TyVarIdSubst { db, subst };
+        constrs.extend(
+            scheme
+                .constrs
+                .iter()
+                .map(|constr| constr.try_fold_with(&mut tyvarid_subst).unwrap()),
+        );
+
+        let ty = scheme.ty.try_fold_with(&mut tyvarid_subst).unwrap();
+        let ty = transform_to_cps_handler_ty(db, ty)
+            .expect("Effect operation should have function type for cps translation");
+
+        row.push((db.effect_member_name(*eff_op_id), ty));
+    }
+
+    let handler_row = db.construct_simple_row(row);
+
+    SalsaTypeScheme::new(
+        db,
+        TyScheme {
+            bound_ty: tys,
+            bound_data_row: datas,
+            bound_eff_row: effs,
+            constrs,
+            eff: Row::Closed(db.empty_row()),
+            ty: db.mk_ty(TypeKind::ProdTy(Row::Closed(handler_row))),
+        },
     )
 }
 
