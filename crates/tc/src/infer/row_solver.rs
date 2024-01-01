@@ -70,10 +70,10 @@ impl RowTheory for Simple {
         left: &Self::Closed<InArena<'ctx>>,
         right: &Self::Closed<InArena<'ctx>>,
     ) -> Result<RowInternals<InArena<'ctx>>, Self::Error<'ctx>> {
-        let left_fields = left.fields(&());
-        let left_values = left.values(&());
-        let right_fields = right.fields(&());
-        let right_values = right.values(&());
+        let left_fields = left.fields(());
+        let left_values = left.values(());
+        let right_fields = right.fields(());
+        let right_values = right.values(());
 
         SimpleClosedRow::<InArena<'ctx>>::merge_rowlikes(
             (left_fields, left_values),
@@ -251,10 +251,10 @@ impl RowTheory for Scoped {
         left: &Self::Closed<InArena<'ctx>>,
         right: &Self::Closed<InArena<'ctx>>,
     ) -> Result<RowInternals<InArena<'ctx>>, Self::Error<'ctx>> {
-        let left_fields = left.fields(&());
-        let left_values = left.values(&());
-        let right_fields = right.fields(&());
-        let right_values = right.values(&());
+        let left_fields = left.fields(());
+        let left_values = left.values(());
+        let right_fields = right.fields(());
+        let right_values = right.values(());
 
         Ok(ScopedClosedRow::<InArena<'ctx>>::merge_rowlikes(
             (left_fields, left_values),
@@ -266,11 +266,11 @@ impl RowTheory for Scoped {
         goal: &Self::Closed<InArena<'ctx>>,
         left: &Self::Closed<InArena<'ctx>>,
     ) -> RowInternals<InArena<'ctx>> {
-        let goal_fields = goal.fields(&());
-        let goal_values = goal.values(&());
+        let goal_fields = goal.fields(());
+        let goal_values = goal.values(());
         ScopedClosedRow::<InArena<'ctx>>::diff_left_rowlikes(
             (goal_fields, goal_values),
-            left.fields(&()),
+            left.fields(()),
         )
     }
 
@@ -278,12 +278,12 @@ impl RowTheory for Scoped {
         goal: &Self::Closed<InArena<'ctx>>,
         right: &Self::Closed<InArena<'ctx>>,
     ) -> RowInternals<InArena<'ctx>> {
-        let goal_fields = goal.fields(&());
-        let goal_values = goal.values(&());
+        let goal_fields = goal.fields(());
+        let goal_values = goal.values(());
 
         ScopedClosedRow::<InArena<'ctx>>::diff_right_rowlikes(
             (goal_fields, goal_values),
-            right.fields(&()),
+            right.fields(()),
         )
     }
 

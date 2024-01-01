@@ -16,7 +16,7 @@ use reducir::{
     ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck, P,
 };
 use rustc_hash::FxHashMap;
-use tc::{EffectInfo, TyChkRes};
+use tc::{EffectInfo, OpSelector, TyChkRes};
 use ty::{
     row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
     AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
@@ -76,6 +76,7 @@ pub(crate) struct LowerCtx<'a, 'b, State = Evidenceless> {
     db: &'a dyn crate::Db,
     current: ReducIrTermName,
     var_conv: &'b mut IdConverter<VarId, ReducIrVarId>,
+    op_sel: &'a FxHashMap<Idx<Term<VarId>>, OpSelector>,
     ty_ctx: LowerTyCtx<'a, 'b>,
     ev_map: EvidenceMap,
     evv_var_id: ReducIrVarId,
@@ -197,7 +198,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
             }
             Row::Closed(row) => {
                 let elems = row
-                    .values(&self.db)
+                    .values(self.db)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
@@ -264,9 +265,9 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
             },
             Row::Closed(row) => {
                 let elems = row
-                    .fields(&self.db)
+                    .fields(self.db)
                     .iter()
-                    .zip(row.values(&self.db).iter())
+                    .zip(row.values(self.db).iter())
                     .map(|(eff_id, ret_ty)| {
                         let eff = self
                             .db
@@ -293,7 +294,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
         match row {
             Row::Open(var) => ReducIrRow::Open(self.lookup_row_var(&var)),
             Row::Closed(row) => ReducIrRow::Closed(
-                row.values(&self.db)
+                row.values(self.db)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>(),
@@ -308,8 +309,8 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                 // which is of RowTy.
                 // TODO: Fix this up so we actually don't produce row types instead of pretending we
                 // don't and casting them to product types.
-                if row.len(&self.db) == 1 {
-                    self.lower_ty(row.values(&self.db)[0])
+                if row.len(self.db) == 1 {
+                    self.lower_ty(row.values(self.db)[0])
                 } else {
                     unreachable!()
                 }
@@ -337,7 +338,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
                 .mk_reducir_ty(ReducIrTyKind::ProdVarTy(self.tyvar_env[row_var])),
             TypeKind::ProdTy(Row::Closed(row)) => {
                 let elems = row
-                    .values(&self.db)
+                    .values(self.db)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
@@ -345,7 +346,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
             }
             TypeKind::SumTy(Row::Closed(row)) => {
                 let elems = row
-                    .values(&self.db)
+                    .values(self.db)
                     .iter()
                     .map(|ty| self.lower_ty(*ty))
                     .collect::<Vec<_>>();
@@ -465,17 +466,17 @@ impl RowReducrIrEvidence for Simple {
         left: Self::Closed<InDb>,
         right: Self::Closed<InDb>,
     ) -> Box<[RowIndx]> {
-        let left_fields = left.fields(&db);
-        let right_fields = right.fields(&db);
+        let left_fields = left.fields(db);
+        let right_fields = right.fields(db);
 
         let left_indxs = left
-            .values(&db)
+            .values(db)
             .iter()
             .enumerate()
             .map(|(i, ty)| RowIndx::Left(i, *ty))
             .collect::<Vec<_>>();
         let right_indxs = right
-            .values(&db)
+            .values(db)
             .iter()
             .enumerate()
             .map(|(i, ty)| RowIndx::Right(i, *ty))
@@ -494,14 +495,14 @@ impl RowReducrIrEvidence for Simple {
         goal: Self::Closed<InDb>,
         left: Self::Closed<InDb>,
     ) -> Box<[(usize, Ty<InDb>)]> {
-        let goal_fields = goal.fields(&db);
+        let goal_fields = goal.fields(db);
         let goal_indxs = goal
-            .values(&db)
+            .values(db)
             .iter()
             .copied()
             .enumerate()
             .collect::<Vec<_>>();
-        SimpleClosedRow::<InDb>::difference_rowlikes((goal_fields, &goal_indxs), left.fields(&db)).1
+        SimpleClosedRow::<InDb>::difference_rowlikes((goal_fields, &goal_indxs), left.fields(db)).1
     }
 
     fn diff_right<Db: ?Sized + crate::Db>(
@@ -509,15 +510,14 @@ impl RowReducrIrEvidence for Simple {
         goal: Self::Closed<InDb>,
         right: Self::Closed<InDb>,
     ) -> Box<[(usize, Ty<InDb>)]> {
-        let goal_fields = goal.fields(&db);
+        let goal_fields = goal.fields(db);
         let goal_indxs = goal
-            .values(&db)
+            .values(db)
             .iter()
             .copied()
             .enumerate()
             .collect::<Vec<_>>();
-        SimpleClosedRow::<InDb>::difference_rowlikes((goal_fields, &goal_indxs), right.fields(&db))
-            .1
+        SimpleClosedRow::<InDb>::difference_rowlikes((goal_fields, &goal_indxs), right.fields(db)).1
     }
 }
 
@@ -527,17 +527,17 @@ impl RowReducrIrEvidence for Scoped {
         left: Self::Closed<InDb>,
         right: Self::Closed<InDb>,
     ) -> Box<[RowIndx]> {
-        let left_fields = left.fields(&db);
-        let right_fields = right.fields(&db);
+        let left_fields = left.fields(db);
+        let right_fields = right.fields(db);
 
         let left_indxs = left
-            .values(&db)
+            .values(db)
             .iter()
             .enumerate()
             .map(|(i, ty)| RowIndx::Left(i, *ty))
             .collect::<Vec<_>>();
         let right_indxs = right
-            .values(&db)
+            .values(db)
             .iter()
             .enumerate()
             .map(|(i, ty)| RowIndx::Right(i, *ty))
@@ -555,15 +555,15 @@ impl RowReducrIrEvidence for Scoped {
         goal: Self::Closed<InDb>,
         left: Self::Closed<InDb>,
     ) -> Box<[(usize, Ty<InDb>)]> {
-        let goal_fields = goal.fields(&db);
+        let goal_fields = goal.fields(db);
         let goal_indxs = goal
-            .values(&db)
+            .values(db)
             .iter()
             .copied()
             .enumerate()
             .collect::<Vec<_>>();
 
-        ScopedClosedRow::<InDb>::diff_left_rowlikes((goal_fields, &goal_indxs), left.fields(&db)).1
+        ScopedClosedRow::<InDb>::diff_left_rowlikes((goal_fields, &goal_indxs), left.fields(db)).1
     }
 
     fn diff_right<Db: ?Sized + crate::Db>(
@@ -571,16 +571,15 @@ impl RowReducrIrEvidence for Scoped {
         goal: Self::Closed<InDb>,
         right: Self::Closed<InDb>,
     ) -> Box<[(usize, Ty<InDb>)]> {
-        let goal_fields = goal.fields(&db);
+        let goal_fields = goal.fields(db);
         let goal_indxs = goal
-            .values(&db)
+            .values(db)
             .iter()
             .copied()
             .enumerate()
             .collect::<Vec<_>>();
 
-        ScopedClosedRow::<InDb>::diff_right_rowlikes((goal_fields, &goal_indxs), right.fields(&db))
-            .1
+        ScopedClosedRow::<InDb>::diff_right_rowlikes((goal_fields, &goal_indxs), right.fields(db)).1
     }
 }
 
@@ -629,9 +628,9 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
 
         let indxs = Sema::merge(self.db, left, right);
 
-        let left_len = left.len(&self.db);
-        let right_len = right.len(&self.db);
-        let goal_len = goal.len(&self.db);
+        let left_len = left.len(self.db);
+        let right_len = right.len(self.db);
+        let goal_len = goal.len(self.db);
         debug_assert_eq!(left_len + right_len, goal_len);
 
         let concat = {
@@ -814,6 +813,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
         db: &'a dyn crate::Db,
         var_conv: &'b mut IdConverter<VarId, ReducIrVarId>,
         ty_ctx: LowerTyCtx<'a, 'b>,
+        op_sel: &'a FxHashMap<Idx<Term<VarId>>, OpSelector>,
         current: ReducIrTermName,
     ) -> Self {
         let evv_id = var_conv.generate();
@@ -822,6 +822,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
             current,
             var_conv,
             ty_ctx,
+            op_sel,
             ev_map: EvidenceMap::default(),
             evv_var_id: evv_id,
             _marker: std::marker::PhantomData,
@@ -858,9 +859,9 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                     ev_items.push(ir_row_ev);
                     (
                         ir_row_ev.simple(self.db.as_reducir_db()),
-                        left.values(&ty_db)
+                        left.values(ty_db)
                             .iter()
-                            .chain(right.values(&ty_db))
+                            .chain(right.values(ty_db))
                             .map(|ty| self.ty_ctx.lower_ty(*ty))
                             .collect::<Vec<_>>(),
                     )
@@ -878,9 +879,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                         goal.raw_fields(),
                     );
                     ev_items.push(ir_row_ev);
-                    let left_row_iter = left.fields(&ty_db).iter().zip(left.values(&ty_db).iter());
-                    let right_row_iter =
-                        right.fields(&ty_db).iter().zip(right.values(&ty_db).iter());
+                    let left_row_iter = left.fields(ty_db).iter().zip(left.values(ty_db).iter());
+                    let right_row_iter = right.fields(ty_db).iter().zip(right.values(ty_db).iter());
                     let ty_vals = left_row_iter
                         .chain(right_row_iter)
                         .map(|(eff_label, eff_ret_ty)| {
@@ -937,6 +937,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             current: prior.current,
             var_conv: prior.var_conv,
             ty_ctx: prior.ty_ctx,
+            op_sel: prior.op_sel,
             ev_map: prior.ev_map,
             evv_var_id: prior.evv_var_id,
             _marker: std::marker::PhantomData,
@@ -1173,11 +1174,29 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 let eff_handler = ReducIr::app(prj, [ReducIr::var(eff_var)]);
 
                 // TODO: How do we get rows here to determine this?
-                let handler_index = self.db.effect_handler_op_index(*op);
+                let op_sel = &self.op_sel[&term];
+                let (op_param, op_ev) = self.ev_map[&PartialEv::Data {
+                    other: op_sel.op_row,
+                    goal: op_sel.handler_row,
+                }];
+                let (handler_index, _) = match op_ev {
+                    Evidence::DataRow { left, right, .. } => {
+                        if left == op_sel.op_row {
+                            (2, 3)
+                        } else if right == op_sel.op_row {
+                            (3, 2)
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    Evidence::EffRow { .. } => unreachable!(),
+                };
                 let handler = ReducIr::field_proj(
-                    handler_index,
-                    ReducIr::field_proj(1, ReducIr::var(handle_var)),
+                    0,
+                    ReducIr::field_proj(handler_index, ReducIr::var(op_param)),
                 );
+                let handler =
+                    ReducIr::app(handler, [ReducIr::field_proj(1, ReducIr::var(handle_var))]);
                 ReducIr::abss(
                     [value_var],
                     ReducIr::local(
@@ -1208,12 +1227,12 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
                 };
                 let ret_label = self.db.ident_str("return");
                 let ret_idx = handler_row
-                    .fields(&self.db)
+                    .fields(self.db)
                     .binary_search(&ret_label)
                     .unwrap_or_else(|_| {
                         panic!("ICE: Type checked handler should contain 'return' field")
                     });
-                let handler_ret_ty = handler_row.values(&self.db)[ret_idx];
+                let handler_ret_ty = handler_row.values(self.db)[ret_idx];
                 let handler_ret_row = self.db.single_row(ret_label, handler_ret_ty);
                 let (handler_ret_param, handler_ret_ev) = self.ev_map[&PartialEv::Data {
                     other: Row::Closed(handler_ret_row),

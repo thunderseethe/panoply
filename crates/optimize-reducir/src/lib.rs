@@ -1,7 +1,7 @@
 use base::{
     id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
     modules::Module,
-    pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
+    pretty::PrettyErrorWithDb,
 };
 use reducir::{
     mon::{MonReducIrItem, MonReducIrModule},
@@ -884,25 +884,25 @@ effect Reader {
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                 (let
                   [ (V0:__mon_bind (let
-                    (V18:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
+                    (V19:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
                     (fun [V3]
                       (let
                         (V2:__mon_prompt ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> { {}
                                                                                    , {}
                                                                                    })])
                           (fun [V0]
-                            (let (V16:f (V1[3][0] V0))
-                              <1: {V16[0], (fun [V17] (V16[1][1] {} V17)), (fun [V0] V0)}>))
-                          (fun [V21] (fun [V0] <0: (fun [V14] {V14, V21})>))))
+                            (let (V17:f (V1[3][0] V0))
+                              <1: {V17[0], (fun [V18] (V17[1][1] {} V18)), (fun [V0] V0)}>))
+                          (fun [V22] (fun [V0] <0: (fun [V15] {V15, V22})>))))
                         (case (V2
                             (V1[0]
                               V3
-                              {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun [V7, V8, V9]
-                                (V8 V9 V9))}}))
+                              {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
+                                (V9 V10 V10))}}))
                           (fun [V5] <0: V5>)
                           (fun [V4]
                             (case (__mon_eqm
-                                V18
+                                V19
                                 (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
                               (fun [V6]
                                 <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
@@ -910,14 +910,14 @@ effect Reader {
                                                                                   })])[0], (V4 @ [Ty({}
                                   -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
                                     ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                      V18
+                                      V19
                                       (fun [V0]
                                         (V1[0]
                                           V0
-                                          {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun
-                                            [V7
-                                            ,V8
-                                            ,V9] (V8 V9 V9))}}))
+                                          {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                            [V8
+                                            ,V9
+                                            ,V10] (V9 V10 V10))}}))
                                       ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
                                                                                     , {}
                                                                                     })])[2]
@@ -926,14 +926,14 @@ effect Reader {
                                 ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
                                   (fun [V8]
                                     ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                      V18
+                                      V19
                                       (fun [V0]
                                         (V1[0]
                                           V0
-                                          {V18, {(fun [V10, V11, V12] (V11 {} V10)), (fun
-                                            [V7
-                                            ,V8
-                                            ,V9] (V8 V9 V9))}}))
+                                          {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                            [V8
+                                            ,V9
+                                            ,V10] (V9 V10 V10))}}))
                                       ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
                                                                                     , {}
                                                                                     })])[2]
@@ -942,7 +942,7 @@ effect Reader {
                   , (V2:__mon_bind V0)
                   ]
                   (case (V0 V2)
-                    (fun [V3] (let (V24:f (V3 {})) <0: V24>))
+                    (fun [V3] (let (V25:f (V3 {})) <0: V25>))
                     (fun [V4]
                       <1: {(V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})])[0], (V4 @ [Ty({ {}
                                                                                       , {}
@@ -951,7 +951,7 @@ effect Reader {
                                                                                                       })])[1], (fun
                           [V3]
                           ((__mon_bind @ [Ty({1}), Ty({{}, {}}), Ty({} -> {{}, {}})])
-                            (fun [V0] (let (V24:f (V3 {})) <0: V24>))
+                            (fun [V0] (let (V25:f (V3 {})) <0: V25>))
                             (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})])[2]))}>)))))"#]];
         expect.assert_eq(&pretty_ir);
 

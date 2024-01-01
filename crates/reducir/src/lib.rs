@@ -897,7 +897,6 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                 let args_iter = args.iter();
                 match func_ty.kind(ctx.as_reducir_db()) {
                     FunTy(fun_arg_tys, ret_ty) => {
-                        debug_assert!(args.len() <= fun_arg_tys.len());
                         let mut fun_args = fun_arg_tys.iter().peekable();
                         for (fun_arg_ty, (arg_index, arg)) in
                             fun_args.zip_non_consuming(&mut args_iter.enumerate().peekable())

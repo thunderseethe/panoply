@@ -62,19 +62,19 @@ impl<A: TypeAlloc> NewRow<A> for ScopedClosedRow<A> {
 }
 
 impl<A: TypeAlloc> RowOps<A> for ScopedClosedRow<A> {
-    fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool {
+    fn is_empty<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> bool {
         self.0.is_empty(acc)
     }
 
-    fn len<'a>(&self, acc: &impl AccessTy<'a, A>) -> usize {
+    fn len<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> usize {
         self.0.len(acc)
     }
 
-    fn fields<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel] {
+    fn fields<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> &'a [RowLabel] {
         acc.row_fields(&self.0.fields)
     }
 
-    fn values<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>] {
+    fn values<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> &'a [Ty<A>] {
         acc.row_values(&self.0.values)
     }
 }

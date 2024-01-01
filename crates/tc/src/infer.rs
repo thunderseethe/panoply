@@ -118,6 +118,27 @@ pub(crate) trait InferState {
     type Storage<'infer>;
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct OpSelector<A: TypeAlloc = InDb> {
+    pub op_row: SimpleRow<A>,
+    pub handler_row: SimpleRow<A>,
+}
+impl<'infer> TypeFoldable<'infer> for OpSelector<InArena<'infer>> {
+    type Alloc = InArena<'infer>;
+
+    type Out<B: TypeAlloc> = OpSelector<B>;
+
+    fn try_fold_with<F: FallibleTypeFold<'infer, In = Self::Alloc>>(
+        self,
+        fold: &mut F,
+    ) -> Result<Self::Out<F::Out>, F::Error> {
+        Ok(OpSelector {
+            op_row: self.op_row.try_fold_with(fold)?,
+            handler_row: self.handler_row.try_fold_with(fold)?,
+        })
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct GenerationStorage<'infer> {
     pub(crate) var_tys: FxHashMap<VarId, InferTy<'infer>>,
@@ -125,6 +146,7 @@ pub(crate) struct GenerationStorage<'infer> {
     /// We use `Idx<Term<VarId>>` here (instead of `TermName`) because we need a wrapper for each
     /// individual use site of an item, and we may have multiple call sites for one item name.
     pub(crate) item_wrappers: FxHashMap<Idx<Term<VarId>>, Wrapper<InArena<'infer>>>,
+    pub(crate) op_selectors: FxHashMap<Idx<Term<VarId>>, OpSelector<InArena<'infer>>>,
     pub(crate) required_ev: FxHashSet<Evidence<InArena<'infer>>>,
 }
 impl InferState for Generation {
@@ -280,6 +302,21 @@ impl<'infer, A: TypeAlloc, I: AccessTy<'infer, A>, S: InferState> AccessTy<'infe
         self.ctx.row_values(row)
     }
 }
+impl<'infer, A: TypeAlloc, I: AccessTy<'infer, A>, S: InferState> AccessTy<'infer, A>
+    for &InferCtx<'_, 'infer, I, S>
+{
+    fn kind(&self, ty: &Ty<A>) -> &'infer TypeKind<A> {
+        InferCtx::kind(self, ty)
+    }
+
+    fn row_fields(&self, row: &<A as TypeAlloc>::RowFields) -> &'infer [RowLabel] {
+        InferCtx::row_fields(self, row)
+    }
+
+    fn row_values(&self, row: &<A as TypeAlloc>::RowValues) -> &'infer [Ty<A>] {
+        InferCtx::row_values(self, row)
+    }
+}
 
 impl<'a, 'infer, I> InferCtx<'a, 'infer, I>
 where
@@ -302,12 +339,7 @@ where
             db,
             module,
             ast,
-            state: GenerationStorage {
-                var_tys: FxHashMap::default(),
-                term_tys: FxHashMap::default(),
-                required_ev: FxHashSet::default(),
-                item_wrappers: FxHashMap::default(),
-            },
+            state: GenerationStorage::default(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -404,7 +436,7 @@ where
             }
             (Label { label, term }, RowTy(row)) => {
                 // If our row is too small or too big, fail
-                if row.len(self) != 1 {
+                if row.len(&*self) != 1 {
                     self.errors.push(into_diag(
                         self.db,
                         (self.single_row_ty(*label, self.mk_ty(ErrorTy)), expected.ty).into(),
@@ -413,7 +445,7 @@ where
                     return;
                 }
                 // If our singleton row is a different field name, fail
-                if Some(label) != row.fields(self).first() {
+                if Some(label) != row.fields(&*self).first() {
                     self.errors.push(into_diag(
                         self.db,
                         (self.single_row_ty(*label, self.mk_ty(ErrorTy)), expected.ty).into(),
@@ -426,13 +458,13 @@ where
                 self._check(
                     *term,
                     expected.with_ty(
-                        *row.values(self)
+                        *row.values(&*self)
                             .first()
                             .expect("ICE: singleton row with no value"),
                     ),
                 )
             }
-            (Unit, ProdTy(Row::Closed(closed))) if closed.is_empty(self) => {}
+            (Unit, ProdTy(Row::Closed(closed))) if closed.is_empty(&*self) => {}
             (Int(_), IntTy) => {}
             (Unlabel { label, term }, _) => {
                 let expected_ty = self.single_row_ty(*label, expected.ty);
@@ -630,9 +662,9 @@ where
                     // If our output type is already a singleton row of without a label, use it
                     // directly. This avoids introducing needless unifiers
                     RowTy(row)
-                        if row.len(self.ctx) == 1 && row.fields(self).first() == Some(&field) =>
+                        if row.len(&*self) == 1 && row.fields(&*self).first() == Some(&field) =>
                     {
-                        *row.values(self)
+                        *row.values(&*self)
                             .first()
                             .expect("ICE: singleton row has field but no value")
                     }
@@ -746,6 +778,37 @@ where
                 let unused = self.fresh_scoped_row();
                 let goal = self.fresh_scoped_row();
                 self.add_effect_row_combine(unused, eff, goal, current_span());
+
+                let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+                let (handler_wrap, handler_res) =
+                    self.instantiate(handler_scheme.clone(), current_span());
+
+                // We know the first type variable of the scheme is the return type
+                // So we extract it and unify it with the effect return type, so the
+                // instantiated scheme is solved correctly.
+                self.constraints
+                    .add_ty_eq(handler_wrap.tys[0], ret_ty, current_span());
+                let handler_row = match *handler_res.ty {
+                    ProdTy(Row::Closed(handler_row)) => handler_row,
+                    _ => unreachable!("Effect handler must be a closed product type"),
+                };
+
+                let unused = self.fresh_simple_row();
+
+                let op_cps_ty = sig
+                    .ty
+                    .transform_to_cps_handler_ty(self, ret_ty)
+                    .expect("Op signature expected to be function type for CPS transformation");
+                let op_row = Row::Closed(self.single_row(op_name.name(core_db), op_cps_ty));
+                self.add_data_row_combine(unused, op_row, Row::Closed(handler_row), current_span());
+
+                self.state.op_selectors.insert(
+                    term,
+                    OpSelector {
+                        op_row,
+                        handler_row: Row::Closed(handler_row),
+                    },
+                );
 
                 InferResult::new(sig.ty, goal)
             }
@@ -1296,7 +1359,7 @@ where
             (Row::Closed(handler), Row::Open(eff_var)) => {
                 let eff_name = self
                     .db
-                    .lookup_effect_by_member_names(self.module, handler.fields(self))
+                    .lookup_effect_by_member_names(self.module, handler.fields(&*self))
                     .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
 
                 let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
@@ -1309,9 +1372,9 @@ where
                 self.unify(eff_var, eff_row)
             }
             (Row::Closed(handler), Row::Closed(eff)) => {
-                debug_assert!(eff.len(self) == 1);
-                let eff_ident = *eff.fields(self).first().unwrap();
-                let eff_ret_ty = *eff.values(self).first().unwrap();
+                debug_assert!(eff.len(&*self) == 1);
+                let eff_ident = *eff.fields(&*self).first().unwrap();
+                let eff_ret_ty = *eff.values(&*self).first().unwrap();
                 self.unify(normal_ret, eff_ret_ty)?;
 
                 let eff_name = self
@@ -1323,9 +1386,9 @@ where
                 unify_sig_handler(self, handler_scheme, handler)
             }
             (Row::Open(handler_var), Row::Closed(eff)) => {
-                debug_assert!(eff.len(self) == 1);
-                let eff_ident = *eff.fields(self).first().unwrap();
-                let eff_ret_ty = *eff.values(self).first().unwrap();
+                debug_assert!(eff.len(&*self) == 1);
+                let eff_ident = *eff.fields(&*self).first().unwrap();
+                let eff_ret_ty = *eff.values(&*self).first().unwrap();
                 self.unify(normal_ret, eff_ret_ty)?;
                 let eff_name = self
                     .db

@@ -102,12 +102,12 @@ where
     }
 }
 impl<A: TypeAlloc> ClosedRow<A> {
-    fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool {
+    fn is_empty<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> bool {
         acc.row_fields(&self.fields).is_empty()
     }
 
     #[allow(clippy::len_without_is_empty)]
-    fn len<'a>(&self, acc: &impl AccessTy<'a, A>) -> usize {
+    fn len<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> usize {
         // Because fields.len() must equal values.len() it doesn't matter which we use here
         acc.row_fields(&self.fields).len()
     }
@@ -288,8 +288,8 @@ pub trait NewRow<A: TypeAlloc>: new_row::SealNewRow {
 
 /// Common row operations that make sense regardless of which row semantics we are using.
 pub trait RowOps<A: TypeAlloc> {
-    fn is_empty<'a>(&self, acc: &impl AccessTy<'a, A>) -> bool;
-    fn len<'a>(&self, acc: &impl AccessTy<'a, A>) -> usize;
-    fn fields<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [RowLabel];
-    fn values<'a>(&self, acc: &impl AccessTy<'a, A>) -> &'a [Ty<A>];
+    fn is_empty<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> bool;
+    fn len<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> usize;
+    fn fields<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> &'a [RowLabel];
+    fn values<'a, Acc: AccessTy<'a, A>>(&self, acc: Acc) -> &'a [Ty<A>];
 }

@@ -117,6 +117,46 @@ impl Ty<InDb> {
     }
 }
 
+impl<A: TypeAlloc> Ty<A>
+where
+    Self: Copy,
+{
+    pub fn transform_to_cps_handler_ty<'a, 'b, C>(
+        &self,
+        acc: &'b C,
+        ret_ty: Self,
+    ) -> Result<Self, (Self, Self)>
+    where
+        A: 'a,
+        C: ?Sized + MkTy<A>,
+        &'b C: AccessTy<'a, A>,
+    {
+        // Transform our ty into the type a handler should have
+        // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+        match acc.kind(self) {
+            TypeKind::FunTy(a, b) => {
+                let kont_ty = acc.mk_ty(TypeKind::FunTy(*b, ret_ty));
+                Ok(acc.mk_ty(TypeKind::FunTy(
+                    *a,
+                    acc.mk_ty(TypeKind::FunTy(kont_ty, ret_ty)),
+                )))
+            }
+            _ => {
+                // TODO: report a better error here.
+                // We should specialize the error so it's clear it was an
+                // effect signature with an invalid type that caused it
+                Err((
+                    *self,
+                    acc.mk_ty(TypeKind::FunTy(
+                        acc.mk_ty(TypeKind::ErrorTy),
+                        acc.mk_ty(TypeKind::ErrorTy),
+                    )),
+                ))
+            }
+        }
+    }
+}
+
 struct TyInDbDfs<'a, Db: ?Sized> {
     db: &'a Db,
     stack: Vec<Ty<InDb>>,
@@ -143,7 +183,7 @@ where
                 TypeKind::IntTy => {}
                 TypeKind::VarTy(_) => {}
                 TypeKind::RowTy(row) => {
-                    self.stack.extend_from_slice(row.values(&self.db));
+                    self.stack.extend_from_slice(row.values(self.db));
                 }
                 TypeKind::FunTy(arg, ret) => {
                     self.stack.extend([arg, ret]);
@@ -151,13 +191,13 @@ where
                 TypeKind::ProdTy(row) => match row {
                     Row::Open(_) => {}
                     Row::Closed(row) => {
-                        self.stack.extend_from_slice(row.values(&self.db));
+                        self.stack.extend_from_slice(row.values(self.db));
                     }
                 },
                 TypeKind::SumTy(row) => match row {
                     Row::Open(_) => {}
                     Row::Closed(row) => {
-                        self.stack.extend_from_slice(row.values(&self.db));
+                        self.stack.extend_from_slice(row.values(self.db.as_ty_db()));
                     }
                 },
             };

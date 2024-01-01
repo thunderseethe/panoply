@@ -18,6 +18,7 @@ use la_arena::Idx;
 use pretty::RcAllocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use salsa::DebugWithDb;
 use ty::{
     infer::{TcUnifierVar, TyCtx, UnifierKind},
     row::Row,
@@ -37,7 +38,7 @@ pub(crate) mod folds;
 use folds::zonker::Zonker;
 
 mod infer;
-pub use infer::TyChkRes;
+pub use infer::{OpSelector, TyChkRes};
 
 /// Information we need about effects during type checking
 pub trait EffectInfo {
@@ -146,6 +147,8 @@ pub struct TypedItem {
     pub required_evidence: FxHashSet<Evidence<InDb>>,
     #[return_ref]
     pub item_to_wrappers: FxHashMap<Idx<ast::Term<VarId>>, Wrapper>,
+    #[return_ref]
+    pub operation_selectors: FxHashMap<Idx<ast::Term<VarId>>, OpSelector>,
     pub ty_scheme: TyScheme,
 }
 
@@ -181,6 +184,7 @@ pub(crate) fn type_scheme_of(db: &dyn crate::Db, term_name: TermName) -> TypedIt
         ty_chk_out.term_tys,
         ty_chk_out.required_ev,
         ty_chk_out.item_wrappers,
+        ty_chk_out.op_selectors,
         ty_chk_out.scheme,
     )
 }
@@ -202,32 +206,6 @@ pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) ->
     let mut supply = IdSupply::<TyVarId>::default();
     let ret_ty_id = supply.supply_id();
     let ret_ty = db.mk_ty(TypeKind::VarTy(ret_ty_id));
-
-    let transform_to_cps_handler_ty = |db: &dyn crate::Db, ty: Ty<InDb>| {
-        // Transform our ty into the type a handler should have
-        // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
-        match db.kind(&ty) {
-            TypeKind::FunTy(a, b) => {
-                let kont_ty = db.mk_ty(TypeKind::FunTy(*b, ret_ty));
-                Ok(db.mk_ty(TypeKind::FunTy(
-                    *a,
-                    db.mk_ty(TypeKind::FunTy(kont_ty, ret_ty)),
-                )))
-            }
-            _ => {
-                // TODO: report a better error here.
-                // We should specialize the error so it's clear it was an
-                // effect signature with an invalid type that caused it
-                Err((
-                    ty,
-                    db.mk_ty(TypeKind::FunTy(
-                        db.mk_ty(TypeKind::ErrorTy),
-                        db.mk_ty(TypeKind::ErrorTy),
-                    )),
-                ))
-            }
-        }
-    };
 
     let mut tys = vec![ret_ty_id];
     let mut datas = vec![];
@@ -266,7 +244,8 @@ pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) ->
         );
 
         let ty = scheme.ty.try_fold_with(&mut tyvarid_subst).unwrap();
-        let ty = transform_to_cps_handler_ty(db, ty)
+        let ty = ty
+            .transform_to_cps_handler_ty(db, ret_ty)
             .expect("Effect operation should have function type for cps translation");
 
         row.push((db.effect_member_name(*eff_op_id), ty));
@@ -292,6 +271,7 @@ pub(crate) struct TypeCheckOutput {
     term_tys: FxHashMap<Idx<Term<VarId>>, TyChkRes<InDb>>,
     required_ev: FxHashSet<Evidence<InDb>>,
     item_wrappers: FxHashMap<Idx<Term<VarId>>, Wrapper<InDb>>,
+    op_selectors: FxHashMap<Idx<Term<VarId>>, OpSelector<InDb>>,
     scheme: TyScheme,
     diags: Vec<TypeCheckDiagnostic>,
 }
@@ -346,6 +326,16 @@ pub(crate) fn type_check(
         .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
         .collect::<FxHashSet<_>>();
 
+    let zonked_op_sels = gen_storage.op_selectors.try_fold_with(&mut zonker).unwrap();
+
+    zonked_op_sels.iter().for_each(|(_, op_sel)| {
+        println!(
+            "OpSel {{\n\top_row: {:?},\n\thandler_row:{:?},\n}}",
+            op_sel.op_row.debug_with(db, false),
+            op_sel.handler_row.debug_with(db, false)
+        );
+    });
+
     let mut constrs = unsolved_eqs
         .data_eqns
         .into_iter()
@@ -376,6 +366,7 @@ pub(crate) fn type_check(
         term_tys: zonked_term_tys,
         required_ev: zonked_required_ev,
         item_wrappers: zonked_item_wrappers,
+        op_selectors: zonked_op_sels,
         scheme,
         diags: errors,
     }
@@ -507,7 +498,7 @@ mod tests {
     macro_rules! assert_matches_unit_ty {
         ($db:expr, $term:expr) => {
             assert_matches!($db.kind($term), TypeKind::ProdTy(Row::Closed(closed)) => {
-                assert!(closed.is_empty(&$db))
+                assert!(closed.is_empty($db))
             });
         }
     }
@@ -614,8 +605,8 @@ mod tests {
             => {
                 assert_matches!((db.kind(arg), db.kind(ret)),
                     (VarTy(a), RowTy(closed)) => {
-                        assert_eq!(closed.fields(&db).get(0).map(|start| start.text(db).as_str()), Some("start"));
-                        assert_eq!(closed.values(&db).get(0).map(|val| db.kind(val)), Some(&VarTy(*a)));
+                        assert_eq!(closed.fields(db).get(0).map(|start| start.text(db).as_str()), Some("start"));
+                        assert_eq!(closed.values(db).get(0).map(|val| db.kind(val)), Some(&VarTy(*a)));
                 });
             }
         );
@@ -660,11 +651,11 @@ match <
             let ty_var = assert_matches!(
                 db.kind(arg),
                 SumTy(Row::Closed(closed)) => {
-                    assert_matches!(closed.fields(&db), [true_, false_] => {
+                    assert_matches!(closed.fields(db), [true_, false_] => {
                         assert_eq!(false_.text(db), "false");
                         assert_eq!(true_.text(db), "true");
                     });
-                    assert_matches!(closed.values(&db), [a, b] => {
+                    assert_matches!(closed.values(db), [a, b] => {
                         assert_eq!(a, b);
                         a
                     })
@@ -685,13 +676,13 @@ match <
         db.kind(&scheme.ty),
         FunTy(arg, ret) => {
             assert_matches!(db.kind(ret), ProdTy(Row::Closed(closed)) => {
-                assert_matches!(closed.fields(&db), [a, b, c, d] => {
+                assert_matches!(closed.fields(db), [a, b, c, d] => {
                     assert_eq!(a.text(db), "a");
                     assert_eq!(b.text(db), "b");
                     assert_eq!(c.text(db), "c");
                     assert_eq!(d.text(db), "d");
                 });
-                assert_matches!(closed.values(&db), [a, b, c, d] => {
+                assert_matches!(closed.values(db), [a, b, c, d] => {
                     assert_eq!(a, arg);
                     assert_eq!(b, arg);
                     assert_eq!(c, arg);
@@ -722,10 +713,10 @@ match <
                 }
             ] => {
                 assert_eq!(a, b);
-                assert_matches!(closed.fields(&&db), [x] => {
+                assert_matches!(closed.fields(&db), [x] => {
                     assert_eq!(x.text(&db), "x");
                 });
-                assert_matches!(closed.values(&&db), [ty] => ty)
+                assert_matches!(closed.values(&db), [ty] => ty)
             }
         );
 
@@ -754,10 +745,10 @@ match <
                 right: Row::Open(_),
                 goal: Row::Open(_),
             }] => {
-                assert_matches!(closed.fields(&&db), [x] => {
+                assert_matches!(closed.fields(&db), [x] => {
                     assert_eq!(x.text(&db), "x");
                 });
-                assert_matches!(closed.values(&&db), [unit] => {
+                assert_matches!(closed.values(&db), [unit] => {
                     assert_matches_unit_ty!(&db, unit);
                 });
             }
@@ -792,7 +783,7 @@ f = State.get({})
                 goal: Row::Open(TyVarId(0))
             }
         ] => {
-            assert_eq!(state.fields(&db), &[db.ident_str("State")]);
+            assert_eq!(state.fields(db), &[db.ident_str("State")]);
         });
         assert_eq!(scheme.eff, Row::Open(TyVarId(0)));
         assert_matches_unit_ty!(db, &scheme.ty);
@@ -834,8 +825,8 @@ f = with {
             }
         ] => {
             assert_eq!(a, b);
-            assert_eq!(state.fields(&db), &[db.ident_str("State")]);
-            assert_eq!(reader.fields(&db), &[db.ident_str("Reader")]);
+            assert_eq!(state.fields(db), &[db.ident_str("State")]);
+            assert_eq!(reader.fields(db), &[db.ident_str("Reader")]);
         });
         assert_matches!(scheme.eff, Row::Open(TyVarId(0)));
     }
@@ -855,8 +846,8 @@ main = (|x| x)({})
         assert_matches!((&db).kind(&scheme.ty), TypeKind::IntTy);
         //assert_matches_unit_ty!(&db, &scheme.ty);
         assert_matches!(scheme.eff, Row::Closed(closed) => {
-            assert!(closed.fields(&&db).is_empty());
-            assert!(closed.values(&&db).is_empty());
+            assert!(closed.fields(&db).is_empty());
+            assert!(closed.values(&db).is_empty());
         })
     }
 }

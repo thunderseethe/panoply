@@ -124,7 +124,7 @@ where
             return Err((left, right).into());
         }
 
-        for (left, right) in left.values(self).iter().zip(right.values(self).iter()) {
+        for (left, right) in left.values(&*self).iter().zip(right.values(&*self).iter()) {
             self.unify(*left, *right)?;
         }
 
@@ -215,7 +215,7 @@ where
             return Err((left, right).into());
         }
 
-        for (left, right) in left.values(self).iter().zip(right.values(self).iter()) {
+        for (left, right) in left.values(&*self).iter().zip(right.values(&*self).iter()) {
             self.unify(*left, *right)?;
         }
 

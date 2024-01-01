@@ -421,7 +421,7 @@ impl<'ctx> ScopedClosedRow<InArena<'ctx>> {
 impl<'ctx> SimpleClosedRow<InArena<'ctx>> {
     /// Create a new row that contains all self fields that are not present in sub.
     pub fn difference(self, sub: Self) -> RowInternals<InArena<'ctx>> {
-        Self::difference_rowlikes((self.fields(&()), self.values(&())), sub.fields(&()))
+        Self::difference_rowlikes((self.fields(()), self.values(())), sub.fields(()))
     }
 
     /// Checks if we can attempt to unify two rows.
