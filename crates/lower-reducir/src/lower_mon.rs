@@ -594,15 +594,17 @@ impl LowerMonCtx<'_> {
                 };
                 ReducIr::abss(
                     [w],
-                    ReducIr::new(Tag(
+                    ReducIr::tag(
                         self.mk_reducir_ty(ControlTy(evv_ty, *ty)),
                         1,
-                        P::new(ReducIr::new(Struct(vec![
+                        // Wrap this struct in type variables.
+                        // These are used to instantiate the existentials during optimization.
+                        ReducIr::new(Struct(vec![
                             self.lower_monadic(evv_ty, mark),
                             self.lower_monadic(evv_ty, f),
                             ReducIr::abss([x], ReducIr::var(x)),
-                        ]))),
-                    )),
+                        ])),
+                    ),
                 )
             }
         }

@@ -223,42 +223,7 @@ impl ReducIrTy {
 
     /// Shift all the variables in a term by delta.
     pub fn shift<DB: ?Sized + crate::Db>(self, db: &DB, delta: i32) -> Self {
-        struct Shift<'db> {
-            db: &'db dyn crate::Db,
-            delta: i32,
-            bound: i32,
-        }
-        impl<'db> FoldReducIrTy<'db> for Shift<'db> {
-            fn db(&self) -> &'db dyn crate::Db {
-                self.db
-            }
-
-            fn fold_ty_kind(&mut self, kind: ReducIrTyKind) -> ReducIrTy {
-                use ReducIrTyKind::*;
-                match kind {
-                    VarTy(var) if var >= self.bound => self.mk_ty(VarTy(var + self.delta)),
-                    ProdVarTy(var) if var >= self.bound => self.mk_ty(ProdVarTy(var + self.delta)),
-                    CoprodVarTy(var) if var >= self.bound => {
-                        self.mk_ty(CoprodVarTy(var + self.delta))
-                    }
-                    // If the variable is bound don't shift it
-                    VarTy(_) | ProdVarTy(_) | CoprodVarTy(_) => self.mk_ty(kind),
-                    ForallTy(kind, body) => {
-                        self.bound += 1;
-                        let body = self.fold_ty(body);
-                        self.bound -= 1;
-                        self.mk_ty(ForallTy(kind, body))
-                    }
-                    kind => default_fold_tykind(self, kind),
-                }
-            }
-        }
-
-        self.fold(&mut Shift {
-            db: db.as_reducir_db(),
-            delta,
-            bound: 0,
-        })
+        self.subst(db.as_reducir_db(), Subst::Inc(delta))
     }
 }
 

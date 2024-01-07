@@ -358,10 +358,15 @@ impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<
                 .append(a.text(":"))
                 .append(a.softline())
                 .append(ty.pretty(db, a)),
-            ReducIrTyErr::ExpectedForallTy(ty) => a
+            ReducIrTyErr::ExpectedForallTy {
+                forall, forall_ty, ..
+            } => a
                 .text("Expected a forall type, but got:")
                 .append(a.softline())
-                .append(ty.pretty(db, a)),
+                .append(forall.pretty(db, a))
+                .append(":")
+                .append(a.softline())
+                .append(forall_ty.pretty(db, a)),
             ReducIrTyErr::ExpectedProdTy(ty, strukt) => a
                 .text("Expected a prod type, but got:")
                 .append(a.softline())

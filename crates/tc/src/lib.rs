@@ -18,7 +18,6 @@ use la_arena::Idx;
 use pretty::RcAllocator;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use salsa::DebugWithDb;
 use ty::{
     infer::{TcUnifierVar, TyCtx, UnifierKind},
     row::Row,
@@ -327,14 +326,6 @@ pub(crate) fn type_check(
         .collect::<FxHashSet<_>>();
 
     let zonked_op_sels = gen_storage.op_selectors.try_fold_with(&mut zonker).unwrap();
-
-    zonked_op_sels.iter().for_each(|(_, op_sel)| {
-        println!(
-            "OpSel {{\n\top_row: {:?},\n\thandler_row:{:?},\n}}",
-            op_sel.op_row.debug_with(db, false),
-            op_sel.handler_row.debug_with(db, false)
-        );
-    });
 
     let mut constrs = unsolved_eqs
         .data_eqns

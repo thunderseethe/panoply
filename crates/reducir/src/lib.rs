@@ -13,7 +13,10 @@ use ReducIrKind::*;
 
 use crate::ty::ReducIrVarTy;
 
-use self::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp};
+use self::{
+    subst::SubstTy,
+    ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, Subst},
+};
 
 mod pretty;
 pub mod ty;
@@ -23,6 +26,135 @@ use zip_non_consuming::ZipNonConsuming;
 
 pub mod mon;
 pub mod optimized;
+
+mod subst {
+    use std::convert::Infallible;
+
+    use crate::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
+    use crate::{ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrVar, P};
+
+    pub(crate) struct SubstTy<'a> {
+        pub(crate) db: &'a dyn crate::Db,
+        pub(crate) subst: Subst,
+    }
+
+    impl<'a> SubstTy<'a> {
+        pub fn new<DB: ?Sized + crate::Db>(db: &'a DB, subst: Subst) -> Self {
+            Self {
+                db: db.as_reducir_db(),
+                subst,
+            }
+        }
+
+        fn subst(&self, ty: ReducIrTy) -> ReducIrTy {
+            ty.subst(self.db.as_reducir_db(), self.subst.clone())
+        }
+    }
+
+    impl ReducIrEndoFold for SubstTy<'_> {
+        type Ext = Infallible;
+
+        fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
+            match kind {
+                ReducIrKind::TyApp(body, ty_apps) => {
+                    let ty_apps = ty_apps
+                        .into_iter()
+                        .map(|ty_app| match ty_app {
+                            ReducIrTyApp::Ty(ty) => ReducIrTyApp::Ty(self.subst(ty)),
+                            // Don't do anything for these
+                            ReducIrTyApp::DataRow(ReducIrRow::Open(_))
+                            | ReducIrTyApp::EffRow(ReducIrRow::Open(_)) => ty_app,
+                            ReducIrTyApp::EffRow(ReducIrRow::Closed(row)) => {
+                                ReducIrTyApp::EffRow(ReducIrRow::Closed(
+                                    row.into_iter().map(|ty| self.subst(ty)).collect(),
+                                ))
+                            }
+                            ReducIrTyApp::DataRow(ReducIrRow::Closed(row)) => {
+                                ReducIrTyApp::DataRow(ReducIrRow::Closed(
+                                    row.into_iter().map(|ty| self.subst(ty)).collect(),
+                                ))
+                            }
+                        })
+                        .collect();
+                    ReducIr::new(ReducIrKind::TyApp(body, ty_apps))
+                }
+                ReducIrKind::Var(var) => ReducIr::var(ReducIrVar {
+                    var: var.var,
+                    ty: self.subst(var.ty),
+                }),
+                ReducIrKind::Item(item, item_ty) => {
+                    ReducIr::new(ReducIrKind::Item(item, self.subst(item_ty)))
+                }
+                ReducIrKind::Abs(vars, body) => ReducIr::new(ReducIrKind::Abs(
+                    vars.iter()
+                        .map(|v| ReducIrVar {
+                            var: v.var,
+                            ty: self.subst(v.ty),
+                        })
+                        .collect(),
+                    body,
+                )),
+                ReducIrKind::Tag(ty, tag, value) => {
+                    ReducIr::new(ReducIrKind::Tag(self.subst(ty), tag, value))
+                }
+                ReducIrKind::Case(ty, discr, branches) => {
+                    ReducIr::new(ReducIrKind::Case(self.subst(ty), discr, branches))
+                }
+                kind => ReducIr::new(kind),
+            }
+        }
+
+        fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
+            use ReducIrKind::*;
+            match ir.kind() {
+                Abs(vars, body) => {
+                    let body = body.fold(self);
+                    self.fold_ir(Abs(vars.clone(), P::new(body)))
+                }
+                App(head, spine) => {
+                    let head = head.fold(self);
+                    let spine = spine.iter().map(|ir| ir.fold(self)).collect();
+                    self.fold_ir(App(P::new(head), spine))
+                }
+                TyAbs(ty_var, body) => {
+                    let subst = self.subst.clone();
+                    let subst = std::mem::replace(&mut self.subst, subst.lift());
+                    let body = body.fold(self);
+                    self.subst = subst;
+                    self.fold_ir(TyAbs(*ty_var, P::new(body)))
+                }
+                TyApp(body, ty_app) => {
+                    let body = body.fold(self);
+                    self.fold_ir(TyApp(P::new(body), ty_app.clone()))
+                }
+                Struct(elems) => {
+                    let elems = elems.iter().map(|e| e.fold(self)).collect();
+                    self.fold_ir(Struct(elems))
+                }
+                FieldProj(indx, body) => {
+                    let body = body.fold(self);
+                    self.fold_ir(FieldProj(*indx, P::new(body)))
+                }
+                Tag(ty, tag, body) => {
+                    let body = body.fold(self);
+                    self.fold_ir(Tag(*ty, *tag, P::new(body)))
+                }
+                Case(ty, discr, branches) => {
+                    let discr = discr.fold(self);
+                    let branches = branches.iter().map(|branch| branch.fold(self)).collect();
+                    self.fold_ir(Case(*ty, P::new(discr), branches))
+                }
+                Int(i) => self.fold_ir(Int(*i)),
+                Var(v) => self.fold_ir(Var(*v)),
+                Item(name, ty) => self.fold_ir(Item(*name, *ty)),
+
+                X(_) => {
+                    unreachable!()
+                }
+            }
+        }
+    }
+}
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
@@ -462,6 +594,13 @@ pub struct TopLevelDef<'a, Ext> {
     pub ty_vars: Vec<ReducIrVarTy>,
     pub vars: &'a [ReducIrVar],
     pub body: &'a ReducIr<Ext>,
+}
+
+impl ReducIr<Infallible> {
+    /// Apply a subst to all types within self
+    pub fn subst<DB: ?Sized + crate::Db>(&self, db: &DB, subst: Subst) -> Self {
+        self.fold(&mut SubstTy::new(db, subst))
+    }
 }
 
 impl ReducIr<Lets> {
@@ -949,7 +1088,11 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                                 Err(ReducIrTyErr::KindMistmatch(k, Kind::ScopedRow))
                             }
                         },
-                        _ => Err(ReducIrTyErr::ExpectedForallTy(forall_ty)),
+                        _ => Err(ReducIrTyErr::ExpectedForallTy {
+                            forall: Cow::Borrowed(forall),
+                            forall_ty,
+                            ty_apps: ty_apps.as_slice(),
+                        }),
                     }
                 })
             }
@@ -1067,7 +1210,11 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
         ty: ReducIrTy,
         func: &'a ReducIr<Ext>,
     },
-    ExpectedForallTy(ReducIrTy),
+    ExpectedForallTy {
+        forall: Cow<'a, ReducIr<Ext>>,
+        forall_ty: ReducIrTy,
+        ty_apps: &'a [ReducIrTyApp],
+    },
     ExpectedProdTy(ReducIrTy, Cow<'a, ReducIr<Ext>>),
     ExpectedCoprodTy(ReducIrTy, Cow<'a, ReducIr<Ext>>),
     ExpectedMarkerTy(ReducIrTy),

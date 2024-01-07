@@ -14,7 +14,7 @@ use reducir::{
 use rustc_hash::FxHashMap;
 use std::convert::Infallible;
 
-use crate::subst::{Inline, SubstTy};
+use crate::subst::Inline;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(simple_reducir_item, simple_reducir_module);
@@ -68,10 +68,7 @@ fn simple_reducir_module(
 mod subst {
     use std::convert::Infallible;
 
-    use reducir::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
-    use reducir::{
-        ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrVar, P,
-    };
+    use reducir::{ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal};
     use rustc_hash::FxHashMap;
 
     pub(crate) struct Inline<'a> {
@@ -87,121 +84,6 @@ mod subst {
                     None => ReducIr::new(kind),
                 },
                 _ => ReducIr::new(kind),
-            }
-        }
-    }
-
-    pub(crate) struct SubstTy<'a> {
-        pub(crate) db: &'a dyn crate::Db,
-        pub(crate) subst: Subst,
-    }
-
-    impl SubstTy<'_> {
-        fn subst(&self, ty: ReducIrTy) -> ReducIrTy {
-            ty.subst(self.db.as_reducir_db(), self.subst.clone())
-        }
-    }
-
-    impl ReducIrEndoFold for SubstTy<'_> {
-        type Ext = Infallible;
-
-        fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
-            match kind {
-                ReducIrKind::TyApp(body, ty_apps) => {
-                    let ty_apps = ty_apps
-                        .into_iter()
-                        .map(|ty_app| match ty_app {
-                            ReducIrTyApp::Ty(ty) => ReducIrTyApp::Ty(self.subst(ty)),
-                            // Don't do anything for these
-                            ReducIrTyApp::DataRow(ReducIrRow::Open(_))
-                            | ReducIrTyApp::EffRow(ReducIrRow::Open(_)) => ty_app,
-                            ReducIrTyApp::EffRow(ReducIrRow::Closed(row)) => {
-                                ReducIrTyApp::EffRow(ReducIrRow::Closed(
-                                    row.into_iter().map(|ty| self.subst(ty)).collect(),
-                                ))
-                            }
-                            ReducIrTyApp::DataRow(ReducIrRow::Closed(row)) => {
-                                ReducIrTyApp::DataRow(ReducIrRow::Closed(
-                                    row.into_iter().map(|ty| self.subst(ty)).collect(),
-                                ))
-                            }
-                        })
-                        .collect();
-                    ReducIr::new(ReducIrKind::TyApp(body, ty_apps))
-                }
-                ReducIrKind::Var(var) => ReducIr::var(ReducIrVar {
-                    var: var.var,
-                    ty: self.subst(var.ty),
-                }),
-                ReducIrKind::Item(item, item_ty) => {
-                    ReducIr::new(ReducIrKind::Item(item, self.subst(item_ty)))
-                }
-                ReducIrKind::Abs(vars, body) => ReducIr::new(ReducIrKind::Abs(
-                    vars.iter()
-                        .map(|v| ReducIrVar {
-                            var: v.var,
-                            ty: self.subst(v.ty),
-                        })
-                        .collect(),
-                    body,
-                )),
-                ReducIrKind::Tag(ty, tag, value) => {
-                    ReducIr::new(ReducIrKind::Tag(self.subst(ty), tag, value))
-                }
-                ReducIrKind::Case(ty, discr, branches) => {
-                    ReducIr::new(ReducIrKind::Case(self.subst(ty), discr, branches))
-                }
-                kind => ReducIr::new(kind),
-            }
-        }
-
-        fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
-            use ReducIrKind::*;
-            match ir.kind() {
-                Abs(vars, body) => {
-                    let body = body.fold(self);
-                    self.fold_ir(Abs(vars.clone(), P::new(body)))
-                }
-                App(head, spine) => {
-                    let head = head.fold(self);
-                    let spine = spine.iter().map(|ir| ir.fold(self)).collect();
-                    self.fold_ir(App(P::new(head), spine))
-                }
-                TyAbs(ty_var, body) => {
-                    let subst = self.subst.clone();
-                    let subst = std::mem::replace(&mut self.subst, subst.lift());
-                    let body = body.fold(self);
-                    self.subst = subst;
-                    self.fold_ir(TyAbs(*ty_var, P::new(body)))
-                }
-                TyApp(body, ty_app) => {
-                    let body = body.fold(self);
-                    self.fold_ir(TyApp(P::new(body), ty_app.clone()))
-                }
-                Struct(elems) => {
-                    let elems = elems.iter().map(|e| e.fold(self)).collect();
-                    self.fold_ir(Struct(elems))
-                }
-                FieldProj(indx, body) => {
-                    let body = body.fold(self);
-                    self.fold_ir(FieldProj(*indx, P::new(body)))
-                }
-                Tag(ty, tag, body) => {
-                    let body = body.fold(self);
-                    self.fold_ir(Tag(*ty, *tag, P::new(body)))
-                }
-                Case(ty, discr, branches) => {
-                    let discr = discr.fold(self);
-                    let branches = branches.iter().map(|branch| branch.fold(self)).collect();
-                    self.fold_ir(Case(*ty, P::new(discr), branches))
-                }
-                Int(i) => self.fold_ir(Int(*i)),
-                Var(v) => self.fold_ir(Var(*v)),
-                Item(name, ty) => self.fold_ir(Item(*name, *ty)),
-
-                X(_) => {
-                    unreachable!()
-                }
             }
         }
     }
@@ -295,16 +177,16 @@ impl ReducIrFold for Simplify<'_> {
                 ty_app.reverse();
                 let (body, apps) = apply_tyabs(&body, &mut ty_app, vec![]);
                 ty_app.reverse();
-                let body = if !apps.is_empty() {
+                let body = if apps.is_empty() {
+                    body.clone()
+                } else {
                     // only perform a substitution if we actually applied types
-                    body.fold(&mut SubstTy {
-                        db: self.db,
-                        subst: apps.into_iter().fold(Subst::Inc(0), |subst, app| {
+                    body.subst(
+                        self.db,
+                        apps.into_iter().fold(Subst::Inc(0), |subst, app| {
                             subst.cons(app.into_payload(self.db))
                         }),
-                    })
-                } else {
-                    body.clone()
+                    )
                 };
                 ReducIr::ty_app(body, ty_app)
             }
@@ -533,7 +415,7 @@ fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> Red
     let exists_m = db.mk_reducir_ty(VarTy(1));
     let exists_r = db.mk_reducir_ty(VarTy(0));
     let exists_mon_m_r = db.mk_mon_ty(exists_m, exists_r);
-    let exists_body_fun_ty = db.mk_mon_ty(VarTy(4), VarTy(3)); //db.mk_mon_ty(upd_m, a);
+    let exists_body_fun_ty = db.mk_mon_ty(VarTy(4), VarTy(3));
     let y_var = ReducIrVar {
         var: gen_local(),
         ty: db.mk_forall_ty(
@@ -739,22 +621,21 @@ fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> ReducIr 
             ReducIrTyApp::Ty(b),
         ],
     );
+    let tyvar0 = ReducIrVarTy {
+        var: tyvar_supply.supply_id(),
+        kind: Kind::Type,
+    };
+    let tyvar1 = ReducIrVarTy {
+        var: tyvar_supply.supply_id(),
+        kind: Kind::Type,
+    };
+    let tyvar2 = ReducIrVarTy {
+        var: tyvar_supply.supply_id(),
+        kind: Kind::Type,
+    };
 
     ReducIr::ty_abs(
-        [
-            ReducIrVarTy {
-                var: tyvar_supply.supply_id(),
-                kind: Kind::Type,
-            },
-            ReducIrVarTy {
-                var: tyvar_supply.supply_id(),
-                kind: Kind::Type,
-            },
-            ReducIrVarTy {
-                var: tyvar_supply.supply_id(),
-                kind: Kind::Type,
-            },
-        ],
+        [tyvar0, tyvar1, tyvar2],
         ReducIr::abss(
             [e, g, w],
             ReducIr::case(
