@@ -7,6 +7,6 @@ use crate::{file::FileId, ident::Ident};
 #[salsa::tracked]
 #[derive(DebugWithDb, Debug)]
 pub struct Module {
-    pub name: Ident,
-    pub uri: FileId,
+  pub name: Ident,
+  pub uri: FileId,
 }

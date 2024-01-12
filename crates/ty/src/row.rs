@@ -20,20 +20,20 @@ mod closed_row;
 pub use closed_row::{NewRow, RowInternals, RowOps, ScopedClosedRow, SimpleClosedRow};
 
 mod seal_row_sema {
-    pub trait SealRowSema {}
+  pub trait SealRowSema {}
 }
 use seal_row_sema::SealRowSema;
 
 pub trait RowSema: SealRowSema {
-    type Open<A: TypeAlloc>: PartialEq + Eq + PartialOrd + Ord + Hash + Clone + Debug;
-    type Closed<A: TypeAlloc>: PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + Hash
-        + Clone
-        + NewRow<A>
-        + RowOps<A>;
+  type Open<A: TypeAlloc>: PartialEq + Eq + PartialOrd + Ord + Hash + Clone + Debug;
+  type Closed<A: TypeAlloc>: PartialEq
+    + Eq
+    + PartialOrd
+    + Ord
+    + Hash
+    + Clone
+    + NewRow<A>
+    + RowOps<A>;
 }
 
 /// Scoped Row Semantics
@@ -61,8 +61,8 @@ pub trait RowSema: SealRowSema {
 pub struct Scoped;
 impl SealRowSema for Scoped {}
 impl RowSema for Scoped {
-    type Open<A: TypeAlloc> = A::ScopedRowVar;
-    type Closed<A: TypeAlloc> = ScopedClosedRow<A>;
+  type Open<A: TypeAlloc> = A::ScopedRowVar;
+  type Closed<A: TypeAlloc> = ScopedClosedRow<A>;
 }
 
 /// Simple Row Semantics
@@ -79,8 +79,8 @@ impl RowSema for Scoped {
 pub struct Simple;
 impl SealRowSema for Simple {}
 impl RowSema for Simple {
-    type Open<A: TypeAlloc> = A::SimpleRowVar;
-    type Closed<A: TypeAlloc> = SimpleClosedRow<A>;
+  type Open<A: TypeAlloc> = A::SimpleRowVar;
+  type Closed<A: TypeAlloc> = SimpleClosedRow<A>;
 }
 
 /// A row is a mapping from labels to types, it can be open or closed.
@@ -90,79 +90,79 @@ impl RowSema for Simple {
 /// as the result.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 pub enum Row<Sema: RowSema, A: TypeAlloc = InDb> {
-    /// An open row is a polymorphic set of data. Used to allow generic row programming.
-    Open(Sema::Open<A>),
-    /// A closed row is a concrete mapping from fields to values.
-    Closed(Sema::Closed<A>),
+  /// An open row is a polymorphic set of data. Used to allow generic row programming.
+  Open(Sema::Open<A>),
+  /// A closed row is a concrete mapping from fields to values.
+  Closed(Sema::Closed<A>),
 }
 pub type SimpleRow<A = InDb> = Row<Simple, A>;
 pub type ScopedRow<A = InDb> = Row<Scoped, A>;
 
 impl<A: TypeAlloc, Sema: RowSema + Clone> Copy for Row<Sema, A>
 where
-    A: Clone,
-    Sema::Open<A>: Copy,
-    Sema::Closed<A>: Copy,
+  A: Clone,
+  Sema::Open<A>: Copy,
+  Sema::Closed<A>: Copy,
 {
 }
 impl<Db, Sema: RowSema> DebugWithDb<Db> for Row<Sema, InDb>
 where
-    Db: ?Sized + crate::Db,
-    Sema::Open<InDb>: Debug,
-    Sema::Closed<InDb>: DebugWithDb<Db>,
+  Db: ?Sized + crate::Db,
+  Sema::Open<InDb>: Debug,
+  Sema::Closed<InDb>: DebugWithDb<Db>,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
-        match self {
-            Row::Open(var) => f.debug_tuple("Open").field(var).finish(),
-            Row::Closed(row) => f
-                .debug_tuple("Closed")
-                .field(&row.debug_with(db, include_all_fields))
-                .finish(),
-        }
+  fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
+    match self {
+      Row::Open(var) => f.debug_tuple("Open").field(var).finish(),
+      Row::Closed(row) => f
+        .debug_tuple("Closed")
+        .field(&row.debug_with(db, include_all_fields))
+        .finish(),
     }
+  }
 }
 
 impl<'ctx, A> TypeFoldable<'ctx> for Row<Simple, A>
 where
-    A: TypeAlloc + Clone + 'ctx,
+  A: TypeAlloc + Clone + 'ctx,
 {
-    type Alloc = A;
-    type Out<B: TypeAlloc> = Row<Simple, B>;
+  type Alloc = A;
+  type Out<B: TypeAlloc> = Row<Simple, B>;
 
-    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::Out>, F::Error> {
-        match self {
-            Row::Open(var) => fold.try_fold_simple_row_var(var),
-            Row::Closed(crow) => crow.try_fold_with(fold).map(Row::Closed),
-        }
+  fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
+    self,
+    fold: &mut F,
+  ) -> Result<Self::Out<F::Out>, F::Error> {
+    match self {
+      Row::Open(var) => fold.try_fold_simple_row_var(var),
+      Row::Closed(crow) => crow.try_fold_with(fold).map(Row::Closed),
     }
+  }
 }
 
 impl<'ctx, A> TypeFoldable<'ctx> for Row<Scoped, A>
 where
-    A: TypeAlloc + Clone + 'ctx,
+  A: TypeAlloc + Clone + 'ctx,
 {
-    type Alloc = A;
-    type Out<B: TypeAlloc> = Row<Scoped, B>;
+  type Alloc = A;
+  type Out<B: TypeAlloc> = Row<Scoped, B>;
 
-    fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
-        self,
-        fold: &mut F,
-    ) -> Result<Self::Out<F::Out>, F::Error> {
-        match self {
-            Row::Open(var) => fold.try_fold_scoped_row_var(var),
-            Row::Closed(crow) => crow.try_fold_with(fold).map(Row::Closed),
-        }
+  fn try_fold_with<F: FallibleTypeFold<'ctx, In = Self::Alloc>>(
+    self,
+    fold: &mut F,
+  ) -> Result<Self::Out<F::Out>, F::Error> {
+    match self {
+      Row::Open(var) => fold.try_fold_scoped_row_var(var),
+      Row::Closed(crow) => crow.try_fold_with(fold).map(Row::Closed),
     }
+  }
 }
 
 pub struct RowsNotDisjoint<'a, V> {
-    /// Left row that was expected to be disjoint
-    pub left: (&'a [RowLabel], &'a [V]),
-    /// Right row that was expected to be disjoint
-    pub right: (&'a [RowLabel], &'a [V]),
-    /// The label left and right both contain
-    pub label: RowLabel,
+  /// Left row that was expected to be disjoint
+  pub left: (&'a [RowLabel], &'a [V]),
+  /// Right row that was expected to be disjoint
+  pub right: (&'a [RowLabel], &'a [V]),
+  /// The label left and right both contain
+  pub label: RowLabel,
 }

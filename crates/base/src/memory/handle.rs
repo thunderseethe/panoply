@@ -2,19 +2,19 @@
 //! whose identity corresponds to its pointer value, rather than the pointed-to data.
 
 use std::{
-    cmp::Ordering,
-    fmt::{self, Debug, Formatter},
-    hash::{Hash, Hasher},
-    ops::Deref,
-    ptr,
-    rc::Rc,
-    sync::Arc,
+  cmp::Ordering,
+  fmt::{self, Debug, Formatter},
+  hash::{Hash, Hasher},
+  ops::Deref,
+  ptr,
+  rc::Rc,
+  sync::Arc,
 };
 
 trait Ptr: Deref {
-    fn ptr(&self) -> *const Self::Target {
-        self.deref()
-    }
+  fn ptr(&self) -> *const Self::Target {
+    self.deref()
+  }
 }
 impl<P: Deref> Ptr for P {}
 
@@ -37,49 +37,49 @@ impl<P: Deref> Ptr for P {}
 pub struct Handle<P>(pub P);
 
 impl<P: Deref> Debug for Handle<P> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Handle").field(&self.0.ptr()).finish()
-    }
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("Handle").field(&self.0.ptr()).finish()
+  }
 }
 
 impl<P: Deref> Eq for Handle<P> {}
 
 impl<P: Deref> Hash for Handle<P> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        ptr::hash(self.0.ptr(), state)
-    }
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    ptr::hash(self.0.ptr(), state)
+  }
 }
 
 impl<P: Deref> Ord for Handle<P> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0.ptr().cmp(&other.0.ptr())
-    }
+  fn cmp(&self, other: &Self) -> Ordering {
+    self.0.ptr().cmp(&other.0.ptr())
+  }
 }
 
 impl<P: Deref> PartialEq for Handle<P> {
-    fn eq(&self, other: &Self) -> bool {
-        ptr::eq(self.0.ptr(), other.0.ptr())
-    }
+  fn eq(&self, other: &Self) -> bool {
+    ptr::eq(self.0.ptr(), other.0.ptr())
+  }
 }
 
 impl<P: Deref> PartialOrd for Handle<P> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    Some(self.cmp(other))
+  }
 }
 
 impl<P: Deref> Deref for Handle<P> {
-    type Target = P::Target;
+  type Target = P::Target;
 
-    fn deref(&self) -> &Self::Target {
-        self.0.deref()
-    }
+  fn deref(&self) -> &Self::Target {
+    self.0.deref()
+  }
 }
 
 impl<T: ?Sized, P: AsRef<T> + Deref> AsRef<T> for Handle<P> {
-    fn as_ref(&self) -> &T {
-        self.0.as_ref()
-    }
+  fn as_ref(&self) -> &T {
+    self.0.as_ref()
+  }
 }
 
 /// See `Handle` for further info.
@@ -94,7 +94,7 @@ pub type ArcHandle<T> = Handle<Arc<T>>;
 /// Matches a handle by pointee value.
 #[macro_export]
 macro_rules! h {
-    ($ptr:pat) => {
-        $crate::memory::handle::Handle($ptr)
-    };
+  ($ptr:pat) => {
+    $crate::memory::handle::Handle($ptr)
+  };
 }
