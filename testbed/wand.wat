@@ -71,380 +71,396 @@
 (;@17c   ;)    i32.load
 (;@17f   ;)    local.set 4
 (;@181   ;)    block (result i32) ;; label = @1
-(;@183   ;)      block (result i32) ;; label = @2
-(;@185   ;)        block (result i32) ;; label = @3
-(;@187   ;)          block (result i32) ;; label = @4
+(;@183   ;)      block ;; label = @2
+(;@185   ;)        block ;; label = @3
+(;@187   ;)          block ;; label = @4
 (;@189   ;)            local.get 4
-(;@18b   ;)            local.get 4
-(;@18d   ;)            br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
-(;@192   ;)          end
-(;@193   ;)          local.get 3
-(;@195   ;)          i32.load offset=4
-(;@198   ;)          local.set 5
-(;@19a   ;)          global.get 0
-(;@19c   ;)          i32.const 4
-(;@19e   ;)          i32.store
-(;@1a1   ;)          global.get 0
-(;@1a3   ;)          i32.const 10
-(;@1a5   ;)          i32.store offset=4
+(;@18b   ;)            br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
+(;@190   ;)          end
+(;@191   ;)          local.get 3
+(;@193   ;)          i32.load offset=4
+(;@196   ;)          local.set 5
+(;@198   ;)          global.get 0
+(;@19a   ;)          i32.const 4
+(;@19c   ;)          i32.store
+(;@19f   ;)          global.get 0
+(;@1a1   ;)          i32.const 10
+(;@1a3   ;)          i32.store offset=4
+(;@1a6   ;)          global.get 0
 (;@1a8   ;)          global.get 0
-(;@1aa   ;)          global.get 0
-(;@1ac   ;)          i32.const 8
-(;@1ae   ;)          i32.add
-(;@1af   ;)          global.set 0
-(;@1b1   ;)          local.set 6
-(;@1b3   ;)          global.get 0
-(;@1b5   ;)          i32.const 6
-(;@1b7   ;)          i32.store
-(;@1ba   ;)          global.get 0
-(;@1bc   ;)          i32.const 15
-(;@1be   ;)          i32.store offset=4
-(;@1c1   ;)          global.get 0
-(;@1c3   ;)          local.get 1
-(;@1c5   ;)          i32.store offset=8
+(;@1aa   ;)          i32.const 8
+(;@1ac   ;)          i32.add
+(;@1ad   ;)          global.set 0
+(;@1af   ;)          local.set 6
+(;@1b1   ;)          global.get 0
+(;@1b3   ;)          i32.const 6
+(;@1b5   ;)          i32.store
+(;@1b8   ;)          global.get 0
+(;@1ba   ;)          i32.const 15
+(;@1bc   ;)          i32.store offset=4
+(;@1bf   ;)          global.get 0
+(;@1c1   ;)          local.get 1
+(;@1c3   ;)          i32.store offset=8
+(;@1c6   ;)          global.get 0
 (;@1c8   ;)          global.get 0
-(;@1ca   ;)          global.get 0
-(;@1cc   ;)          i32.const 12
-(;@1ce   ;)          i32.add
-(;@1cf   ;)          global.set 0
-(;@1d1   ;)          local.set 7
-(;@1d3   ;)          global.get 0
-(;@1d5   ;)          local.get 1
-(;@1d7   ;)          i32.store
-(;@1da   ;)          global.get 0
-(;@1dc   ;)          local.get 6
-(;@1de   ;)          i32.store offset=4
-(;@1e1   ;)          global.get 0
-(;@1e3   ;)          local.get 7
-(;@1e5   ;)          i32.store offset=8
+(;@1ca   ;)          i32.const 12
+(;@1cc   ;)          i32.add
+(;@1cd   ;)          global.set 0
+(;@1cf   ;)          local.set 7
+(;@1d1   ;)          global.get 0
+(;@1d3   ;)          local.get 1
+(;@1d5   ;)          i32.store
+(;@1d8   ;)          global.get 0
+(;@1da   ;)          local.get 6
+(;@1dc   ;)          i32.store offset=4
+(;@1df   ;)          global.get 0
+(;@1e1   ;)          local.get 7
+(;@1e3   ;)          i32.store offset=8
+(;@1e6   ;)          global.get 0
 (;@1e8   ;)          global.get 0
-(;@1ea   ;)          global.get 0
-(;@1ec   ;)          i32.const 12
-(;@1ee   ;)          i32.add
-(;@1ef   ;)          global.set 0
-(;@1f1   ;)          local.set 8
-(;@1f3   ;)          global.get 0
-(;@1f5   ;)          i32.const 1
-(;@1f7   ;)          i32.store
-(;@1fa   ;)          global.get 0
-(;@1fc   ;)          local.get 8
-(;@1fe   ;)          i32.store offset=4
+(;@1ea   ;)          i32.const 12
+(;@1ec   ;)          i32.add
+(;@1ed   ;)          global.set 0
+(;@1ef   ;)          local.set 8
+(;@1f1   ;)          global.get 0
+(;@1f3   ;)          i32.const 1
+(;@1f5   ;)          i32.store
+(;@1f8   ;)          global.get 0
+(;@1fa   ;)          local.get 8
+(;@1fc   ;)          i32.store offset=4
+(;@1ff   ;)          global.get 0
 (;@201   ;)          global.get 0
-(;@203   ;)          global.get 0
-(;@205   ;)          i32.const 8
-(;@207   ;)          i32.add
-(;@208   ;)          global.set 0
-(;@20a   ;)          br 2 (;@1;)
-(;@20c   ;)        end
-(;@20d   ;)        local.get 3
-(;@20f   ;)        i32.load offset=4
-(;@212   ;)        local.set 5
-(;@214   ;)        global.get 0
-(;@216   ;)        i32.const 6
-(;@218   ;)        i32.store
-(;@21b   ;)        global.get 0
-(;@21d   ;)        i32.const 17
-(;@21f   ;)        i32.store offset=4
-(;@222   ;)        global.get 0
-(;@224   ;)        local.get 1
-(;@226   ;)        i32.store offset=8
+(;@203   ;)          i32.const 8
+(;@205   ;)          i32.add
+(;@206   ;)          global.set 0
+(;@208   ;)          br 2 (;@1;)
+(;@20a   ;)        end
+(;@20b   ;)        local.get 3
+(;@20d   ;)        i32.load offset=4
+(;@210   ;)        local.set 5
+(;@212   ;)        global.get 0
+(;@214   ;)        i32.const 6
+(;@216   ;)        i32.store
+(;@219   ;)        global.get 0
+(;@21b   ;)        i32.const 17
+(;@21d   ;)        i32.store offset=4
+(;@220   ;)        global.get 0
+(;@222   ;)        local.get 1
+(;@224   ;)        i32.store offset=8
+(;@227   ;)        global.get 0
 (;@229   ;)        global.get 0
-(;@22b   ;)        global.get 0
-(;@22d   ;)        i32.const 12
-(;@22f   ;)        i32.add
-(;@230   ;)        global.set 0
-(;@232   ;)        local.set 9
-(;@234   ;)        global.get 0
-(;@236   ;)        i32.const 4
-(;@238   ;)        i32.store
-(;@23b   ;)        global.get 0
-(;@23d   ;)        i32.const 18
-(;@23f   ;)        i32.store offset=4
+(;@22b   ;)        i32.const 12
+(;@22d   ;)        i32.add
+(;@22e   ;)        global.set 0
+(;@230   ;)        local.set 9
+(;@232   ;)        global.get 0
+(;@234   ;)        i32.const 4
+(;@236   ;)        i32.store
+(;@239   ;)        global.get 0
+(;@23b   ;)        i32.const 18
+(;@23d   ;)        i32.store offset=4
+(;@240   ;)        global.get 0
 (;@242   ;)        global.get 0
-(;@244   ;)        global.get 0
-(;@246   ;)        i32.const 8
-(;@248   ;)        i32.add
-(;@249   ;)        global.set 0
-(;@24b   ;)        local.set 10
-(;@24d   ;)        global.get 0
-(;@24f   ;)        i32.const 5
-(;@251   ;)        i32.store
-(;@254   ;)        global.get 0
-(;@256   ;)        i32.const 19
-(;@258   ;)        i32.store offset=4
+(;@244   ;)        i32.const 8
+(;@246   ;)        i32.add
+(;@247   ;)        global.set 0
+(;@249   ;)        local.set 10
+(;@24b   ;)        global.get 0
+(;@24d   ;)        i32.const 5
+(;@24f   ;)        i32.store
+(;@252   ;)        global.get 0
+(;@254   ;)        i32.const 19
+(;@256   ;)        i32.store offset=4
+(;@259   ;)        global.get 0
 (;@25b   ;)        global.get 0
-(;@25d   ;)        global.get 0
-(;@25f   ;)        i32.const 8
-(;@261   ;)        i32.add
-(;@262   ;)        global.set 0
-(;@264   ;)        local.set 11
-(;@266   ;)        global.get 0
-(;@268   ;)        i32.const 7
-(;@26a   ;)        i32.store
-(;@26d   ;)        global.get 0
-(;@26f   ;)        i32.const 1
-(;@271   ;)        i32.store offset=4
-(;@274   ;)        global.get 0
-(;@276   ;)        local.get 11
-(;@278   ;)        i32.store offset=8
-(;@27b   ;)        global.get 0
-(;@27d   ;)        local.get 10
-(;@27f   ;)        i32.store offset=12
+(;@25d   ;)        i32.const 8
+(;@25f   ;)        i32.add
+(;@260   ;)        global.set 0
+(;@262   ;)        local.set 11
+(;@264   ;)        global.get 0
+(;@266   ;)        i32.const 7
+(;@268   ;)        i32.store
+(;@26b   ;)        global.get 0
+(;@26d   ;)        i32.const 1
+(;@26f   ;)        i32.store offset=4
+(;@272   ;)        global.get 0
+(;@274   ;)        local.get 11
+(;@276   ;)        i32.store offset=8
+(;@279   ;)        global.get 0
+(;@27b   ;)        local.get 10
+(;@27d   ;)        i32.store offset=12
+(;@280   ;)        global.get 0
 (;@282   ;)        global.get 0
-(;@284   ;)        global.get 0
-(;@286   ;)        i32.const 16
-(;@288   ;)        i32.add
-(;@289   ;)        global.set 0
-(;@28b   ;)        local.set 12
-(;@28d   ;)        local.get 1
-(;@28f   ;)        local.get 9
-(;@291   ;)        local.get 12
-(;@293   ;)        local.get 2
-(;@295   ;)        call 2
-(;@297   ;)        br 1 (;@1;)
-(;@299   ;)      end
-(;@29a   ;)      unreachable
-(;@29b   ;)    end
-(;@29c   ;)    local.set 13
-(;@29e   ;)    local.get 13
-(;@2a0   ;)    i32.load
-(;@2a3   ;)    local.set 14
-(;@2a5   ;)    block (result i32) ;; label = @1
-(;@2a7   ;)      block (result i32) ;; label = @2
-(;@2a9   ;)        block (result i32) ;; label = @3
-(;@2ab   ;)          local.get 14
-(;@2ad   ;)          local.get 14
-(;@2af   ;)          br_table 0 (;@3;) 1 (;@2;)
-(;@2b3   ;)        end
-(;@2b4   ;)        local.get 13
-(;@2b6   ;)        i32.load offset=4
-(;@2b9   ;)        local.set 15
-(;@2bb   ;)        local.get 15
-(;@2bd   ;)        br 1 (;@1;)
-(;@2bf   ;)      end
-(;@2c0   ;)      unreachable
-(;@2c1   ;)    end
+(;@284   ;)        i32.const 16
+(;@286   ;)        i32.add
+(;@287   ;)        global.set 0
+(;@289   ;)        local.set 12
+(;@28b   ;)        local.get 1
+(;@28d   ;)        local.get 9
+(;@28f   ;)        local.get 12
+(;@291   ;)        local.get 2
+(;@293   ;)        call 2
+(;@295   ;)        br 1 (;@1;)
+(;@297   ;)      end
+(;@298   ;)      unreachable
+(;@299   ;)    end
+(;@29a   ;)    local.set 13
+(;@29c   ;)    local.get 13
+(;@29e   ;)    i32.load
+(;@2a1   ;)    local.set 14
+(;@2a3   ;)    block (result i32) ;; label = @1
+(;@2a5   ;)      block ;; label = @2
+(;@2a7   ;)        block ;; label = @3
+(;@2a9   ;)          block ;; label = @4
+(;@2ab   ;)            local.get 14
+(;@2ad   ;)            br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
+(;@2b2   ;)          end
+(;@2b3   ;)          local.get 13
+(;@2b5   ;)          i32.load offset=4
+(;@2b8   ;)          local.set 15
+(;@2ba   ;)          local.get 15
+(;@2bc   ;)          br 2 (;@1;)
+(;@2be   ;)        end
+(;@2bf   ;)        local.get 13
+(;@2c1   ;)        i32.load offset=4
+(;@2c4   ;)        local.set 15
+(;@2c6   ;)        i32.const 5467
+(;@2c9   ;)        br 1 (;@1;)
+(;@2cb   ;)      end
+(;@2cc   ;)      unreachable
+(;@2cd   ;)    end
+(;@2ce   ;)    return
              )
-(;@2c4   ;)  (func $main_lam_0 (;10;) (type $fun_1_1) (param i32) (result i32)
-(;@2c5   ;)    (local i32)
-(;@2c7   ;)    local.get 0
-(;@2c9   ;)    i32.const 4
-(;@2cb   ;)    i32.add
-(;@2cc   ;)    i32.const 52
-(;@2ce   ;)    local.get 0
-(;@2d0   ;)    i32.load
-(;@2d3   ;)    call_indirect (type $fun_2_1)
+(;@2d1   ;)  (func $main_lam_0 (;10;) (type $fun_1_1) (param i32) (result i32)
+(;@2d2   ;)    (local i32)
+(;@2d4   ;)    local.get 0
+(;@2d6   ;)    i32.const 4
+(;@2d8   ;)    i32.add
+(;@2d9   ;)    i32.const 52
+(;@2db   ;)    local.get 0
+(;@2dd   ;)    i32.load
+(;@2e0   ;)    call_indirect (type $fun_2_1)
+(;@2e3   ;)    return
              )
-(;@2d8   ;)  (func $main_lam_1 (;11;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@2d9   ;)    (local i32)
-(;@2db   ;)    local.get 1
-(;@2dd   ;)    i32.const 4
-(;@2df   ;)    i32.add
-(;@2e0   ;)    i32.const 52
-(;@2e2   ;)    local.get 1
-(;@2e4   ;)    i32.load
-(;@2e7   ;)    call_indirect (type $fun_2_1)
+(;@2e6   ;)  (func $main_lam_1 (;11;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@2e7   ;)    (local i32)
+(;@2e9   ;)    local.get 1
+(;@2eb   ;)    i32.const 4
+(;@2ed   ;)    i32.add
+(;@2ee   ;)    i32.const 52
+(;@2f0   ;)    local.get 1
+(;@2f2   ;)    i32.load
+(;@2f5   ;)    call_indirect (type $fun_2_1)
+(;@2f8   ;)    return
              )
-(;@2ec   ;)  (func $main_lam_2 (;12;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@2ed   ;)    (local i32 i32)
-(;@2ef   ;)    global.get 0
-(;@2f1   ;)    i32.const 5
-(;@2f3   ;)    i32.store
-(;@2f6   ;)    global.get 0
-(;@2f8   ;)    i32.const 11
-(;@2fa   ;)    i32.store offset=4
-(;@2fd   ;)    global.get 0
-(;@2ff   ;)    global.get 0
-(;@301   ;)    i32.const 8
-(;@303   ;)    i32.add
-(;@304   ;)    global.set 0
-(;@306   ;)    local.set 2
-(;@308   ;)    global.get 0
-(;@30a   ;)    local.get 0
-(;@30c   ;)    i32.store
-(;@30f   ;)    global.get 0
-(;@311   ;)    local.get 2
-(;@313   ;)    i32.store offset=4
-(;@316   ;)    global.get 0
-(;@318   ;)    global.get 0
-(;@31a   ;)    i32.const 8
-(;@31c   ;)    i32.add
-(;@31d   ;)    global.set 0
+(;@2fb   ;)  (func $main_lam_2 (;12;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@2fc   ;)    (local i32 i32)
+(;@2fe   ;)    global.get 0
+(;@300   ;)    i32.const 5
+(;@302   ;)    i32.store
+(;@305   ;)    global.get 0
+(;@307   ;)    i32.const 11
+(;@309   ;)    i32.store offset=4
+(;@30c   ;)    global.get 0
+(;@30e   ;)    global.get 0
+(;@310   ;)    i32.const 8
+(;@312   ;)    i32.add
+(;@313   ;)    global.set 0
+(;@315   ;)    local.set 2
+(;@317   ;)    global.get 0
+(;@319   ;)    local.get 0
+(;@31b   ;)    i32.store
+(;@31e   ;)    global.get 0
+(;@320   ;)    local.get 2
+(;@322   ;)    i32.store offset=4
+(;@325   ;)    global.get 0
+(;@327   ;)    global.get 0
+(;@329   ;)    i32.const 8
+(;@32b   ;)    i32.add
+(;@32c   ;)    global.set 0
+(;@32e   ;)    return
              )
-(;@321   ;)  (func $main_lam_3 (;13;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@322   ;)    (local i32)
-(;@324   ;)    global.get 0
-(;@326   ;)    i32.const 0
-(;@328   ;)    i32.store
-(;@32b   ;)    global.get 0
-(;@32d   ;)    local.get 0
-(;@32f   ;)    i32.store offset=4
-(;@332   ;)    global.get 0
+(;@331   ;)  (func $main_lam_3 (;13;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@332   ;)    (local i32)
 (;@334   ;)    global.get 0
-(;@336   ;)    i32.const 8
-(;@338   ;)    i32.add
-(;@339   ;)    global.set 0
+(;@336   ;)    i32.const 0
+(;@338   ;)    i32.store
+(;@33b   ;)    global.get 0
+(;@33d   ;)    local.get 0
+(;@33f   ;)    i32.store offset=4
+(;@342   ;)    global.get 0
+(;@344   ;)    global.get 0
+(;@346   ;)    i32.const 8
+(;@348   ;)    i32.add
+(;@349   ;)    global.set 0
+(;@34b   ;)    return
              )
-(;@33d   ;)  (func $main_lam_4 (;14;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@33e   ;)    (local i32)
-(;@340   ;)    global.get 0
-(;@342   ;)    i32.const 0
-(;@344   ;)    i32.store
-(;@347   ;)    global.get 0
-(;@349   ;)    local.get 0
-(;@34b   ;)    i32.store offset=4
-(;@34e   ;)    global.get 0
-(;@350   ;)    global.get 0
-(;@352   ;)    i32.const 8
-(;@354   ;)    i32.add
-(;@355   ;)    global.set 0
+(;@34e   ;)  (func $main_lam_4 (;14;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@34f   ;)    (local i32)
+(;@351   ;)    global.get 0
+(;@353   ;)    i32.const 0
+(;@355   ;)    i32.store
+(;@358   ;)    global.get 0
+(;@35a   ;)    local.get 0
+(;@35c   ;)    i32.store offset=4
+(;@35f   ;)    global.get 0
+(;@361   ;)    global.get 0
+(;@363   ;)    i32.const 8
+(;@365   ;)    i32.add
+(;@366   ;)    global.set 0
+(;@368   ;)    return
              )
-(;@35a   ;)  (func $main_lam_5 (;15;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@35b   ;)    (local i32 i32 i32 i32 i32)
-(;@35d   ;)    global.get 0
-(;@35f   ;)    i32.const 6
-(;@361   ;)    i32.store
-(;@364   ;)    global.get 0
-(;@366   ;)    i32.const 12
-(;@368   ;)    i32.store offset=4
-(;@36b   ;)    global.get 0
-(;@36d   ;)    local.get 0
-(;@36f   ;)    i32.store offset=8
-(;@372   ;)    global.get 0
-(;@374   ;)    global.get 0
-(;@376   ;)    i32.const 12
-(;@378   ;)    i32.add
-(;@379   ;)    global.set 0
-(;@37b   ;)    local.set 2
+(;@36c   ;)  (func $main_lam_5 (;15;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@36d   ;)    (local i32 i32 i32 i32 i32)
+(;@36f   ;)    global.get 0
+(;@371   ;)    i32.const 6
+(;@373   ;)    i32.store
+(;@376   ;)    global.get 0
+(;@378   ;)    i32.const 12
+(;@37a   ;)    i32.store offset=4
 (;@37d   ;)    global.get 0
-(;@37f   ;)    i32.const 6
-(;@381   ;)    i32.store
+(;@37f   ;)    local.get 0
+(;@381   ;)    i32.store offset=8
 (;@384   ;)    global.get 0
-(;@386   ;)    i32.const 13
-(;@388   ;)    i32.store offset=4
-(;@38b   ;)    global.get 0
-(;@38d   ;)    local.get 1
-(;@38f   ;)    i32.store offset=8
-(;@392   ;)    global.get 0
-(;@394   ;)    global.get 0
-(;@396   ;)    i32.const 12
-(;@398   ;)    i32.add
-(;@399   ;)    global.set 0
-(;@39b   ;)    local.set 3
+(;@386   ;)    global.get 0
+(;@388   ;)    i32.const 12
+(;@38a   ;)    i32.add
+(;@38b   ;)    global.set 0
+(;@38d   ;)    local.set 2
+(;@38f   ;)    global.get 0
+(;@391   ;)    i32.const 6
+(;@393   ;)    i32.store
+(;@396   ;)    global.get 0
+(;@398   ;)    i32.const 13
+(;@39a   ;)    i32.store offset=4
 (;@39d   ;)    global.get 0
-(;@39f   ;)    i32.const 5
-(;@3a1   ;)    i32.store
+(;@39f   ;)    local.get 1
+(;@3a1   ;)    i32.store offset=8
 (;@3a4   ;)    global.get 0
-(;@3a6   ;)    i32.const 14
-(;@3a8   ;)    i32.store offset=4
-(;@3ab   ;)    global.get 0
-(;@3ad   ;)    global.get 0
-(;@3af   ;)    i32.const 8
-(;@3b1   ;)    i32.add
-(;@3b2   ;)    global.set 0
-(;@3b4   ;)    local.set 4
+(;@3a6   ;)    global.get 0
+(;@3a8   ;)    i32.const 12
+(;@3aa   ;)    i32.add
+(;@3ab   ;)    global.set 0
+(;@3ad   ;)    local.set 3
+(;@3af   ;)    global.get 0
+(;@3b1   ;)    i32.const 5
+(;@3b3   ;)    i32.store
 (;@3b6   ;)    global.get 0
-(;@3b8   ;)    i32.const 7
-(;@3ba   ;)    i32.store
+(;@3b8   ;)    i32.const 14
+(;@3ba   ;)    i32.store offset=4
 (;@3bd   ;)    global.get 0
-(;@3bf   ;)    i32.const 1
-(;@3c1   ;)    i32.store offset=4
-(;@3c4   ;)    global.get 0
-(;@3c6   ;)    local.get 4
-(;@3c8   ;)    i32.store offset=8
-(;@3cb   ;)    global.get 0
-(;@3cd   ;)    local.get 3
-(;@3cf   ;)    i32.store offset=12
-(;@3d2   ;)    global.get 0
-(;@3d4   ;)    global.get 0
-(;@3d6   ;)    i32.const 16
-(;@3d8   ;)    i32.add
-(;@3d9   ;)    global.set 0
-(;@3db   ;)    local.set 5
+(;@3bf   ;)    global.get 0
+(;@3c1   ;)    i32.const 8
+(;@3c3   ;)    i32.add
+(;@3c4   ;)    global.set 0
+(;@3c6   ;)    local.set 4
+(;@3c8   ;)    global.get 0
+(;@3ca   ;)    i32.const 7
+(;@3cc   ;)    i32.store
+(;@3cf   ;)    global.get 0
+(;@3d1   ;)    i32.const 1
+(;@3d3   ;)    i32.store offset=4
+(;@3d6   ;)    global.get 0
+(;@3d8   ;)    local.get 4
+(;@3da   ;)    i32.store offset=8
 (;@3dd   ;)    global.get 0
-(;@3df   ;)    i32.const 8
-(;@3e1   ;)    i32.store
+(;@3df   ;)    local.get 3
+(;@3e1   ;)    i32.store offset=12
 (;@3e4   ;)    global.get 0
-(;@3e6   ;)    i32.const 2
-(;@3e8   ;)    i32.store offset=4
-(;@3eb   ;)    global.get 0
-(;@3ed   ;)    local.get 5
-(;@3ef   ;)    i32.store offset=8
-(;@3f2   ;)    global.get 0
-(;@3f4   ;)    local.get 2
-(;@3f6   ;)    i32.store offset=12
-(;@3f9   ;)    global.get 0
-(;@3fb   ;)    local.get 0
-(;@3fd   ;)    i32.store offset=16
-(;@400   ;)    global.get 0
-(;@402   ;)    global.get 0
-(;@404   ;)    i32.const 20
-(;@406   ;)    i32.add
-(;@407   ;)    global.set 0
+(;@3e6   ;)    global.get 0
+(;@3e8   ;)    i32.const 16
+(;@3ea   ;)    i32.add
+(;@3eb   ;)    global.set 0
+(;@3ed   ;)    local.set 5
+(;@3ef   ;)    global.get 0
+(;@3f1   ;)    i32.const 8
+(;@3f3   ;)    i32.store
+(;@3f6   ;)    global.get 0
+(;@3f8   ;)    i32.const 2
+(;@3fa   ;)    i32.store offset=4
+(;@3fd   ;)    global.get 0
+(;@3ff   ;)    local.get 5
+(;@401   ;)    i32.store offset=8
+(;@404   ;)    global.get 0
+(;@406   ;)    local.get 2
+(;@408   ;)    i32.store offset=12
+(;@40b   ;)    global.get 0
+(;@40d   ;)    local.get 0
+(;@40f   ;)    i32.store offset=16
+(;@412   ;)    global.get 0
+(;@414   ;)    global.get 0
+(;@416   ;)    i32.const 20
+(;@418   ;)    i32.add
+(;@419   ;)    global.set 0
+(;@41b   ;)    return
              )
-(;@40b   ;)  (func $main_lam_6 (;16;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@40c   ;)    (local i32)
-(;@40e   ;)    local.get 1
-(;@410   ;)    i32.const 4
-(;@412   ;)    i32.add
-(;@413   ;)    i32.const 52
-(;@415   ;)    local.get 1
-(;@417   ;)    i32.load
-(;@41a   ;)    call_indirect (type $fun_2_1)
+(;@41e   ;)  (func $main_lam_6 (;16;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@41f   ;)    (local i32)
+(;@421   ;)    local.get 1
+(;@423   ;)    i32.const 4
+(;@425   ;)    i32.add
+(;@426   ;)    i32.const 52
+(;@428   ;)    local.get 1
+(;@42a   ;)    i32.load
+(;@42d   ;)    call_indirect (type $fun_2_1)
+(;@430   ;)    return
              )
-(;@41f   ;)  (func $main_lam_7 (;17;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@420   ;)    (local i32 i32)
-(;@422   ;)    global.get 0
-(;@424   ;)    i32.const 5
-(;@426   ;)    i32.store
-(;@429   ;)    global.get 0
-(;@42b   ;)    i32.const 16
-(;@42d   ;)    i32.store offset=4
-(;@430   ;)    global.get 0
-(;@432   ;)    global.get 0
-(;@434   ;)    i32.const 8
-(;@436   ;)    i32.add
-(;@437   ;)    global.set 0
-(;@439   ;)    local.set 2
-(;@43b   ;)    global.get 0
-(;@43d   ;)    local.get 0
-(;@43f   ;)    i32.store
-(;@442   ;)    global.get 0
-(;@444   ;)    local.get 2
-(;@446   ;)    i32.store offset=4
-(;@449   ;)    global.get 0
-(;@44b   ;)    global.get 0
-(;@44d   ;)    i32.const 8
-(;@44f   ;)    i32.add
-(;@450   ;)    global.set 0
+(;@433   ;)  (func $main_lam_7 (;17;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@434   ;)    (local i32 i32)
+(;@436   ;)    global.get 0
+(;@438   ;)    i32.const 5
+(;@43a   ;)    i32.store
+(;@43d   ;)    global.get 0
+(;@43f   ;)    i32.const 16
+(;@441   ;)    i32.store offset=4
+(;@444   ;)    global.get 0
+(;@446   ;)    global.get 0
+(;@448   ;)    i32.const 8
+(;@44a   ;)    i32.add
+(;@44b   ;)    global.set 0
+(;@44d   ;)    local.set 2
+(;@44f   ;)    global.get 0
+(;@451   ;)    local.get 0
+(;@453   ;)    i32.store
+(;@456   ;)    global.get 0
+(;@458   ;)    local.get 2
+(;@45a   ;)    i32.store offset=4
+(;@45d   ;)    global.get 0
+(;@45f   ;)    global.get 0
+(;@461   ;)    i32.const 8
+(;@463   ;)    i32.add
+(;@464   ;)    global.set 0
+(;@466   ;)    return
              )
-(;@454   ;)  (func $main_lam_8 (;18;) (type $fun_1_1) (param i32) (result i32)
-(;@455   ;)    (local i32)
-(;@457   ;)    global.get 0
-(;@459   ;)    i32.const 0
-(;@45b   ;)    i32.store
-(;@45e   ;)    global.get 0
-(;@460   ;)    i32.const 52
-(;@462   ;)    i32.store offset=4
-(;@465   ;)    global.get 0
-(;@467   ;)    global.get 0
-(;@469   ;)    i32.const 8
-(;@46b   ;)    i32.add
-(;@46c   ;)    global.set 0
-             )
-(;@470   ;)  (func $main_lam_9 (;19;) (type $fun_2_1) (param i32 i32) (result i32)
-(;@471   ;)    (local i32)
+(;@469   ;)  (func $main_lam_8 (;18;) (type $fun_1_1) (param i32) (result i32)
+(;@46a   ;)    (local i32)
+(;@46c   ;)    global.get 0
+(;@46e   ;)    i32.const 0
+(;@470   ;)    i32.store
 (;@473   ;)    global.get 0
-(;@475   ;)    i32.const 0
-(;@477   ;)    i32.store
+(;@475   ;)    i32.const 52
+(;@477   ;)    i32.store offset=4
 (;@47a   ;)    global.get 0
-(;@47c   ;)    local.get 0
-(;@47e   ;)    i32.store offset=4
-(;@481   ;)    global.get 0
-(;@483   ;)    global.get 0
-(;@485   ;)    i32.const 8
-(;@487   ;)    i32.add
-(;@488   ;)    global.set 0
+(;@47c   ;)    global.get 0
+(;@47e   ;)    i32.const 8
+(;@480   ;)    i32.add
+(;@481   ;)    global.set 0
+(;@483   ;)    return
+             )
+(;@486   ;)  (func $main_lam_9 (;19;) (type $fun_2_1) (param i32 i32) (result i32)
+(;@487   ;)    (local i32)
+(;@489   ;)    global.get 0
+(;@48b   ;)    i32.const 0
+(;@48d   ;)    i32.store
+(;@490   ;)    global.get 0
+(;@492   ;)    local.get 0
+(;@494   ;)    i32.store offset=4
+(;@497   ;)    global.get 0
+(;@499   ;)    global.get 0
+(;@49b   ;)    i32.const 8
+(;@49d   ;)    i32.add
+(;@49e   ;)    global.set 0
+(;@4a0   ;)    return
              )
 (;@bb    ;)  (table (;0;) 20 20 funcref)
 (;@c2    ;)  (memory (;0;) 1)
@@ -453,20 +469,7 @@
 (;@d6    ;)  (export "mem" (memory 0))
 (;@df    ;)  (elem (;0;) (i32.const 0) func 0 1 2 3 $__apply_1_0 $__apply_2_0 $__apply_2_1 $__apply_3_2 $__apply_4_3 $main $main_lam_0 $main_lam_1 $main_lam_2 $main_lam_3 $main_lam_4 $main_lam_5 $main_lam_6 $main_lam_7 $main_lam_8 $main_lam_9)
            )
-515   ;)    i32.const 5
-(;@517   ;)    i32.store
-(;@51a   ;)    global.get 0
-(;@51c   ;)    i32.const 22
-(;@51e   ;)    i32.store offset=4
-(;@521   ;)    global.get 0
-(;@523   ;)    global.get 0
-(;@525   ;)    i32.const 8
-(;@527   ;)    i32.add
-(;@528   ;)    global.set 0
-(;@52a   ;)    local.set 1
-(;@52c   ;)    global.get 0
-(;@52e   ;)    i32.const 7
-(;@530   ;)    i32.store
+ ;)    i32.store
 (;@533   ;)    global.get 0
 (;@535   ;)    i32.const 23
 (;@537   ;)    i32.store offset=4

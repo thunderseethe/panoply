@@ -96,20 +96,7 @@ mod subst {
         fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
             match kind {
                 ReducIrKind::Var(v) => match self.env.get(&v.var) {
-                    Some(val) => {
-                        if v.var.top_level.name(self.db) == self.db.ident_str("__mon_bind") {
-                            println!(
-                                "{} inlined by {}\nsubst: {}\n",
-                                ReducIr::<Infallible>::var(v)
-                                    .pretty_with(self.db)
-                                    .pprint()
-                                    .pretty(80),
-                                val.pretty_with(self.db).pprint().pretty(80),
-                                self.subst.pretty_with(self.db).pprint().pretty(80)
-                            );
-                        }
-                        val.subst(self.db, self.subst.clone())
-                    }
+                    Some(val) => val.subst(self.db, self.subst.clone()),
                     None => ReducIr::new(kind),
                 },
                 _ => ReducIr::new(kind),
@@ -304,8 +291,6 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
     let row_evs = item.row_evs(reducir_db);
     let ir = item.item(reducir_db);
 
-    println!("{}\n\n\n", ir.pretty_with(db).pprint().pretty(80));
-
     let mut builtin_evs = row_evs
         .iter()
         .flat_map(|row_ev| {
@@ -327,7 +312,6 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
     let module = item.name(reducir_db).module(db.as_core_db());
     let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
     let bind = bind_term(db, bind_name);
-    println!("bind_term:\n{}\n", bind.pretty_with(db).pprint().pretty(80));
     debug_assert!(bind.type_check(db).map_err_pretty_with(db).is_ok());
     builtin_evs.insert(bind_name, &bind);
 
@@ -340,8 +324,13 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
     let freshm = freshm_term(db, module, freshm_name);
     builtin_evs.insert(freshm_name, &freshm);
 
-    ir.fold(&mut Simplify { db, builtin_evs })
-        .fold(&mut InsertLet)
+    let ir = ir
+        .fold(&mut Simplify { db, builtin_evs })
+        .fold(&mut InsertLet);
+
+    println!("{}", ir.pretty_with(db).pprint().pretty(80));
+
+    ir
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {

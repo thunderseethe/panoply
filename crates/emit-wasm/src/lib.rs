@@ -320,12 +320,14 @@ fn emit_wasm_item(
                 ]),
                 MedIrKind::Switch(scrutinee, branches) => {
                     let end: u32 = branches.len().try_into().unwrap();
-                    self.inss((0..=end + 1).map(|_| {
-                        Instruction::Block(wasm_encoder::BlockType::Result(ValType::I32))
-                    }));
+                    self.ins(Instruction::Block(wasm_encoder::BlockType::Result(
+                        ValType::I32,
+                    )));
+                    self.inss(
+                        (0..=end).map(|_| Instruction::Block(wasm_encoder::BlockType::Empty)),
+                    );
                     let atom = self.emit_atom(scrutinee);
                     self.inss([
-                        atom.clone(),
                         atom,
                         Instruction::BrTable((0u32..end).collect(), end),
                         Instruction::End,
@@ -455,6 +457,7 @@ fn emit_wasm_item(
     };
 
     emitter.emit_locals(&defn.body);
+    emitter.ins(Instruction::Return);
     emitter.ins(Instruction::End);
 
     let num_locals = emitter.locals.len() - defn.params.len() + 1;
@@ -468,7 +471,6 @@ fn emit_wasm_item(
 
 #[cfg(test)]
 mod tests {
-
     use base::file::{FileId, SourceFile, SourceFileSet};
     use expect_test::expect;
     use wasmparser::Validator;
@@ -553,6 +555,7 @@ effect Reader {
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (table (;0;) 5 5 funcref)
               (memory (;0;) 1)
@@ -658,6 +661,7 @@ g = f({ x = {} })({ y = {} })
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $g (;8;) (type $fun_1_1) (param i32) (result i32)
                 (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
@@ -899,6 +903,7 @@ g = f({ x = {} })({ y = {} })
                 local.get 20
                 local.get 0
                 call $f
+                return
               )
               (func $g_lam_0 (;9;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32)
@@ -913,6 +918,7 @@ g = f({ x = {} })({ y = {} })
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $g_lam_1 (;10;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32 i32 i32)
@@ -920,10 +926,9 @@ g = f({ x = {} })({ y = {} })
                 i32.load
                 local.set 3
                 block (result i32) ;; label = @1
-                  block (result i32) ;; label = @2
-                    block (result i32) ;; label = @3
-                      block (result i32) ;; label = @4
-                        local.get 3
+                  block ;; label = @2
+                    block ;; label = @3
+                      block ;; label = @4
                         local.get 3
                         br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
                       end
@@ -953,11 +958,13 @@ g = f({ x = {} })({ y = {} })
                   end
                   unreachable
                 end
+                return
               )
               (func $g_lam_2 (;11;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
                 local.get 0
                 i32.load
+                return
               )
               (func $g_lam_3 (;12;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
@@ -972,11 +979,13 @@ g = f({ x = {} })({ y = {} })
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $g_lam_4 (;13;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
                 local.get 0
                 i32.load offset=4
+                return
               )
               (func $g_lam_5 (;14;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
@@ -991,6 +1000,7 @@ g = f({ x = {} })({ y = {} })
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $g_lam_6 (;15;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32)
@@ -1005,6 +1015,7 @@ g = f({ x = {} })({ y = {} })
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $g_lam_7 (;16;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32 i32 i32)
@@ -1012,10 +1023,9 @@ g = f({ x = {} })({ y = {} })
                 i32.load
                 local.set 3
                 block (result i32) ;; label = @1
-                  block (result i32) ;; label = @2
-                    block (result i32) ;; label = @3
-                      block (result i32) ;; label = @4
-                        local.get 3
+                  block ;; label = @2
+                    block ;; label = @3
+                      block ;; label = @4
                         local.get 3
                         br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
                       end
@@ -1045,11 +1055,13 @@ g = f({ x = {} })({ y = {} })
                   end
                   unreachable
                 end
+                return
               )
               (func $g_lam_8 (;17;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
                 local.get 0
                 i32.load offset=4
+                return
               )
               (func $g_lam_9 (;18;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
@@ -1064,11 +1076,13 @@ g = f({ x = {} })({ y = {} })
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $g_lam_10 (;19;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
                 local.get 0
                 i32.load
+                return
               )
               (func $g_lam_11 (;20;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
@@ -1083,6 +1097,7 @@ g = f({ x = {} })({ y = {} })
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (table (;0;) 21 21 funcref)
               (memory (;0;) 1)
@@ -1211,10 +1226,9 @@ f = (with {
                 i32.load
                 local.set 5
                 block (result i32) ;; label = @1
-                  block (result i32) ;; label = @2
-                    block (result i32) ;; label = @3
-                      block (result i32) ;; label = @4
-                        local.get 5
+                  block ;; label = @2
+                    block ;; label = @3
+                      block ;; label = @4
                         local.get 5
                         br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
                       end
@@ -1298,6 +1312,7 @@ f = (with {
                   end
                   unreachable
                 end
+                return
               )
               (func $f_lam_0 (;11;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32 i32)
@@ -1311,6 +1326,7 @@ f = (with {
                 local.get 1
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_1 (;12;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32)
@@ -1322,6 +1338,7 @@ f = (with {
                 local.get 1
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_2 (;13;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32 i32 i32 i32)
@@ -1341,6 +1358,7 @@ f = (with {
                 local.get 4
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_3 (;14;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32)
@@ -1355,6 +1373,7 @@ f = (with {
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_4 (;15;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32 i32 i32 i32 i32 i32 i32 i32)
@@ -1428,6 +1447,7 @@ f = (with {
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_5 (;16;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32)
@@ -1442,6 +1462,7 @@ f = (with {
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_6 (;17;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32 i32)
@@ -1471,6 +1492,7 @@ f = (with {
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_7 (;18;) (type $fun_1_1) (param i32) (result i32)
                 (local i32)
@@ -1488,6 +1510,7 @@ f = (with {
                 i32.const 12
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_8 (;19;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32 i32)
@@ -1501,6 +1524,7 @@ f = (with {
                 local.get 1
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_9 (;20;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32)
@@ -1512,6 +1536,7 @@ f = (with {
                 local.get 1
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_10 (;21;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32 i32 i32 i32 i32 i32)
@@ -1574,6 +1599,7 @@ f = (with {
                 local.get 7
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_11 (;22;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
                 (local i32 i32 i32 i32)
@@ -1626,6 +1652,7 @@ f = (with {
                 i32.const 20
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_12 (;23;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32 i32)
@@ -1639,6 +1666,7 @@ f = (with {
                 local.get 1
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_13 (;24;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32)
@@ -1650,6 +1678,7 @@ f = (with {
                 local.get 1
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_14 (;25;) (type $fun_3_1) (param i32 i32 i32) (result i32)
                 (local i32 i32 i32 i32 i32 i32)
@@ -1712,6 +1741,7 @@ f = (with {
                 local.get 7
                 i32.load
                 call_indirect (type $fun_3_1)
+                return
               )
               (func $f_lam_15 (;26;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
                 (local i32 i32 i32 i32)
@@ -1764,6 +1794,7 @@ f = (with {
                 i32.const 20
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_16 (;27;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
@@ -1868,10 +1899,9 @@ f = (with {
                 i32.load
                 local.set 13
                 block (result i32) ;; label = @1
-                  block (result i32) ;; label = @2
-                    block (result i32) ;; label = @3
-                      block (result i32) ;; label = @4
-                        local.get 13
+                  block ;; label = @2
+                    block ;; label = @3
+                      block ;; label = @4
                         local.get 13
                         br_table 0 (;@4;) 1 (;@3;) 2 (;@2;)
                       end
@@ -1905,10 +1935,9 @@ f = (with {
                     i32.load
                     local.set 18
                     block (result i32) ;; label = @3
-                      block (result i32) ;; label = @4
-                        block (result i32) ;; label = @5
-                          block (result i32) ;; label = @6
-                            local.get 18
+                      block ;; label = @4
+                        block ;; label = @5
+                          block ;; label = @6
                             local.get 18
                             br_table 0 (;@6;) 1 (;@5;) 2 (;@4;)
                           end
@@ -2013,6 +2042,7 @@ f = (with {
                   end
                   unreachable
                 end
+                return
               )
               (func $f_lam_17 (;28;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32 i32)
@@ -2035,6 +2065,7 @@ f = (with {
                 i32.const 8
                 i32.add
                 global.set 0
+                return
               )
               (func $f_lam_18 (;29;) (type $fun_2_1) (param i32 i32) (result i32)
                 (local i32 i32 i32)
@@ -2073,6 +2104,7 @@ f = (with {
                 i32.const 16
                 i32.add
                 global.set 0
+                return
               )
               (table (;0;) 30 30 funcref)
               (memory (;0;) 1)

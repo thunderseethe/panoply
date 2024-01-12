@@ -76,17 +76,30 @@ impl LowerMonCtx<'_> {
                 ReducIr::case(
                     a_ty,
                     ReducIr::app(mon_ir, [ReducIr::new(ReducIrKind::Struct(vec![]))]),
-                    [{
-                        let mut supply = IdSupply::default();
-                        let x = ReducIrVar {
-                            var: ReducIrLocal {
-                                top_level: name,
-                                id: supply.supply_id(),
-                            },
-                            ty: a_ty,
-                        };
-                        ReducIr::abss([x], ReducIr::var(x))
-                    }],
+                    [
+                        {
+                            let mut supply = IdSupply::default();
+                            let x = ReducIrVar {
+                                var: ReducIrLocal {
+                                    top_level: name,
+                                    id: supply.supply_id(),
+                                },
+                                ty: a_ty,
+                            };
+                            ReducIr::abss([x], ReducIr::var(x))
+                        },
+                        {
+                            let mut supply = IdSupply::default();
+                            let x = ReducIrVar {
+                                var: ReducIrLocal {
+                                    top_level: name,
+                                    id: supply.supply_id(),
+                                },
+                                ty: a_ty,
+                            };
+                            ReducIr::abss([x], ReducIr::new(Int(5467)))
+                        },
+                    ],
                 )
             }
             Err(_) => mon_ir,

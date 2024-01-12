@@ -928,7 +928,8 @@ effect Reader {
                         {}
                         {})
                       (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) {})
-                  (fun [V0] V0))"#]],
+                  (fun [V0] V0)
+                  (fun [V0] 5467))"#]],
         ];
         let tys = vec![
             // wand
@@ -949,7 +950,28 @@ effect Reader {
                                  , {{1} -> T5, T5 -> <1>}
                                  } -> {3} -> {2} -> {4} -> (Control {4} T5)"#]],
             // main
-            expect!["{}"],
+            expect![[r#"
+                Type Mismatch:
+                ((fun [V0] 5467)):
+                ({})
+                (((let
+                  [ (V1 ((_row_simple_x_y @ [Ty({}), Ty({})]) {}))
+                  , (V2 ((_row_simple_y_x @ [Ty({}), Ty({})]) {}))
+                  ]
+                  ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
+                    ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
+                      V1
+                      V2
+                      {}
+                      {})
+                    (fun [V5] (let (V6 (let (V3 V5) {})) (fun [V0] <0: V6>))))) {})):
+                forall Type .
+                  forall Type .
+                    forall Type .
+                      { (Marker T0)
+                      , (T2 -> T1 -> (Control T1 T0)) -> T1 -> (Control T1 T0)
+                      , T2 -> {} -> (Control {} {})
+                      }"#]],
         ];
         for ((item, expect), expect_ty) in module
             .items(&db)
