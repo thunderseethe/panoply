@@ -31,7 +31,9 @@ mod subst {
     use std::convert::Infallible;
 
     use crate::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
-    use crate::{ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrVar, P};
+    use crate::{
+        default_endotraverse_ir, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrVar, P,
+    };
 
     pub(crate) struct SubstTy<'a> {
         pub(crate) db: &'a dyn crate::Db,
@@ -107,15 +109,6 @@ mod subst {
         fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
             use ReducIrKind::*;
             match ir.kind() {
-                Abs(vars, body) => {
-                    let body = body.fold(self);
-                    self.fold_ir(Abs(vars.clone(), P::new(body)))
-                }
-                App(head, spine) => {
-                    let head = head.fold(self);
-                    let spine = spine.iter().map(|ir| ir.fold(self)).collect();
-                    self.fold_ir(App(P::new(head), spine))
-                }
                 TyAbs(ty_var, body) => {
                     let subst = self.subst.clone();
                     let subst = std::mem::replace(&mut self.subst, subst.lift());
@@ -123,34 +116,7 @@ mod subst {
                     self.subst = subst;
                     self.fold_ir(TyAbs(*ty_var, P::new(body)))
                 }
-                TyApp(body, ty_app) => {
-                    let body = body.fold(self);
-                    self.fold_ir(TyApp(P::new(body), ty_app.clone()))
-                }
-                Struct(elems) => {
-                    let elems = elems.iter().map(|e| e.fold(self)).collect();
-                    self.fold_ir(Struct(elems))
-                }
-                FieldProj(indx, body) => {
-                    let body = body.fold(self);
-                    self.fold_ir(FieldProj(*indx, P::new(body)))
-                }
-                Tag(ty, tag, body) => {
-                    let body = body.fold(self);
-                    self.fold_ir(Tag(*ty, *tag, P::new(body)))
-                }
-                Case(ty, discr, branches) => {
-                    let discr = discr.fold(self);
-                    let branches = branches.iter().map(|branch| branch.fold(self)).collect();
-                    self.fold_ir(Case(*ty, P::new(discr), branches))
-                }
-                Int(i) => self.fold_ir(Int(*i)),
-                Var(v) => self.fold_ir(Var(*v)),
-                Item(name, ty) => self.fold_ir(Item(*name, *ty)),
-
-                X(_) => {
-                    unreachable!()
-                }
+                _ => default_endotraverse_ir(self, ir),
             }
         }
     }
@@ -676,6 +642,56 @@ pub trait ReducIrInPlaceFold {
     }
 }
 
+pub fn default_endotraverse_ir<F: ReducIrEndoFold>(
+    fold: &mut F,
+    ir: &ReducIr<F::Ext>,
+) -> ReducIr<F::Ext> {
+    match ir.kind() {
+        Abs(vars, body) => {
+            let body = body.fold(fold);
+            fold.fold_ir(Abs(vars.clone(), P::new(body)))
+        }
+        App(head, spine) => {
+            let head = head.fold(fold);
+            let spine = spine.iter().map(|ir| ir.fold(fold)).collect();
+            fold.fold_ir(App(P::new(head), spine))
+        }
+        TyAbs(ty_var, body) => {
+            let body = body.fold(fold);
+            fold.fold_ir(TyAbs(*ty_var, P::new(body)))
+        }
+        TyApp(body, ty_app) => {
+            let body = body.fold(fold);
+            fold.fold_ir(TyApp(P::new(body), ty_app.clone()))
+        }
+        Struct(elems) => {
+            let elems = elems.iter().map(|e| e.fold(fold)).collect();
+            fold.fold_ir(Struct(elems))
+        }
+        FieldProj(indx, body) => {
+            let body = body.fold(fold);
+            fold.fold_ir(FieldProj(*indx, P::new(body)))
+        }
+        Tag(ty, tag, body) => {
+            let body = body.fold(fold);
+            fold.fold_ir(Tag(*ty, *tag, P::new(body)))
+        }
+        Case(ty, discr, branches) => {
+            let discr = discr.fold(fold);
+            let branches = branches.iter().map(|branch| branch.fold(fold)).collect();
+            fold.fold_ir(Case(*ty, P::new(discr), branches))
+        }
+        Int(i) => fold.fold_ir(Int(*i)),
+        Var(v) => fold.fold_ir(Var(*v)),
+        Item(name, ty) => fold.fold_ir(Item(*name, *ty)),
+
+        X(in_ext) => {
+            let out_ext = fold.fold_ext(in_ext);
+            fold.fold_ir(X(out_ext))
+        }
+    }
+}
+
 pub trait ReducIrEndoFold: Sized {
     type Ext: Clone;
 
@@ -684,50 +700,7 @@ pub trait ReducIrEndoFold: Sized {
     }
 
     fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
-        match ir.kind() {
-            Abs(vars, body) => {
-                let body = body.fold(self);
-                self.fold_ir(Abs(vars.clone(), P::new(body)))
-            }
-            App(head, spine) => {
-                let head = head.fold(self);
-                let spine = spine.iter().map(|ir| ir.fold(self)).collect();
-                self.fold_ir(App(P::new(head), spine))
-            }
-            TyAbs(ty_var, body) => {
-                let body = body.fold(self);
-                self.fold_ir(TyAbs(*ty_var, P::new(body)))
-            }
-            TyApp(body, ty_app) => {
-                let body = body.fold(self);
-                self.fold_ir(TyApp(P::new(body), ty_app.clone()))
-            }
-            Struct(elems) => {
-                let elems = elems.iter().map(|e| e.fold(self)).collect();
-                self.fold_ir(Struct(elems))
-            }
-            FieldProj(indx, body) => {
-                let body = body.fold(self);
-                self.fold_ir(FieldProj(*indx, P::new(body)))
-            }
-            Tag(ty, tag, body) => {
-                let body = body.fold(self);
-                self.fold_ir(Tag(*ty, *tag, P::new(body)))
-            }
-            Case(ty, discr, branches) => {
-                let discr = discr.fold(self);
-                let branches = branches.iter().map(|branch| branch.fold(self)).collect();
-                self.fold_ir(Case(*ty, P::new(discr), branches))
-            }
-            Int(i) => self.fold_ir(Int(*i)),
-            Var(v) => self.fold_ir(Var(*v)),
-            Item(name, ty) => self.fold_ir(Item(*name, *ty)),
-
-            X(in_ext) => {
-                let out_ext = self.fold_ext(in_ext);
-                self.fold_ir(X(out_ext))
-            }
-        }
+        default_endotraverse_ir::<Self>(self, ir)
     }
 }
 impl<F: ReducIrEndoFold + Sized> ReducIrFold for F {

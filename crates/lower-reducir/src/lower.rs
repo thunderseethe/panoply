@@ -911,7 +911,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                 ir_ty,
             ));
 
-            let ir = ReducIr::ty_app(ir, ty_vals_iter.into_iter().rev().map(ReducIrTyApp::Ty));
+            let ir = ReducIr::app(
+                ReducIr::ty_app(ir, ty_vals_iter.into_iter().rev().map(ReducIrTyApp::Ty)),
+                [ReducIr::new(Struct(vec![]))],
+            );
             solved.push((param, ir));
         }
 

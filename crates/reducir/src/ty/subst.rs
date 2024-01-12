@@ -94,16 +94,27 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Subst {
 }
 
 impl Subst {
+    pub fn nil() -> Self {
+        Subst::Inc(0)
+    }
+
     pub fn single(payload: SubstPayload) -> Self {
-        Subst::Inc(0).cons(payload)
+        Subst::nil().cons(payload)
     }
 
     pub fn cons(self, payload: SubstPayload) -> Self {
         Self::Ext(payload, Box::new(self))
     }
 
+    pub fn inc1(self) -> Self {
+        Self::compose(self, Self::Inc(1))
+    }
+
     fn compose(s1: Self, s2: Self) -> Self {
-        Self::Compose(Box::new(s1), Box::new(s2))
+        match (s1, s2) {
+            (Subst::Inc(n), Subst::Inc(m)) => Subst::Inc(n + m),
+            (s1, s2) => Self::Compose(Box::new(s1), Box::new(s2)),
+        }
     }
 
     pub fn lift(self) -> Self {

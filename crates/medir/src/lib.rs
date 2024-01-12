@@ -237,7 +237,10 @@ impl MedIr {
                 })
                 .unwrap_or_else(|| db.mk_medir_ty(MedIrTyKind::BlockTy(vec![]))),
             MedIrKind::Call(fun, _) => match fun {
-                Call::Known(item) => item.ty,
+                Call::Known(item) => match item.ty.kind(db.as_medir_db()) {
+                    MedIrTyKind::FunTy(_, ret_ty) => *ret_ty,
+                    _ => todo!(),
+                },
                 Call::Unknown(var) => match var.ty.kind(db.as_medir_db()) {
                     MedIrTyKind::FunTy(_, ret_ty) => *ret_ty,
                     _ => todo!(),

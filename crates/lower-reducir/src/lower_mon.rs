@@ -1,8 +1,10 @@
 use base::{
-    id::{IdSupply, ReducIrVarId},
+    id::{Id, IdSupply, ReducIrTyVarId, ReducIrVarId},
     pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
 };
-use reducir::ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, UnwrapMonTy};
+use reducir::ty::{
+    Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst, UnwrapMonTy,
+};
 use reducir::{
     DelimCont, DelimReducIr, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar,
     TypeCheck, P,
@@ -552,7 +554,17 @@ impl LowerMonCtx<'_> {
                     FunTy(args, ret) => (args[0], ret),
                     _ => unreachable!(),
                 };
+
+                let evv_var = ReducIrVar {
+                    var: ReducIrLocal {
+                        top_level: self.current,
+                        id: self.evv_var_id,
+                    },
+                    ty: upd_evv_ty,
+                };
                 let mon_body = self.lower_monadic(upd_evv_ty, body);
+                let mon_body =
+                    ReducIr::abss([evv_var], ReducIr::app(mon_body, [ReducIr::var(evv_var)]));
                 let mon_marker = self.lower_monadic(evv_ty, marker);
                 let mon_body_ty = mon_body
                     .type_check(reducir_db)
@@ -586,12 +598,23 @@ impl LowerMonCtx<'_> {
                     ty: evv_ty,
                 };
                 let x = ReducIrVar {
-                    var: ReducIrLocal {
-                        top_level: self.current,
-                        id: self.evv_var_id,
-                    },
+                    var: self.generate_local(),
                     ty: *ty,
                 };
+                let [a, b, c] = [
+                    ReducIrVarTy {
+                        var: ReducIrTyVarId::from_raw(0),
+                        kind: Kind::Type,
+                    },
+                    ReducIrVarTy {
+                        var: ReducIrTyVarId::from_raw(1),
+                        kind: Kind::Type,
+                    },
+                    ReducIrVarTy {
+                        var: ReducIrTyVarId::from_raw(2),
+                        kind: Kind::Type,
+                    },
+                ];
                 ReducIr::abss(
                     [w],
                     ReducIr::tag(
@@ -599,11 +622,15 @@ impl LowerMonCtx<'_> {
                         1,
                         // Wrap this struct in type variables.
                         // These are used to instantiate the existentials during optimization.
-                        ReducIr::new(Struct(vec![
-                            self.lower_monadic(evv_ty, mark),
-                            self.lower_monadic(evv_ty, f),
-                            ReducIr::abss([x], ReducIr::var(x)),
-                        ])),
+                        ReducIr::ty_abs(
+                            [a, b, c],
+                            ReducIr::new(Struct(vec![
+                                self.lower_monadic(evv_ty, mark),
+                                self.lower_monadic(evv_ty, f),
+                                ReducIr::abss([x], pure(ReducIr::var(x))),
+                            ]))
+                            .subst(self.db, Subst::Inc(3)),
+                        ),
                     ),
                 )
             }

@@ -1,7 +1,7 @@
 use base::{
     id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
     modules::Module,
-    pretty::PrettyErrorWithDb,
+    pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
 };
 use reducir::{
     mon::{MonReducIrItem, MonReducIrModule},
@@ -61,29 +61,71 @@ fn simple_reducir_module(
             .items(reducir_db)
             .iter()
             .map(|item| db.simple_reducir_item(*item))
-            .collect(),
+            .collect::<Vec<_>>(),
     )
 }
 
 mod subst {
     use std::convert::Infallible;
 
-    use reducir::{ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal};
+    use base::pretty::{PrettyPrint, PrettyWithCtx};
+    use reducir::ty::Subst;
+    use reducir::{
+        default_endotraverse_ir, ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, P,
+    };
     use rustc_hash::FxHashMap;
 
-    pub(crate) struct Inline<'a> {
+    pub(crate) struct Inline<'a, DB: ?Sized> {
+        pub(crate) db: &'a DB,
         pub(crate) env: &'a FxHashMap<ReducIrLocal, ReducIr>,
+        pub(crate) subst: Subst,
     }
-    impl ReducIrEndoFold for Inline<'_> {
+
+    impl<'a, DB: ?Sized> Inline<'a, DB> {
+        pub(crate) fn new(db: &'a DB, env: &'a FxHashMap<ReducIrLocal, ReducIr>) -> Self {
+            Self {
+                db,
+                env,
+                subst: Subst::nil(),
+            }
+        }
+    }
+    impl<DB: ?Sized + crate::Db> ReducIrEndoFold for Inline<'_, DB> {
         type Ext = Infallible;
 
         fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
             match kind {
                 ReducIrKind::Var(v) => match self.env.get(&v.var) {
-                    Some(val) => val.clone(),
+                    Some(val) => {
+                        if v.var.top_level.name(self.db) == self.db.ident_str("__mon_bind") {
+                            println!(
+                                "{} inlined by {}\nsubst: {}\n",
+                                ReducIr::<Infallible>::var(v)
+                                    .pretty_with(self.db)
+                                    .pprint()
+                                    .pretty(80),
+                                val.pretty_with(self.db).pprint().pretty(80),
+                                self.subst.pretty_with(self.db).pprint().pretty(80)
+                            );
+                        }
+                        val.subst(self.db, self.subst.clone())
+                    }
                     None => ReducIr::new(kind),
                 },
                 _ => ReducIr::new(kind),
+            }
+        }
+
+        fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
+            match ir.kind() {
+                ReducIrKind::TyAbs(ty_var, body) => {
+                    let subst = self.subst.clone();
+                    self.subst = self.subst.clone().inc1();
+                    let body = body.fold(self);
+                    self.subst = subst;
+                    self.endofold_ir(ReducIrKind::TyAbs(*ty_var, P::new(body)))
+                }
+                _ => default_endotraverse_ir(self, ir),
             }
         }
     }
@@ -206,7 +248,7 @@ impl ReducIrFold for Simplify<'_> {
                     loop {
                         match (args_iter.next(), spine_iter.next()) {
                             (Some(var), Some(arg)) => {
-                                let arg = arg.fold(&mut Inline { env: &env }).fold(self);
+                                let arg = arg.fold(&mut Inline::new(self.db, &env)).fold(self);
                                 if is_value(&arg) {
                                     // Later args may refer to earlier args we're about to
                                     // substitute
@@ -233,7 +275,7 @@ impl ReducIrFold for Simplify<'_> {
                     ReducIr::app(
                         ReducIr::abss(
                             remaining_args,
-                            self.traverse_ir(&body.fold(&mut Inline { env: &env })),
+                            self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env))),
                         ),
                         remaining_apps,
                     )
@@ -261,6 +303,9 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
     let reducir_db = db.as_reducir_db();
     let row_evs = item.row_evs(reducir_db);
     let ir = item.item(reducir_db);
+
+    println!("{}\n\n\n", ir.pretty_with(db).pprint().pretty(80));
+
     let mut builtin_evs = row_evs
         .iter()
         .flat_map(|row_ev| {
@@ -282,17 +327,13 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
     let module = item.name(reducir_db).module(db.as_core_db());
     let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
     let bind = bind_term(db, bind_name);
-    bind.type_check(db)
-        .map_err_pretty_with(db)
-        .expect("bind should type check");
+    println!("bind_term:\n{}\n", bind.pretty_with(db).pprint().pretty(80));
+    debug_assert!(bind.type_check(db).map_err_pretty_with(db).is_ok());
     builtin_evs.insert(bind_name, &bind);
 
     let prompt_name = ReducIrTermName::gen(db, "__mon_prompt", module);
     let prompt = prompt_term(db, module, prompt_name);
-    prompt
-        .type_check(db)
-        .map_err_pretty_with(db)
-        .expect("prompt should type check");
+    debug_assert!(prompt.type_check(db).map_err_pretty_with(db).is_ok());
     builtin_evs.insert(prompt_name, &prompt);
 
     let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
@@ -621,21 +662,21 @@ fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> ReducIr 
             ReducIrTyApp::Ty(b),
         ],
     );
-    let tyvar0 = ReducIrVarTy {
+    let mut gen_tyvar = || ReducIrVarTy {
         var: tyvar_supply.supply_id(),
         kind: Kind::Type,
     };
-    let tyvar1 = ReducIrVarTy {
-        var: tyvar_supply.supply_id(),
-        kind: Kind::Type,
-    };
-    let tyvar2 = ReducIrVarTy {
-        var: tyvar_supply.supply_id(),
-        kind: Kind::Type,
-    };
+    let [tv0, tv1, tv2, tv3, tv4, tv5] = [
+        gen_tyvar(),
+        gen_tyvar(),
+        gen_tyvar(),
+        gen_tyvar(),
+        gen_tyvar(),
+        gen_tyvar(),
+    ];
 
     ReducIr::ty_abs(
-        [tyvar0, tyvar1, tyvar2],
+        [tv0, tv1, tv2],
         ReducIr::abss(
             [e, g, w],
             ReducIr::case(
@@ -647,31 +688,46 @@ fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> ReducIr 
                         ReducIr::app(ReducIr::var(g), [ReducIr::var(x), ReducIr::var(w)]),
                     ),
                     ReducIr::abss([y_var], {
-                        let mon = ReducIr::field_proj(0, y.clone());
-                        let f = ReducIr::field_proj(1, y.clone());
-                        let k = ReducIr::field_proj(2, y);
+                        let yield_ = gen_local(y.type_check(db).expect("y should typecheck"));
 
-                        ReducIr::tag(
-                            ctl_m_b,
-                            1,
-                            ReducIr::new(ReducIrKind::Struct(vec![
-                                mon,
-                                f,
-                                ReducIr::abss(
-                                    [x],
-                                    ReducIr::app(
-                                        ReducIr::ty_app(
-                                            bind_item,
-                                            [
-                                                ReducIrTyApp::Ty(m),
-                                                ReducIrTyApp::Ty(b),
-                                                ReducIrTyApp::Ty(a),
-                                            ],
+                        let mon = ReducIr::field_proj(0, ReducIr::var(yield_));
+                        let f = ReducIr::field_proj(1, ReducIr::var(yield_));
+                        let k = ReducIr::field_proj(2, ReducIr::var(yield_));
+                        ReducIr::local(
+                            yield_,
+                            y,
+                            ReducIr::tag(
+                                ctl_m_b,
+                                1,
+                                ReducIr::ty_abs(
+                                    [tv3, tv4, tv5],
+                                    ReducIr::new(ReducIrKind::Struct(vec![
+                                        mon,
+                                        f,
+                                        ReducIr::abss(
+                                            [x],
+                                            ReducIr::app(
+                                                ReducIr::ty_app(
+                                                    bind_item,
+                                                    [
+                                                        ReducIrTyApp::Ty(m),
+                                                        ReducIrTyApp::Ty(b),
+                                                        ReducIrTyApp::Ty(a),
+                                                    ],
+                                                ),
+                                                [
+                                                    ReducIr::app(
+                                                        ReducIr::var(g),
+                                                        [ReducIr::var(x)],
+                                                    ),
+                                                    k,
+                                                ],
+                                            ),
                                         ),
-                                        [ReducIr::app(ReducIr::var(g), [ReducIr::var(x)]), k],
-                                    ),
+                                    ]))
+                                    .subst(db, Subst::Inc(3)),
                                 ),
-                            ])),
+                            ),
                         )
                     }),
                 ],
@@ -764,76 +820,72 @@ effect Reader {
         let expect = expect![[r#"
             (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
                 (let
-                  [ (V0:__mon_bind (let
-                    (V19:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
-                    (fun [V3]
-                      (let
-                        (V2:__mon_prompt ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> { {}
-                                                                                   , {}
-                                                                                   })])
-                          (fun [V0]
-                            (let (V17:f (V1[3][0] V0))
-                              <1: {V17[0], (fun [V18] (V17[1][1] {} V18)), (fun [V0] V0)}>))
-                          (fun [V22] (fun [V0] <0: (fun [V15] {V15, V22})>))))
-                        (case (V2
-                            (V1[0]
-                              V3
-                              {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
-                                (V9 V10 V10))}}))
-                          (fun [V5] <0: V5>)
-                          (fun [V4]
-                            (case (__mon_eqm
-                                V19
-                                (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
-                              (fun [V6]
-                                <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                  [ (V0:__mon_bind (fun [V3]
+                    (let (V19:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
+                      (case (let
+                          (V0:f (V1[0]
+                            V3
+                            {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
+                              (V9 V10 V10))}}))
+                          ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> {{}, {}})])
+                            (fun [V0]
+                              (let (V17:f (V1[3][0] V0))
+                                <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V17[0], (fun
+                                      [V18] (V17[1][1] {} V18)), (fun [V20, V0] <0: V20>)
+                                    })>))
+                            (fun [V23] (fun [V0] <0: (fun [V15] {V15, V23})>))
+                            V0))
+                        (fun [V5] <0: V5>)
+                        (fun [V4]
+                          (case (__mon_eqm
+                              V19
+                              (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
+                            (fun [V6]
+                              <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                                , {}
+                                                                                })])[0], (V4 @ [Ty({}
+                                -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
+                                  ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                                    V19
+                                    (fun [V0]
+                                      (V1[0]
+                                        V0
+                                        {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                          [V8
+                                          ,V9
+                                          ,V10] (V9 V10 V10))}}))
+                                    ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
                                                                                   , {}
-                                                                                  })])[0], (V4 @ [Ty({}
-                                  -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
-                                    ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                      V19
-                                      (fun [V0]
-                                        (V1[0]
-                                          V0
-                                          {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                            [V8
-                                            ,V9
-                                            ,V10] (V9 V10 V10))}}))
-                                      ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                                    , {}
-                                                                                    })])[2]
-                                        V7)))}>)
-                              (fun [V6]
-                                ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
-                                  (fun [V8]
-                                    ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                      V19
-                                      (fun [V0]
-                                        (V1[0]
-                                          V0
-                                          {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                            [V8
-                                            ,V9
-                                            ,V10] (V9 V10 V10))}}))
-                                      ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                                    , {}
-                                                                                    })])[2]
-                                        V8)))
-                                  V3)))))))))
+                                                                                  })])[2]
+                                      V7)))}>)
+                            (fun [V6]
+                              ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
+                                (fun [V8]
+                                  ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                                    V19
+                                    (fun [V0]
+                                      (V1[0]
+                                        V0
+                                        {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                          [V8
+                                          ,V9
+                                          ,V10] (V9 V10 V10))}}))
+                                    ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                                  , {}
+                                                                                  })])[2]
+                                      V8)))
+                                V3))))))))
                   , (V2:__mon_bind V0)
                   ]
                   (case (V0 V2)
-                    (fun [V3] (let (V25:f (V3 {})) <0: V25>))
+                    (fun [V3] (let (V26:f (V3 {})) <0: V26>))
                     (fun [V4]
-                      <1: {(V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})])[0], (V4 @ [Ty({ {}
-                                                                                      , {}
-                                                                                      }), Ty({1}), Ty({ {}
-                                                                                                      , {}
-                                                                                                      })])[1], (fun
-                          [V3]
-                          ((__mon_bind @ [Ty({1}), Ty({{}, {}}), Ty({} -> {{}, {}})])
-                            (fun [V0] (let (V25:f (V3 {})) <0: V25>))
-                            (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})])[2]))}>)))))"#]];
+                      (let (V5:__mon_bind (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})]))
+                        <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V5[0], V5[1], (fun
+                              [V3]
+                              ((__mon_bind @ [Ty({4}), Ty({{}, {}}), Ty({} -> {{}, {}})])
+                                (fun [V0] (let (V26:f (V3 {})) <0: V26>))
+                                V5[2]))})>))))))"#]];
         expect.assert_eq(&pretty_ir);
 
         let expect_ty = expect![[r#"
