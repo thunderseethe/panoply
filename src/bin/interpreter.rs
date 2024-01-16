@@ -1,10 +1,8 @@
-use std::io::Write;
-
 use clap::Parser;
 use emit_wasm::Db as EmitWasmDb;
 use panoply::{canonicalize_path_set, create_source_file_set, Args, PanoplyDatabase};
 use wasmparser::WasmFeatures;
-use wasmtime::{Config, Engine, FuncType, Linker, Store, Val, ValType};
+use wasmtime::{Config, Engine, FuncType, Linker, Memory, MemoryType, Module, Store, Val, ValType};
 
 fn main() -> eyre::Result<()> {
   let args = Args::parse();
@@ -26,13 +24,6 @@ fn main() -> eyre::Result<()> {
   let wat = printer.print(&bytes).unwrap();
   println!("{}", wat);
 
-  let mut file = std::fs::OpenOptions::new()
-    .write(true)
-    .create(true)
-    .open("./testbed/wand.wat")
-    .unwrap();
-  writeln!(&mut file, "{}", wat).unwrap();
-
   match tys {
     Ok(_) => {}
     Err(err) => {
@@ -40,21 +31,52 @@ fn main() -> eyre::Result<()> {
     }
   }
 
-  let engine = Engine::new(&Config::new()).unwrap();
+  let mut file = std::fs::OpenOptions::new()
+    .truncate(true)
+    .write(true)
+    .open("./testbed/wand.wat")
+    .unwrap();
+  use std::io::Write;
+  writeln!(file, "{}", wat).unwrap();
+  /*let mut file = std::fs::OpenOptions::new()
+    .read(true)
+    .open("./testbed/wand.opt.wat")
+    .unwrap();
+  let mut wat = String::new();
+  use std::io::Read;
+  file.read_to_string(&mut wat).unwrap();*/
 
-  let module = wasmtime::Module::new(&engine, wat).unwrap();
+  let mut config = Config::new();
+  config
+    .wasm_bulk_memory(true)
+    .wasm_multi_value(true)
+    .wasm_multi_memory(true)
+    .coredump_on_trap(true);
+  let engine = Engine::new(&config).unwrap();
 
-  let mut store = Store::new(&engine, 4);
+  #[derive(Default)]
+  struct Data {
+    bump_alloc: usize,
+    marker: i32,
+  }
+
+  let mut store = Store::new(&engine, Data::default());
 
   let mut linker = Linker::new(&engine);
+
+  let main_mem = Memory::new(&mut store, MemoryType::new(1, None)).unwrap();
+  linker.define(&mut store, "main", "mem", main_mem).unwrap();
 
   linker
     .func_new(
       "intrinsic",
       "__mon_generate_marker",
       FuncType::new([], [ValType::I32]),
-      |_call, _args, ret| {
-        ret[0] = Val::I32(1);
+      |mut call, _args, ret| {
+        let data: &mut Data = call.data_mut();
+        let marker = data.marker;
+        data.marker += 1;
+        ret[0] = Val::I32(marker);
         Ok(())
       },
     )
@@ -63,10 +85,21 @@ fn main() -> eyre::Result<()> {
   linker
     .func_new(
       "intrinsic",
-      "__mon_prompt",
-      FuncType::new([ValType::I32, ValType::I32, ValType::I32], [ValType::I32]),
-      |_call, _args, ret| {
-        ret[0] = Val::I32(2);
+      "alloc",
+      FuncType::new([ValType::I32], [ValType::I32]),
+      |mut call, args, ret| {
+        let len: i32 = match args[0] {
+          Val::I32(i) => i,
+          _ => {
+            return Err(wasmtime::Error::msg(
+              "Expected an i32 as parameter to alloc",
+            ))
+          }
+        };
+        let data: &mut Data = call.data_mut();
+        let addr = data.bump_alloc;
+        data.bump_alloc += len as usize;
+        ret[0] = Val::I32(addr.try_into()?);
         Ok(())
       },
     )
@@ -75,27 +108,17 @@ fn main() -> eyre::Result<()> {
   linker
     .func_new(
       "intrinsic",
-      "__mon_bind",
-      FuncType::new([ValType::I32, ValType::I32], [ValType::I32]),
-      |_call, _args, ret| {
-        ret[0] = Val::I32(3);
+      "trace",
+      FuncType::new([ValType::I32], [ValType::I32]),
+      |_call, args, ret| {
+        println!("trace: {:?}", args[0]);
+        ret[0] = args[0].clone();
         Ok(())
       },
     )
     .unwrap();
 
-  linker
-    .func_new(
-      "intrinsic",
-      "__mon_eqm",
-      FuncType::new([ValType::I32, ValType::I32], [ValType::I32]),
-      |_call, _args, ret| {
-        ret[0] = Val::I32(4);
-        Ok(())
-      },
-    )
-    .unwrap();
-
+  let module = Module::new(&engine, wat).unwrap();
   let instance = linker.instantiate(&mut store, &module).unwrap();
 
   let main = instance
@@ -104,7 +127,7 @@ fn main() -> eyre::Result<()> {
 
   match main.call(&mut store, ()) {
     Ok(val) => {
-      println!("We did it reddit! {} {}", val, val << 8);
+      println!("Success: {}", val);
     }
     Err(err) => {
       eprintln!("{}", err.root_cause());

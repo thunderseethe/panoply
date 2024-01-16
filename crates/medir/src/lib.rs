@@ -36,7 +36,7 @@ pub trait MedIrTraversal {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct PartialAppArity {
   pub arity: usize,
-  pub num_args: usize,
+  pub provided_args: usize,
 }
 
 pub struct ClosureArities<'db> {
@@ -60,7 +60,7 @@ impl ClosureArities<'_> {
       };
       self.arities.insert(PartialAppArity {
         arity,
-        num_args: elems.len(),
+        provided_args: elems.len(),
       });
     }
   }

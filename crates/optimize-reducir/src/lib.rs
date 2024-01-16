@@ -1,7 +1,7 @@
 use base::{
   id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
   modules::Module,
-  pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
+  pretty::PrettyErrorWithDb,
 };
 use reducir::{
   mon::{MonReducIrItem, MonReducIrModule},
@@ -54,13 +54,34 @@ fn simple_reducir_module(
   ir_module: MonReducIrModule,
 ) -> OptimizedReducIrModule {
   let reducir_db = db.as_reducir_db();
+  let module = ir_module.module(reducir_db);
+
+  // TODO: Instead of incluing these in the module we should create a separate method
+  // that produces a module with just these functions inside it.
+  // Then lower that module down to wasm and link it in automatically (instead of hardcoding the
+  // wasm version of these functions.)
+  let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
+  let bind = bind_term(db, bind_name);
+  debug_assert!(bind.type_check(db).map_err_pretty_with(db).is_ok());
+
+  let prompt_name = ReducIrTermName::gen(db, "__mon_prompt", module);
+  let prompt = prompt_term(db, module, prompt_name);
+  prompt
+    .type_check(db)
+    .map_err_pretty_with(db)
+    .expect("Prompt should type check");
+
   OptimizedReducIrModule::new(
     db.as_reducir_db(),
-    ir_module.module(reducir_db),
+    module,
     ir_module
       .items(reducir_db)
       .iter()
       .map(|item| db.simple_reducir_item(*item))
+      .chain([
+        OptimizedReducIrItem::new(reducir_db, bind_name, bind.fold(&mut InsertLet)),
+        OptimizedReducIrItem::new(reducir_db, prompt_name, prompt.fold(&mut InsertLet)),
+      ])
       .collect::<Vec<_>>(),
   )
 }
@@ -68,7 +89,6 @@ fn simple_reducir_module(
 mod subst {
   use std::convert::Infallible;
 
-  use base::pretty::{PrettyPrint, PrettyWithCtx};
   use reducir::ty::Subst;
   use reducir::{default_endotraverse_ir, ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, P};
   use rustc_hash::FxHashMap;
@@ -315,20 +335,18 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
 
   let prompt_name = ReducIrTermName::gen(db, "__mon_prompt", module);
   let prompt = prompt_term(db, module, prompt_name);
-  debug_assert!(prompt.type_check(db).map_err_pretty_with(db).is_ok());
+  prompt
+    .type_check(db)
+    .map_err_pretty_with(db)
+    .expect("Prompt should type check");
   builtin_evs.insert(prompt_name, &prompt);
 
   let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
-  let ir = ir
-    .fold(&mut Simplify { db, builtin_evs })
-    .fold(&mut InsertLet);
-
-  println!("{}", ir.pretty_with(db).pprint().pretty(80));
-
-  ir
+  ir.fold(&mut Simplify { db, builtin_evs })
+    .fold(&mut InsertLet)
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {
@@ -425,7 +443,7 @@ fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> Red
   };
 
   let reinstall_prompt = || {
-    let prompt_item = ReducIr::new(ReducIrKind::Item(name, prompt_type));
+    let prompt_item = ReducIr::new(ReducIrKind::<Infallible>::Item(name, prompt_type));
     ReducIr::app(
       ReducIr::ty_app(
         prompt_item,
@@ -567,6 +585,7 @@ fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> Red
                       compose(db, &mut gen_local, reinstall_prompt(), &k)
                         .map_err_pretty_with(db)
                         .expect("Failed to compose"),
+                      k.clone(),
                     ])),
                   ),
                 ),
@@ -799,74 +818,75 @@ effect Reader {
     let pretty_ir = simple_ir.pretty_with(&db).pprint().pretty(80).to_string();
 
     let expect = expect![[r#"
-            (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
-                (let
-                  [ (V0:__mon_bind (fun [V3]
-                    (let (V19:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
-                      (case (let
-                          (V0:f (V1[0]
-                            V3
-                            {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
-                              (V9 V10 V10))}}))
-                          ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> {{}, {}})])
-                            (fun [V0]
-                              (let (V17:f (V1[3][0] V0))
-                                <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V17[0], (fun
-                                      [V18] (V17[1][1] {} V18)), (fun [V20, V0] <0: V20>)
-                                    })>))
-                            (fun [V23] (fun [V0] <0: (fun [V15] {V15, V23})>))
-                            V0))
-                        (fun [V5] <0: V5>)
-                        (fun [V4]
-                          (case (__mon_eqm
-                              V19
-                              (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
-                            (fun [V6]
-                              <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                                , {}
-                                                                                })])[0], (V4 @ [Ty({}
-                                -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
-                                  ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                    V19
-                                    (fun [V0]
-                                      (V1[0]
-                                        V0
-                                        {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                          [V8
-                                          ,V9
-                                          ,V10] (V9 V10 V10))}}))
-                                    ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                                  , {}
-                                                                                  })])[2]
-                                      V7)))}>)
-                            (fun [V6]
-                              ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
-                                (fun [V8]
-                                  ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                    V19
-                                    (fun [V0]
-                                      (V1[0]
-                                        V0
-                                        {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                          [V8
-                                          ,V9
-                                          ,V10] (V9 V10 V10))}}))
-                                    ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                                  , {}
-                                                                                  })])[2]
-                                      V8)))
-                                V3))))))))
-                  , (V2:__mon_bind V0)
-                  ]
-                  (case (V0 V2)
-                    (fun [V3] (let (V26:f (V3 {})) <0: V26>))
+        (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
+            (let
+              [ (V0:__mon_bind (fun [V3]
+                (let (V19:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
+                  (case (let
+                      (V0:f (V1[0]
+                        V3
+                        {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
+                          (V9 V10 V10))}}))
+                      ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> {{}, {}})])
+                        (fun [V0]
+                          (let (V17:f (V1[3][0] V0))
+                            <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V17[0], (fun
+                                  [V18] (V17[1][1] {} V18)), (fun [V20, V0] <0: V20>)
+                                })>))
+                        (fun [V23] (fun [V0] <0: (fun [V15] {V15, V23})>))
+                        V0))
+                    (fun [V5] <0: V5>)
                     (fun [V4]
-                      (let (V5:__mon_bind (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})]))
-                        <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V5[0], V5[1], (fun
-                              [V3]
-                              ((__mon_bind @ [Ty({4}), Ty({{}, {}}), Ty({} -> {{}, {}})])
-                                (fun [V0] (let (V26:f (V3 {})) <0: V26>))
-                                V5[2]))})>))))))"#]];
+                      (case (__mon_eqm
+                          V19
+                          (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
+                        (fun [V6]
+                          <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                            , {}
+                                                                            })])[0], (V4 @ [Ty({}
+                            -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
+                              ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                                V19
+                                (fun [V0]
+                                  (V1[0]
+                                    V0
+                                    {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                      [V8
+                                      ,V9
+                                      ,V10] (V9 V10 V10))}}))
+                                ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                              , {}
+                                                                              })])[2]
+                                  V7))), (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} ->
+                            {{}, {}})])[2]}>)
+                        (fun [V6]
+                          ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
+                            (fun [V8]
+                              ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                                V19
+                                (fun [V0]
+                                  (V1[0]
+                                    V0
+                                    {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                      [V8
+                                      ,V9
+                                      ,V10] (V9 V10 V10))}}))
+                                ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                              , {}
+                                                                              })])[2]
+                                  V8)))
+                            V3))))))))
+              , (V2:__mon_bind V0)
+              ]
+              (case (V0 V2)
+                (fun [V3] (let (V26:f (V3 {})) <0: V26>))
+                (fun [V4]
+                  (let (V5:__mon_bind (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})]))
+                    <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V5[0], V5[1], (fun
+                          [V3]
+                          ((__mon_bind @ [Ty({4}), Ty({{}, {}}), Ty({} -> {{}, {}})])
+                            (fun [V0] (let (V26:f (V3 {})) <0: V26>))
+                            V5[2]))})>))))))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"
