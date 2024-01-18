@@ -1,6 +1,8 @@
 use clap::Parser;
 use emit_wasm::Db as EmitWasmDb;
+use nameres::Db;
 use panoply::{canonicalize_path_set, create_source_file_set, Args, PanoplyDatabase};
+use parser::Db as NameResDb;
 use wasmparser::WasmFeatures;
 use wasmtime::{Config, Engine, FuncType, Linker, Memory, MemoryType, Module, Store, Val, ValType};
 
@@ -14,6 +16,12 @@ fn main() -> eyre::Result<()> {
   let _ = create_source_file_set(&db, uniq_paths)?;
 
   let wasm_module = db.emit_module_for_path(args.main_file);
+  for err in db.all_parse_errors() {
+    println!("{:?}", err);
+  }
+  for err in db.all_nameres_errors() {
+    println!("{:?}", err);
+  }
 
   let bytes = wasm_module.finish();
 
@@ -31,20 +39,20 @@ fn main() -> eyre::Result<()> {
     }
   }
 
-  let mut file = std::fs::OpenOptions::new()
+  /*let mut file = std::fs::OpenOptions::new()
     .truncate(true)
     .write(true)
     .open("./testbed/wand.wat")
     .unwrap();
   use std::io::Write;
-  writeln!(file, "{}", wat).unwrap();
-  /*let mut file = std::fs::OpenOptions::new()
+  writeln!(file, "{}", wat).unwrap();*/
+  let mut file = std::fs::OpenOptions::new()
     .read(true)
-    .open("./testbed/wand.opt.wat")
+    .open("./testbed/wand.wat")
     .unwrap();
-  let mut wat = String::new();
   use std::io::Read;
-  file.read_to_string(&mut wat).unwrap();*/
+  let mut wat = String::new();
+  file.read_to_string(&mut wat).unwrap();
 
   let mut config = Config::new();
   config
@@ -134,6 +142,12 @@ fn main() -> eyre::Result<()> {
       eprintln!("{}", err);
     }
   };
+
+  let mem = instance.get_memory(&mut store, "mem").unwrap();
+  let mem_ref = mem.data(&store);
+
+  println!("{:?}", &mem_ref[84..92]);
+  println!("{:?}", &mem_ref[136..152]);
 
   Ok(())
 }

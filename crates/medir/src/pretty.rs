@@ -24,6 +24,28 @@ where
   }
 }
 
+#[allow(dead_code)]
+impl MedIrVar {
+  fn with_type(self) -> PrettyWithType {
+    PrettyWithType(self)
+  }
+}
+
+struct PrettyWithType(MedIrVar);
+
+impl<Db: ?Sized + crate::Db> PrettyWithCtx<Db> for PrettyWithType {
+  fn pretty<'a>(
+    &self,
+    db: &Db,
+    a: &'a pretty::RcAllocator,
+  ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+    a.text("V")
+      .append(a.as_string(self.0.id.raw()))
+      .append(": ")
+      .append(self.0.ty.pretty(db, a))
+  }
+}
+
 impl<'a, D, A: 'a> pretty::Pretty<'a, D, A> for &Atom
 where
   D: DocAllocator<'a, A>,
@@ -36,7 +58,7 @@ where
   }
 }
 
-impl<DB: ?Sized + reducir::Db> PrettyWithCtx<DB> for Call {
+impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Call {
   fn pretty<'a>(
     &self,
     ctx: &DB,
