@@ -184,6 +184,19 @@ impl<'a> LowerCtx<'a> {
           }
         })
       }
+      ReducIrKind::Locals(reducir_binds, body) => {
+        for bind in reducir_binds.iter() {
+          let defn = self.lower_binds(&bind.defn, binds);
+          binds.push((
+            MedIrVar::new(
+              self.var_converter.convert(bind.var.var),
+              defn.type_of(self.db),
+            ),
+            defn,
+          ));
+        }
+        self.lower_binds(body, binds)
+      }
       // We get rid of types in this IR
       ReducIrKind::TyAbs(_, body) | ReducIrKind::TyApp(body, _) => self.lower_binds(body, binds),
       ReducIrKind::Struct(elems) => {

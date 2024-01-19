@@ -146,7 +146,10 @@ fn is_value(ir: &ReducIr) -> bool {
     | ReducIrKind::Abs(_, _)
     | ReducIrKind::TyAbs(_, _)
     | ReducIrKind::X(_) => true,
-    ReducIrKind::App(_, _) | ReducIrKind::Case(_, _, _) | ReducIrKind::TyApp(_, _) => false,
+    ReducIrKind::App(_, _)
+    | ReducIrKind::Case(_, _, _)
+    | ReducIrKind::TyApp(_, _)
+    | ReducIrKind::Locals(_, _) => false,
     ReducIrKind::Struct(elems) => elems.iter().all(is_value),
     ReducIrKind::FieldProj(_, base) => is_value(base),
     ReducIrKind::Tag(_, _, base) => is_value(base),

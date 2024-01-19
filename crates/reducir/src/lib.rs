@@ -292,13 +292,34 @@ pub struct Lets {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
+/// A local binding
+pub struct Bind<Ext> {
+  pub var: ReducIrVar,
+  pub defn: ReducIr<Ext>,
+}
+impl<Ext> Bind<Ext> {
+  pub fn new(var: ReducIrVar, defn: ReducIr<Ext>) -> Self {
+    Self { var, defn }
+  }
+
+  fn fold<F: ?Sized + ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> Bind<F::OutExt> {
+    Bind {
+      var: self.var,
+      defn: self.defn.fold(fold),
+    }
+  }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ReducIrKind<Ext = Infallible> {
+  // Values
   Int(usize),
   Var(ReducIrVar),
   Item(ReducIrTermName, ReducIrTy),
   // Value abstraction and application
   Abs(Box<[ReducIrVar]>, P<ReducIr<Ext>>),
   App(P<ReducIr<Ext>>, Vec<ReducIr<Ext>>),
+  Locals(Vec<Bind<Ext>>, P<ReducIr<Ext>>),
   // Type abstraction and application
   TyAbs(ReducIrVarTy, P<ReducIr<Ext>>),
   TyApp(P<ReducIr<Ext>>, Vec<ReducIrTyApp>),
@@ -369,6 +390,9 @@ impl<Ext: ContainsVar> ContainsVar for ReducIr<Ext> {
         body.contains_var(var)
       }
       App(head, spine) => head.contains_var(var) || spine.iter().any(|ir| ir.contains_var(var)),
+      Locals(defns, body) => {
+        body.contains_var(var) || defns.iter().any(|local| local.defn.contains_var(var))
+      }
       Struct(elems) => elems.iter().any(|ir| ir.contains_var(var)),
       Case(_, discr, branches) => {
         discr.contains_var(var) || branches.iter().any(|ir| ir.contains_var(var))
@@ -510,6 +534,17 @@ impl<Ext> ReducIr<Ext> {
     ReducIr::new(FieldProj(indx, P::new(target)))
   }
 
+  pub fn locals(binds: impl IntoIterator<Item = Bind<Ext>>, mut body: Self) -> Self {
+    if let Locals(ref mut body_binds, _) = &mut body.kind {
+      let mut binds = binds.into_iter().collect::<Vec<_>>();
+      binds.append(body_binds);
+      *body_binds = binds;
+      body
+    } else {
+      ReducIr::new(Locals(binds.into_iter().collect(), P::new(body)))
+    }
+  }
+
   pub fn try_top_level_def(&self) -> Result<TopLevelDef<Ext>, &Self> {
     let mut ir = self;
     let mut ty_vars = vec![];
@@ -564,7 +599,7 @@ impl ReducIr<Infallible> {
 }
 
 impl ReducIr<Lets> {
-  pub fn locals(
+  pub fn lets(
     binds: impl IntoIterator<Item = (ReducIrVar, ReducIr<Lets>)>,
     body: ReducIr<Lets>,
   ) -> Self {
@@ -649,6 +684,11 @@ pub fn default_endotraverse_ir<F: ReducIrEndoFold>(
       let head = head.fold(fold);
       let spine = spine.iter().map(|ir| ir.fold(fold)).collect();
       fold.fold_ir(App(P::new(head), spine))
+    }
+    Locals(binds, body) => {
+      let binds = binds.iter().map(|local| local.fold(fold)).collect();
+      let body = body.fold(fold);
+      fold.fold_ir(Locals(binds, P::new(body)))
     }
     TyAbs(ty_var, body) => {
       let body = body.fold(fold);
@@ -737,6 +777,11 @@ pub trait ReducIrFold: Sized {
         let head = head.fold(self);
         let spine = spine.iter().map(|ir| ir.fold(self)).collect();
         self.fold_ir(App(P::new(head), spine))
+      }
+      Locals(binds, body) => {
+        let binds = binds.iter().map(|local| local.fold(self)).collect();
+        let body = body.fold(self);
+        self.fold_ir(Locals(binds, P::new(body)))
       }
       TyAbs(ty_var, body) => {
         let body = body.fold(self);
@@ -866,6 +911,13 @@ impl ReducIr<Lets> {
           branch.free_var_aux(in_scope, bound);
         }
       }
+      Locals(binds, body) => {
+        for Bind { var, defn } in binds.iter() {
+          defn.free_var_aux(in_scope, bound);
+          in_scope.insert(var.var);
+        }
+        body.free_var_aux(in_scope, bound);
+      }
       X(Lets { binds, body }) => {
         for (var, defn) in binds.iter() {
           defn.free_var_aux(in_scope, bound);
@@ -885,7 +937,7 @@ impl ReducIr<Lets> {
 }
 
 impl ReducIr {
-  pub fn free_vars<'a>(&'a self) -> Box<dyn Iterator<Item = ReducIrVar> + 'a> {
+  /*pub fn free_vars<'a>(&'a self) -> Box<dyn Iterator<Item = ReducIrVar> + 'a> {
     match &self.kind {
       Int(_) | Item(_, _) => Box::new(std::iter::empty()),
       Var(v) => Box::new(std::iter::once(*v)),
@@ -895,6 +947,14 @@ impl ReducIr {
           .free_vars()
           .chain(args.iter().flat_map(|arg| arg.free_vars())),
       ),
+      Locals(binds, body) => {
+          let mut vars = vec![];
+          binds.iter().flat_map(|local| {
+              let in_scope = vars.clone();
+              vars.push(local.var);
+              local.defn.free_vars().filter(move |v| !in_scope.contains(v))
+          }).chain(body.free_vars())
+      }
       TyAbs(_, body) => Box::new(body.free_vars()),
       TyApp(head, _) => Box::new(head.free_vars()),
       Struct(elems) => Box::new(elems.iter().flat_map(|e| e.free_vars())),
@@ -907,7 +967,7 @@ impl ReducIr {
       ),
       X(_) => unreachable!(),
     }
-  }
+  }*/
 }
 
 pub trait TypeCheck {
@@ -1030,6 +1090,20 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
           _ => Err(ReducIrTyErr::ExpectedFunTy { ty: func_ty, func }),
         }
       }
+      Locals(binds, body) => {
+        for Bind { var, defn } in binds.iter() {
+          let defn_ty = defn.type_check(ctx)?;
+          if var.ty != defn_ty {
+            return Err(ReducIrTyErr::TyMismatch {
+              left_ty: var.ty,
+              left_ir: Cow::Owned(ReducIr::var(*var)),
+              right_ty: defn_ty,
+              right_ir: Cow::Borrowed(defn),
+            });
+          }
+        }
+        body.type_check(ctx)
+      }
       TyAbs(ty_arg, body) => {
         let ret_ty = body.type_check(ctx)?;
         Ok(ctx.mk_reducir_ty(ForallTy(ty_arg.kind, ret_ty)))
@@ -1141,7 +1215,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
 }
 
 impl DelimReducIr {
-  pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
+  /*pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
     self.unbound_vars_with_bound(FxHashSet::default())
   }
 
@@ -1153,7 +1227,7 @@ impl DelimReducIr {
       bound,
       stack: vec![self],
     }
-  }
+  }*/
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1179,7 +1253,7 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
   ExpectedMarkerTy(ReducIrTy),
 }
 
-struct UnboundVars<'a> {
+/*struct UnboundVars<'a> {
   bound: FxHashSet<ReducIrLocal>,
   stack: Vec<&'a DelimReducIr>,
 }
@@ -1231,4 +1305,4 @@ impl Iterator for UnboundVars<'_> {
       }
     })
   }
-}
+}*/

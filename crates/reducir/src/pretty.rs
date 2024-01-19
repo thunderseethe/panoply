@@ -5,7 +5,8 @@ use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 
 use crate::ty::{Kind, ReducIrVarTy};
 use crate::{
-  DelimCont, Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr, ReducIrVar,
+  Bind, DelimCont, Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr,
+  ReducIrVar,
 };
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
@@ -232,6 +233,33 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
             )
             .parens(),
         }
+      }
+      Locals(binds, body) => {
+        let binds_len = binds.len();
+        let mut binds_iter = binds.iter().map(|Bind { var, defn }| {
+          var
+            .pretty(arena)
+            .append(arena.space())
+            .append(defn.pretty(db, arena))
+            .parens()
+        });
+        let binds = if binds_len == 1 {
+          binds_iter.next().unwrap()
+        } else {
+          arena
+            .space()
+            .append(arena.intersperse(binds_iter, arena.line().append(",").append(arena.space())))
+            .append(arena.line())
+            .brackets()
+        };
+
+        docs![
+          arena,
+          "let",
+          arena.line().append(binds).nest(2).group(),
+          arena.line().append(body.pretty(db, arena)).nest(2).group()
+        ]
+        .parens()
       }
       TyAbs(tyvar, body) => {
         let mut tyvars = vec![*tyvar];

@@ -2,8 +2,11 @@ use base::{
   id::{Id, IdSupply, ReducIrTyVarId, ReducIrVarId},
   pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
 };
-use reducir::ty::{
-  Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst, UnwrapMonTy,
+use reducir::{
+  ty::{
+    Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst, UnwrapMonTy,
+  },
+  Bind,
 };
 use reducir::{
   DelimCont, DelimReducIr, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar,
@@ -432,6 +435,15 @@ impl LowerMonCtx<'_> {
             [arg, ReducIr::abss([arg_var], body)],
           )
         })
+      }
+      Locals(binds, body) => {
+        let body = self.lower_monadic(evv_ty, body);
+        ReducIr::locals(
+          binds
+            .iter()
+            .map(|bind| Bind::new(bind.var, self.lower_monadic(evv_ty, &bind.defn))),
+          body,
+        )
       }
       TyAbs(tyvar, ir) => ReducIr::new(TyAbs(*tyvar, P::new(self.lower_monadic(evv_ty, ir)))),
       TyApp(ir, ty) => ReducIr::new(TyApp(P::new(self.lower_monadic(evv_ty, ir)), ty.clone())),
