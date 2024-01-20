@@ -2,7 +2,7 @@ use base::{id::MedIrVarId, id_converter::IdConverter, pretty::PrettyErrorWithDb}
 use medir::MedIrItemName;
 use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar};
 use reducir::ty::{ReducIrTy, ReducIrTyKind};
-use reducir::{Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck};
+use reducir::{ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck};
 
 pub(crate) struct LowerCtx<'a> {
   db: &'a dyn crate::Db,
@@ -60,7 +60,7 @@ impl<'a> LowerCtx<'a> {
     }
   }
 
-  pub(crate) fn lower_item(&mut self, reducir: &ReducIr<Lets>) -> medir::Defn {
+  pub(crate) fn lower_item(&mut self, reducir: &ReducIr) -> medir::Defn {
     let mut binds = vec![];
     let (params, body) = match reducir.try_top_level_def() {
       Ok(top_level) => {
@@ -96,7 +96,7 @@ impl<'a> LowerCtx<'a> {
     }
   }
 
-  fn lower_binds(&mut self, body: &ReducIr<Lets>, binds: &mut Vec<(MedIrVar, MedIr)>) -> MedIr {
+  fn lower_binds(&mut self, body: &ReducIr, binds: &mut Vec<(MedIrVar, MedIr)>) -> MedIr {
     match body.kind() {
       ReducIrKind::Int(i) => MedIr::int(*i),
       ReducIrKind::Var(v) => {
@@ -267,26 +267,14 @@ impl<'a> LowerCtx<'a> {
           .collect();
         MedIr::new(MedIrKind::Switch(Atom::Var(discr_var), cases))
       }
-      ReducIrKind::X(Lets {
-        binds: reducir_binds,
-        body,
-      }) => {
-        for (var, body) in reducir_binds.iter() {
-          let defn = self.lower_binds(body, binds);
-          binds.push((
-            MedIrVar::new(self.var_converter.convert(var.var), defn.type_of(self.db)),
-            defn,
-          ));
-        }
-        self.lower_binds(body, binds)
-      }
+      ReducIrKind::X(_) => unreachable!(),
     }
   }
 
   fn closure_convert(
     &mut self,
     vars: &[ReducIrVar],
-    body: &ReducIr<Lets>,
+    body: &ReducIr,
   ) -> (MedIrTypedItem, Vec<MedIrVar>) {
     let mut free_vars = body
       .free_var_set()

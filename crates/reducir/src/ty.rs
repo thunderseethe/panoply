@@ -68,11 +68,12 @@ pub struct UnwrapMonTy {
 }
 impl ReducIrTy {
   /// Unwrap a monadic type into it's evv type and value type.
-  pub fn try_unwrap_monadic(self, db: &dyn crate::Db) -> Result<UnwrapMonTy, Self> {
+  pub fn try_unwrap_monadic<Db: ?Sized + crate::Db>(self, db: &Db) -> Result<UnwrapMonTy, Self> {
     // Monadic type is evv -> Control evv a
     // Unwrap and return (evv, a) from Control type
-    match self.kind(db) {
-      ReducIrTyKind::FunTy(args, ret) if args.len() == 1 => match ret.kind(db) {
+    let reducir_db = db.as_reducir_db();
+    match self.kind(reducir_db) {
+      ReducIrTyKind::FunTy(args, ret) if args.len() == 1 => match ret.kind(reducir_db) {
         ReducIrTyKind::ControlTy(evv_ty, a_ty) if args[0] == evv_ty => {
           Ok(UnwrapMonTy { evv_ty, a_ty })
         }

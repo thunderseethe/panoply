@@ -5,8 +5,7 @@ use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 
 use crate::ty::{Kind, ReducIrVarTy};
 use crate::{
-  Bind, DelimCont, Lets, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr,
-  ReducIrVar,
+  Bind, DelimCont, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr, ReducIrVar,
 };
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
@@ -58,39 +57,6 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
         )
         .parens(),
     }
-  }
-}
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Lets {
-  fn pretty<'a>(&self, ctx: &DB, alloc: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
-    let binds_len = self.binds.len();
-    let mut binds_iter = self.binds.iter().map(|(var, defn)| {
-      var
-        .pretty_with_local(ctx, alloc)
-        .append(alloc.space())
-        .append(defn.pretty(ctx, alloc))
-        .parens()
-    });
-    let binds = if binds_len == 1 {
-      binds_iter.next().unwrap()
-    } else {
-      alloc
-        .space()
-        .append(alloc.intersperse(binds_iter, alloc.line().append(",").append(alloc.space())))
-        .append(alloc.line())
-        .brackets()
-    };
-
-    docs![
-      alloc,
-      "let",
-      alloc.line().append(binds).nest(2).group(),
-      alloc
-        .line()
-        .append(self.body.pretty(ctx, alloc))
-        .nest(2)
-        .group()
-    ]
-    .parens()
   }
 }
 

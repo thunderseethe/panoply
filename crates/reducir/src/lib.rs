@@ -2,7 +2,7 @@ use base::{
   id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
   ident::Ident,
   modules::Module,
-  pretty::PrettyWithCtx,
+  pretty::{PrettyPrint, PrettyWithCtx},
 };
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
@@ -32,7 +32,8 @@ mod subst {
 
   use crate::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
   use crate::{
-    default_endotraverse_ir, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrVar, P,
+    default_endotraverse_ir, Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrVar,
+    P,
   };
 
   pub(crate) struct SubstTy<'a> {
@@ -89,6 +90,21 @@ mod subst {
             .map(|v| ReducIrVar {
               var: v.var,
               ty: self.subst(v.ty),
+            })
+            .collect(),
+          body,
+        )),
+        ReducIrKind::Locals(binds, body) => ReducIr::new(ReducIrKind::Locals(
+          binds
+            .into_iter()
+            .map(|bind| {
+              Bind::new(
+                ReducIrVar {
+                  var: bind.var.var,
+                  ty: self.subst(bind.var.ty),
+                },
+                bind.defn,
+              )
             })
             .collect(),
           body,
@@ -285,13 +301,6 @@ pub enum DelimCont {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct Lets {
-  pub binds: Vec<(ReducIrVar, ReducIr<Lets>)>,
-  pub body: P<ReducIr<Lets>>,
-  // TODO: Join points?
-}
-
-#[derive(Debug, PartialEq, Eq, Clone)]
 /// A local binding
 pub struct Bind<Ext> {
   pub var: ReducIrVar,
@@ -361,47 +370,6 @@ where
   }
 }
 
-pub trait ContainsVar {
-  fn contains_var(&self, var: &ReducIrVar) -> bool;
-}
-impl ContainsVar for Infallible {
-  fn contains_var(&self, _: &ReducIrVar) -> bool {
-    // easy
-    false
-  }
-}
-impl ContainsVar for DelimCont {
-  fn contains_var(&self, var: &ReducIrVar) -> bool {
-    match self {
-      DelimCont::NewPrompt(v, ir) => v == var || ir.contains_var(var),
-      DelimCont::Prompt(marker, upd_handler, body) => {
-        marker.contains_var(var) || upd_handler.contains_var(var) || body.contains_var(var)
-      }
-      DelimCont::Yield(_, marker, body) => marker.contains_var(var) || body.contains_var(var),
-    }
-  }
-}
-impl<Ext: ContainsVar> ContainsVar for ReducIr<Ext> {
-  fn contains_var(&self, var: &ReducIrVar) -> bool {
-    match self.kind() {
-      Int(_) | Item(_, _) => false,
-      Var(v) => v == var,
-      Abs(_, body) | TyAbs(_, body) | TyApp(body, _) | FieldProj(_, body) | Tag(_, _, body) => {
-        body.contains_var(var)
-      }
-      App(head, spine) => head.contains_var(var) || spine.iter().any(|ir| ir.contains_var(var)),
-      Locals(defns, body) => {
-        body.contains_var(var) || defns.iter().any(|local| local.defn.contains_var(var))
-      }
-      Struct(elems) => elems.iter().any(|ir| ir.contains_var(var)),
-      Case(_, discr, branches) => {
-        discr.contains_var(var) || branches.iter().any(|ir| ir.contains_var(var))
-      }
-      X(ext) => ext.contains_var(var),
-    }
-  }
-}
-
 impl<Ext> ReducIr<Ext> {
   pub fn new(kind: ReducIrKind<Ext>) -> Self {
     Self { kind }
@@ -447,13 +415,18 @@ impl<Ext> ReducIr<Ext> {
     }
   }
 
-  pub fn app(mut head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
-    match head.kind {
-      App(_, ref mut in_place_spine) => {
+  pub fn app(head: Self, spine: impl IntoIterator<Item = Self>) -> Self {
+    // This just exists because we might call app recursively if head is an Abs.
+    // If we actually call `app` recursively we evoke a recursive IntoIterator check that fails.
+    // So instead we call this inner function and don't recurse.
+    fn app_inner<Ext>(
+      mut head: ReducIr<Ext>,
+      spine: impl IntoIterator<Item = ReducIr<Ext>>,
+    ) -> ReducIr<Ext> {
+      if let App(_, ref mut in_place_spine) = &mut head.kind {
         in_place_spine.extend(spine);
         head
-      }
-      _ => {
+      } else {
         let mut spine_iter = spine.into_iter().peekable();
         if spine_iter.peek().is_some() {
           ReducIr::new(App(P::new(head), spine_iter.collect()))
@@ -462,6 +435,23 @@ impl<Ext> ReducIr<Ext> {
           head
         }
       }
+    }
+
+    if let Abs(vars, body) = head.kind {
+      let mut vars = vars.iter().copied().peekable();
+      let mut spine = spine.into_iter().peekable();
+      let mut binds = vec![];
+      let body = loop {
+        match (vars.peek(), spine.peek()) {
+          (None, None) => break body.into_inner(),
+          (None, Some(_)) => break app_inner(body.into_inner(), spine),
+          (Some(_), None) => break ReducIr::abss(vars, body.into_inner()),
+          (Some(_), Some(_)) => binds.push(Bind::new(vars.next().unwrap(), spine.next().unwrap())),
+        }
+      };
+      ReducIr::locals(binds, body)
+    } else {
+      app_inner(head, spine)
     }
   }
 
@@ -541,7 +531,12 @@ impl<Ext> ReducIr<Ext> {
       *body_binds = binds;
       body
     } else {
-      ReducIr::new(Locals(binds.into_iter().collect(), P::new(body)))
+      let mut binds = binds.into_iter().peekable();
+      if binds.peek().is_none() {
+        body
+      } else {
+        ReducIr::new(Locals(binds.collect(), P::new(body)))
+      }
     }
   }
 
@@ -563,25 +558,9 @@ impl<Ext> ReducIr<Ext> {
   }
 }
 
-impl<Ext: ContainsVar> ReducIr<Ext> {
-  pub fn local(var: ReducIrVar, value: Self, mut body: Self) -> Self {
-    if let App(ref mut head, ref mut spine) = body.kind {
-      if spine.iter().all(|arg| !arg.contains_var(&var)) {
-        if let Abs(ref mut vars, _) = head.as_mut().kind {
-          *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
-          spine.insert(0, value);
-          return body;
-        }
-      }
-    }
-    if let Abs(ref mut vars, _) = body.kind {
-      *vars = std::iter::once(var).chain(vars.iter().copied()).collect();
-      return ReducIr::app(body, std::iter::once(value));
-    }
-    ReducIr::app(
-      ReducIr::abss(std::iter::once(var), body),
-      std::iter::once(value),
-    )
+impl<Ext> ReducIr<Ext> {
+  pub fn local(var: ReducIrVar, value: Self, body: Self) -> Self {
+    Self::locals(std::iter::once(Bind::new(var, value)), body)
   }
 }
 
@@ -598,23 +577,6 @@ impl ReducIr<Infallible> {
   }
 }
 
-impl ReducIr<Lets> {
-  pub fn lets(
-    binds: impl IntoIterator<Item = (ReducIrVar, ReducIr<Lets>)>,
-    body: ReducIr<Lets>,
-  ) -> Self {
-    let mut binds_iter = binds.into_iter().peekable();
-    if binds_iter.peek().is_none() {
-      body
-    } else {
-      ReducIr::new(X(Lets {
-        binds: binds_iter.collect(),
-        body: P::new(body),
-      }))
-    }
-  }
-}
-
 pub trait TraverseExtInPlace {
   fn traverse_in_place<F: ?Sized + ReducIrInPlaceFold<Ext = Self>>(&mut self, fold: &mut F);
 }
@@ -622,14 +584,6 @@ pub trait TraverseExtInPlace {
 impl TraverseExtInPlace for Infallible {
   fn traverse_in_place<F: ?Sized + ReducIrInPlaceFold<Ext = Self>>(&mut self, _: &mut F) {
     unreachable!()
-  }
-}
-impl TraverseExtInPlace for Lets {
-  fn traverse_in_place<F: ?Sized + ReducIrInPlaceFold<Ext = Self>>(&mut self, fold: &mut F) {
-    for (_, defn) in self.binds.iter_mut() {
-      defn.fold_in_place(fold);
-    }
-    self.body.as_mut().fold_in_place(fold)
   }
 }
 
@@ -871,7 +825,7 @@ impl<Ext> ReducIr<Ext> {
   }
 }
 
-impl ReducIr<Lets> {
+impl ReducIr {
   fn free_var_aux(
     &self,
     in_scope: &mut FxHashSet<ReducIrLocal>,
@@ -918,13 +872,7 @@ impl ReducIr<Lets> {
         }
         body.free_var_aux(in_scope, bound);
       }
-      X(Lets { binds, body }) => {
-        for (var, defn) in binds.iter() {
-          defn.free_var_aux(in_scope, bound);
-          in_scope.insert(var.var);
-        }
-        body.free_var_aux(in_scope, bound);
-      }
+      X(_) => unreachable!(),
     }
   }
 
@@ -934,40 +882,6 @@ impl ReducIr<Lets> {
     self.free_var_aux(&mut in_scope, &mut free_vars);
     free_vars
   }
-}
-
-impl ReducIr {
-  /*pub fn free_vars<'a>(&'a self) -> Box<dyn Iterator<Item = ReducIrVar> + 'a> {
-    match &self.kind {
-      Int(_) | Item(_, _) => Box::new(std::iter::empty()),
-      Var(v) => Box::new(std::iter::once(*v)),
-      Abs(vars, body) => Box::new(body.free_vars().filter(move |v| !vars.contains(v))),
-      App(func, args) => Box::new(
-        func
-          .free_vars()
-          .chain(args.iter().flat_map(|arg| arg.free_vars())),
-      ),
-      Locals(binds, body) => {
-          let mut vars = vec![];
-          binds.iter().flat_map(|local| {
-              let in_scope = vars.clone();
-              vars.push(local.var);
-              local.defn.free_vars().filter(move |v| !in_scope.contains(v))
-          }).chain(body.free_vars())
-      }
-      TyAbs(_, body) => Box::new(body.free_vars()),
-      TyApp(head, _) => Box::new(head.free_vars()),
-      Struct(elems) => Box::new(elems.iter().flat_map(|e| e.free_vars())),
-      FieldProj(_, base) => Box::new(base.free_vars()),
-      Tag(_, _, base) => Box::new(base.free_vars()),
-      Case(_, discr, branches) => Box::new(
-        discr
-          .free_vars()
-          .chain(branches.iter().flat_map(|b| b.free_vars())),
-      ),
-      X(_) => unreachable!(),
-    }
-  }*/
 }
 
 pub trait TypeCheck {
@@ -1012,27 +926,6 @@ impl TypeCheck for DelimCont {
         Ok(*ty)
       }
     }
-  }
-}
-impl TypeCheck for Lets {
-  type Ext = Self;
-
-  fn type_check<'a, DB: ?Sized + crate::Db>(
-    &'a self,
-    ctx: &DB,
-  ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>> {
-    for (var, defn) in self.binds.iter() {
-      let defn_ty = defn.type_check(ctx)?;
-      if var.ty != defn_ty {
-        return Err(ReducIrTyErr::TyMismatch {
-          left_ty: var.ty,
-          left_ir: Cow::Owned(ReducIr::var(*var)),
-          right_ty: defn_ty,
-          right_ir: Cow::Borrowed(defn),
-        });
-      }
-    }
-    self.body.type_check(ctx)
   }
 }
 impl TypeCheck for Infallible {
@@ -1094,6 +987,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         for Bind { var, defn } in binds.iter() {
           let defn_ty = defn.type_check(ctx)?;
           if var.ty != defn_ty {
+            println!("{}", self.pretty_with(ctx).pprint().pretty(80));
             return Err(ReducIrTyErr::TyMismatch {
               left_ty: var.ty,
               left_ir: Cow::Owned(ReducIr::var(*var)),

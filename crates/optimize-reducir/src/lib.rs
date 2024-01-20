@@ -7,8 +7,7 @@ use reducir::{
   mon::{MonReducIrItem, MonReducIrModule},
   optimized::{OptimizedReducIrItem, OptimizedReducIrModule},
   ty::{IntoPayload, Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst},
-  zip_non_consuming::ZipNonConsuming,
-  Lets, ReducIr, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr, ReducIrVar,
+  Bind, ReducIr, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr, ReducIrVar,
   TypeCheck,
 };
 use rustc_hash::FxHashMap;
@@ -79,8 +78,8 @@ fn simple_reducir_module(
       .iter()
       .map(|item| db.simple_reducir_item(*item))
       .chain([
-        OptimizedReducIrItem::new(reducir_db, bind_name, bind.fold(&mut InsertLet)),
-        OptimizedReducIrItem::new(reducir_db, prompt_name, prompt.fold(&mut InsertLet)),
+        OptimizedReducIrItem::new(reducir_db, bind_name, bind),
+        OptimizedReducIrItem::new(reducir_db, prompt_name, prompt),
       ])
       .collect::<Vec<_>>(),
   )
@@ -156,41 +155,6 @@ fn is_value(ir: &ReducIr) -> bool {
   }
 }
 
-struct InsertLet;
-impl ReducIrFold for InsertLet {
-  type InExt = Infallible;
-
-  type OutExt = Lets;
-
-  fn fold_ext(&mut self, _: &Self::InExt) -> Self::OutExt {
-    unreachable!()
-  }
-
-  fn fold_ir(&mut self, kind: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
-    match kind {
-      ReducIrKind::App(head, spine) => match head.into_inner().kind {
-        ReducIrKind::Abs(vars, body) => {
-          let mut vars_iter = vars.iter().copied().peekable();
-          let mut args_iter = spine.into_iter().peekable();
-          let binds = vars_iter
-            .zip_non_consuming(&mut args_iter)
-            .collect::<Vec<_>>();
-          ReducIr::app(
-            ReducIr::abss(
-              vars_iter,
-              // We want these lets inside the abs so they're not considered free.
-              ReducIr::new(ReducIrKind::X(Lets { binds, body })),
-            ),
-            args_iter,
-          )
-        }
-        head => ReducIr::app(ReducIr::new(head), spine),
-      },
-      kind => ReducIr::new(kind),
-    }
-  }
-}
-
 struct Simplify<'a> {
   db: &'a dyn crate::Db,
   builtin_evs: FxHashMap<ReducIrTermName, &'a ReducIr>,
@@ -244,57 +208,101 @@ impl ReducIrFold for Simplify<'_> {
         Struct(elems) => self.traverse_ir(&elems[indx]),
         _ => ReducIr::new(ir),
       },
-      App(head, spine) => match head.kind() {
-        Abs(ref args, body) => {
-          let mut remaining_args = vec![];
-          let mut remaining_apps = vec![];
+      Locals(binds, body) => {
+        let mut env = FxHashMap::default();
+        let binds = binds
+          .into_iter()
+          .filter_map(|bind| {
+            let arg = bind.defn.fold(&mut Inline::new(self.db, &env)).fold(self);
+            if is_value(&arg) {
+              env.insert(bind.var.var, arg);
+              None
+            } else {
+              Some(Bind::new(bind.var, arg))
+            }
+          })
+          .collect::<Vec<_>>();
+        ReducIr::locals(binds, body.fold(&mut Inline::new(self.db, &env)).fold(self))
+      }
+      App(head, spine) => {
+        let mut app_binds = vec![];
+        let spine = spine
+          .into_iter()
+          .map(|ir| match ir.kind {
+            ReducIrKind::Locals(binds, body) => {
+              app_binds.extend(binds);
+              body.into_inner()
+            }
+            _ => ir,
+          })
+          .collect::<Vec<_>>();
+        let app = match head.kind() {
+          Abs(ref args, body) => {
+            let mut binds = vec![];
 
-          let mut args_iter = args.iter().copied();
-          let mut spine_iter = spine.into_iter();
-          let mut env = FxHashMap::default();
+            let mut args_iter = args.iter().copied();
+            let mut spine_iter = spine.into_iter();
+            let mut env = FxHashMap::default();
 
-          loop {
-            match (args_iter.next(), spine_iter.next()) {
-              (Some(var), Some(arg)) => {
-                let arg = arg.fold(&mut Inline::new(self.db, &env)).fold(self);
-                if is_value(&arg) {
-                  // Later args may refer to earlier args we're about to
-                  // substitute
-                  env.insert(var.var, arg);
-                } else {
-                  remaining_args.push(var);
-                  remaining_apps.push(arg);
+            let body = loop {
+              match (args_iter.next(), spine_iter.next()) {
+                (Some(var), Some(arg)) => {
+                  let arg = arg.fold(&mut Inline::new(self.db, &env)).fold(self);
+                  if is_value(&arg) {
+                    // Later args may refer to earlier args we're about to
+                    // substitute
+                    env.insert(var.var, arg);
+                  } else {
+                    binds.push(Bind::new(var, arg));
+                  }
+                }
+                (None, Some(arg)) => {
+                  let mut apps = vec![arg];
+                  apps.extend(spine_iter);
+                  break ReducIr::app(
+                    self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env))),
+                    apps,
+                  );
+                }
+                (Some(var), None) => {
+                  let mut vars = vec![var];
+                  vars.extend(args_iter);
+                  break ReducIr::abss(
+                    vars,
+                    self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env))),
+                  );
+                }
+                (None, None) => {
+                  break self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env)))
                 }
               }
-              (None, Some(arg)) => {
-                remaining_apps.push(arg);
-                break;
-              }
-              (Some(var), None) => {
-                remaining_args.push(var);
-                break;
-              }
-              (None, None) => break,
-            }
-          }
-          remaining_args.extend(args_iter);
-          remaining_apps.extend(spine_iter);
+            };
 
-          ReducIr::app(
-            ReducIr::abss(
-              remaining_args,
-              self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env))),
-            ),
-            remaining_apps,
-          )
-        }
-        _ => ReducIr::new(App(head, spine)),
-      },
+            ReducIr::locals(binds, body)
+          }
+          // Let floating for app
+          Locals(binds, body) => ReducIr::locals(
+            binds.iter().cloned(),
+            self.traverse_ir(&ReducIr::new(App(body.clone(), spine))),
+          ),
+          _ => ReducIr::new(App(head, spine)),
+        };
+        ReducIr::locals(app_binds, app)
+      }
       Case(ty, discr, branches) => match discr.kind() {
         Tag(_, tag, val) => self.traverse_ir(&ReducIr::app(
           branches[*tag].clone(),
           [val.clone().into_inner()],
         )),
+        // Let floating for case
+        Locals(binds, body) => ReducIr::locals(
+          binds.iter().cloned(),
+          self.traverse_ir(&ReducIr::case(
+            ty,
+            body.clone().into_inner(),
+            branches.iter().cloned(),
+          )),
+        ),
         _ => ReducIr::new(Case(ty, discr, branches)),
       },
       // Always inline row evidence
@@ -307,7 +315,7 @@ impl ReducIrFold for Simplify<'_> {
   }
 }
 
-fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
+fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr {
   let reducir_db = db.as_reducir_db();
   let row_evs = item.row_evs(reducir_db);
   let ir = item.item(reducir_db);
@@ -349,7 +357,6 @@ fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr<Lets> {
   builtin_evs.insert(freshm_name, &freshm);
 
   ir.fold(&mut Simplify { db, builtin_evs })
-    .fold(&mut InsertLet)
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {
@@ -819,77 +826,74 @@ effect Reader {
     let simple_ir = simplify(&db, ir);
 
     let pretty_ir = simple_ir.pretty_with(&db).pprint().pretty(80).to_string();
-
     let expect = expect![[r#"
         (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
             (let
-              [ (V0:__mon_bind (fun [V3]
-                (let (V19:f ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
-                  (case (let
-                      (V0:f (V1[0]
-                        V3
-                        {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
-                          (V9 V10 V10))}}))
-                      ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> {{}, {}})])
-                        (fun [V0]
-                          (let (V17:f (V1[3][0] V0))
-                            <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V17[0], (fun
-                                  [V18] (V17[1][1] {} V18)), (fun [V20, V0] <0: V20>)
-                                })>))
-                        (fun [V23] (fun [V0] <0: (fun [V15] {V15, V23})>))
-                        V0))
-                    (fun [V5] <0: V5>)
-                    (fun [V4]
-                      (case (__mon_eqm
-                          V19
-                          (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
-                        (fun [V6]
-                          <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                            , {}
-                                                                            })])[0], (V4 @ [Ty({}
-                            -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
-                              ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                V19
-                                (fun [V0]
-                                  (V1[0]
-                                    V0
-                                    {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                      [V8
-                                      ,V9
-                                      ,V10] (V9 V10 V10))}}))
-                                ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                              , {}
-                                                                              })])[2]
-                                  V7))), (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} ->
-                            {{}, {}})])[2]}>)
-                        (fun [V6]
-                          ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
-                            (fun [V8]
-                              ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
-                                V19
-                                (fun [V0]
-                                  (V1[0]
-                                    V0
-                                    {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                      [V8
-                                      ,V9
-                                      ,V10] (V9 V10 V10))}}))
-                                ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
-                                                                              , {}
-                                                                              })])[2]
-                                  V8)))
-                            V3))))))))
-              , (V2:__mon_bind V0)
+              [ (V19 ((__mon_generate_marker @ [Ty({} -> {{}, {}})]) {}))
+              , (V0 (V1[0]
+                V0
+                {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
+                  (V9 V10 V10))}}))
+              , (V17 (V1[3][0] V0))
               ]
-              (case (V0 V2)
-                (fun [V3] (let (V26:f (V3 {})) <0: V26>))
+              (case (case ((__mon_bind @ [Ty({0}), Ty({}), Ty({} -> {{}, {}})])
+                    (fun [V0]
+                      <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V17[0], (fun [V18]
+                            (V17[1][1] {} V18)), (fun [V20, V0] <0: V20>)})>)
+                    (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>))
+                    V0)
+                  (fun [V5] <0: V5>)
+                  (fun [V4]
+                    (case (__mon_eqm
+                        V19
+                        (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[0])
+                      (fun [V6]
+                        <1: {(V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                          , {}
+                                                                          })])[0], (V4 @ [Ty({}
+                          -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1], (fun [V7]
+                            ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                              V19
+                              (fun [V0]
+                                (V1[0]
+                                  V0
+                                  {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                    [V8
+                                    ,V9
+                                    ,V10] (V9 V10 V10))}}))
+                              ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                            , {}
+                                                                            })])[2]
+                                V7))), (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                                    , {}
+                                                                                    })])[2]
+                          }>)
+                      (fun [V6]
+                        ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> {{}, {}})])[1]
+                          (fun [V8]
+                            ((__mon_prompt @ [Ty({1}), Ty({0}), Ty({} -> {{}, {}})])
+                              V19
+                              (fun [V0]
+                                (V1[0]
+                                  V0
+                                  {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
+                                    [V8
+                                    ,V9
+                                    ,V10] (V9 V10 V10))}}))
+                              ((V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({} -> { {}
+                                                                            , {}
+                                                                            })])[2]
+                                V8)))
+                          V0)))))
+                (fun [V3] (let (V24 (V3 {})) <0: V24>))
                 (fun [V4]
-                  (let (V5:__mon_bind (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})]))
+                  (let (V5 (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})]))
                     <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V5[0], V5[1], (fun
                           [V3]
-                          ((__mon_bind @ [Ty({4}), Ty({{}, {}}), Ty({} -> {{}, {}})])
-                            (fun [V0] (let (V26:f (V3 {})) <0: V26>))
-                            V5[2]))})>))))))"#]];
+                          (let (V24 (V3 {}))
+                            ((__mon_bind @ [Ty({4}), Ty({{}, {}}), Ty({} -> {{}, {}})])
+                              (fun [V0] <0: V24>)
+                              V5[2])))})>))))))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"

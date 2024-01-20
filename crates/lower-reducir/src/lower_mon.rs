@@ -437,13 +437,38 @@ impl LowerMonCtx<'_> {
         })
       }
       Locals(binds, body) => {
-        let body = self.lower_monadic(evv_ty, body);
-        ReducIr::locals(
-          binds
-            .iter()
-            .map(|bind| Bind::new(bind.var, self.lower_monadic(evv_ty, &bind.defn))),
-          body,
-        )
+        let mut needs_mon_bind = vec![];
+        let binds = binds
+          .iter()
+          .filter_map(|bind| {
+            let defn = self.lower_monadic(evv_ty, &bind.defn);
+            let defn_ty = defn
+              .type_check(self.db)
+              .expect("Monadic lowered defn should type check");
+            match defn_ty.try_unwrap_monadic(self.db) {
+              Ok(UnwrapMonTy { .. }) => {
+                needs_mon_bind.push(defn);
+                None
+              }
+              // No monadic type we can just bind this normally
+              Err(_) => Some(Bind::new(bind.var, defn)),
+            }
+          })
+          .collect::<Vec<_>>();
+
+        let mut body = self.lower_monadic(evv_ty, body);
+        let body_ty = body
+          .type_check(self.db)
+          .map_err_pretty_with(self.db)
+          .unwrap();
+        if !needs_mon_bind.is_empty() {
+          body = needs_mon_bind
+            .into_iter()
+            .fold(pure(body), |body, mon_defn| {
+              self.bind(mon_defn, |_| body_ty, |_, _| body)
+            });
+        }
+        ReducIr::locals(binds, body)
       }
       TyAbs(tyvar, ir) => ReducIr::new(TyAbs(*tyvar, P::new(self.lower_monadic(evv_ty, ir)))),
       TyApp(ir, ty) => ReducIr::new(TyApp(P::new(self.lower_monadic(evv_ty, ir)), ty.clone())),
