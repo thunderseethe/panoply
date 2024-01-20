@@ -9,6 +9,7 @@ use reducir::{
   ReducIrTermName, TypeCheck,
 };
 
+mod occurrence;
 mod simplify;
 mod subst;
 use simplify::{bind_term, prompt_term};
