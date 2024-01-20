@@ -39,20 +39,20 @@ fn main() -> eyre::Result<()> {
     }
   }
 
-  /*let mut file = std::fs::OpenOptions::new()
+  let mut file = std::fs::OpenOptions::new()
     .truncate(true)
     .write(true)
     .open("./testbed/wand.wat")
     .unwrap();
   use std::io::Write;
-  writeln!(file, "{}", wat).unwrap();*/
-  let mut file = std::fs::OpenOptions::new()
+  writeln!(file, "{}", wat).unwrap();
+  /*let mut file = std::fs::OpenOptions::new()
     .read(true)
     .open("./testbed/wand.wat")
     .unwrap();
   use std::io::Read;
   let mut wat = String::new();
-  file.read_to_string(&mut wat).unwrap();
+  file.read_to_string(&mut wat).unwrap();*/
 
   let mut config = Config::new();
   config
