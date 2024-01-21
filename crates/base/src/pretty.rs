@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::fmt;
 
-use pretty::{DocBuilder, RcAllocator};
+pub use pretty::{DocBuilder, RcAllocator};
 
 pub trait PrettyWithCtx<Ctx: ?Sized> {
   fn pretty_with<'me>(&'me self, ctx: &'me Ctx) -> PrettyWith<'me, Ctx>

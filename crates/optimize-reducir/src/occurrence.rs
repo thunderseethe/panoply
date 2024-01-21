@@ -19,6 +19,7 @@ impl Occurrence {
   fn in_abs(self) -> Self {
     match self {
       Occurrence::Once => Occurrence::OnceInAbs,
+      Occurrence::ManyBranch => Occurrence::Many,
       occ => occ,
     }
   }
@@ -27,7 +28,7 @@ impl Occurrence {
 #[derive(Default)]
 pub(crate) struct Occurrences {
   binders: FxHashMap<ReducIrLocal, Occurrence>,
-  items: FxHashMap<ReducIrTermName, Occurrence>,
+  pub(crate) items: FxHashMap<ReducIrTermName, Occurrence>,
 }
 impl Occurrences {
   fn with_binder(var: ReducIrVar) -> Self {
@@ -111,6 +112,14 @@ impl Occurrences {
   fn merge(self, other: Self) -> Self {
     self.merge_internal(other, Occurrence::Many)
   }
+
+  pub(crate) fn force_inlinable(&mut self, name: ReducIrTermName) {
+    self.items.entry(name).and_modify(|occ| {
+      if *occ > Occurrence::Once {
+        *occ = Occurrence::Once
+      }
+    });
+  }
 }
 
 impl std::ops::Index<&ReducIrLocal> for Occurrences {
@@ -134,6 +143,13 @@ impl std::ops::Index<&ReducIrTermName> for Occurrences {
     self.items.get(index).unwrap_or(&Occurrence::Dead)
   }
 }
+impl std::ops::Index<ReducIrTermName> for Occurrences {
+  type Output = Occurrence;
+
+  fn index(&self, index: ReducIrTermName) -> &Self::Output {
+    self.items.get(&index).unwrap_or(&Occurrence::Dead)
+  }
+}
 
 pub(crate) fn occurence_analysis(ir: &ReducIr) -> Occurrences {
   match ir.kind() {
@@ -152,7 +168,7 @@ pub(crate) fn occurence_analysis(ir: &ReducIr) -> Occurrences {
       .fold(occurence_analysis(body), |a, b| a.merge(b)),
     ReducIrKind::Struct(elems) => elems
       .iter()
-      .map(occurence_analysis)
+      .map(|ir| occurence_analysis(ir).mark_in_abs(&[]))
       .reduce(Occurrences::merge)
       .unwrap_or_else(Occurrences::default),
     ReducIrKind::Case(_, discr, branches) => branches
@@ -277,6 +293,23 @@ mod tests {
         ReducIr::app(ReducIr::var(var), [ReducIr::var(var)]),
         ReducIr::var(var),
       ],
+    ));
+    assert_eq!(occs[var], Occurrence::Many);
+  }
+
+  #[test]
+  fn test_many_branch_in_abs_is_many() {
+    let mut gen_var = var_supply();
+
+    let var = gen_var();
+    let discr = gen_var();
+    let occs = occurence_analysis(&ReducIr::abss(
+      [discr],
+      ReducIr::case(
+        ReducIrTy::from_id(salsa::Id::from_u32(0)),
+        ReducIr::var(discr),
+        [ReducIr::var(var), ReducIr::var(var)],
+      ),
     ));
     assert_eq!(occs[var], Occurrence::Many);
   }

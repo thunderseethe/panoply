@@ -1,8 +1,4 @@
-use base::{
-  id::TermName,
-  modules::Module,
-  pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
-};
+use base::{id::TermName, ident::Ident, modules::Module, pretty::PrettyErrorWithDb};
 use reducir::{
   mon::{MonReducIrItem, MonReducIrModule},
   optimized::{OptimizedReducIrItem, OptimizedReducIrModule},
@@ -22,7 +18,7 @@ pub trait Db: salsa::DbWithJar<Jar> + lower_reducir::Db {
     <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
   }
 
-  fn simplify_reducir_for_name(&self, name: TermName) -> OptimizedReducIrItem {
+  fn simple_reducir_item_of(&self, name: TermName) -> OptimizedReducIrItem {
     let reducir_item = self.lower_reducir_mon_item_of(name);
     self.simple_reducir_item(reducir_item)
   }
@@ -35,12 +31,25 @@ pub trait Db: salsa::DbWithJar<Jar> + lower_reducir::Db {
     let ir_module = self.lower_reducir_mon_module_of(module);
     simple_reducir_module(self.as_opt_reducir_db(), ir_module)
   }
+
+  fn simple_reducir_item_for_file_name(
+    &self,
+    path: std::path::PathBuf,
+    item: Ident,
+  ) -> Option<OptimizedReducIrItem> {
+    let module = self.root_module_for_path(path);
+    let term_name = self.id_for_name(module, item)?;
+    Some(self.simple_reducir_item_of(term_name))
+  }
 }
 impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + lower_reducir::Db {}
 
 #[salsa::tracked]
 fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedReducIrItem {
-  let ir = simplify::simplify(db, item);
+  let ir_db = db.as_reducir_db();
+  let name = item.name(ir_db);
+  let row_evs = item.row_evs(ir_db);
+  let ir = simplify::simplify(db, name, row_evs, item.item(ir_db));
 
   let term_name = item.name(db.as_reducir_db());
   OptimizedReducIrItem::new(db.as_reducir_db(), ReducIrTermName::Term(term_name), ir)
@@ -60,7 +69,6 @@ fn simple_reducir_module(
   // wasm version of these functions.)
   let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
   let bind = bind_term(db, bind_name);
-  println!("{}", bind.pretty_with(db).pprint().pretty(80));
   debug_assert!(bind.type_check(db).map_err_pretty_with(db).is_ok());
 
   let prompt_name = ReducIrTermName::gen(db, "__mon_prompt", module);
@@ -93,11 +101,10 @@ mod tests {
     Db as BaseDb,
   };
   use expect_test::expect;
-  use lower_reducir::Db as LowerDb;
   use parser::Db as ParseDb;
-  use reducir::{mon::MonReducIrItem, TypeCheck};
+  use reducir::{optimized::OptimizedReducIrItem, TypeCheck};
 
-  use crate::simplify::simplify;
+  use crate::Db;
 
   #[derive(Default)]
   #[salsa::db(
@@ -117,7 +124,7 @@ mod tests {
   }
   impl salsa::Database for TestDatabase {}
 
-  fn lower_function(db: &TestDatabase, input: &str, fn_name: &str) -> MonReducIrItem {
+  fn simple_function(db: &TestDatabase, input: &str, fn_name: &str) -> OptimizedReducIrItem {
     let path = std::path::PathBuf::from("test");
     let mut contents = r#"
 effect State {
@@ -135,7 +142,7 @@ effect Reader {
     let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
     SourceFileSet::new(db, vec![file]);
 
-    match db.lower_reducir_mon_item_for_file_name(path, db.ident_str(fn_name)) {
+    match db.simple_reducir_item_for_file_name(path, db.ident_str(fn_name)) {
       Some(term) => term,
       None => {
         dbg!(db.all_parse_errors());
@@ -144,16 +151,16 @@ effect Reader {
     }
   }
 
-  fn lower_mon_snippet(db: &TestDatabase, input: &str) -> MonReducIrItem {
+  fn simple_mon_snippet(db: &TestDatabase, input: &str) -> OptimizedReducIrItem {
     let main = format!("f = {}", input);
-    lower_function(db, &main, "f")
+    simple_function(db, &main, "f")
   }
 
   #[test]
   fn simplify_state_get() {
     let db = TestDatabase::default();
 
-    let ir = lower_mon_snippet(
+    let ir = simple_mon_snippet(
       &db,
       r#"
 (with {
@@ -162,7 +169,7 @@ effect Reader {
     return = |x| |s| {state = s, value = x},
 } do State.get({}))({})"#,
     );
-    let simple_ir = simplify(&db, ir);
+    let simple_ir = ir.item(&db);
 
     let pretty_ir = simple_ir.pretty_with(&db).pprint().pretty(80).to_string();
     let expect = expect![[r#"

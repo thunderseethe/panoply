@@ -1,9 +1,10 @@
 use std::convert::Infallible;
+use std::ops::Deref;
 
-use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId};
+use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
-use base::pretty::PrettyErrorWithDb;
-use reducir::mon::MonReducIrItem;
+use base::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx, RcAllocator};
+use reducir::mon::MonReducIrRowEv;
 use reducir::ty::{
   IntoPayload, Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
 };
@@ -13,6 +14,7 @@ use reducir::{
 };
 use rustc_hash::FxHashMap;
 
+use crate::occurrence::{occurence_analysis, Occurrence, Occurrences};
 use crate::subst::Inline;
 
 /// True if an ir term is a value (contains no computations), false if the term does require
@@ -38,6 +40,7 @@ fn is_value(ir: &ReducIr) -> bool {
 struct Simplify<'a> {
   db: &'a dyn crate::Db,
   builtin_evs: FxHashMap<ReducIrTermName, &'a ReducIr>,
+  occs: Occurrences,
 }
 impl ReducIrFold for Simplify<'_> {
   type InExt = Infallible;
@@ -94,7 +97,10 @@ impl ReducIrFold for Simplify<'_> {
           .into_iter()
           .filter_map(|bind| {
             let arg = bind.defn.fold(&mut Inline::new(self.db, &env)).fold(self);
-            if is_value(&arg) {
+            if is_value(&arg)
+              || self.occs[bind.var] == Occurrence::Once
+              || self.occs[bind.var] == Occurrence::ManyBranch
+            {
               env.insert(bind.var.var, arg);
               None
             } else {
@@ -122,43 +128,27 @@ impl ReducIrFold for Simplify<'_> {
 
             let mut args_iter = args.iter().copied();
             let mut spine_iter = spine.into_iter();
-            let mut env = FxHashMap::default();
 
             let body = loop {
               match (args_iter.next(), spine_iter.next()) {
                 (Some(var), Some(arg)) => {
-                  let arg = arg.fold(&mut Inline::new(self.db, &env)).fold(self);
-                  if is_value(&arg) {
-                    // Later args may refer to earlier args we're about to
-                    // substitute
-                    env.insert(var.var, arg);
-                  } else {
-                    binds.push(Bind::new(var, arg));
-                  }
+                  binds.push(Bind::new(var, arg));
                 }
                 (None, Some(arg)) => {
                   let mut apps = vec![arg];
                   apps.extend(spine_iter);
-                  break ReducIr::app(
-                    self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env))),
-                    apps,
-                  );
+                  break ReducIr::app(body.deref().clone(), apps);
                 }
                 (Some(var), None) => {
                   let mut vars = vec![var];
                   vars.extend(args_iter);
-                  break ReducIr::abss(
-                    vars,
-                    self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env))),
-                  );
+                  break ReducIr::abss(vars, body.deref().clone());
                 }
-                (None, None) => {
-                  break self.traverse_ir(&body.fold(&mut Inline::new(self.db, &env)))
-                }
+                (None, None) => break body.deref().clone(),
               }
             };
 
-            ReducIr::locals(binds, body)
+            self.traverse_ir(&ReducIr::locals(binds, body))
           }
           // Let floating for app
           Locals(binds, body) => ReducIr::locals(
@@ -195,10 +185,18 @@ impl ReducIrFold for Simplify<'_> {
   }
 }
 
-pub(crate) fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr {
+pub(crate) fn simplify(
+  db: &dyn crate::Db,
+  name: TermName,
+  row_evs: &[MonReducIrRowEv],
+  ir: &ReducIr,
+) -> ReducIr {
   let reducir_db = db.as_reducir_db();
-  let row_evs = item.row_evs(reducir_db);
-  let ir = item.item(reducir_db);
+
+  let mut occs = match ir.try_top_level_def() {
+    Ok(top_level) => occurence_analysis(top_level.body),
+    Err(body) => occurence_analysis(body),
+  };
 
   let mut builtin_evs = row_evs
     .iter()
@@ -206,19 +204,19 @@ pub(crate) fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr {
       let simple_item = row_ev.simple(reducir_db);
       let scoped_item = row_ev.scoped(reducir_db);
 
-      let simple = (
-        ReducIrTermName::Gen(simple_item.name(reducir_db)),
-        simple_item.item(reducir_db),
-      );
-      let scoped = (
-        ReducIrTermName::Gen(scoped_item.name(reducir_db)),
-        scoped_item.item(reducir_db),
-      );
+      let simple_name = ReducIrTermName::Gen(simple_item.name(reducir_db));
+      let scoped_name = ReducIrTermName::Gen(scoped_item.name(reducir_db));
+
+      occs.force_inlinable(simple_name);
+      occs.force_inlinable(scoped_name);
+
+      let simple = (simple_name, simple_item.item(reducir_db));
+      let scoped = (scoped_name, scoped_item.item(reducir_db));
       [simple, scoped]
     })
     .collect::<FxHashMap<_, _>>();
 
-  let module = item.name(reducir_db).module(db.as_core_db());
+  let module = name.module(db.as_core_db());
   let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
   let bind = bind_term(db, bind_name);
   debug_assert!(bind.type_check(db).map_err_pretty_with(db).is_ok());
@@ -233,10 +231,15 @@ pub(crate) fn simplify(db: &dyn crate::Db, item: MonReducIrItem) -> ReducIr {
   builtin_evs.insert(prompt_name, &prompt);
 
   let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
+  occs.force_inlinable(freshm_name);
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
-  ir.fold(&mut Simplify { db, builtin_evs })
+  ir.fold(&mut Simplify {
+    db,
+    builtin_evs,
+    occs,
+  })
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {

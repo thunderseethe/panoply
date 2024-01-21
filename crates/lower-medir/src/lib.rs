@@ -29,7 +29,7 @@ pub trait Db: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {
   }
 
   fn lower_medir_item_of(&self, name: TermName) -> Vec<MedIrItem> {
-    let opt_item = self.simplify_reducir_for_name(name);
+    let opt_item = self.simple_reducir_item_of(name);
     lower_item(self.as_lower_medir_db(), opt_item)
   }
 
