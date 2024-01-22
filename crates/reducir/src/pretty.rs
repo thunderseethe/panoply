@@ -291,7 +291,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
         )
         .parens(),
       X(xt) => xt.pretty(db, arena),
-      Item(name, _) => arena.text(name.name(db).text(db.as_core_db()).clone()),
+      Item(occ) => arena.text(occ.name.name(db).text(db.as_core_db()).clone()),
     }
   }
 }

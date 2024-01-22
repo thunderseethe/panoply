@@ -78,9 +78,7 @@ mod subst {
           ReducIr::new(ReducIrKind::TyApp(body, ty_apps))
         }
         ReducIrKind::Var(var) => ReducIr::var(ReducIrVar::new(var.var, self.subst(var.ty))),
-        ReducIrKind::Item(item, item_ty) => {
-          ReducIr::new(ReducIrKind::Item(item, self.subst(item_ty)))
-        }
+        ReducIrKind::Item(occ) => ReducIr::new(ReducIrKind::item(occ.name, self.subst(occ.ty))),
         ReducIrKind::Abs(vars, body) => ReducIr::new(ReducIrKind::Abs(
           vars
             .iter()
@@ -335,12 +333,41 @@ impl<Ext> Bind<Ext> {
   }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct ReducIrItemOccurence {
+  pub name: ReducIrTermName,
+  pub ty: ReducIrTy,
+  /// Can this item occurence be inlined
+  pub inline: bool,
+}
+
+impl ReducIrItemOccurence {
+  pub fn new(name: ReducIrTermName, ty: ReducIrTy) -> Self {
+    Self {
+      name,
+      ty,
+      inline: true,
+    }
+  }
+
+  pub fn with_inline(name: ReducIrTermName, ty: ReducIrTy, inline: bool) -> Self {
+    Self { name, ty, inline }
+  }
+
+  pub fn map_ty(self, ty_op: impl FnOnce(ReducIrTy) -> ReducIrTy) -> Self {
+    Self {
+      ty: ty_op(self.ty),
+      ..self
+    }
+  }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ReducIrKind<Ext = Infallible> {
   // Values
   Int(usize),
   Var(ReducIrVar),
-  Item(ReducIrTermName, ReducIrTy),
+  Item(ReducIrItemOccurence),
   // Value abstraction and application
   Abs(Box<[ReducIrVar]>, P<ReducIr<Ext>>),
   App(P<ReducIr<Ext>>, Vec<ReducIr<Ext>>),
@@ -356,6 +383,11 @@ pub enum ReducIrKind<Ext = Infallible> {
   Case(ReducIrTy, P<ReducIr<Ext>>, Box<[ReducIr<Ext>]>), // Elim
   // Extensions
   X(Ext),
+}
+impl<Ext> ReducIrKind<Ext> {
+  pub fn item(name: ReducIrTermName, ty: ReducIrTy) -> Self {
+    Self::Item(ReducIrItemOccurence::new(name, ty))
+  }
 }
 
 /// A ReducIr node
@@ -687,7 +719,7 @@ pub fn default_endotraverse_ir<F: ReducIrEndoFold>(
     }
     Int(i) => fold.fold_ir(Int(*i)),
     Var(v) => fold.fold_ir(Var(*v)),
-    Item(name, ty) => fold.fold_ir(Item(*name, *ty)),
+    Item(occ) => fold.fold_ir(Item(*occ)),
 
     X(in_ext) => {
       let out_ext = fold.fold_ext(in_ext);
@@ -780,7 +812,7 @@ pub trait ReducIrFold: Sized {
       }
       Int(i) => self.fold_ir(Int(*i)),
       Var(v) => self.fold_ir(Var(*v)),
-      Item(name, ty) => self.fold_ir(Item(*name, *ty)),
+      Item(occ) => self.fold_ir(Item(*occ)),
 
       X(in_ext) => {
         let out_ext = self.fold_ext(in_ext);
@@ -848,7 +880,7 @@ impl ReducIr {
     bound: &mut FxHashSet<ReducIrVar>,
   ) {
     match &self.kind {
-      Int(_) | Item(_, _) => {}
+      Int(_) | Item(_) => {}
       Var(v) => {
         if !in_scope.contains(&v.var) {
           bound.insert(*v);
@@ -1119,7 +1151,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
       }
       X(xt) => xt.type_check(ctx),
       Tag(ty, _, _) => Ok(*ty),
-      Item(_, ty) => Ok(*ty),
+      Item(occ) => Ok(occ.ty),
     }
   }
 }

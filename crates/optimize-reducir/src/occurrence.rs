@@ -114,14 +114,6 @@ impl Occurrences {
   fn merge(self, other: Self) -> Self {
     self.merge_internal(other, Occurrence::Many)
   }
-
-  pub(crate) fn force_inlinable(&mut self, name: ReducIrTermName) {
-    self.items.entry(name).and_modify(|occ| {
-      if *occ > Occurrence::Once {
-        *occ = Occurrence::Once
-      }
-    });
-  }
 }
 
 impl std::ops::Index<&ReducIrLocal> for Occurrences {
@@ -176,7 +168,7 @@ pub(crate) fn occurence_analysis(ir: &impl AsKindRef) -> Occurrences {
   match ir.as_kind_ref() {
     ReducIrKind::Int(_) => Occurrences::default(),
     ReducIrKind::Var(var) => Occurrences::with_binder(*var),
-    ReducIrKind::Item(name, _) => Occurrences::with_item(*name),
+    ReducIrKind::Item(occ) => Occurrences::with_item(occ.name),
     ReducIrKind::Abs(vars, body) => occurence_analysis(body).mark_in_abs(vars),
     ReducIrKind::App(head, spine) => spine
       .iter()

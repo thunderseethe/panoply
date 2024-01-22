@@ -170,7 +170,7 @@ impl LowerMonCtx<'_> {
 
   fn fresh_marker_item(&mut self) -> ReducIr {
     let ret_ty = self.mk_reducir_ty(VarTy(0));
-    ReducIr::new(Item(
+    ReducIr::new(ReducIrKind::item(
       ReducIrTermName::gen(self.db, "__mon_freshm", self.current.module(self.db)),
       self.mk_forall_ty(
         [Kind::Type, Kind::Type],
@@ -215,7 +215,7 @@ impl LowerMonCtx<'_> {
       ),
     );
 
-    ReducIr::new(Item(
+    ReducIr::new(ReducIrKind::item(
       ReducIrTermName::gen(self.db, "__mon_prompt", self.current.module(self.db)),
       prompt_type,
     ))
@@ -241,7 +241,7 @@ impl LowerMonCtx<'_> {
         mon_m_b,
       ),
     );
-    ReducIr::new(Item(
+    ReducIr::new(ReducIrKind::item(
       ReducIrTermName::gen(self.db, "__mon_bind", self.current.module(self.db)),
       bind_type,
     ))
@@ -538,18 +538,18 @@ impl LowerMonCtx<'_> {
       }
       // TODO: do we need to handle this specially? item should be lowered monadically so it
       // already returns a monad when we call it here
-      Item(item, ty) => match item {
+      Item(occ) => match occ.name {
         ReducIrTermName::Term(term) => {
-          let mi = self.db.lower_reducir_mon_item_of(*term);
+          let mi = self.db.lower_reducir_mon_item_of(term);
           let mon_item = mi.item(self.db.as_reducir_db());
           let mon_ty = mon_item
             .type_check(self.db.as_reducir_db())
             .expect("Type checking must succeed for item to exist");
-          ReducIr::new(Item(*item, mon_ty))
+          ReducIr::new(ReducIrKind::Item(occ.map_ty(|_| mon_ty)))
         }
         // Generated items don't have monadic type (they are row evidence).
         // So they can reuse their type unmodified.
-        ReducIrTermName::Gen(_) => ReducIr::new(Item(*item, *ty)),
+        ReducIrTermName::Gen(_) => ReducIr::new(ReducIrKind::Item(*occ)),
       },
       X(DelimCont::NewPrompt(mark_var, ir)) => {
         let x = self.lower_monadic(evv_ty, ir);

@@ -878,7 +878,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
       let ir_ty = item
         .type_check(self.db.as_reducir_db())
         .expect("ICE: Generated effect row evidence didn't type check");
-      let ir = ReducIr::new(Item(
+      let ir = ReducIr::new(ReducIrKind::item(
         ReducIrTermName::Gen(ir_item.name(self.db.as_reducir_db())),
         ir_ty,
       ));
@@ -1007,7 +1007,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         // Construct an ad hoc LowerTySchemeCtx to lower our scheme
         let ty_scheme_ctx = LowerTySchemeCtx::new(self.db, self.ty_ctx.tyvar_conv);
         let (ir_scheme, _) = ty_scheme_ctx.lower_scheme(self.current.module(self.db), &scheme);
-        let ir = ReducIr::new(ReducIrKind::Item(
+        let ir = ReducIr::new(ReducIrKind::item(
           ReducIrTermName::Term(*term_name),
           ir_scheme,
         ));

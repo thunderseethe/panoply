@@ -103,8 +103,11 @@ impl<'a> LowerCtx<'a> {
         let var = self.var_converter.convert(v.var);
         MedIr::var(MedIrVar::new(var, from_reducir_ty(self.db, v.ty)))
       }
-      ReducIrKind::Item(name, ty) => MedIr::new(MedIrKind::Closure(
-        medir::MedIrTypedItem::new(MedIrItemName::new(*name), from_reducir_ty(self.db, *ty)),
+      ReducIrKind::Item(occ) => MedIr::new(MedIrKind::Closure(
+        medir::MedIrTypedItem::new(
+          MedIrItemName::new(occ.name),
+          from_reducir_ty(self.db, occ.ty),
+        ),
         vec![],
       )),
       ReducIrKind::Abs(vars, body) => {

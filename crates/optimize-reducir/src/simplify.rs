@@ -9,12 +9,12 @@ use reducir::ty::{
   IntoPayload, Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
 };
 use reducir::{
-  Bind, ReducIr, ReducIrFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr, ReducIrVar,
-  TypeCheck,
+  Bind, ReducIr, ReducIrFold, ReducIrItemOccurence, ReducIrKind, ReducIrLocal, ReducIrTermName,
+  ReducIrTyErr, ReducIrVar, TypeCheck,
 };
 use rustc_hash::FxHashMap;
 
-use crate::occurrence::{occurence_analysis, Occurrence, Occurrences};
+use crate::occurrence::{occurence_analysis, Occurrence};
 use crate::subst::Inline;
 
 /// True if an ir term is a value (contains no computations), false if the term does require
@@ -23,7 +23,7 @@ fn is_value(ir: &ReducIr) -> bool {
   match ir.kind() {
     ReducIrKind::Int(_)
     | ReducIrKind::Var(_)
-    | ReducIrKind::Item(_, _)
+    | ReducIrKind::Item(_)
     | ReducIrKind::Abs(_, _)
     | ReducIrKind::TyAbs(_, _)
     | ReducIrKind::X(_) => true,
@@ -177,7 +177,7 @@ impl ReducIrFold for Simplify<'_> {
         _ => ReducIr::new(Case(ty, discr, branches)),
       },
       // Always inline row evidence
-      Item(name, _) => match self.builtin_evs.remove(&name) {
+      Item(occ) => match self.builtin_evs.remove(&occ.name) {
         Some(builtin) => self.traverse_ir(builtin),
         None => ReducIr::new(ir),
       },
@@ -194,11 +194,6 @@ pub(crate) fn simplify(
 ) -> ReducIr {
   let reducir_db = db.as_reducir_db();
 
-  /*let mut occs = match ir.try_top_level_def() {
-    Ok(top_level) => occurence_analysis(top_level.body),
-    Err(body) => occurence_analysis(body),
-  };*/
-
   let mut builtin_evs = row_evs
     .iter()
     .flat_map(|row_ev| {
@@ -207,9 +202,6 @@ pub(crate) fn simplify(
 
       let simple_name = ReducIrTermName::Gen(simple_item.name(reducir_db));
       let scoped_name = ReducIrTermName::Gen(scoped_item.name(reducir_db));
-
-      //occs.force_inlinable(simple_name);
-      //occs.force_inlinable(scoped_name);
 
       let simple = (simple_name, simple_item.item(reducir_db));
       let scoped = (scoped_name, scoped_item.item(reducir_db));
@@ -232,15 +224,10 @@ pub(crate) fn simplify(
   builtin_evs.insert(prompt_name, &prompt);
 
   let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
-  //occs.force_inlinable(freshm_name);
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
-  ir.fold(&mut Simplify {
-    db,
-    builtin_evs,
-    //occs,
-  })
+  ir.fold(&mut Simplify { db, builtin_evs })
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {
@@ -265,7 +252,7 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
     ),
   );
 
-  let marker = ReducIr::new(ReducIrKind::Item(
+  let marker = ReducIr::new(ReducIrKind::item(
     ReducIrTermName::gen(db, "__mon_generate_marker", module),
     db.mk_forall_ty(
       [Kind::Type],
@@ -325,7 +312,9 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   let evv = ReducIrVar::new(gen_local(), m_ty);
 
   let reinstall_prompt = || {
-    let prompt_item = ReducIr::new(ReducIrKind::<Infallible>::Item(name, prompt_type));
+    let prompt_item = ReducIr::new(ReducIrKind::<Infallible>::Item(
+      ReducIrItemOccurence::with_inline(name, prompt_type, false),
+    ));
     ReducIr::app(
       ReducIr::ty_app(
         prompt_item,
@@ -368,7 +357,7 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   let x = ReducIrVar::new(gen_local(), a);
   let unused = ReducIrVar::new(gen_local(), unit_ty);
 
-  let meq = ReducIr::new(ReducIrKind::Item(
+  let meq = ReducIr::new(ReducIrKind::item(
     ReducIrTermName::gen(db, "__mon_eqm", module),
     db.mk_fun_ty(
       [mark_ty, mark_ty],
@@ -503,7 +492,9 @@ pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) 
     db.mk_fun_ty([db.mk_mon_ty(m, a), db.mk_fun_ty([a], mon_m_b)], mon_m_b),
   );
 
-  let bind_item = ReducIr::new(ReducIrKind::Item(name, bind_type));
+  let bind_item = ReducIr::new(ReducIrKind::Item(ReducIrItemOccurence::with_inline(
+    name, bind_type, false,
+  )));
   let mut tyvar_supply: IdSupply<ReducIrTyVarId> = IdSupply::default();
 
   let mut supply: IdSupply<ReducIrVarId> = IdSupply::default();
