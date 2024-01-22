@@ -77,20 +77,14 @@ mod subst {
             .collect();
           ReducIr::new(ReducIrKind::TyApp(body, ty_apps))
         }
-        ReducIrKind::Var(var) => ReducIr::var(ReducIrVar {
-          var: var.var,
-          ty: self.subst(var.ty),
-        }),
+        ReducIrKind::Var(var) => ReducIr::var(ReducIrVar::new(var.var, self.subst(var.ty))),
         ReducIrKind::Item(item, item_ty) => {
           ReducIr::new(ReducIrKind::Item(item, self.subst(item_ty)))
         }
         ReducIrKind::Abs(vars, body) => ReducIr::new(ReducIrKind::Abs(
           vars
             .iter()
-            .map(|v| ReducIrVar {
-              var: v.var,
-              ty: self.subst(v.ty),
-            })
+            .map(|v| ReducIrVar::new(v.var, self.subst(v.ty)))
             .collect(),
           body,
         )),
@@ -99,10 +93,7 @@ mod subst {
             .into_iter()
             .map(|bind| {
               Bind::new(
-                ReducIrVar {
-                  var: bind.var.var,
-                  ty: self.subst(bind.var.ty),
-                },
+                ReducIrVar::new(bind.var.var, self.subst(bind.var.ty)),
                 bind.defn,
               )
             })
@@ -246,10 +237,35 @@ pub struct ReducIrLocal {
   pub id: ReducIrVarId,
 }
 
+impl ReducIrLocal {
+  pub fn new(top_level: ReducIrTermName, id: ReducIrVarId) -> Self {
+    Self { top_level, id }
+  }
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct ReducIrVar {
   pub var: ReducIrLocal,
   pub ty: ReducIrTy,
+  pub is_join_point: bool,
+}
+
+impl ReducIrVar {
+  pub fn new(var: ReducIrLocal, ty: ReducIrTy) -> Self {
+    Self {
+      var,
+      ty,
+      is_join_point: false,
+    }
+  }
+
+  pub fn with_join(var: ReducIrLocal, ty: ReducIrTy) -> Self {
+    Self {
+      var,
+      ty,
+      is_join_point: true,
+    }
+  }
 }
 
 /// An owned T that is frozen and exposes a reduced Box API.

@@ -253,13 +253,13 @@ where
   );
   let ir = lower_ctx.row_evidence_ir::<Sema>(left_row, right_row, goal_row);
 
-  let unit_param = ReducIrVar {
-    var: ReducIrLocal {
+  let unit_param = ReducIrVar::new(
+    ReducIrLocal {
       top_level: ReducIrTermName::Gen(row_ev_name),
       id: ReducIrVarId::from_raw(0),
     },
-    ty: db.mk_prod_ty(vec![]),
-  };
+    db.mk_prod_ty(vec![]),
+  );
   let ir = ReducIr::ty_abs(
     order_of_tys.into_iter().map(|var| ReducIrVarTy {
       var: tyvar_conv.convert(var),

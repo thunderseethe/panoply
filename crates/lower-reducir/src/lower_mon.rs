@@ -82,24 +82,24 @@ impl LowerMonCtx<'_> {
           [
             {
               let mut supply = IdSupply::default();
-              let x = ReducIrVar {
-                var: ReducIrLocal {
+              let x = ReducIrVar::new(
+                ReducIrLocal {
                   top_level: name,
                   id: supply.supply_id(),
                 },
-                ty: a_ty,
-              };
+                a_ty,
+              );
               ReducIr::abss([x], ReducIr::var(x))
             },
             {
               let mut supply = IdSupply::default();
-              let x = ReducIrVar {
-                var: ReducIrLocal {
+              let x = ReducIrVar::new(
+                ReducIrLocal {
                   top_level: name,
                   id: supply.supply_id(),
                 },
-                ty: a_ty,
-              };
+                a_ty,
+              );
               ReducIr::abss([x], ReducIr::new(Int(5467)))
             },
           ],
@@ -259,10 +259,7 @@ impl LowerMonCtx<'_> {
       .try_unwrap_monadic(ir_db)
       .map_err_pretty_with(ir_db)
       .unwrap();
-    let tmp = ReducIrVar {
-      var: self.generate_local(),
-      ty: mon_ty.a_ty,
-    };
+    let tmp = ReducIrVar::new(self.generate_local(), mon_ty.a_ty);
     let bind = self.bind_item();
     ReducIr::app(
       ReducIr::ty_app(
@@ -288,10 +285,7 @@ impl LowerMonCtx<'_> {
         .type_check(reducir_db)
         .expect("ICE: lower_monadic type check error");
       ReducIr::abss(
-        [ReducIrVar {
-          var: evv_var_id,
-          ty: evv_ty,
-        }],
+        [ReducIrVar::new(evv_var_id, evv_ty)],
         ReducIr::new(ReducIrKind::Tag(
           reducir_db.mk_reducir_ty(ControlTy(evv_ty, ty)),
           0,
@@ -338,10 +332,7 @@ impl LowerMonCtx<'_> {
                   .type_check(reducir_db)
                   .map_err_pretty_with(reducir_db)
                   .unwrap();
-                let arg_var = ReducIrVar {
-                  var: self.generate_local(),
-                  ty: arg_ty,
-                };
+                let arg_var = ReducIrVar::new(self.generate_local(), arg_ty);
                 bind_args.push((mon_arg, arg_var));
                 ReducIr::var(arg_var)
               }
@@ -364,10 +355,7 @@ impl LowerMonCtx<'_> {
             let post_mon_args = mon_args.split_off(arg_count);
             let pre_mon_args = mon_args;
 
-            let f = ReducIrVar {
-              var: self.generate_local(),
-              ty: mon.a_ty,
-            };
+            let f = ReducIrVar::new(self.generate_local(), mon.a_ty);
 
             if post_mon_args.is_empty() {
               (ReducIr::app(func_mon, pre_mon_args), mon.a_ty)
@@ -385,10 +373,7 @@ impl LowerMonCtx<'_> {
                 [
                   ReducIr::app(func_mon, pre_mon_args),
                   ReducIr::abss([f], {
-                    let y = ReducIrVar {
-                      var: self.generate_local(),
-                      ty: applied_fun_ty,
-                    };
+                    let y = ReducIrVar::new(self.generate_local(), applied_fun_ty);
                     ReducIr::local(
                       y,
                       ReducIr::app(ReducIr::var(f), post_mon_args),
@@ -411,10 +396,7 @@ impl LowerMonCtx<'_> {
             let applied_fun_ty = ty.drop_args(reducir_db, mon_args.len()).unwrap();
 
             // Otherwise lift our return value into our monad
-            let y = ReducIrVar {
-              var: self.generate_local(),
-              ty: applied_fun_ty,
-            };
+            let y = ReducIrVar::new(self.generate_local(), applied_fun_ty);
 
             let body = ReducIr::local(y, ReducIr::app(func_mon, mon_args), pure(ReducIr::var(y)));
 
@@ -485,13 +467,13 @@ impl LowerMonCtx<'_> {
               *v
             }
             _ => {
-              let v = ReducIrVar {
-                var: self.generate_local(),
-                ty: elem
+              let v = ReducIrVar::new(
+                self.generate_local(),
+                elem
                   .type_check(reducir_db)
                   .map_err_pretty_with(reducir_db)
                   .unwrap(),
-              };
+              );
               binds.push((v, elem));
               v
             }
@@ -598,13 +580,13 @@ impl LowerMonCtx<'_> {
           _ => unreachable!(),
         };
 
-        let evv_var = ReducIrVar {
-          var: ReducIrLocal {
+        let evv_var = ReducIrVar::new(
+          ReducIrLocal {
             top_level: self.current,
             id: self.evv_var_id,
           },
-          ty: upd_evv_ty,
-        };
+          upd_evv_ty,
+        );
         let mon_body = self.lower_monadic(upd_evv_ty, body);
         let mon_body = ReducIr::abss([evv_var], ReducIr::app(mon_body, [ReducIr::var(evv_var)]));
         let mon_marker = self.lower_monadic(evv_ty, marker);
@@ -632,17 +614,14 @@ impl LowerMonCtx<'_> {
         )
       }
       X(DelimCont::Yield(ty, mark, f)) => {
-        let w = ReducIrVar {
-          var: ReducIrLocal {
+        let w = ReducIrVar::new(
+          ReducIrLocal {
             top_level: self.current,
             id: self.evv_var_id,
           },
-          ty: evv_ty,
-        };
-        let x = ReducIrVar {
-          var: self.generate_local(),
-          ty: *ty,
-        };
+          evv_ty,
+        );
+        let x = ReducIrVar::new(self.generate_local(), *ty);
         let [a, b, c] = [
           ReducIrVarTy {
             var: ReducIrTyVarId::from_raw(0),

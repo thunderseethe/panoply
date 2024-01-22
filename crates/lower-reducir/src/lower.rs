@@ -425,16 +425,16 @@ impl<'a, S> LowerCtx<'a, '_, S> {
 
   pub(crate) fn evv_var(&mut self, ast: &Ast<VarId>) -> ReducIrVar {
     let term_infer = self.lookup_term(ast.root());
-    ReducIrVar {
-      var: ReducIrLocal {
+    ReducIrVar::new(
+      ReducIrLocal {
         top_level: self.current,
         id: self.evv_var_id,
       },
-      ty: match self.ty_ctx.lower_row(term_infer.eff) {
+      match self.ty_ctx.lower_row(term_infer.eff) {
         ReducIrRow::Open(i) => self.db.mk_reducir_ty(ProdVarTy(i)),
         ReducIrRow::Closed(tys) => self.mk_prod_ty(tys),
       },
-    }
+    )
   }
 }
 
@@ -638,14 +638,8 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
     debug_assert_eq!(left_len + right_len, goal_len);
 
     let concat = {
-      let left_prod_var = ReducIrVar {
-        var: left_var_id,
-        ty: left_ir.prod,
-      };
-      let right_prod_var = ReducIrVar {
-        var: right_var_id,
-        ty: right_ir.prod,
-      };
+      let left_prod_var = ReducIrVar::new(left_var_id, left_ir.prod);
+      let right_prod_var = ReducIrVar::new(right_var_id, right_ir.prod);
       ReducIr::abss([left_prod_var, right_prod_var], {
         let mut elems = indxs.iter().map(|indx| match indx {
           RowIndx::Left(i, _) => prj(*i, left_len, ReducIr::var(left_prod_var)),
@@ -668,18 +662,11 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
       let ir_db = self.db.as_reducir_db();
       let left_coprod = left_ir.coprod.shift(self.db, 1);
       let right_coprod = right_ir.coprod.shift(self.db, 1);
-      let left_branch_var = ReducIrVar {
-        var: left_var_id,
-        ty: self.mk_fun_ty([left_coprod], branch_var_ty),
-      };
-      let right_branch_var = ReducIrVar {
-        var: right_var_id,
-        ty: self.mk_fun_ty([right_coprod], branch_var_ty),
-      };
-      let goal_branch_var = ReducIrVar {
-        var: goal_var_id,
-        ty: goal_ir.coprod.shift(ir_db, 1),
-      };
+      let left_branch_var =
+        ReducIrVar::new(left_var_id, self.mk_fun_ty([left_coprod], branch_var_ty));
+      let right_branch_var =
+        ReducIrVar::new(right_var_id, self.mk_fun_ty([right_coprod], branch_var_ty));
+      let goal_branch_var = ReducIrVar::new(goal_var_id, goal_ir.coprod.shift(ir_db, 1));
       ReducIr::new(TyAbs(
         branch_tyvar,
         P::new(ReducIr::abss(
@@ -692,10 +679,8 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
                 RowIndx::Right(i, ty) => (i, ty, right_coprod, right_len, right_branch_var),
               };
 
-              let case_var = ReducIrVar {
-                var: case_var_id,
-                ty: self.ty_ctx.lower_ty(*ty).shift(ir_db, 1),
-              };
+              let case_var =
+                ReducIrVar::new(case_var_id, self.ty_ctx.lower_ty(*ty).shift(ir_db, 1));
               ReducIr::abss(
                 [case_var],
                 ReducIr::app(
@@ -716,10 +701,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
       ))
     };
 
-    let goal_prod_var = ReducIrVar {
-      var: goal_var_id,
-      ty: goal_ir.prod,
-    };
+    let goal_prod_var = ReducIrVar::new(goal_var_id, goal_ir.prod);
 
     let left_indxs = Sema::diff_right(self.db, goal, right);
 
@@ -736,17 +718,11 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
       })
     };
     let inj_l = {
-      let left_coprod_var = ReducIrVar {
-        var: left_var_id,
-        ty: left_ir.coprod,
-      };
+      let left_coprod_var = ReducIrVar::new(left_var_id, left_ir.coprod);
       ReducIr::abss([left_coprod_var], {
         let case_var_id = self.generate_local();
         let mut elems = left_indxs.iter().map(|(i, ty)| {
-          let y = ReducIrVar {
-            var: case_var_id,
-            ty: self.ty_ctx.lower_ty(*ty),
-          };
+          let y = ReducIrVar::new(case_var_id, self.ty_ctx.lower_ty(*ty));
           ReducIr::abss([y], inj(*i, goal_len, goal_ir.coprod, ReducIr::var(y)))
         });
         if left_len == 1 {
@@ -771,17 +747,11 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
       })
     };
     let inj_r = {
-      let right_coprod_var = ReducIrVar {
-        var: right_var_id,
-        ty: right_ir.coprod,
-      };
+      let right_coprod_var = ReducIrVar::new(right_var_id, right_ir.coprod);
       ReducIr::abss([right_coprod_var], {
         let case_var_id = self.generate_local();
         let mut elems = right_indxs.iter().map(|(i, ty)| {
-          let y = ReducIrVar {
-            var: case_var_id,
-            ty: self.ty_ctx.lower_ty(*ty),
-          };
+          let y = ReducIrVar::new(case_var_id, self.ty_ctx.lower_ty(*ty));
           ReducIr::abss([y], inj(*i, goal_len, goal_ir.coprod, ReducIr::var(y)))
         });
         if right_len == 1 {
@@ -928,10 +898,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
     let row_ev_ty = self
       .ty_ctx
       .row_evidence_ir_ty(self.current.module(self.db), ev);
-    ReducIrVar {
-      var: ev_term,
-      ty: row_ev_ty,
-    }
+    ReducIrVar::new(ev_term, row_ev_ty)
   }
 }
 
@@ -989,24 +956,24 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       Abstraction { arg, body } => {
         let arg_ty = self.lookup_var(*arg);
         let ty = self.ty_ctx.lower_ty(arg_ty);
-        let mut vars = vec![ReducIrVar {
-          var: ReducIrLocal {
+        let mut vars = vec![ReducIrVar::new(
+          ReducIrLocal {
             top_level: self.current,
             id: self.var_conv.convert(*arg),
           },
           ty,
-        }];
+        )];
         let mut body = *body;
         while let Abstraction { arg, body: next } = ast.view(body) {
           let arg_ty = self.lookup_var(*arg);
           let ty = self.ty_ctx.lower_ty(arg_ty);
-          vars.push(ReducIrVar {
-            var: ReducIrLocal {
+          vars.push(ReducIrVar::new(
+            ReducIrLocal {
               top_level: self.current,
               id: self.var_conv.convert(*arg),
             },
             ty,
-          });
+          ));
           body = *next;
         }
         ReducIr::abss(vars, self.lower_term(ast, body))
@@ -1022,13 +989,13 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       }
       Variable(var) => {
         let ty = self.lookup_var(*var);
-        ReducIr::new(Var(ReducIrVar {
-          var: ReducIrLocal {
+        ReducIr::new(Var(ReducIrVar::new(
+          ReducIrLocal {
             top_level: self.current,
             id: self.var_conv.convert(*var),
           },
-          ty: self.ty_ctx.lower_ty(ty),
-        }))
+          self.ty_ctx.lower_ty(ty),
+        )))
       }
       Term::Int(i) => ReducIr::new(ReducIrKind::Int(*i)),
       Item(term_name) => {
@@ -1129,10 +1096,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           .ty
           .try_as_fn_ty(&self.db)
           .unwrap_or_else(|_| unreachable!());
-        let value_var = ReducIrVar {
-          var: self.generate_local(),
-          ty: self.ty_ctx.lower_ty(value_ty),
-        };
+        let value_var = ReducIrVar::new(self.generate_local(), self.ty_ctx.lower_ty(value_ty));
         let eff = op.effect(self.db.as_core_db());
 
         let eff_name = eff.name(self.db.as_core_db());
@@ -1148,32 +1112,30 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         let kont_ret_ty = self
           .ty_ctx
           .lower_ty(*eff_vals.values(self.db.as_ty_db()).first().unwrap());
-        let handle_var = ReducIrVar {
-          var: self.generate_local(),
-          ty: self
+        let handle_var = ReducIrVar::new(
+          self.generate_local(),
+          self
             .db
             .effect_handler_ir_ty(eff)
             .reduce_forall(self.db.as_reducir_db(), kont_ret_ty),
-        };
+        );
         let op_ret = self.ty_ctx.lower_ty(op_ret);
-        let kont_var = ReducIrVar {
-          var: self.generate_local(),
-          ty: self.mk_fun_ty([op_ret], kont_ret_ty),
-        };
+        let kont_var =
+          ReducIrVar::new(self.generate_local(), self.mk_fun_ty([op_ret], kont_ret_ty));
 
         // Always project out the right one for row evidence because we want the innermost
         // scoped effect handler.
         let prj = ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(eff_ev_param)));
-        let eff_var = ReducIrVar {
-          var: ReducIrLocal {
+        let eff_var = ReducIrVar::new(
+          ReducIrLocal {
             top_level: self.current,
             id: self.evv_var_id,
           },
-          ty: self
+          self
             .ty_ctx
             .eff_row_into_evv_ty(self.current.module(self.db), term_infer.eff)
             .prod,
-        };
+        );
         let eff_handler = ReducIr::app(prj, [ReducIr::var(eff_var)]);
 
         // TODO: How do we get rows here to determine this?
@@ -1249,10 +1211,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           Evidence::EffRow { .. } => unreachable!(),
         };
 
-        let handler_var = ReducIrVar {
-          var: self.generate_local(),
-          ty: self.ty_ctx.lower_ty(handler_infer.ty),
-        };
+        let handler_var = ReducIrVar::new(
+          self.generate_local(),
+          self.ty_ctx.lower_ty(handler_infer.ty),
+        );
         let handler_prj_ret = ReducIr::app(
           ReducIr::field_proj(
             0,
@@ -1278,26 +1240,26 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           goal: body_infer.eff,
         }];
         let return_ = ReducIr::app(handler_prj_ret, [self.lower_term(ast, *body)]);
-        let prompt_var = ReducIrVar {
-          var: self.generate_local(),
-          ty: self.mk_reducir_ty(MarkerTy(
+        let prompt_var = ReducIrVar::new(
+          self.generate_local(),
+          self.mk_reducir_ty(MarkerTy(
             return_
               .type_check(self.db.as_reducir_db())
               .map_err_pretty_with(self.db)
               .unwrap(),
           )),
-        };
+        );
         let update_evv = {
-          let outer_evv_var = ReducIrVar {
-            var: ReducIrLocal {
+          let outer_evv_var = ReducIrVar::new(
+            ReducIrLocal {
               top_level: self.current,
               id: self.evv_var_id,
             },
-            ty: self
+            self
               .ty_ctx
               .eff_row_into_evv_ty(self.current.module(self.db), term_infer.eff)
               .prod,
-          };
+          );
           ReducIr::abss(
             [outer_evv_var],
             ReducIr::app(

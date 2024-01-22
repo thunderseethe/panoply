@@ -198,12 +198,14 @@ mod tests {
 
   fn var_supply() -> impl FnMut() -> ReducIrVar {
     let mut var_supply = IdSupply::default();
-    move || ReducIrVar {
-      var: ReducIrLocal {
-        top_level: reducir::ReducIrTermName::Term(TermName::from_id(salsa::Id::from_u32(0))),
-        id: var_supply.supply_id(),
-      },
-      ty: ReducIrTy::from_id(salsa::Id::from_u32(0)),
+    move || {
+      ReducIrVar::new(
+        ReducIrLocal {
+          top_level: reducir::ReducIrTermName::Term(TermName::from_id(salsa::Id::from_u32(0))),
+          id: var_supply.supply_id(),
+        },
+        ReducIrTy::from_id(salsa::Id::from_u32(0)),
+      )
     }
   }
 

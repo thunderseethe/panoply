@@ -3,7 +3,7 @@ use std::ops::Deref;
 
 use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
-use base::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx, RcAllocator};
+use base::pretty::PrettyErrorWithDb;
 use reducir::mon::MonReducIrRowEv;
 use reducir::ty::{
   IntoPayload, Kind, MkReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
@@ -253,16 +253,16 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
   };
   let var_ty0 = db.mk_reducir_ty(ReducIrTyKind::VarTy(0));
   let var_ty1 = db.mk_reducir_ty(ReducIrTyKind::VarTy(1));
-  let f = ReducIrVar {
-    var: ReducIrLocal {
+  let f = ReducIrVar::new(
+    ReducIrLocal {
       top_level,
       id: ReducIrVarId(0),
     },
-    ty: db.mk_fun_ty(
+    db.mk_fun_ty(
       [db.mk_reducir_ty(ReducIrTyKind::MarkerTy(var_ty1))],
       var_ty0,
     ),
-  };
+  );
 
   let marker = ReducIr::new(ReducIrKind::Item(
     ReducIrTermName::gen(db, "__mon_generate_marker", module),
@@ -318,22 +318,10 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
     top_level: name,
     id: var_gen.supply_id(),
   };
-  let mark = ReducIrVar {
-    var: gen_local(),
-    ty: mark_ty,
-  };
-  let upd = ReducIrVar {
-    var: gen_local(),
-    ty: upd_fun_ty,
-  };
-  let body = ReducIrVar {
-    var: gen_local(),
-    ty: body_fun_ty,
-  };
-  let evv = ReducIrVar {
-    var: gen_local(),
-    ty: m_ty,
-  };
+  let mark = ReducIrVar::new(gen_local(), mark_ty);
+  let upd = ReducIrVar::new(gen_local(), upd_fun_ty);
+  let body = ReducIrVar::new(gen_local(), body_fun_ty);
+  let evv = ReducIrVar::new(gen_local(), m_ty);
 
   let reinstall_prompt = || {
     let prompt_item = ReducIr::new(ReducIrKind::<Infallible>::Item(name, prompt_type));
@@ -355,9 +343,9 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   let exists_r = db.mk_reducir_ty(VarTy(0));
   let exists_mon_m_r = db.mk_mon_ty(exists_m, exists_r);
   let exists_body_fun_ty = db.mk_mon_ty(VarTy(4), VarTy(3));
-  let y_var = ReducIrVar {
-    var: gen_local(),
-    ty: db.mk_forall_ty(
+  let y_var = ReducIrVar::new(
+    gen_local(),
+    db.mk_forall_ty(
       [Kind::Type, Kind::Type, Kind::Type],
       db.mk_prod_ty(vec![
         db.mk_reducir_ty(MarkerTy(exists_r)),
@@ -365,7 +353,7 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
         db.mk_fun_ty([exists_b], exists_body_fun_ty),
       ]),
     ),
-  };
+  );
   let y = ReducIr::ty_app(
     ReducIr::var(y_var),
     [
@@ -376,14 +364,8 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   );
 
   let unit_ty = db.mk_prod_ty(vec![]);
-  let x = ReducIrVar {
-    var: gen_local(),
-    ty: a,
-  };
-  let unused = ReducIrVar {
-    var: gen_local(),
-    ty: unit_ty,
-  };
+  let x = ReducIrVar::new(gen_local(), a);
+  let unused = ReducIrVar::new(gen_local(), unit_ty);
 
   let meq = ReducIr::new(ReducIrKind::Item(
     ReducIrTermName::gen(db, "__mon_eqm", module),
@@ -411,10 +393,7 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
       }
     };
 
-    let x = ReducIrVar {
-      var: gen_local(),
-      ty: b_arg,
-    };
+    let x = ReducIrVar::new(gen_local(), b_arg);
 
     Ok(ReducIr::abss(
       [x],
@@ -527,12 +506,14 @@ pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) 
   let mut tyvar_supply: IdSupply<ReducIrTyVarId> = IdSupply::default();
 
   let mut supply: IdSupply<ReducIrVarId> = IdSupply::default();
-  let mut gen_local = |ty| ReducIrVar {
-    var: ReducIrLocal {
-      top_level: name,
-      id: supply.supply_id(),
-    },
-    ty,
+  let mut gen_local = |ty| {
+    ReducIrVar::new(
+      ReducIrLocal {
+        top_level: name,
+        id: supply.supply_id(),
+      },
+      ty,
+    )
   };
 
   let e = gen_local(db.mk_mon_ty(m, a));
