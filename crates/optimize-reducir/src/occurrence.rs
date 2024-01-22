@@ -1,4 +1,6 @@
-use reducir::{ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar};
+use std::ops::Deref;
+
+use reducir::{ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, P};
 use rustc_hash::FxHashMap;
 
 /// Occurrence information about a binder
@@ -151,8 +153,27 @@ impl std::ops::Index<ReducIrTermName> for Occurrences {
   }
 }
 
-pub(crate) fn occurence_analysis(ir: &ReducIr) -> Occurrences {
-  match ir.kind() {
+pub(crate) trait AsKindRef {
+  fn as_kind_ref(&self) -> &ReducIrKind;
+}
+impl AsKindRef for ReducIrKind {
+  fn as_kind_ref(&self) -> &ReducIrKind {
+    self
+  }
+}
+impl AsKindRef for ReducIr {
+  fn as_kind_ref(&self) -> &ReducIrKind {
+    self.kind()
+  }
+}
+impl AsKindRef for P<ReducIr> {
+  fn as_kind_ref(&self) -> &ReducIrKind {
+    self.deref().kind()
+  }
+}
+
+pub(crate) fn occurence_analysis(ir: &impl AsKindRef) -> Occurrences {
+  match ir.as_kind_ref() {
     ReducIrKind::Int(_) => Occurrences::default(),
     ReducIrKind::Var(var) => Occurrences::with_binder(*var),
     ReducIrKind::Item(name, _) => Occurrences::with_item(*name),

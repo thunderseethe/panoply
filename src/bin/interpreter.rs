@@ -30,7 +30,7 @@ fn main() -> eyre::Result<()> {
   let mut printer = wasmprinter::Printer::default();
   printer.print_offsets(true);
   let wat = printer.print(&bytes).unwrap();
-  println!("{}", wat);
+  //println!("{}", wat);
 
   match tys {
     Ok(_) => {}

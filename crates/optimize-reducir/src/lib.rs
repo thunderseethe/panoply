@@ -1,4 +1,9 @@
-use base::{id::TermName, ident::Ident, modules::Module, pretty::PrettyErrorWithDb};
+use base::{
+  id::TermName,
+  ident::Ident,
+  modules::Module,
+  pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
+};
 use reducir::{
   mon::{MonReducIrItem, MonReducIrModule},
   optimized::{OptimizedReducIrItem, OptimizedReducIrModule},
@@ -52,6 +57,7 @@ fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedRed
   let ir = simplify::simplify(db, name, row_evs, item.item(ir_db));
 
   let term_name = item.name(db.as_reducir_db());
+  println!("{}", ir.pretty_with(db).pprint().pretty(80));
   OptimizedReducIrItem::new(db.as_reducir_db(), ReducIrTermName::Term(term_name), ir)
 }
 
@@ -231,7 +237,7 @@ effect Reader {
                                                                             })])[2]
                                 V8)))
                           V0)))))
-                (fun [V3] (let (V24 (V3 {})) <0: V24>))
+                (fun [V3] <0: (V3 {})>)
                 (fun [V4]
                   (let (V5 (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})]))
                     <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V5[0], V5[1], (fun

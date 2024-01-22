@@ -40,7 +40,7 @@ fn is_value(ir: &ReducIr) -> bool {
 struct Simplify<'a> {
   db: &'a dyn crate::Db,
   builtin_evs: FxHashMap<ReducIrTermName, &'a ReducIr>,
-  occs: Occurrences,
+  //occs: Occurrences,
 }
 impl ReducIrFold for Simplify<'_> {
   type InExt = Infallible;
@@ -92,14 +92,15 @@ impl ReducIrFold for Simplify<'_> {
         _ => ReducIr::new(ir),
       },
       Locals(binds, body) => {
+        let occs = occurence_analysis(&Locals(binds.clone(), body.clone()));
         let mut env = FxHashMap::default();
         let binds = binds
           .into_iter()
           .filter_map(|bind| {
             let arg = bind.defn.fold(&mut Inline::new(self.db, &env)).fold(self);
             if is_value(&arg)
-              || self.occs[bind.var] == Occurrence::Once
-              || self.occs[bind.var] == Occurrence::ManyBranch
+              || occs[bind.var] == Occurrence::Once
+              || occs[bind.var] == Occurrence::ManyBranch
             {
               env.insert(bind.var.var, arg);
               None
@@ -193,10 +194,10 @@ pub(crate) fn simplify(
 ) -> ReducIr {
   let reducir_db = db.as_reducir_db();
 
-  let mut occs = match ir.try_top_level_def() {
+  /*let mut occs = match ir.try_top_level_def() {
     Ok(top_level) => occurence_analysis(top_level.body),
     Err(body) => occurence_analysis(body),
-  };
+  };*/
 
   let mut builtin_evs = row_evs
     .iter()
@@ -207,8 +208,8 @@ pub(crate) fn simplify(
       let simple_name = ReducIrTermName::Gen(simple_item.name(reducir_db));
       let scoped_name = ReducIrTermName::Gen(scoped_item.name(reducir_db));
 
-      occs.force_inlinable(simple_name);
-      occs.force_inlinable(scoped_name);
+      //occs.force_inlinable(simple_name);
+      //occs.force_inlinable(scoped_name);
 
       let simple = (simple_name, simple_item.item(reducir_db));
       let scoped = (scoped_name, scoped_item.item(reducir_db));
@@ -231,14 +232,14 @@ pub(crate) fn simplify(
   builtin_evs.insert(prompt_name, &prompt);
 
   let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
-  occs.force_inlinable(freshm_name);
+  //occs.force_inlinable(freshm_name);
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
   ir.fold(&mut Simplify {
     db,
     builtin_evs,
-    occs,
+    //occs,
   })
 }
 
