@@ -619,14 +619,14 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
       if len == 1 {
         prod
       } else {
-        ReducIr::new(FieldProj(index, P::new(prod)))
+        ReducIr::field_proj(index, prod)
       }
     };
     let inj = |index, len, ty, coprod| {
       if len == 1 {
         coprod
       } else {
-        ReducIr::new(Tag(ty, index, P::new(coprod)))
+        ReducIr::tag(ty, index, coprod)
       }
     };
 
@@ -667,38 +667,34 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
       let right_branch_var =
         ReducIrVar::new(right_var_id, self.mk_fun_ty([right_coprod], branch_var_ty));
       let goal_branch_var = ReducIrVar::new(goal_var_id, goal_ir.coprod.shift(ir_db, 1));
-      ReducIr::new(TyAbs(
-        branch_tyvar,
-        P::new(ReducIr::abss(
-          [left_branch_var, right_branch_var, goal_branch_var],
-          {
-            let case_var_id = self.generate_local();
-            let mut elems = indxs.iter().map(|indx| {
-              let (i, ty, coprod_ty, length, branch_var) = match indx {
-                RowIndx::Left(i, ty) => (i, ty, left_coprod, left_len, left_branch_var),
-                RowIndx::Right(i, ty) => (i, ty, right_coprod, right_len, right_branch_var),
-              };
+      ReducIr::ty_abs(
+        [branch_tyvar],
+        ReducIr::abss([left_branch_var, right_branch_var, goal_branch_var], {
+          let case_var_id = self.generate_local();
+          let mut elems = indxs.iter().map(|indx| {
+            let (i, ty, coprod_ty, length, branch_var) = match indx {
+              RowIndx::Left(i, ty) => (i, ty, left_coprod, left_len, left_branch_var),
+              RowIndx::Right(i, ty) => (i, ty, right_coprod, right_len, right_branch_var),
+            };
 
-              let case_var =
-                ReducIrVar::new(case_var_id, self.ty_ctx.lower_ty(*ty).shift(ir_db, 1));
-              ReducIr::abss(
-                [case_var],
-                ReducIr::app(
-                  ReducIr::var(branch_var),
-                  [inj(*i, length, coprod_ty, ReducIr::var(case_var))],
-                ),
-              )
-            });
+            let case_var = ReducIrVar::new(case_var_id, self.ty_ctx.lower_ty(*ty).shift(ir_db, 1));
+            ReducIr::abss(
+              [case_var],
+              ReducIr::app(
+                ReducIr::var(branch_var),
+                [inj(*i, length, coprod_ty, ReducIr::var(case_var))],
+              ),
+            )
+          });
 
-            if indxs.len() == 1 {
-              // Don't emit a case when we
-              ReducIr::app(elems.next().unwrap(), [ReducIr::var(goal_branch_var)])
-            } else {
-              ReducIr::case_on_var(branch_var_ty, goal_branch_var, elems)
-            }
-          },
-        )),
-      ))
+          if indxs.len() == 1 {
+            // Don't emit a case when we
+            ReducIr::app(elems.next().unwrap(), [ReducIr::var(goal_branch_var)])
+          } else {
+            ReducIr::case_on_var(branch_var_ty, goal_branch_var, elems)
+          }
+        }),
+      )
     };
 
     let goal_prod_var = ReducIrVar::new(goal_var_id, goal_ir.prod);
@@ -989,13 +985,13 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       }
       Variable(var) => {
         let ty = self.lookup_var(*var);
-        ReducIr::new(Var(ReducIrVar::new(
+        ReducIr::var(ReducIrVar::new(
           ReducIrLocal {
             top_level: self.current,
             id: self.var_conv.convert(*var),
           },
           self.ty_ctx.lower_ty(ty),
-        )))
+        ))
       }
       Term::Int(i) => ReducIr::new(ReducIrKind::Int(*i)),
       Item(term_name) => {
@@ -1027,7 +1023,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           goal: goal_row,
         };
         let param = self.ev_map[&ev];
-        let concat = ReducIr::new(FieldProj(0, P::new(ReducIr::new(Var(param)))));
+        let concat = ReducIr::field_proj(0, ReducIr::var(param));
 
         ReducIr::app(
           concat,
@@ -1044,7 +1040,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           right: right_row,
           goal: goal_row,
         })];
-        let branch = ReducIr::new(FieldProj(1, P::new(ReducIr::var(param))));
+        let branch = ReducIr::field_proj(1, ReducIr::var(param));
 
         ReducIr::app(
           branch,
@@ -1064,10 +1060,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           Direction::Right => 3,
         };
 
-        let prj = ReducIr::new(FieldProj(
-          0,
-          P::new(ReducIr::new(FieldProj(idx, P::new(ReducIr::var(param))))),
-        ));
+        let prj = ReducIr::field_proj(0, ReducIr::field_proj(idx, ReducIr::var(param)));
         ReducIr::app(prj, [self.lower_term(ast, *subterm)])
       }
       Inject {
@@ -1083,10 +1076,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           Direction::Right => 3,
         };
 
-        let inj = ReducIr::new(FieldProj(
-          1,
-          P::new(ReducIr::new(FieldProj(idx, P::new(ReducIr::var(param))))),
-        ));
+        let inj = ReducIr::field_proj(1, ReducIr::field_proj(idx, ReducIr::var(param)));
         ReducIr::app(inj, [self.lower_term(ast, *subterm)])
       }
       // Effect stuff
@@ -1263,7 +1253,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           ReducIr::abss(
             [outer_evv_var],
             ReducIr::app(
-              ReducIr::new(FieldProj(0, P::new(ReducIr::var(eff_ev)))),
+              ReducIr::field_proj(0, ReducIr::var(eff_ev)),
               [
                 ReducIr::var(outer_evv_var),
                 ReducIr::new(Struct(vec![ReducIr::var(prompt_var), handler_prj_sig])),
