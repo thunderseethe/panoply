@@ -529,7 +529,7 @@ pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) 
   let y = ReducIr::ty_app(
     ReducIr::var(y_var),
     [
-      ReducIrTyApp::Ty(b),
+      ReducIrTyApp::Ty(a),
       ReducIrTyApp::Ty(m),
       ReducIrTyApp::Ty(b),
     ],
@@ -583,11 +583,11 @@ pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) 
                           bind_item,
                           [
                             ReducIrTyApp::Ty(m),
-                            ReducIrTyApp::Ty(b),
                             ReducIrTyApp::Ty(a),
+                            ReducIrTyApp::Ty(b),
                           ],
                         ),
-                        [ReducIr::app(ReducIr::var(g), [ReducIr::var(x)]), k],
+                        [ReducIr::app(k, [ReducIr::var(x)]), ReducIr::var(g)], //[ReducIr::app(ReducIr::var(g), [ReducIr::var(x)]), k],
                       ),
                     ),
                   ]))

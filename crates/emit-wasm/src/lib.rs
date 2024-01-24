@@ -242,16 +242,16 @@ effect Reader {
           )
           (func $__mon_bind_lam_0 (;8;) (type $fun_3_1) (param i32 i32 i32) (result i32)
             (local i32 i32 i32)
-            local.get 0
+            local.get 1
+            i32.load offset=8
+            local.set 3
+            local.get 3
             i32.const 4
             i32.add
             local.get 2
-            local.get 0
+            local.get 3
             i32.load
             call_indirect (type $fun_2_1)
-            local.set 3
-            local.get 1
-            i32.load offset=8
             local.set 4
             i32.const 16
             call $alloc
@@ -263,10 +263,10 @@ effect Reader {
             i32.const 7
             i32.store offset=4
             local.get 5
-            local.get 3
+            local.get 4
             i32.store offset=8
             local.get 5
-            local.get 4
+            local.get 0
             i32.store offset=12
             local.get 5
             return
@@ -1159,16 +1159,16 @@ g = f({ x = {} })({ y = {} })
           )
           (func $__mon_bind_lam_0 (;24;) (type $fun_3_1) (param i32 i32 i32) (result i32)
             (local i32 i32 i32)
-            local.get 0
+            local.get 1
+            i32.load offset=8
+            local.set 3
+            local.get 3
             i32.const 4
             i32.add
             local.get 2
-            local.get 0
+            local.get 3
             i32.load
             call_indirect (type $fun_2_1)
-            local.set 3
-            local.get 1
-            i32.load offset=8
             local.set 4
             i32.const 16
             call $alloc
@@ -1180,10 +1180,10 @@ g = f({ x = {} })({ y = {} })
             i32.const 23
             i32.store offset=4
             local.get 5
-            local.get 3
+            local.get 4
             i32.store offset=8
             local.get 5
-            local.get 4
+            local.get 0
             i32.store offset=12
             local.get 5
             return
@@ -1844,7 +1844,7 @@ f = (with {
                 i32.const 6
                 i32.store
                 local.get 37
-                i32.const 28
+                i32.const 29
                 i32.store offset=4
                 local.get 37
                 local.get 34
@@ -2187,7 +2187,7 @@ f = (with {
             i32.const 9
             i32.store
             local.get 7
-            i32.const 31
+            i32.const 32
             i32.store offset=4
             local.get 7
             local.get 1
@@ -2326,7 +2326,7 @@ f = (with {
             i32.const 9
             i32.store
             local.get 7
-            i32.const 31
+            i32.const 32
             i32.store offset=4
             local.get 7
             local.get 1
@@ -2354,32 +2354,54 @@ f = (with {
             local.get 2
             return
           )
-          (func $f_lam_17 (;28;) (type $fun_2_1) (param i32 i32) (result i32)
-            (local i32 i32 i32 i32)
-            local.get 1
+          (func $f_lam_17 (;28;) (type $fun_1_1) (param i32) (result i32)
+            (local i32 i32)
+            local.get 0
             i32.const 4
             i32.add
             i32.const 825
-            local.get 1
+            local.get 0
             i32.load
             call_indirect (type $fun_2_1)
-            local.set 2
+            local.set 1
             i32.const 12
             call $alloc
-            local.set 3
-            local.get 3
+            local.set 2
+            local.get 2
             i32.const 6
             i32.store
-            local.get 3
+            local.get 2
             i32.const 27
             i32.store offset=4
-            local.get 3
             local.get 2
+            local.get 1
             i32.store offset=8
-            local.get 3
-            local.set 3
+            local.get 2
+            return
+          )
+          (func $f_lam_18 (;29;) (type $fun_2_1) (param i32 i32) (result i32)
+            (local i32 i32 i32 i32)
             local.get 0
             i32.load offset=8
+            local.set 2
+            local.get 2
+            i32.const 4
+            i32.add
+            local.get 1
+            local.get 2
+            i32.load
+            call_indirect (type $fun_2_1)
+            local.set 3
+            i32.const 8
+            call $alloc
+            local.set 4
+            local.get 4
+            i32.const 4
+            i32.store
+            local.get 4
+            i32.const 28
+            i32.store offset=4
+            local.get 4
             local.set 4
             i32.const 16
             call $alloc
@@ -2388,7 +2410,7 @@ f = (with {
             i32.const 8
             i32.store
             local.get 5
-            i32.const 29
+            i32.const 30
             i32.store offset=4
             local.get 5
             local.get 3
@@ -2399,7 +2421,7 @@ f = (with {
             local.get 5
             return
           )
-          (func $__mon_bind (;29;) (type $fun_3_1) (param i32 i32 i32) (result i32)
+          (func $__mon_bind (;30;) (type $fun_3_1) (param i32 i32 i32) (result i32)
             (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
             local.get 0
             i32.const 4
@@ -2450,7 +2472,7 @@ f = (with {
                 i32.const 8
                 i32.store
                 local.get 10
-                i32.const 30
+                i32.const 31
                 i32.store offset=4
                 local.get 10
                 local.get 1
@@ -2490,18 +2512,18 @@ f = (with {
             end
             return
           )
-          (func $__mon_bind_lam_0 (;30;) (type $fun_3_1) (param i32 i32 i32) (result i32)
+          (func $__mon_bind_lam_0 (;31;) (type $fun_3_1) (param i32 i32 i32) (result i32)
             (local i32 i32 i32)
-            local.get 0
+            local.get 1
+            i32.load offset=8
+            local.set 3
+            local.get 3
             i32.const 4
             i32.add
             local.get 2
-            local.get 0
+            local.get 3
             i32.load
             call_indirect (type $fun_2_1)
-            local.set 3
-            local.get 1
-            i32.load offset=8
             local.set 4
             i32.const 16
             call $alloc
@@ -2510,18 +2532,18 @@ f = (with {
             i32.const 8
             i32.store
             local.get 5
-            i32.const 29
+            i32.const 30
             i32.store offset=4
             local.get 5
-            local.get 3
+            local.get 4
             i32.store offset=8
             local.get 5
-            local.get 4
+            local.get 0
             i32.store offset=12
             local.get 5
             return
           )
-          (func $__mon_prompt (;31;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
+          (func $__mon_prompt (;32;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
             (local i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32 i32)
             local.get 1
             i32.const 4
@@ -2600,7 +2622,7 @@ f = (with {
                       i32.const 9
                       i32.store
                       local.get 15
-                      i32.const 32
+                      i32.const 33
                       i32.store offset=4
                       local.get 15
                       local.get 0
@@ -2655,7 +2677,7 @@ f = (with {
                     i32.const 9
                     i32.store
                     local.get 18
-                    i32.const 33
+                    i32.const 34
                     i32.store offset=4
                     local.get 18
                     local.get 0
@@ -2689,7 +2711,7 @@ f = (with {
             end
             return
           )
-          (func $__mon_prompt_lam_0 (;32;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
+          (func $__mon_prompt_lam_0 (;33;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
             (local i32 i32 i32)
             local.get 2
             i32.load offset=8
@@ -2709,7 +2731,7 @@ f = (with {
             i32.const 9
             i32.store
             local.get 6
-            i32.const 31
+            i32.const 32
             i32.store offset=4
             local.get 6
             local.get 0
@@ -2723,7 +2745,7 @@ f = (with {
             local.get 6
             return
           )
-          (func $__mon_prompt_lam_1 (;33;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
+          (func $__mon_prompt_lam_1 (;34;) (type $fun_4_1) (param i32 i32 i32 i32) (result i32)
             (local i32 i32 i32)
             local.get 2
             i32.load offset=8
@@ -2743,7 +2765,7 @@ f = (with {
             i32.const 9
             i32.store
             local.get 6
-            i32.const 31
+            i32.const 32
             i32.store offset=4
             local.get 6
             local.get 0
@@ -2757,11 +2779,11 @@ f = (with {
             local.get 6
             return
           )
-          (table (;0;) 34 34 funcref)
+          (table (;0;) 35 35 funcref)
           (memory (;0;) 1)
           (global (;0;) (mut i32) i32.const 0)
           (export "mem" (memory 0))
-          (elem (;0;) (i32.const 0) func $__mon_generate_marker $alloc $trace $__mon_eqm $__apply_1_0 $__apply_2_0 $__apply_2_1 $__apply_3_0 $__apply_3_2 $__apply_4_3 $f $f_lam_0 $f_lam_1 $f_lam_2 $f_lam_3 $f_lam_4 $f_lam_5 $f_lam_6 $f_lam_7 $f_lam_8 $f_lam_9 $f_lam_10 $f_lam_11 $f_lam_12 $f_lam_13 $f_lam_14 $f_lam_15 $f_lam_16 $f_lam_17 $__mon_bind $__mon_bind_lam_0 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1)
+          (elem (;0;) (i32.const 0) func $__mon_generate_marker $alloc $trace $__mon_eqm $__apply_1_0 $__apply_2_0 $__apply_2_1 $__apply_3_0 $__apply_3_2 $__apply_4_3 $f $f_lam_0 $f_lam_1 $f_lam_2 $f_lam_3 $f_lam_4 $f_lam_5 $f_lam_6 $f_lam_7 $f_lam_8 $f_lam_9 $f_lam_10 $f_lam_11 $f_lam_12 $f_lam_13 $f_lam_14 $f_lam_15 $f_lam_16 $f_lam_17 $f_lam_18 $__mon_bind $__mon_bind_lam_0 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1)
         )"#]];
     expect.assert_eq(&string);
 

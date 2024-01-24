@@ -239,13 +239,13 @@ effect Reader {
                           V0)))))
                 (fun [V3] <0: (V3 {})>)
                 (fun [V4]
-                  (let (V5 (V4 @ [Ty({{}, {}}), Ty({1}), Ty({{}, {}})]))
+                  (let (V5 (V4 @ [Ty({} -> {{}, {}}), Ty({1}), Ty({{}, {}})]))
                     <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V5[0], V5[1], (fun
                           [V3]
-                          (let (V24 (V3 {}))
-                            ((__mon_bind @ [Ty({4}), Ty({{}, {}}), Ty({} -> {{}, {}})])
-                              (fun [V0] <0: V24>)
-                              V5[2])))})>))))))"#]];
+                          ((__mon_bind @ [Ty({4}), Ty({} -> {{}, {}}), Ty({{}, {}})])
+                            (V5[2] V3)
+                            (fun [V23] (let (V24 (V23 {})) (fun [V0] <0: V24>)))))
+                        })>))))))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"

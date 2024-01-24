@@ -207,9 +207,9 @@ effect Reader {
                 let V74 = V73;
                 let V75 = V74[0];
                 let V76 = V74[1];
-                let V81 = make_closure(f_lam_17,[V74]);
-                let V82 = [V75, V76, V81];
-                typecast<[Int,Int,Int,Int]>([1, V82])
+                let V83 = make_closure(f_lam_18,[V74]);
+                let V84 = [V75, V76, V83];
+                typecast<[Int,Int,Int,Int]>([1, V84])
               }
             >
           }"#]],
@@ -305,16 +305,21 @@ effect Reader {
             make_closure(__mon_prompt,[V3, V63, V65])
           }"#]],
       expect![[r#"
-          defn f_lam_16(V78, V1) {
-            typecast<[Int,Int,Int,Int]>([0, V78])
+          defn f_lam_16(V81, V1) {
+            typecast<[Int,Int,Int,Int]>([0, V81])
           }"#]],
       expect![[r#"
-          defn f_lam_17(V74, V70) {
-            let V77 = [];
-            let V78 = apply_closure(V70)(V77);
-            let V79 = make_closure(f_lam_16,[V78]);
-            let V80 = V74[2];
-            make_closure(__mon_bind,[V79, V80])
+          defn f_lam_17(V79) {
+            let V80 = [];
+            let V81 = apply_closure(V79)(V80);
+            make_closure(f_lam_16,[V81])
+          }"#]],
+      expect![[r#"
+          defn f_lam_18(V74, V70) {
+            let V77 = V74[2];
+            let V78 = apply_closure(V77)(V70);
+            let V82 = make_closure(f_lam_17,[]);
+            make_closure(__mon_bind,[V78, V82])
           }"#]],
     ];
 
