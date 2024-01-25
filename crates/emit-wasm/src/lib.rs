@@ -338,49 +338,45 @@ effect Reader {
                       i32.load offset=4
                       local.set 12
                       local.get 8
-                      i32.load
                       local.set 13
-                      local.get 8
-                      i32.load offset=4
+                      local.get 13
+                      i32.load
                       local.set 14
+                      local.get 13
+                      i32.load offset=4
+                      local.set 15
                       i32.const 20
                       call $alloc
-                      local.set 15
-                      local.get 15
+                      local.set 16
+                      local.get 16
                       i32.const 5
                       i32.store
-                      local.get 15
+                      local.get 16
                       i32.const 10
                       i32.store offset=4
-                      local.get 15
+                      local.get 16
                       local.get 0
                       i32.store offset=8
-                      local.get 15
+                      local.get 16
                       local.get 1
                       i32.store offset=12
-                      local.get 15
-                      local.get 8
+                      local.get 16
+                      local.get 13
                       i32.store offset=16
-                      local.get 15
-                      local.set 15
-                      local.get 8
-                      i32.load offset=8
+                      local.get 16
                       local.set 16
-                      i32.const 16
+                      i32.const 12
                       call $alloc
                       local.set 17
                       local.get 17
-                      local.get 13
+                      local.get 14
                       i32.store
                       local.get 17
-                      local.get 14
+                      local.get 15
                       i32.store offset=4
                       local.get 17
-                      local.get 15
-                      i32.store offset=8
-                      local.get 17
                       local.get 16
-                      i32.store offset=12
+                      i32.store offset=8
                       local.get 17
                       local.set 17
                       i32.const 8
@@ -1255,49 +1251,45 @@ g = f({ x = {} })({ y = {} })
                       i32.load offset=4
                       local.set 12
                       local.get 8
-                      i32.load
                       local.set 13
-                      local.get 8
-                      i32.load offset=4
+                      local.get 13
+                      i32.load
                       local.set 14
+                      local.get 13
+                      i32.load offset=4
+                      local.set 15
                       i32.const 20
                       call $alloc
-                      local.set 15
-                      local.get 15
+                      local.set 16
+                      local.get 16
                       i32.const 8
                       i32.store
-                      local.get 15
+                      local.get 16
                       i32.const 26
                       i32.store offset=4
-                      local.get 15
+                      local.get 16
                       local.get 0
                       i32.store offset=8
-                      local.get 15
+                      local.get 16
                       local.get 1
                       i32.store offset=12
-                      local.get 15
-                      local.get 8
+                      local.get 16
+                      local.get 13
                       i32.store offset=16
-                      local.get 15
-                      local.set 15
-                      local.get 8
-                      i32.load offset=8
+                      local.get 16
                       local.set 16
-                      i32.const 16
+                      i32.const 12
                       call $alloc
                       local.set 17
                       local.get 17
-                      local.get 13
+                      local.get 14
                       i32.store
                       local.get 17
-                      local.get 14
+                      local.get 15
                       i32.store offset=4
                       local.get 17
-                      local.get 15
-                      i32.store offset=8
-                      local.get 17
                       local.get 16
-                      i32.store offset=12
+                      i32.store offset=8
                       local.get 17
                       local.set 17
                       i32.const 8
@@ -1693,49 +1685,45 @@ f = (with {
                       i32.load offset=4
                       local.set 21
                       local.get 17
-                      i32.load
                       local.set 22
-                      local.get 17
-                      i32.load offset=4
+                      local.get 22
+                      i32.load
                       local.set 23
+                      local.get 22
+                      i32.load offset=4
+                      local.set 24
                       i32.const 20
                       call $alloc
-                      local.set 24
-                      local.get 24
+                      local.set 25
+                      local.get 25
                       i32.const 9
                       i32.store
-                      local.get 24
+                      local.get 25
                       i32.const 22
                       i32.store offset=4
-                      local.get 24
+                      local.get 25
                       local.get 0
                       i32.store offset=8
-                      local.get 24
+                      local.get 25
                       local.get 3
                       i32.store offset=12
-                      local.get 24
-                      local.get 17
+                      local.get 25
+                      local.get 22
                       i32.store offset=16
-                      local.get 24
-                      local.set 24
-                      local.get 17
-                      i32.load offset=8
+                      local.get 25
                       local.set 25
-                      i32.const 16
+                      i32.const 12
                       call $alloc
                       local.set 26
                       local.get 26
-                      local.get 22
+                      local.get 23
                       i32.store
                       local.get 26
-                      local.get 23
+                      local.get 24
                       i32.store offset=4
                       local.get 26
-                      local.get 24
-                      i32.store offset=8
-                      local.get 26
                       local.get 25
-                      i32.store offset=12
+                      i32.store offset=8
                       local.get 26
                       local.set 26
                       i32.const 8
@@ -2610,49 +2598,45 @@ f = (with {
                       i32.load offset=4
                       local.set 12
                       local.get 8
-                      i32.load
                       local.set 13
-                      local.get 8
-                      i32.load offset=4
+                      local.get 13
+                      i32.load
                       local.set 14
+                      local.get 13
+                      i32.load offset=4
+                      local.set 15
                       i32.const 20
                       call $alloc
-                      local.set 15
-                      local.get 15
+                      local.set 16
+                      local.get 16
                       i32.const 9
                       i32.store
-                      local.get 15
+                      local.get 16
                       i32.const 33
                       i32.store offset=4
-                      local.get 15
+                      local.get 16
                       local.get 0
                       i32.store offset=8
-                      local.get 15
+                      local.get 16
                       local.get 1
                       i32.store offset=12
-                      local.get 15
-                      local.get 8
+                      local.get 16
+                      local.get 13
                       i32.store offset=16
-                      local.get 15
-                      local.set 15
-                      local.get 8
-                      i32.load offset=8
+                      local.get 16
                       local.set 16
-                      i32.const 16
+                      i32.const 12
                       call $alloc
                       local.set 17
                       local.get 17
-                      local.get 13
+                      local.get 14
                       i32.store
                       local.get 17
-                      local.get 14
+                      local.get 15
                       i32.store offset=4
                       local.get 17
-                      local.get 15
-                      i32.store offset=8
-                      local.get 17
                       local.get 16
-                      i32.store offset=12
+                      i32.store offset=8
                       local.get 17
                       local.set 17
                       i32.const 8

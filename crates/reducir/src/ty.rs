@@ -284,19 +284,6 @@ pub enum ReducIrTyApp {
   DataRow(ReducIrRow),
   EffRow(ReducIrRow),
 }
-impl ReducIrTyApp {
-  pub fn subst_into(self, db: &dyn crate::Db, haystack: ReducIrTy) -> ReducIrTy {
-    haystack.subst_single(db, self)
-  }
-
-  pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {
-    match self {
-      ReducIrTyApp::Ty(ty) => ReducIrTyApp::Ty(ty.shift(db, delta)),
-      ReducIrTyApp::DataRow(row) => ReducIrTyApp::DataRow(row.shift(db, delta)),
-      ReducIrTyApp::EffRow(row) => ReducIrTyApp::EffRow(row.shift(db, delta)),
-    }
-  }
-}
 
 pub trait MkReducIrTy {
   fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy;
@@ -350,6 +337,8 @@ pub trait MkReducIrTy {
       self.mk_reducir_ty(ReducIrTyKind::ControlTy(evv_ty, a_ty)),
     )
   }
+
+  fn mk_yield_ty(&self, evv_ty: impl IntoReducIrTy, a_ty: impl IntoReducIrTy) -> ReducIrTy;
 }
 pub trait IntoReducIrTy {
   fn into_reducir_ty<I: ?Sized + MkReducIrTy>(self, ctx: &I) -> ReducIrTy;
@@ -395,5 +384,23 @@ where
         _ => self.mk_reducir_ty(ReducIrTyKind::FunTy(args.collect(), ret)),
       }
     }
+  }
+
+  fn mk_yield_ty(&self, evv_ty: impl IntoReducIrTy, a_ty: impl IntoReducIrTy) -> ReducIrTy {
+    let exists_b = self.mk_reducir_ty(ReducIrTyKind::VarTy(2));
+    let exists_m = self.mk_reducir_ty(ReducIrTyKind::VarTy(1));
+    let exists_r = self.mk_reducir_ty(ReducIrTyKind::VarTy(0));
+    let exists_mon_m_r = self.mk_mon_ty(exists_m, exists_r);
+    let exists_body_fun_ty = self
+      .mk_mon_ty(evv_ty, a_ty)
+      .subst(self.as_reducir_db(), Subst::Inc(3));
+    self.mk_forall_ty(
+      [Kind::Type, Kind::Type, Kind::Type],
+      self.mk_prod_ty(vec![
+        self.mk_reducir_ty(ReducIrTyKind::MarkerTy(exists_r)),
+        self.mk_fun_ty([self.mk_fun_ty([exists_b], exists_mon_m_r)], exists_mon_m_r),
+        self.mk_fun_ty([exists_b], exists_body_fun_ty),
+      ]),
+    )
   }
 }

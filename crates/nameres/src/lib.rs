@@ -214,10 +214,7 @@ pub fn nameres_module(db: &dyn crate::Db, parse_module: ParseFile) -> NameResMod
   NameResModule::new(
     db,
     parse_module.module(db.as_parser_db()),
-    module_names
-      .into_iter()
-      .map(|(key, value)| (key, value))
-      .collect(),
+    module_names.into_iter().collect(),
     terms
       .into_iter()
       .map(|ot| {

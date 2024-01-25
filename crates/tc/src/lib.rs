@@ -406,7 +406,7 @@ pub mod test_utils {
       members: &[Ident],
     ) -> Option<EffectName> {
       members
-        .get(0)
+        .first()
         .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
           "ask" => Some(EffectName::new(
             self.0.as_core_db(),
@@ -583,8 +583,8 @@ mod tests {
         => {
             assert_matches!((db.kind(arg), db.kind(ret)),
                 (VarTy(a), RowTy(closed)) => {
-                    assert_eq!(closed.fields(db).get(0).map(|start| start.text(db).as_str()), Some("start"));
-                    assert_eq!(closed.values(db).get(0).map(|val| db.kind(val)), Some(&VarTy(*a)));
+                    assert_eq!(closed.fields(db).first().map(|start| start.text(db).as_str()), Some("start"));
+                    assert_eq!(closed.values(db).first().map(|val| db.kind(val)), Some(&VarTy(*a)));
             });
         }
     );

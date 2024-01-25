@@ -394,6 +394,14 @@ impl<'a, 'b, S> MkReducIrTy for LowerCtx<'a, 'b, S> {
   ) -> ReducIrTy {
     self.db.mk_fun_ty(args, ret)
   }
+
+  fn mk_yield_ty(
+    &self,
+    evv_ty: impl reducir::ty::IntoReducIrTy,
+    a_ty: impl reducir::ty::IntoReducIrTy,
+  ) -> ReducIrTy {
+    self.db.mk_yield_ty(evv_ty, a_ty)
+  }
 }
 
 impl<'a, S> LowerCtx<'a, '_, S> {

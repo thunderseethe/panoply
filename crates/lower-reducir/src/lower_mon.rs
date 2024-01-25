@@ -35,6 +35,14 @@ impl MkReducIrTy for LowerMonCtx<'_> {
   ) -> ReducIrTy {
     self.db.mk_fun_ty(args, ret)
   }
+
+  fn mk_yield_ty(
+    &self,
+    evv_ty: impl reducir::ty::IntoReducIrTy,
+    a_ty: impl reducir::ty::IntoReducIrTy,
+  ) -> ReducIrTy {
+    self.db.mk_yield_ty(evv_ty, a_ty)
+  }
 }
 
 impl<'a> LowerMonCtx<'a> {
@@ -68,7 +76,7 @@ impl LowerMonCtx<'_> {
       .expect("Monadic lowered IR to type check")
       .try_unwrap_monadic(reducir_db)
     {
-      Ok(UnwrapMonTy { a_ty, .. }) => {
+      Ok(UnwrapMonTy { a_ty, evv_ty }) => {
         // If our value is a monad then apply our evv to it
         // We do this so the return value of our item is
         // `Ctl m a` and not `evv -> Ctl m a`
@@ -98,7 +106,7 @@ impl LowerMonCtx<'_> {
                   top_level: name,
                   id: supply.supply_id(),
                 },
-                a_ty,
+                self.mk_yield_ty(evv_ty, a_ty),
               );
               ReducIr::abss([x], ReducIr::new(Int(5467)))
             },

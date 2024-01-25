@@ -901,7 +901,7 @@ effect Reader {
       &db,
       r#"
             wand = |m| |n| (m ,, n).x
-            main = w = wand({ x = {} })({ y = {} }); {}
+            main = w = wand({ x = 5 })({ y = {} }); w
             "#,
     );
 
@@ -914,16 +914,16 @@ effect Reader {
       // main
       expect![[r#"
           (case ((let
-              [ (V1 ((_row_simple_x_y @ [Ty({}), Ty({})]) {}))
-              , (V2 ((_row_simple_y_x @ [Ty({}), Ty({})]) {}))
+              [ (V1 ((_row_simple_x_y @ [Ty({}), Ty(Int)]) {}))
+              , (V2 ((_row_simple_y_x @ [Ty(Int), Ty({})]) {}))
               ]
-              ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
-                ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
+              ((__mon_bind @ [Ty({}), Ty(Int), Ty(Int)])
+                ((wand @ [Ty(Int), Eff([]), Data([Int]), Data([{}]), Data([Int,{}]), Data([{}])])
                   V1
                   V2
-                  {}
+                  5
                   {})
-                (fun [V5, V0] <0: {}>))) {})
+                (fun [V5, V0] <0: V3>))) {})
             (fun [V0] V0)
             (fun [V0] 5467))"#]],
     ];
@@ -946,27 +946,7 @@ effect Reader {
                                  , {{1} -> T5, T5 -> <1>}
                                  } -> {3} -> {2} -> {4} -> (Control {4} T5)"#]],
       // main
-      expect![[r#"
-          Type Mismatch:
-          ((fun [V0] 5467)):
-          ({})
-          (((let
-            [ (V1 ((_row_simple_x_y @ [Ty({}), Ty({})]) {}))
-            , (V2 ((_row_simple_y_x @ [Ty({}), Ty({})]) {}))
-            ]
-            ((__mon_bind @ [Ty({}), Ty({}), Ty({})])
-              ((wand @ [Ty({}), Eff([]), Data([{}]), Data([{}]), Data([{},{}]), Data([{}])])
-                V1
-                V2
-                {}
-                {})
-              (fun [V5, V0] <0: {}>))) {})): forall Type .
-            forall Type .
-              forall Type .
-                { (Marker T0)
-                , (T2 -> T1 -> (Control T1 T0)) -> T1 -> (Control T1 T0)
-                , T2 -> {} -> (Control {} {})
-                }"#]],
+      expect!["Int"],
     ];
     for ((item, expect), expect_ty) in module
       .items(&db)
