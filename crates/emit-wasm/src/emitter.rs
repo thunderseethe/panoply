@@ -1,4 +1,3 @@
-use base::pretty::{PrettyPrint, PrettyWithCtx};
 use base::{id::MedIrVarId, modules::Module};
 use medir::{
   Atom, ClosureArities, Locals, MedIr, MedIrItem, MedIrItemName, MedIrKind, MedIrModule,

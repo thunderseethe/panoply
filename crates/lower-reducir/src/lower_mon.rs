@@ -559,6 +559,9 @@ impl LowerMonCtx<'_> {
         // So they can reuse their type unmodified.
         ReducIrTermName::Gen(_) => ReducIr::new(ReducIrKind::Item(*occ)),
       },
+      Coerce(_, _) => {
+        unreachable!("Coerce should only be used for primitives")
+      }
       X(DelimCont::NewPrompt(mark_var, ir)) => {
         let x = self.lower_monadic(evv_ty, ir);
         let a_ty = match mark_var.ty.kind(reducir_db) {

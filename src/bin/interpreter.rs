@@ -4,7 +4,7 @@ use nameres::Db;
 use panoply::{canonicalize_path_set, create_source_file_set, Args, PanoplyDatabase};
 use parser::Db as NameResDb;
 use wasmparser::WasmFeatures;
-use wasmtime::{Config, Engine, FuncType, Linker, Memory, MemoryType, Module, Store, Val, ValType};
+use wasmtime::{Config, Engine, Linker, Module, Store};
 
 fn main() -> eyre::Result<()> {
   let args = Args::parse();
@@ -30,7 +30,7 @@ fn main() -> eyre::Result<()> {
   let mut printer = wasmprinter::Printer::default();
   printer.print_offsets(true);
   let wat = printer.print(&bytes).unwrap();
-  //println!("{}", wat);
+  println!("{}", wat);
 
   match tys {
     Ok(_) => {}
@@ -63,69 +63,9 @@ fn main() -> eyre::Result<()> {
     .coredump_on_trap(true);
   let engine = Engine::new(&config).unwrap();
 
-  #[derive(Default)]
-  struct Data {
-    bump_alloc: usize,
-    marker: i32,
-  }
-
-  let mut store = Store::new(&engine, Data::default());
+  let mut store = Store::new(&engine, ());
 
   let linker = Linker::new(&engine);
-
-  /*let main_mem = Memory::new(&mut store, MemoryType::new(1, None)).unwrap();
-  linker.define(&mut store, "main", "mem", main_mem).unwrap();*/
-
-  /*linker
-    .func_new(
-      "intrinsic",
-      "__mon_generate_marker",
-      FuncType::new([], [ValType::I32]),
-      |mut call, _args, ret| {
-        let data: &mut Data = call.data_mut();
-        let marker = data.marker;
-        data.marker += 1;
-        ret[0] = Val::I32(marker);
-        Ok(())
-      },
-    )
-    .unwrap();
-
-  linker
-    .func_new(
-      "intrinsic",
-      "alloc",
-      FuncType::new([ValType::I32], [ValType::I32]),
-      |mut call, args, ret| {
-        let len: i32 = match args[0] {
-          Val::I32(i) => i,
-          _ => {
-            return Err(wasmtime::Error::msg(
-              "Expected an i32 as parameter to alloc",
-            ))
-          }
-        };
-        let data: &mut Data = call.data_mut();
-        let addr = data.bump_alloc;
-        data.bump_alloc += len as usize;
-        ret[0] = Val::I32(addr.try_into()?);
-        Ok(())
-      },
-    )
-    .unwrap();
-
-  linker
-    .func_new(
-      "intrinsic",
-      "trace",
-      FuncType::new([ValType::I32], [ValType::I32]),
-      |_call, args, ret| {
-        println!("trace: {:?}", args[0]);
-        ret[0] = args[0].clone();
-        Ok(())
-      },
-    )
-    .unwrap();*/
 
   let module = Module::new(&engine, wat).unwrap();
 

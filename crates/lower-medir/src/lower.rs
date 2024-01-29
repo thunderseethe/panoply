@@ -270,6 +270,13 @@ impl<'a> LowerCtx<'a> {
           .collect();
         MedIr::new(MedIrKind::Switch(Atom::Var(discr_var), cases))
       }
+      ReducIrKind::Coerce(ty, body) => {
+        let medir = self.lower_binds(body, binds);
+        MedIr::new(MedIrKind::Typecast(
+          from_reducir_ty(self.db, *ty),
+          Box::new(medir),
+        ))
+      }
       ReducIrKind::X(_) => unreachable!(),
     }
   }

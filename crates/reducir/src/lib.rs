@@ -2,7 +2,7 @@ use base::{
   id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
   ident::Ident,
   modules::Module,
-  pretty::{PrettyPrint, PrettyWithCtx},
+  pretty::PrettyWithCtx,
 };
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
@@ -104,6 +104,7 @@ mod subst {
         ReducIrKind::Case(ty, discr, branches) => {
           ReducIr::new(ReducIrKind::Case(self.subst(ty), discr, branches))
         }
+        ReducIrKind::Coerce(ty, body) => ReducIr::new(ReducIrKind::Coerce(self.subst(ty), body)),
         kind => ReducIr::new(kind),
       }
     }
@@ -381,6 +382,8 @@ pub enum ReducIrKind<Ext = Infallible> {
   // Trivial coproducts
   Tag(ReducIrTy, usize, P<ReducIr<Ext>>), // Intro
   Case(ReducIrTy, P<ReducIr<Ext>>, Box<[ReducIr<Ext>]>), // Elim
+  // TODO: It'd be nice to not need this.
+  Coerce(ReducIrTy, P<ReducIr<Ext>>),
   // Extensions
   X(Ext),
 }
@@ -717,6 +720,10 @@ pub fn default_endotraverse_ir<F: ReducIrEndoFold>(
       let branches = branches.iter().map(|branch| branch.fold(fold)).collect();
       fold.fold_ir(Case(*ty, P::new(discr), branches))
     }
+    Coerce(ty, ir) => {
+      let ir = ir.fold(fold);
+      fold.fold_ir(Coerce(*ty, P::new(ir)))
+    }
     Int(i) => fold.fold_ir(Int(*i)),
     Var(v) => fold.fold_ir(Var(*v)),
     Item(occ) => fold.fold_ir(Item(*occ)),
@@ -809,6 +816,10 @@ pub trait ReducIrFold: Sized {
         let discr = discr.fold(self);
         let branches = branches.iter().map(|branch| branch.fold(self)).collect();
         self.fold_ir(Case(*ty, P::new(discr), branches))
+      }
+      Coerce(ty, ir) => {
+        let ir = ir.fold(self);
+        self.fold_ir(Coerce(*ty, P::new(ir)))
       }
       Int(i) => self.fold_ir(Int(*i)),
       Var(v) => self.fold_ir(Var(*v)),
@@ -918,6 +929,9 @@ impl ReducIr {
           defn.free_var_aux(in_scope, bound);
           in_scope.insert(var.var);
         }
+        body.free_var_aux(in_scope, bound);
+      }
+      Coerce(_, body) => {
         body.free_var_aux(in_scope, bound);
       }
       X(_) => unreachable!(),
@@ -1147,6 +1161,10 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
           }
         }
         Ok(*case_ty)
+      }
+      Coerce(ty, body) => {
+        let _ = body.type_check(ctx)?;
+        Ok(*ty)
       }
       X(xt) => xt.type_check(ctx),
       Tag(ty, _, _) => Ok(*ty),

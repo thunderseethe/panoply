@@ -10,7 +10,7 @@ use reducir::ty::{
 };
 use reducir::{
   Bind, ReducIr, ReducIrFold, ReducIrItemOccurence, ReducIrKind, ReducIrLocal, ReducIrTermName,
-  ReducIrVar, TypeCheck,
+  ReducIrVar, TypeCheck, P,
 };
 use rustc_hash::FxHashMap;
 
@@ -30,7 +30,8 @@ fn is_value(ir: &ReducIr) -> bool {
     ReducIrKind::App(_, _)
     | ReducIrKind::Case(_, _, _)
     | ReducIrKind::TyApp(_, _)
-    | ReducIrKind::Locals(_, _) => false,
+    | ReducIrKind::Locals(_, _)
+    | ReducIrKind::Coerce(_, _) => false,
     ReducIrKind::Struct(elems) => elems.iter().all(is_value),
     ReducIrKind::FieldProj(_, base) => is_value(base),
     ReducIrKind::Tag(_, _, base) => is_value(base),
@@ -307,14 +308,6 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   let body_fun_ty = db.mk_mon_ty(upd_m, a);
   let ret_ty = db.mk_reducir_ty(ControlTy(m_ty, a));
 
-  let prompt_type = db.mk_forall_ty(
-    [Kind::Type, Kind::Type, Kind::Type],
-    db.mk_fun_ty(
-      [mark_ty, upd_fun_ty, body_fun_ty],
-      db.mk_fun_ty([m_ty], ret_ty),
-    ),
-  );
-
   let mut var_gen = IdSupply::default();
   let mut gen_local = || ReducIrLocal {
     top_level: name,
@@ -324,24 +317,6 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   let upd = ReducIrVar::new(gen_local(), upd_fun_ty);
   let body = ReducIrVar::new(gen_local(), body_fun_ty);
   let evv = ReducIrVar::new(gen_local(), m_ty);
-
-  let reinstall_prompt = |shift| {
-    let prompt_item = ReducIr::new(ReducIrKind::<Infallible>::Item(
-      ReducIrItemOccurence::with_inline(name, prompt_type, false),
-    ));
-    ReducIr::app(
-      ReducIr::ty_app(
-        prompt_item,
-        [
-          ReducIrTyApp::Ty(m_ty),
-          ReducIrTyApp::Ty(upd_m),
-          ReducIrTyApp::Ty(a),
-        ],
-      ),
-      [ReducIr::var(mark), ReducIr::var(upd)],
-    )
-    .subst(db, Subst::Inc(shift))
-  };
 
   let unit_ty = db.mk_prod_ty(vec![]);
   let x = ReducIrVar::new(gen_local(), a);
@@ -430,45 +405,35 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
                           ReducIr::new(ReducIrKind::Struct(vec![
                             ReducIr::field_proj(0, ReducIr::var(reinst_y)),
                             ReducIr::field_proj(1, ReducIr::var(reinst_y)),
-                            {
-                              let x = ReducIrVar::new(gen_local(), beta_ty);
-                              ReducIr::abss(
-                                [x],
-                                ReducIr::app(
-                                  reinstall_prompt(3),
-                                  [ReducIr::app(
-                                    ReducIr::field_proj(2, ReducIr::var(reinst_y)),
-                                    [ReducIr::var(x)],
-                                  )],
-                                ),
-                              )
-                            },
+                            ReducIr::field_proj(2, ReducIr::var(reinst_y)),
                           ])),
                         )
                       }),
                     ),
                   ),
                   // True branch
-                  ReducIr::abss(
-                    [unused],
-                    ReducIr::app(
-                      ReducIr::field_proj(1, y.clone()),
-                      [
-                        {
-                          // Not sure how to give this a type yet
-                          let x = ReducIrVar::new(gen_local(), a);
-                          ReducIr::abss(
-                            [x],
-                            ReducIr::app(
-                              reinstall_prompt(0),
-                              [ReducIr::app(ReducIr::field_proj(2, y), [ReducIr::var(x)])],
-                            ),
-                          )
-                        },
-                        ReducIr::var(evv),
-                      ],
-                    ),
-                  ),
+                  ReducIr::abss([unused], {
+                    let ty = db.mk_yield_ty(VarTy(2), VarTy(0));
+                    let lie = ReducIrVar::new(gen_local(), ty);
+                    let ty_apply = |var| {
+                      ReducIr::ty_app(
+                        ReducIr::var(var),
+                        [
+                          ReducIrTyApp::Ty(a), // TODO figure out what beta should be here
+                          ReducIrTyApp::Ty(m_ty),
+                          ReducIrTyApp::Ty(a),
+                        ],
+                      )
+                    };
+                    ReducIr::local(
+                      lie,
+                      ReducIr::new(ReducIrKind::Coerce(ty, P::new(ReducIr::var(y_var)))),
+                      ReducIr::app(
+                        ReducIr::field_proj(1, ty_apply(lie)),
+                        [ReducIr::field_proj(2, ty_apply(lie)), ReducIr::var(evv)],
+                      ),
+                    )
+                  }),
                 ],
               ),
             )

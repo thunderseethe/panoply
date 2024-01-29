@@ -157,7 +157,6 @@ effect Reader {
   }
 
   #[test]
-  #[ignore = "Fixing monadic lowering of ops"]
   fn simplify_state_get() {
     let db = TestDatabase::default();
 
@@ -186,36 +185,29 @@ effect Reader {
               (case (case (__mon_eqm V19 V17[0])
                   (fun [V5]
                     <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V17[0], (fun [V18]
-                          (V17[1][1] {} V18)), (fun [V8]
-                          ((__mon_prompt @ [Ty({4}), Ty({3}), Ty(Int -> {Int, Int})])
-                            V19
-                            (fun [V0]
-                              (V1[0]
-                                V0
-                                {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                  [V8
-                                  ,V9
-                                  ,V10] (V9 V10 V10))}}))
-                            ((__mon_bind @ [Ty({3}), Ty(Int), Ty(Int -> {Int, Int})])
-                              (fun [V0] <0: V8>)
-                              (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>)))))})>)
+                          (V17[1][1] {} V18)), (fun [V6]
+                          ((__mon_bind @ [Ty({3}), Ty(Int), Ty(Int -> {Int, Int})])
+                            (fun [V0] <0: V6>)
+                            (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>))))})>)
                   (fun [V5]
-                    (V17[1][1]
-                      {}
-                      (fun [V9]
-                        ((__mon_prompt @ [Ty({1}), Ty({0}), Ty(Int -> {Int, Int})])
-                          V19
-                          (fun [V0]
-                            (V1[0]
-                              V0
-                              {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun
-                                [V8
-                                ,V9
-                                ,V10] (V9 V10 V10))}}))
-                          ((__mon_bind @ [Ty({0}), Ty(Int), Ty(Int -> {Int, Int})])
-                            (fun [V0] <0: V9>)
-                            (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>)))))
-                      V0)))
+                    (let
+                      (V8 (coerce ((forall [(T3: Type) (T4: Type) (T5: Type)] {
+                        V17[0], (fun [V18] (V17[1][1] {} V18)), (fun [V6]
+                          ((__mon_bind @ [Ty({3}), Ty(Int), Ty(Int -> {Int, Int})])
+                            (fun [V0] <0: V6>)
+                            (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>))))}))
+                      as (forall Type .
+                        forall Type .
+                          forall Type .
+                            { (Marker T0)
+                            , (T2 -> T1 -> (Control T1 T0)) -> T1 -> (Control T1 T0)
+                            , T2 -> {4} -> (Control {4} Int -> {Int, Int})
+                            })))
+                      ((V8 @ [Ty(Int -> {Int, Int}), Ty({1}), Ty(Int -> {Int, Int})])[1]
+                        (V8 @ [Ty(Int -> {Int, Int}), Ty({1}), Ty(Int -> { Int
+                                                                         , Int
+                                                                         })])[2]
+                        V0))))
                 (fun [V3] <0: (V3 825)>)
                 (fun [V4]
                   <1: (forall [(T3: Type) (T4: Type) (T5: Type)] (let
@@ -278,31 +270,33 @@ main = (with {
 
     let pretty_ir = simple_ir.pretty_with(&db).pprint().pretty(80).to_string();
     let expect = expect![[r#"
-        (let (V19 ((__mon_generate_marker @ [Ty(Int -> {Int, Int})]) {}))
-          (case (case (case ((__mon_prompt @ [Ty({}), Ty({ (Marker Int -> {Int, Int})
-                                                         , { Int -> ({} -> Int -> { Int
-                                                                                  , Int
-                                                                                  }) ->
-                                                           Int -> {Int, Int}
-                                                           , {} -> (Int -> Int -> { Int
-                                                                                  , Int
-                                                                                  }) ->
-                                                           Int -> {Int, Int}
-                                                           }
-                                                         }), Ty(Int -> {Int, Int})])
-                  V19
-                  (fun [V0]
-                    {V19, {(fun [V11, V12, V13] (V12 {} V11)), (fun [V8, V9, V10]
-                      (V9 V10 V10))}})
-                  ((__mon_bind @ [Ty({ (Marker Int -> {Int, Int})
-                                     , { Int -> ({} -> Int -> {Int, Int}) -> Int ->
-                                       {Int, Int}
-                                       , {} -> (Int -> Int -> {Int, Int}) -> Int ->
-                                       {Int, Int}
-                                       }
-                                     }), Ty(Int), Ty(Int -> {Int, Int})])
-                    (fun [V0] <0: {}>)
-                    (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>)))
+        (let
+          [ (V19 ((__mon_generate_marker @ [Ty(Int -> {Int, Int})]) {}))
+          , (V8 (coerce ((forall [(T3: Type) (T4: Type) (T5: Type)] {V19, (fun [V18]
+              (fun [V10] (V18 V10 V10))), (fun [V6]
+              ((__mon_bind @ [Ty({ (Marker Int -> {Int, Int})
+                                 , { Int -> ({} -> Int -> {Int, Int}) -> Int -> { Int
+                                                                                , Int
+                                                                                }
+                                   , {} -> (Int -> Int -> {Int, Int}) -> Int -> { Int
+                                                                                , Int
+                                                                                }
+                                   }
+                                 }), Ty(Int), Ty(Int -> {Int, Int})])
+                (fun [V0] <0: V6>)
+                (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>))))}))
+          as (forall Type .
+            forall Type .
+              forall Type .
+                { (Marker T0)
+                , (T2 -> T1 -> (Control T1 T0)) -> T1 -> (Control T1 T0)
+                , T2 -> {} -> (Control {} Int -> {Int, Int})
+                })))
+          ]
+          (case (case (case ((V8 @ [Ty(Int -> {Int, Int}), Ty({}), Ty(Int -> { Int
+                                                                             , Int
+                                                                             })])[1]
+                  (V8 @ [Ty(Int -> {Int, Int}), Ty({}), Ty(Int -> {Int, Int})])[2]
                   {})
                 (fun [V3] <0: (V3 825)>)
                 (fun [V4]

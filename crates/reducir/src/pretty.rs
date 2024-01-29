@@ -290,6 +290,17 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
             .brackets(),
         )
         .parens(),
+      Coerce(ty, body) => docs![
+        arena,
+        "coerce",
+        arena.softline(),
+        body.pretty(db, arena).parens(),
+        arena.softline(),
+        "as",
+        arena.space(),
+        ty.pretty(db, arena).parens()
+      ]
+      .parens(),
       X(xt) => xt.pretty(db, arena),
       Item(occ) => arena.text(occ.name.name(db).text(db.as_core_db()).clone()),
     }

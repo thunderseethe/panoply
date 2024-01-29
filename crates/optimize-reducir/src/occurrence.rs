@@ -193,7 +193,8 @@ pub(crate) fn occurence_analysis(ir: &impl AsKindRef) -> Occurrences {
     ReducIrKind::TyAbs(_, body)
     | ReducIrKind::TyApp(body, _)
     | ReducIrKind::FieldProj(_, body)
-    | ReducIrKind::Tag(_, _, body) => occurence_analysis(body),
+    | ReducIrKind::Tag(_, _, body)
+    | ReducIrKind::Coerce(_, body) => occurence_analysis(body),
     ReducIrKind::X(_) => unreachable!(),
   }
 }
