@@ -56,6 +56,7 @@ fn main() -> eyre::Result<()> {
 
   let mut config = Config::new();
   config
+    .debug_info(true)
     .wasm_bulk_memory(true)
     .wasm_multi_value(true)
     .wasm_multi_memory(true)
@@ -70,12 +71,12 @@ fn main() -> eyre::Result<()> {
 
   let mut store = Store::new(&engine, Data::default());
 
-  let mut linker = Linker::new(&engine);
+  let linker = Linker::new(&engine);
 
-  let main_mem = Memory::new(&mut store, MemoryType::new(1, None)).unwrap();
-  linker.define(&mut store, "main", "mem", main_mem).unwrap();
+  /*let main_mem = Memory::new(&mut store, MemoryType::new(1, None)).unwrap();
+  linker.define(&mut store, "main", "mem", main_mem).unwrap();*/
 
-  linker
+  /*linker
     .func_new(
       "intrinsic",
       "__mon_generate_marker",
@@ -124,9 +125,10 @@ fn main() -> eyre::Result<()> {
         Ok(())
       },
     )
-    .unwrap();
+    .unwrap();*/
 
   let module = Module::new(&engine, wat).unwrap();
+
   let instance = linker.instantiate(&mut store, &module).unwrap();
 
   let main = instance
@@ -143,11 +145,11 @@ fn main() -> eyre::Result<()> {
     }
   };
 
-  let mem = instance.get_memory(&mut store, "mem").unwrap();
+  /*let mem = instance.get_memory(&mut store, "mem").unwrap();
   let mem_ref = mem.data(&store);
 
   println!("{:?}", &mem_ref[84..92]);
-  println!("{:?}", &mem_ref[136..152]);
+  println!("{:?}", &mem_ref[136..152]);*/
 
   Ok(())
 }

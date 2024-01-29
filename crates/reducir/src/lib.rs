@@ -78,7 +78,7 @@ mod subst {
           ReducIr::new(ReducIrKind::TyApp(body, ty_apps))
         }
         ReducIrKind::Var(var) => ReducIr::var(ReducIrVar::new(var.var, self.subst(var.ty))),
-        ReducIrKind::Item(occ) => ReducIr::new(ReducIrKind::item(occ.name, self.subst(occ.ty))),
+        ReducIrKind::Item(occ) => ReducIr::new(ReducIrKind::Item(occ.map_ty(|ty| self.subst(ty)))),
         ReducIrKind::Abs(vars, body) => ReducIr::new(ReducIrKind::Abs(
           vars
             .iter()
@@ -1035,7 +1035,6 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         for Bind { var, defn } in binds.iter() {
           let defn_ty = defn.type_check(ctx)?;
           if var.ty != defn_ty {
-            println!("{}", self.pretty_with(ctx).pprint().pretty(80));
             return Err(ReducIrTyErr::TyMismatch {
               left_ty: var.ty,
               left_ir: Cow::Owned(ReducIr::var(*var)),

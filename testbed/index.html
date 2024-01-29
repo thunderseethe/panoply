@@ -1,0 +1,9 @@
+<html>
+  <body>
+    <script>
+      WebAssembly.instantiateStreaming(fetch("wand.wasm"), {}).then(
+        (obj) => obj.instance.exports.main(),
+      )
+    </script>
+  </body>
+</html>

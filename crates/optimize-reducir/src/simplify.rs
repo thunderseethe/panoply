@@ -156,6 +156,17 @@ impl ReducIrFold for Simplify<'_> {
             binds.iter().cloned(),
             self.traverse_ir(&ReducIr::new(App(body.clone(), spine))),
           ),
+          Item(occ)
+            if occ.name.name(self.db) == self.db.ident_str("__mon_eqm")
+              && spine.as_slice().chunks(2).all(|c| c[0] == c[1]) =>
+          {
+            let unit = self.db.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]));
+            ReducIr::tag(
+              self.db.mk_coprod_ty(vec![unit, unit]),
+              1,
+              ReducIr::new(Struct(vec![])),
+            )
+          }
           _ => ReducIr::new(App(head, spine)),
         };
         ReducIr::locals(app_binds, app)
@@ -177,7 +188,7 @@ impl ReducIrFold for Simplify<'_> {
         _ => ReducIr::new(Case(ty, discr, branches)),
       },
       // Always inline row evidence
-      Item(occ) => match self.builtin_evs.remove(&occ.name) {
+      Item(occ) if occ.inline => match self.builtin_evs.get(&occ.name) {
         Some(builtin) => self.traverse_ir(builtin),
         None => ReducIr::new(ir),
       },

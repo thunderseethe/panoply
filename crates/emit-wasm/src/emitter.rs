@@ -1,3 +1,4 @@
+use base::pretty::{PrettyPrint, PrettyWithCtx};
 use base::{id::MedIrVarId, modules::Module};
 use medir::{
   Atom, ClosureArities, Locals, MedIr, MedIrItem, MedIrItemName, MedIrKind, MedIrModule,
@@ -87,8 +88,8 @@ pub(crate) fn emit_wasm_module(
 
   let module = medir_module.module(medir_db);
   let alloc_indx = 1;
-  let import_items = [
-    Import {
+  let import_items: [Import<'_>; 0] = [
+    /*Import {
       name: MedIrItemName::new(ReducIrTermName::gen(db, "__mon_generate_marker", module)),
       module: "intrinsic",
       func: "__mon_generate_marker",
@@ -108,7 +109,7 @@ pub(crate) fn emit_wasm_module(
       func: "trace",
       params: vec![ValType::I32],
       returns: vec![ValType::I32],
-    },
+    },*/
     /*Import {
         name: MedIrItemName::new(ReducIrTermName::gen(db, "__mon_prompt", module)),
         module: "mon",
@@ -151,6 +152,66 @@ pub(crate) fn emit_wasm_module(
 
   let mut type_sect = TypeSect::new(types);
   let mut codes = CodeSection::new();
+
+  // Builtin __mon_generate_marker function
+  {
+    let indx = funcs.len();
+    let ty_indx = type_sect.insert_fun_ty(fun_n_i32s(0));
+    funcs.function(ty_indx);
+    let name_str = "__mon_generate_marker";
+    let name = MedIrItemName::new(ReducIrTermName::gen(
+      db,
+      name_str,
+      medir_module.module(db.as_medir_db()),
+    ));
+    name_map.append(indx + num_imports, name_str);
+    item_indices.insert(name, indx + num_imports);
+
+    let ins = [
+      Instruction::GlobalGet(0),
+      Instruction::GlobalGet(0),
+      Instruction::I32Const(1),
+      Instruction::I32Add,
+      Instruction::GlobalSet(0),
+      Instruction::Return,
+      Instruction::End,
+    ];
+    let mut f = Function::new([(1, ValType::I32)]);
+    ins.iter().for_each(|ins| {
+      f.instruction(ins);
+    });
+    codes.function(&f);
+  }
+
+  // Builtin alloc function
+  {
+    let indx = funcs.len();
+    let ty_indx = type_sect.insert_fun_ty(fun_n_i32s(1));
+    funcs.function(ty_indx);
+    let name_str = "alloc";
+    let name = MedIrItemName::new(ReducIrTermName::gen(
+      db,
+      name_str,
+      medir_module.module(db.as_medir_db()),
+    ));
+    name_map.append(indx + num_imports, name_str);
+    item_indices.insert(name, indx + num_imports);
+
+    let ins = [
+      Instruction::GlobalGet(0),
+      Instruction::GlobalGet(0),
+      Instruction::LocalGet(0),
+      Instruction::I32Add,
+      Instruction::GlobalSet(0),
+      Instruction::Return,
+      Instruction::End,
+    ];
+    let mut f = Function::new([(1, ValType::I32)]);
+    ins.iter().for_each(|ins| {
+      f.instruction(ins);
+    });
+    codes.function(&f);
+  }
 
   // Builtin mon_eqm function
   {
@@ -250,6 +311,13 @@ pub(crate) fn emit_wasm_module(
   names.types(&type_sect.names);
 
   let mut globals = GlobalSection::new();
+  globals.global(
+    GlobalType {
+      val_type: ValType::I32,
+      mutable: true,
+    },
+    &ConstExpr::i32_const(0),
+  );
   globals.global(
     GlobalType {
       val_type: ValType::I32,
