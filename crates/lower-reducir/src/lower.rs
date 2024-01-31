@@ -26,6 +26,7 @@ use crate::{
   evidence::{EvidenceMap, PartialEv},
   lower_row_ev, ReducIrEffectInfo, ReducIrRowEv,
 };
+
 /// Unwrap a type into it a product and return the product's row.
 ///
 /// Because we are lowering from a type checked AST we would've failed with a type error already if

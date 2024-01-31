@@ -1,4 +1,9 @@
-use base::{id::TermName, ident::Ident, modules::Module, pretty::PrettyErrorWithDb};
+use base::{
+  id::{IdSupply, TermName},
+  ident::Ident,
+  modules::Module,
+  pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
+};
 use reducir::{
   mon::{MonReducIrItem, MonReducIrModule},
   optimized::{OptimizedReducIrItem, OptimizedReducIrModule},
@@ -49,9 +54,15 @@ fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedRed
   let ir_db = db.as_reducir_db();
   let name = item.name(ir_db);
   let row_evs = item.row_evs(ir_db);
-  let ir = simplify::simplify(db, name, row_evs, item.item(ir_db));
+  let var_supply = item.var_supply(ir_db);
+
+  let mut var_supply = IdSupply::start_from(var_supply);
+
+  println!("{}", item.item(ir_db).pretty_with(db).pprint().pretty(80));
+  let ir = simplify::simplify(db, name, row_evs, item.item(ir_db), &mut var_supply);
 
   let term_name = item.name(db.as_reducir_db());
+  println!("{}", ir.pretty_with(db).pprint().pretty(80));
   OptimizedReducIrItem::new(db.as_reducir_db(), ReducIrTermName::Term(term_name), ir)
 }
 
@@ -185,18 +196,19 @@ effect Reader {
               (case (case (__mon_eqm V19 V17[0])
                   (fun [V5]
                     <1: (forall [(T3: Type) (T4: Type) (T5: Type)] {V17[0], (fun [V18]
-                          (V17[1][1] {} V18)), (fun [V6]
+                          (V17[1][1] {} V18)), (fun [V6, V25]
                           ((__mon_bind @ [Ty({3}), Ty(Int), Ty(Int -> {Int, Int})])
                             (fun [V0] <0: V6>)
-                            (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>))))})>)
+                            (fun [V21, V0] <0: (fun [V15] {V15, V21})>)
+                            V25))})>)
                   (fun [V5]
                     (let
                       (V8 (coerce ((forall [(T3: Type) (T4: Type) (T5: Type)] {
-                        V17[0], (fun [V18] (V17[1][1] {} V18)), (fun [V6]
+                        V17[0], (fun [V18] (V17[1][1] {} V18)), (fun [V6, V26]
                           ((__mon_bind @ [Ty({3}), Ty(Int), Ty(Int -> {Int, Int})])
                             (fun [V0] <0: V6>)
-                            (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>))))}))
-                      as (forall Type .
+                            (fun [V21, V0] <0: (fun [V15] {V15, V21})>)
+                            V26))})) as (forall Type .
                         forall Type .
                           forall Type .
                             { (Marker T0)
@@ -212,13 +224,13 @@ effect Reader {
                 (fun [V4]
                   <1: (forall [(T3: Type) (T4: Type) (T5: Type)] (let
                         (V5 (V4 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                        {V5[0], V5[1], (fun [V6]
+                        {V5[0], V5[1], (fun [V6, V27]
                           ((__mon_bind @ [Ty({4}), Ty(Int -> {Int, Int}), Ty({ Int
                                                                              , Int
                                                                              })])
                             (V5[2] V6)
-                            (fun [V23] (let (V24 (V23 825)) (fun [V0] <0: V24>)))))
-                        }))>)))))"#]];
+                            (fun [V23] (let (V24 (V23 825)) (fun [V0] <0: V24>)))
+                            V27))}))>)))))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"
@@ -272,8 +284,9 @@ main = (with {
     let expect = expect![[r#"
         (let
           [ (V19 ((__mon_generate_marker @ [Ty(Int -> {Int, Int})]) {}))
-          , (V8 (coerce ((forall [(T3: Type) (T4: Type) (T5: Type)] {V19, (fun [V18]
-              (fun [V10] (V18 V10 V10))), (fun [V6]
+          , (V8 (coerce ((forall [(T3: Type) (T4: Type) (T5: Type)] {V19, (fun
+              [V18
+              ,V10] (V18 V10 V10)), (fun [V6, V29]
               ((__mon_bind @ [Ty({ (Marker Int -> {Int, Int})
                                  , { Int -> ({} -> Int -> {Int, Int}) -> Int -> { Int
                                                                                 , Int
@@ -284,8 +297,8 @@ main = (with {
                                    }
                                  }), Ty(Int), Ty(Int -> {Int, Int})])
                 (fun [V0] <0: V6>)
-                (fun [V21] (fun [V0] <0: (fun [V15] {V15, V21})>))))}))
-          as (forall Type .
+                (fun [V21, V0] <0: (fun [V15] {V15, V21})>)
+                V29))})) as (forall Type .
             forall Type .
               forall Type .
                 { (Marker T0)
@@ -302,21 +315,22 @@ main = (with {
                 (fun [V4]
                   <1: (forall [(T3: Type) (T4: Type) (T5: Type)] (let
                         (V5 (V4 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                        {V5[0], V5[1], (fun [V6]
+                        {V5[0], V5[1], (fun [V6, V27]
                           ((__mon_bind @ [Ty({}), Ty(Int -> {Int, Int}), Ty({ Int
                                                                             , Int
                                                                             })])
                             (V5[2] V6)
-                            (fun [V23] (let (V24 (V23 825)) (fun [V0] <0: V24>)))))
-                        }))>))
+                            (fun [V23] (let (V24 (V23 825)) (fun [V0] <0: V24>)))
+                            V27))}))>))
               (fun [V3] <0: V3[1]>)
               (fun [V4]
                 <1: (forall [(T3: Type) (T4: Type) (T5: Type)] (let
                       (V5 (V4 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                      {V5[0], V5[1], (fun [V6]
+                      {V5[0], V5[1], (fun [V6, V28]
                         ((__mon_bind @ [Ty({}), Ty({Int, Int}), Ty(Int)])
                           (V5[2] V6)
-                          (fun [V25] (fun [V0] <0: V25[1]>))))}))>))
+                          (fun [V25, V0] <0: V25[1]>)
+                          V28))}))>))
             (fun [V0] V0)
             (fun [V0] 5467)))"#]];
     expect.assert_eq(&pretty_ir);

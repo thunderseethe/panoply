@@ -1,8 +1,12 @@
+use std::convert::Infallible;
+
 use base::{id::MedIrVarId, id_converter::IdConverter, pretty::PrettyErrorWithDb};
 use medir::MedIrItemName;
 use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar};
 use reducir::ty::{ReducIrTy, ReducIrTyKind};
-use reducir::{ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck};
+use reducir::{
+  ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
+};
 
 pub(crate) struct LowerCtx<'a> {
   db: &'a dyn crate::Db,
@@ -129,8 +133,8 @@ impl<'a> LowerCtx<'a> {
             }
           })
           .collect();
-        let medir = self.lower_binds(head, binds);
-        MedIr::new(match medir.kind {
+        let med_head = self.lower_binds(head, binds);
+        MedIr::new(match med_head.kind {
           MedIrKind::Atom(medir::Atom::Var(v)) => {
             MedIrKind::Call(medir::Call::Unknown(v), medir_spine)
           }

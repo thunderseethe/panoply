@@ -30,7 +30,7 @@ fn main() -> eyre::Result<()> {
   let mut printer = wasmprinter::Printer::default();
   printer.print_offsets(true);
   let wat = printer.print(&bytes).unwrap();
-  println!("{}", wat);
+  //println!("{}", wat);
 
   match tys {
     Ok(_) => {}
@@ -84,12 +84,6 @@ fn main() -> eyre::Result<()> {
       eprintln!("{}", err);
     }
   };
-
-  /*let mem = instance.get_memory(&mut store, "mem").unwrap();
-  let mem_ref = mem.data(&store);
-
-  println!("{:?}", &mem_ref[84..92]);
-  println!("{:?}", &mem_ref[136..152]);*/
 
   Ok(())
 }

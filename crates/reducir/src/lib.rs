@@ -683,17 +683,21 @@ pub fn default_endotraverse_ir<F: ReducIrEndoFold>(
   match ir.kind() {
     Abs(vars, body) => {
       let body = body.fold(fold);
-      fold.fold_ir(Abs(vars.clone(), P::new(body)))
+      // We do it this way to reuse smart constructor logic
+      fold.fold_ir(ReducIr::abss(vars.iter().copied(), body).kind)
     }
     App(head, spine) => {
       let head = head.fold(fold);
-      let spine = spine.iter().map(|ir| ir.fold(fold)).collect();
-      fold.fold_ir(App(P::new(head), spine))
+      let spine = spine.iter().map(|ir| ir.fold(fold));
+      // We do it this way to reuse smart constructor logic
+      let kind = ReducIr::app(head, spine).kind;
+      fold.fold_ir(kind)
     }
     Locals(binds, body) => {
-      let binds = binds.iter().map(|local| local.fold(fold)).collect();
       let body = body.fold(fold);
-      fold.fold_ir(Locals(binds, P::new(body)))
+      let binds = binds.iter().map(|local| local.fold(fold));
+      let kind = ReducIr::locals(binds, body).kind;
+      fold.fold_ir(kind)
     }
     TyAbs(ty_var, body) => {
       let body = body.fold(fold);
@@ -701,7 +705,8 @@ pub fn default_endotraverse_ir<F: ReducIrEndoFold>(
     }
     TyApp(body, ty_app) => {
       let body = body.fold(fold);
-      fold.fold_ir(TyApp(P::new(body), ty_app.clone()))
+      let kind = ReducIr::ty_app(body, ty_app.iter().cloned()).kind;
+      fold.fold_ir(kind)
     }
     Struct(elems) => {
       let elems = elems.iter().map(|e| e.fold(fold)).collect();
@@ -1111,7 +1116,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
           // We have to coerce control to an enum type here
           // This is the toil we pay for special casing control
           ControlTy(m_ty, a_ty) => {
-            let exists_b = ctx.mk_reducir_ty(VarTy(2));
+            /*let exists_b = ctx.mk_reducir_ty(VarTy(2));
             let exists_m = ctx.mk_reducir_ty(VarTy(1));
             let exists_r = ctx.mk_reducir_ty(VarTy(0));
             let exists_mon_m_r = ctx.mk_mon_ty(exists_m, exists_r);
@@ -1123,8 +1128,8 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
                 ctx.mk_fun_ty([ctx.mk_fun_ty([exists_b], exists_mon_m_r)], exists_mon_m_r),
                 ctx.mk_fun_ty([exists_b], exists_body_fun_ty),
               ]),
-            );
-            vec![a_ty, yield_ty]
+            );*/
+            vec![a_ty, ctx.mk_yield_ty(m_ty, a_ty)]
           }
           _ => {
             return Err(ReducIrTyErr::ExpectedCoprodTy(coprod, Cow::Borrowed(discr)));

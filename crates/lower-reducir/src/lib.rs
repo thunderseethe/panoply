@@ -4,6 +4,7 @@ use base::{
   id_converter::IdConverter,
   ident::Ident,
   modules::Module,
+  pretty::{PrettyPrint, PrettyWithCtx},
 };
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
@@ -348,6 +349,8 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
       P::new(acc),
     ))
   });
+
+  println!("{}", ir.pretty_with(db).pprint().pretty(80));
 
   ReducIrItem::new(
     db.as_reducir_db(),

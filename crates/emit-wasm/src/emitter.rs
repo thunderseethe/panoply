@@ -87,50 +87,7 @@ pub(crate) fn emit_wasm_module(
 
   let module = medir_module.module(medir_db);
   let alloc_indx = 1;
-  let import_items: [Import<'_>; 0] = [
-    /*Import {
-      name: MedIrItemName::new(ReducIrTermName::gen(db, "__mon_generate_marker", module)),
-      module: "intrinsic",
-      func: "__mon_generate_marker",
-      params: vec![],
-      returns: vec![ValType::I32],
-    },
-    Import {
-      name: MedIrItemName::new(ReducIrTermName::gen(db, "alloc", module)),
-      module: "intrinsic",
-      func: "alloc",
-      params: vec![ValType::I32],
-      returns: vec![ValType::I32],
-    },
-    Import {
-      name: MedIrItemName::new(ReducIrTermName::gen(db, "trace", module)),
-      module: "intrinsic",
-      func: "trace",
-      params: vec![ValType::I32],
-      returns: vec![ValType::I32],
-    },*/
-    /*Import {
-        name: MedIrItemName::new(ReducIrTermName::gen(db, "__mon_prompt", module)),
-        module: "mon",
-        func: "prompt",
-        params: vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
-        returns: vec![ValType::I32],
-    },
-    Import {
-        name: MedIrItemName::new(ReducIrTermName::gen(db, "__mon_bind", module)),
-        module: "mon",
-        func: "bind",
-        params: vec![ValType::I32, ValType::I32, ValType::I32],
-        returns: vec![ValType::I32],
-    },
-    Import {
-        name: MedIrItemName::new(ReducIrTermName::gen(db, "__mon_eqm", module)),
-        module: "mon",
-        func: "eqm",
-        params: vec![ValType::I32, ValType::I32],
-        returns: vec![ValType::I32],
-    },*/
-  ];
+  let import_items: [Import<'_>; 0] = [];
 
   let mut imports = wasm_encoder::ImportSection::new();
 
@@ -167,11 +124,11 @@ pub(crate) fn emit_wasm_module(
     item_indices.insert(name, indx + num_imports);
 
     let ins = [
-      Instruction::GlobalGet(0),
-      Instruction::GlobalGet(0),
+      Instruction::GlobalGet(1),
+      Instruction::GlobalGet(1),
       Instruction::I32Const(1),
       Instruction::I32Add,
-      Instruction::GlobalSet(0),
+      Instruction::GlobalSet(1),
       Instruction::Return,
       Instruction::End,
     ];

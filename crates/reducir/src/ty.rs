@@ -83,6 +83,13 @@ impl ReducIrTy {
     }
   }
 
+  pub fn unwrap_foralls<Db: ?Sized + crate::Db>(self, db: &Db) -> Self {
+    match self.kind(db.as_reducir_db()) {
+      ReducIrTyKind::ForallTy(_, ty) => ty.unwrap_foralls(db),
+      _ => self,
+    }
+  }
+
   /// Checks if a function type returns a monadic type
   pub fn try_fun_returns_monadic(self, db: &dyn crate::Db) -> Result<(usize, UnwrapMonTy), Self> {
     match self.kind(db) {
@@ -102,14 +109,6 @@ impl ReducIrTy {
     match self.kind(db) {
       ReducIrTyKind::FunTy(args, ret) => Ok(db.mk_fun_ty(args.iter().skip(n_args).copied(), ret)),
       _ => Err(self),
-    }
-  }
-
-  pub fn is_fun_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> bool {
-    match self.kind(db.as_reducir_db()) {
-      ReducIrTyKind::FunTy(_, _) => true,
-      ReducIrTyKind::ForallTy(_, ty) => ty.is_fun_ty(db),
-      _ => false,
     }
   }
 

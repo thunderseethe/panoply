@@ -3,6 +3,7 @@ use base::{
   id_converter::IdConverter,
   ident::Ident,
   modules::Module,
+  pretty::{PrettyPrint, PrettyWithCtx},
 };
 use medir::{MedIrItem, MedIrModule};
 use reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
@@ -56,6 +57,16 @@ fn lower_item(db: &dyn crate::Db, term: OptimizedReducIrItem) -> Vec<MedIrItem> 
     .map(|defn| MedIrItem::new(medir_db, defn.name, defn, IdSupply::start_from(&supply)))
     .collect::<Vec<_>>();
   defns.insert(0, MedIrItem::new(medir_db, defn.name, defn, supply));
+  for defn in defns.iter() {
+    println!(
+      "{}",
+      defn
+        .item(medir_db)
+        .pretty_with(medir_db)
+        .pprint()
+        .pretty(80)
+    );
+  }
   defns
 }
 
@@ -164,42 +175,42 @@ effect Reader {
             let V19 = V18[0];
             let V20 = __mon_eqm(V3, V19);
             let V21 = V20[0];
-            let V49 = switch V21 <
+            let V51 = switch V21 <
               branch 0 {
                 let V22 = V20[1];
                 let V23 = V18[0];
                 let V28 = make_closure(f_lam_2,[V18]);
-                let V35 = make_closure(f_lam_7,[]);
-                let V36 = [V23, V28, V35];
-                typecast<[Int,Int,Int,Int]>([1, V36])
+                let V36 = make_closure(f_lam_6,[]);
+                let V37 = [V23, V28, V36];
+                typecast<[Int,Int,Int,Int]>([1, V37])
               }
               branch 1 {
                 let V22 = V20[1];
-                let V37 = V18[0];
-                let V41 = make_closure(f_lam_8,[V18]);
-                let V45 = make_closure(f_lam_13,[]);
-                let V46 = typecast<[Int,((Int,Int) -> [Int,Int,Int,Int],Int) -> [Int,Int,Int,Int],(Int,Int) -> [Int,Int,Int,Int]]>([V37, V41, V45]);
-                let V47 = V46[2];
-                let V48 = V46[1];
-                apply_closure(V48)(V47, V1)
+                let V38 = V18[0];
+                let V42 = make_closure(f_lam_7,[V18]);
+                let V47 = make_closure(f_lam_11,[]);
+                let V48 = typecast<[Int,((Int,Int) -> [Int,Int,Int,Int],Int) -> [Int,Int,Int,Int],(Int,Int) -> [Int,Int,Int,Int]]>([V38, V42, V47]);
+                let V49 = V48[2];
+                let V50 = V48[1];
+                apply_closure(V50)(V49, V1)
               }
             >;
-            let V50 = V49[0];
-            switch V50 <
+            let V52 = V51[0];
+            switch V52 <
               branch 0 {
-                let V51 = V49[1];
-                let V52 = [];
-                let V53 = apply_closure(V51)(V52);
-                typecast<[Int,Int,Int,Int]>([0, V53])
+                let V53 = V51[1];
+                let V54 = [];
+                let V55 = apply_closure(V53)(V54);
+                typecast<[Int,Int,Int,Int]>([0, V55])
               }
               branch 1 {
-                let V54 = V49[1];
-                let V55 = V54;
-                let V56 = V55[0];
-                let V57 = V55[1];
-                let V64 = make_closure(f_lam_16,[V55]);
-                let V65 = [V56, V57, V64];
-                typecast<[Int,Int,Int,Int]>([1, V65])
+                let V56 = V51[1];
+                let V57 = V56;
+                let V58 = V57[0];
+                let V59 = V57[1];
+                let V67 = make_closure(f_lam_14,[V57]);
+                let V68 = [V58, V59, V67];
+                typecast<[Int,Int,Int,Int]>([1, V68])
               }
             >
           }"#]],
@@ -224,70 +235,62 @@ effect Reader {
             typecast<[Int,Int,Int,Int]>([0, V29])
           }"#]],
       expect![[r#"
-          defn f_lam_4(V31, V32) {
-            [V32, V31]
+          defn f_lam_4(V32, V33) {
+            [V33, V32]
           }"#]],
       expect![[r#"
-          defn f_lam_5(V31, V1) {
-            let V33 = make_closure(f_lam_4,[V31]);
-            typecast<[Int,Int,Int,Int]>([0, V33])
+          defn f_lam_5(V32, V1) {
+            let V34 = make_closure(f_lam_4,[V32]);
+            typecast<[Int,Int,Int,Int]>([0, V34])
           }"#]],
       expect![[r#"
-          defn f_lam_6(V31) {
-            make_closure(f_lam_5,[V31])
+          defn f_lam_6(V29, V30) {
+            let V31 = make_closure(f_lam_3,[V29]);
+            let V35 = make_closure(f_lam_5,[]);
+            __mon_bind(V31, V35, V30)
           }"#]],
       expect![[r#"
-          defn f_lam_7(V29) {
-            let V30 = make_closure(f_lam_3,[V29]);
-            let V34 = make_closure(f_lam_6,[]);
-            make_closure(__mon_bind,[V30, V34])
+          defn f_lam_7(V18, V24) {
+            let V39 = [];
+            let V40 = V18[1];
+            let V41 = V40[1];
+            apply_closure(V41)(V39, V24)
           }"#]],
       expect![[r#"
-          defn f_lam_8(V18, V24) {
-            let V38 = [];
-            let V39 = V18[1];
-            let V40 = V39[1];
-            apply_closure(V40)(V38, V24)
-          }"#]],
-      expect![[r#"
-          defn f_lam_9(V29, V1) {
+          defn f_lam_8(V29, V1) {
             typecast<[Int,Int,Int,Int]>([0, V29])
           }"#]],
       expect![[r#"
-          defn f_lam_10(V31, V32) {
-            [V32, V31]
+          defn f_lam_9(V32, V33) {
+            [V33, V32]
           }"#]],
       expect![[r#"
-          defn f_lam_11(V31, V1) {
-            let V43 = make_closure(f_lam_10,[V31]);
-            typecast<[Int,Int,Int,Int]>([0, V43])
+          defn f_lam_10(V32, V1) {
+            let V45 = make_closure(f_lam_9,[V32]);
+            typecast<[Int,Int,Int,Int]>([0, V45])
           }"#]],
       expect![[r#"
-          defn f_lam_12(V31) {
-            make_closure(f_lam_11,[V31])
+          defn f_lam_11(V29, V43) {
+            let V44 = make_closure(f_lam_8,[V29]);
+            let V46 = make_closure(f_lam_10,[]);
+            __mon_bind(V44, V46, V43)
           }"#]],
       expect![[r#"
-          defn f_lam_13(V29) {
-            let V42 = make_closure(f_lam_9,[V29]);
-            let V44 = make_closure(f_lam_12,[]);
-            make_closure(__mon_bind,[V42, V44])
+          defn f_lam_12(V65, V1) {
+            typecast<[Int,Int,Int,Int]>([0, V65])
           }"#]],
       expect![[r#"
-          defn f_lam_14(V62, V1) {
-            typecast<[Int,Int,Int,Int]>([0, V62])
+          defn f_lam_13(V63) {
+            let V64 = [];
+            let V65 = apply_closure(V63)(V64);
+            make_closure(f_lam_12,[V65])
           }"#]],
       expect![[r#"
-          defn f_lam_15(V60) {
-            let V61 = [];
-            let V62 = apply_closure(V60)(V61);
-            make_closure(f_lam_14,[V62])
-          }"#]],
-      expect![[r#"
-          defn f_lam_16(V55, V29) {
-            let V58 = V55[2];
-            let V59 = apply_closure(V58)(V29);
-            let V63 = make_closure(f_lam_15,[]);
-            make_closure(__mon_bind,[V59, V63])
+          defn f_lam_14(V57, V29, V60) {
+            let V61 = V57[2];
+            let V62 = apply_closure(V61)(V29);
+            let V66 = make_closure(f_lam_13,[]);
+            __mon_bind(V62, V66, V60)
           }"#]],
     ];
 
