@@ -423,10 +423,13 @@ where
         .expect("ICE: Term should have Span in tc after desugaring")
     };
     match (self.ast.view(term), *expected.ty) {
-      (Abstraction { arg, body }, FunTy(arg_ty, body_ty)) => {
+      (Abstraction { arg, body }, FunTy(arg_ty, eff, body_ty)) => {
         // Check an abstraction against a function type by checking the body checks against
         // the function return type with the function argument type in scope.
         self.local_env.insert(*arg, arg_ty);
+        self
+          .constraints
+          .add_effect_row_eq(eff, expected.eff, current_span());
         self._check(*body, InferResult::new(body_ty, expected.eff));
         self.local_env.remove(arg);
       }
@@ -498,24 +501,27 @@ where
           .add_effect_row_eq(expected.eff, right_infer.eff, current_span());
         self.add_data_row_combine(left_row, right_row, row, span);
       }
-      (Branch { left, right }, FunTy(Ty(handle::Handle(SumTy(arg_row))), ret)) => {
+      (Branch { left, right }, FunTy(Ty(handle::Handle(SumTy(arg_row))), eff, ret)) => {
         let span = current_span();
 
         let left_row = self.fresh_simple_row();
         let right_row = self.fresh_simple_row();
+        self
+          .constraints
+          .add_effect_row_eq(eff, expected.eff, current_span());
         self.add_data_row_combine(left_row, right_row, *arg_row, span);
 
         self._check(
           *left,
           TyChkRes::new(
-            self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret)),
+            self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), eff, ret)),
             expected.eff,
           ),
         );
         self._check(
           *right,
           TyChkRes::new(
-            self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret)),
+            self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), eff, ret)),
             expected.eff,
           ),
         );
@@ -621,7 +627,7 @@ where
         self.local_env.remove(arg);
 
         InferResult::new(
-          self.mk_ty(TypeKind::FunTy(arg_ty, body_out.ty)),
+          self.mk_ty(TypeKind::FunTy(arg_ty, body_out.eff, body_out.ty)),
           body_out.eff,
         )
       }
@@ -634,7 +640,11 @@ where
         let fun_infer = self._infer(*func);
         // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
         // for arg and ret type.
-        let (arg_ty, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
+        let (arg_ty, eff, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
+
+        self
+          .constraints
+          .add_effect_row_eq(eff, fun_infer.eff, current_span());
 
         self._check(*arg, InferResult::new(arg_ty, fun_infer.eff));
 
@@ -711,8 +721,8 @@ where
 
         let ret_ty = self.fresh_var();
 
-        let left_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), ret_ty));
-        let right_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), ret_ty));
+        let left_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(left_row)), out_eff, ret_ty));
+        let right_ty = self.mk_ty(FunTy(self.mk_ty(SumTy(right_row)), out_eff, ret_ty));
 
         self._check(*left, InferResult::new(left_ty, out_eff));
         self._check(*right, InferResult::new(right_ty, out_eff));
@@ -721,7 +731,7 @@ where
         self.add_data_row_combine(left_row, right_row, out_row, span);
 
         InferResult::new(
-          self.mk_ty(FunTy(self.mk_ty(SumTy(out_row)), ret_ty)),
+          self.mk_ty(FunTy(self.mk_ty(SumTy(out_row)), out_eff, ret_ty)),
           out_eff,
         )
       }
@@ -776,9 +786,9 @@ where
         let ret_ty = self.fresh_var();
         let eff = Row::Closed(self.single_row(eff_name.name(core_db), ret_ty));
 
-        let unused = self.fresh_scoped_row();
+        let outer_eff = self.fresh_scoped_row();
         let goal = self.fresh_scoped_row();
-        self.add_effect_row_combine(unused, eff, goal, current_span());
+        self.add_effect_row_combine(outer_eff, eff, goal, current_span());
 
         let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
         let (handler_wrap, handler_res) = self.instantiate(handler_scheme.clone(), current_span());
@@ -789,6 +799,9 @@ where
         self
           .constraints
           .add_ty_eq(handler_wrap.tys[0], ret_ty, current_span());
+        self
+          .constraints
+          .add_effect_row_eq(handler_wrap.eff_rows[0], outer_eff, current_span());
         let handler_row = match *handler_res.ty {
           ProdTy(Row::Closed(handler_row)) => handler_row,
           _ => unreachable!("Effect handler must be a closed product type"),
@@ -825,7 +838,7 @@ where
         // Ensure there is a return clause in the handler
         let ret_row = self.mk_row(
           &[self.mk_label("return")],
-          &[self.mk_ty(FunTy(body_ty, ret_ty))],
+          &[self.mk_ty(FunTy(body_ty, out_eff, ret_ty))],
         );
         let eff_sig_row = self.fresh_simple_row();
         let handler_row = self.fresh_simple_row();
@@ -956,14 +969,15 @@ where
     &mut self,
     ty: InferTy<'infer>,
     span: impl FnOnce() -> Span,
-  ) -> (InferTy<'infer>, InferTy<'infer>) {
+  ) -> (InferTy<'infer>, ScopedInferRow<'infer>, InferTy<'infer>) {
     ty.try_as_fn_ty().unwrap_or_else(|ty| {
       let arg = self.fresh_var();
+      let eff = self.fresh_scoped_row();
       let ret = self.fresh_var();
       self
         .constraints
-        .add_ty_eq(ty, self.mk_ty(FunTy(arg, ret)), span());
-      (arg, ret)
+        .add_ty_eq(ty, self.mk_ty(FunTy(arg, eff, ret)), span());
+      (arg, eff, ret)
     })
   }
 

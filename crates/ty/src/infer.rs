@@ -342,9 +342,10 @@ where
         .debug_tuple("RowTy")
         .field(&row.debug_with(db, include_all_fields))
         .finish(),
-      TypeKind::FunTy(arg, ret) => f
+      TypeKind::FunTy(arg, eff, ret) => f
         .debug_tuple("FunTy")
         .field(&arg.debug_with(db, include_all_fields))
+        .field(&eff.debug_with(db, include_all_fields))
         .field(&ret.debug_with(db, include_all_fields))
         .finish(),
       TypeKind::ProdTy(row) => f
@@ -366,7 +367,12 @@ impl<'ctx> fmt::Debug for TypeKind<InArena<'ctx>> {
       TypeKind::IntTy => f.debug_tuple("IntTy").finish(),
       TypeKind::VarTy(var) => f.debug_tuple("VarTy").field(var).finish(),
       TypeKind::RowTy(row) => f.debug_tuple("RowTy").field(row).finish(),
-      TypeKind::FunTy(arg, ret) => f.debug_tuple("FunTy").field(arg).field(ret).finish(),
+      TypeKind::FunTy(arg, eff, ret) => f
+        .debug_tuple("FunTy")
+        .field(arg)
+        .field(eff)
+        .field(ret)
+        .finish(),
       TypeKind::ProdTy(row) => f.debug_tuple("ProdTy").field(row).finish(),
       TypeKind::SumTy(row) => f.debug_tuple("SumTy").field(row).finish(),
     }
@@ -374,9 +380,9 @@ impl<'ctx> fmt::Debug for TypeKind<InArena<'ctx>> {
 }
 
 impl<'ctx> Ty<InArena<'ctx>> {
-  pub fn try_as_fn_ty(self) -> Result<(Self, Self), Self> {
+  pub fn try_as_fn_ty(self) -> Result<(Self, ScopedRow<InArena<'ctx>>, Self), Self> {
     match self.deref() {
-      TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
+      TypeKind::FunTy(arg, eff, ret) => Ok((*arg, *eff, *ret)),
       _ => Err(self),
     }
   }
@@ -481,13 +487,14 @@ mod tests {
 
     let ty = db.mk_ty(FunTy(
       db.mk_ty(ProdTy(Row::Closed(row))),
+      Row::Closed(db.empty_row()),
       db.mk_ty(VarTy(TyVarId(0))),
     ));
     let out = ty.pretty_with(&(&db, &db)).pprint().pretty(32).to_string();
     assert_eq!(
       out,
       r#"{ x |> Int, y |> Int, z |> Int }
-  -> ty_var<0>"#
+  ->  ty_var<0>"#
     );
     let out = ty.pretty_with(&(&db, &db)).pprint().pretty(10).to_string();
     assert_eq!(
@@ -496,7 +503,7 @@ mod tests {
 , y |> Int
 , z |> Int
 } ->
-  ty_var<0>"#
+   ty_var<0>"#
     );
   }
 }

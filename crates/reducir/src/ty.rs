@@ -205,9 +205,17 @@ impl ReducIrTy {
   }
   /// Assume `self` is a forall and reduce it by applying `ty` as it's argument.
   /// This applies type substitution without having to create a TyApp ReducIr node.
-  pub fn reduce_forall(self, db: &dyn crate::Db, ty: ReducIrTy) -> ReducIrTy {
-    match self.kind(db) {
-      ReducIrTyKind::ForallTy(Kind::Type, ret_ty) => ret_ty.subst_single(db, ty),
+  pub fn reduce_forall(self, db: &dyn crate::Db, ty_app: ReducIrTyApp) -> ReducIrTy {
+    match (self.kind(db), ty_app) {
+      (ReducIrTyKind::ForallTy(Kind::Type, ret_ty), ReducIrTyApp::Ty(ty)) => {
+        ret_ty.subst_single(db, ty)
+      }
+      (ReducIrTyKind::ForallTy(Kind::ScopedRow, ret_ty), ReducIrTyApp::EffRow(row)) => {
+        ret_ty.subst_single(db, row)
+      }
+      (ReducIrTyKind::ForallTy(Kind::SimpleRow, ret_ty), ReducIrTyApp::DataRow(row)) => {
+        ret_ty.subst_single(db, row)
+      }
       _ => panic!("reduce_forall called on non forall type"),
     }
   }

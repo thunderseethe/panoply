@@ -300,8 +300,9 @@ where
       (SumTy(left), RowTy(right)) => self.unify(left, Row::Closed(right)),
 
       // Decompose compound types
-      (FunTy(left_arg, left_ret), FunTy(right_arg, right_ret)) => {
+      (FunTy(left_arg, left_eff, left_ret), FunTy(right_arg, right_eff, right_ret)) => {
         self.unify(left_arg, right_arg)?;
+        self.unify(left_eff, right_eff)?;
         self.unify(left_ret, right_ret)
       }
       (RowTy(left_row), RowTy(right_row)) => self.unify(left_row, right_row),
@@ -311,21 +312,21 @@ where
       (IntTy, IntTy) => Ok(()),
 
       // Type mismatch
-      (IntTy, FunTy(_, _))
+      (IntTy, FunTy(_, _, _))
       | (IntTy, RowTy(_))
       | (IntTy, ProdTy(_))
       | (IntTy, SumTy(_))
-      | (FunTy(_, _), IntTy)
-      | (FunTy(_, _), RowTy(_))
-      | (FunTy(_, _), ProdTy(_))
-      | (FunTy(_, _), SumTy(_))
+      | (FunTy(_, _, _), IntTy)
+      | (FunTy(_, _, _), RowTy(_))
+      | (FunTy(_, _, _), ProdTy(_))
+      | (FunTy(_, _, _), SumTy(_))
       | (RowTy(_), IntTy)
-      | (RowTy(_), FunTy(_, _))
+      | (RowTy(_), FunTy(_, _, _))
       | (ProdTy(_), IntTy)
-      | (ProdTy(_), FunTy(_, _))
+      | (ProdTy(_), FunTy(_, _, _))
       | (ProdTy(_), SumTy(_))
       | (SumTy(_), IntTy)
-      | (SumTy(_), FunTy(_, _))
+      | (SumTy(_), FunTy(_, _, _))
       | (SumTy(_), ProdTy(_)) => Err((left, right).into()),
     }
   }

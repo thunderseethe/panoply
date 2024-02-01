@@ -1,12 +1,8 @@
-use std::convert::Infallible;
-
 use base::{id::MedIrVarId, id_converter::IdConverter, pretty::PrettyErrorWithDb};
 use medir::MedIrItemName;
 use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar};
 use reducir::ty::{ReducIrTy, ReducIrTyKind};
-use reducir::{
-  ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
-};
+use reducir::{ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck};
 
 pub(crate) struct LowerCtx<'a> {
   db: &'a dyn crate::Db,

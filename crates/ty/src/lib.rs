@@ -93,9 +93,9 @@ impl Ty<InDb> {
   pub fn try_as_fn_ty<'a>(
     self,
     db: &(impl ?Sized + AccessTy<'a, InDb>),
-  ) -> Result<(Self, Self), Self> {
+  ) -> Result<(Self, ScopedRow<InDb>, Self), Self> {
     match db.kind(&self) {
-      TypeKind::FunTy(arg, ret) => Ok((*arg, *ret)),
+      TypeKind::FunTy(arg, eff, ret) => Ok((*arg, *eff, *ret)),
       _ => Err(self),
     }
   }
@@ -107,18 +107,12 @@ impl Ty<InDb> {
       _ => None,
     })
   }
-
-  pub fn ty_vars<'db>(&self, db: &'db dyn crate::Db) -> impl Iterator<Item = TyVarId> + 'db {
-    TyInDbDfs::new(db, *self).filter_map(|ty| match ty.0.kind(db) {
-      TypeKind::VarTy(ty_var) => Some(*ty_var),
-      _ => None,
-    })
-  }
 }
 
 impl<A: TypeAlloc> Ty<A>
 where
   Self: Copy,
+  ScopedRow<A>: Copy,
 {
   pub fn transform_to_cps_handler_ty<'a, 'b, C>(
     &self,
@@ -133,11 +127,12 @@ where
     // Transform our ty into the type a handler should have
     // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
     match acc.kind(self) {
-      TypeKind::FunTy(a, b) => {
-        let kont_ty = acc.mk_ty(TypeKind::FunTy(*b, ret_ty));
+      TypeKind::FunTy(a, eff, b) => {
+        let kont_ty = acc.mk_ty(TypeKind::FunTy(*b, *eff, ret_ty));
         Ok(acc.mk_ty(TypeKind::FunTy(
           *a,
-          acc.mk_ty(TypeKind::FunTy(kont_ty, ret_ty)),
+          *eff,
+          acc.mk_ty(TypeKind::FunTy(kont_ty, *eff, ret_ty)),
         )))
       }
       _ => {
@@ -148,6 +143,7 @@ where
           *self,
           acc.mk_ty(TypeKind::FunTy(
             acc.mk_ty(TypeKind::ErrorTy),
+            Row::Closed(acc.empty_row()),
             acc.mk_ty(TypeKind::ErrorTy),
           )),
         ))
@@ -184,7 +180,7 @@ where
         TypeKind::RowTy(row) => {
           self.stack.extend_from_slice(row.values(self.db));
         }
-        TypeKind::FunTy(arg, ret) => {
+        TypeKind::FunTy(arg, _, ret) => {
           self.stack.extend([arg, ret]);
         }
         TypeKind::ProdTy(row) => match row {
@@ -231,7 +227,7 @@ pub enum TypeKind<A: TypeAlloc = InDb> {
   /// A row type, this is specifically a closed row. Open rows are represented as VarTy
   RowTy(SimpleClosedRow<A>),
   /// A function type
-  FunTy(Ty<A>, Ty<A>),
+  FunTy(Ty<A>, ScopedRow<A>, Ty<A>),
   /// A product type. This is purely a wrapper type to coerce a row type to be a product.
   ProdTy(Row<Simple, A>),
   /// A sum type. This is purely a wrapper type to coerce a row type to be a sum.
@@ -262,9 +258,10 @@ where
       TypeKind::IntTy => f.debug_tuple("IntTy").finish(),
       TypeKind::VarTy(var) => f.debug_tuple("VarTy").field(var).finish(),
       TypeKind::RowTy(row) => f.debug_tuple("RowTy").field(&row.debug(db)).finish(),
-      TypeKind::FunTy(arg, ret) => f
+      TypeKind::FunTy(arg, eff, ret) => f
         .debug_tuple("FunTy")
         .field(&arg.debug(db))
+        .field(&eff.debug(db))
         .field(&ret.debug(db))
         .finish(),
       TypeKind::ProdTy(row) => f.debug_tuple("ProdTy").field(&row.debug(db)).finish(),
@@ -287,10 +284,13 @@ where
       TypeKind::VarTy(ref var) => fold.try_fold_var(var.clone())?,
       TypeKind::IntTy => fold.ctx().mk_ty(TypeKind::IntTy),
       TypeKind::ErrorTy => fold.ctx().mk_ty(TypeKind::ErrorTy),
-      TypeKind::FunTy(ref arg, ref ret) => {
+      TypeKind::FunTy(ref arg, ref eff, ref ret) => {
         let arg_ = arg.clone().try_fold_with(fold)?;
+        let eff_ = eff.clone().try_fold_with(fold)?;
         let ret_ = ret.clone().try_fold_with(fold)?;
-        fold.ctx().mk_ty(TypeKind::<F::Out>::FunTy(arg_, ret_))
+        fold
+          .ctx()
+          .mk_ty(TypeKind::<F::Out>::FunTy(arg_, eff_, ret_))
       }
       TypeKind::RowTy(ref row) => {
         let row_ = row.clone().try_fold_with(fold)?;

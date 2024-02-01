@@ -265,7 +265,7 @@ pub(crate) mod instantiate {
         .ty_unifiers
         .iter()
         .find_map(|(key, val)| (key == &var).then_some(val))
-        .expect("ty_unifiers did not contain variable");
+        .expect("ty_unifiers did not contain type variable");
       Ok(self.ctx().mk_ty(TypeKind::VarTy(*uni_var)))
     }
 
@@ -277,7 +277,7 @@ pub(crate) mod instantiate {
         .datarow_unifiers
         .iter()
         .find_map(|(key, val)| (key == &var).then_some(val))
-        .expect("ty_unifiers did not contain variable");
+        .expect("ty_unifiers did not contain data variable");
       Ok(Row::Open(*uni_var))
     }
 
@@ -289,7 +289,7 @@ pub(crate) mod instantiate {
         .effrow_unifiers
         .iter()
         .find_map(|(key, val)| (key == &var).then_some(val))
-        .expect("ty_unifiers did not contain variable");
+        .expect("ty_unifiers did not contain effect variable");
       Ok(Row::Open(*uni_var))
     }
   }

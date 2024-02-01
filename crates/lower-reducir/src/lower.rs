@@ -51,7 +51,7 @@ fn expect_sum_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row<Sim
 /// this operation would fail.
 fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row<Simple> {
   ty.try_as_fn_ty(db)
-    .and_then(|(arg, _)| arg.try_as_sum_row(db))
+    .and_then(|(arg, _, _)| arg.try_as_sum_row(db))
     .unwrap_or_else(|_| unreachable!())
 }
 
@@ -280,7 +280,7 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
             self
               .db
               .effect_handler_ir_ty(eff)
-              .reduce_forall(self.db.as_reducir_db(), ret_ty)
+              .reduce_forall(self.db.as_reducir_db(), ReducIrTyApp::Ty(ret_ty))
           })
           .collect::<Vec<_>>();
         RowEvIrTy {
@@ -325,11 +325,11 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
       TypeKind::VarTy(var) => self
         .db
         .mk_reducir_ty(ReducIrTyKind::VarTy(self.tyvar_env[var])),
-      TypeKind::FunTy(arg, ret) => {
+      TypeKind::FunTy(arg, eff, ret) => {
         let mut args = vec![self.lower_ty(*arg)];
         // gather any nested funcs into one
         let mut ret = ret;
-        while let TypeKind::FunTy(arg, next) = self.db.kind(ret) {
+        while let TypeKind::FunTy(arg, eff, next) = self.db.kind(ret) {
           args.push(self.lower_ty(*arg));
           ret = next;
         }
@@ -868,7 +868,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
               self
                 .db
                 .effect_handler_ir_ty(eff)
-                .reduce_forall(self.db.as_reducir_db(), ret_ty)
+                .reduce_forall(self.db.as_reducir_db(), ReducIrTyApp::Ty(ret_ty))
             })
             .collect::<Vec<_>>();
           (ir_row_ev.scoped(self.db.as_reducir_db()), ty_vals)
@@ -1091,7 +1091,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       // Effect stuff
       Operation(op) => {
         let term_infer = self.lookup_term(term);
-        let (value_ty, op_ret) = term_infer
+        let (value_ty, op_eff, op_ret) = term_infer
           .ty
           .try_as_fn_ty(&self.db)
           .unwrap_or_else(|_| unreachable!());
@@ -1116,7 +1116,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           self
             .db
             .effect_handler_ir_ty(eff)
-            .reduce_forall(self.db.as_reducir_db(), kont_ret_ty),
+            .reduce_forall(self.db.as_reducir_db(), ReducIrTyApp::Ty(kont_ret_ty)),
         );
         let op_ret = self.ty_ctx.lower_ty(op_ret);
         let kont_var =

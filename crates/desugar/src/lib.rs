@@ -22,8 +22,8 @@ use nameres::{NameResEffect, NameResTerm};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::AsId;
 use ty::{
-  row::{Row, Simple},
-  Evidence, MkTy, Ty, TyScheme, TypeKind,
+  row::{Row, ScopedRow, Simple},
+  Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
 };
 
 #[salsa::jar(db = Db)]
@@ -188,6 +188,7 @@ pub(crate) fn desugar_effect_defn(
 ) -> ast::EffectDefn {
   let terms = la_arena::Arena::default();
   let mut ds_ctx = DesugarCtx::new(db, terms, arenas, vars, ty_vars);
+  let outer_eff = ds_ctx.ty_vars.push(true);
   ast::EffectDefn {
     name: eff.name.value,
     ops: eff
@@ -195,15 +196,15 @@ pub(crate) fn desugar_effect_defn(
       .iter()
       .map(|opt_op| {
         opt_op.as_ref().map(|op| {
-          let ty = ds_ctx.ds_type(op.type_);
+          let ty = ds_ctx.ds_type_with_eff(op.type_, Row::Open(outer_eff));
           (
             op.name.value,
             TyScheme {
               bound_ty: vec![],
               bound_data_row: vec![],
-              bound_eff_row: vec![],
+              bound_eff_row: vec![outer_eff],
               constrs: vec![],
-              eff: Row::Closed(db.empty_row()),
+              eff: Row::Open(outer_eff),
               ty,
             },
           )
@@ -319,7 +320,11 @@ impl<'a> DesugarCtx<'a> {
             .db
             .as_ty_db()
             .mk_ty(TypeKind::VarTy(self.ty_vars.push(true)));
-          let ty = self.db.as_ty_db().mk_ty(TypeKind::FunTy(arg_ty, ret_ty));
+          let eff = self.ty_vars.push(true);
+          let ty = self
+            .db
+            .as_ty_db()
+            .mk_ty(TypeKind::FunTy(arg_ty, Row::Open(eff), ret_ty));
           term = self.terms.alloc(Annotated { ty, term });
         }
         term
@@ -448,7 +453,7 @@ impl<'a> DesugarCtx<'a> {
     }
   }
 
-  fn ds_type(&mut self, nst: Idx<cst::Type<TyVarId>>) -> Ty {
+  fn ds_type_with_eff(&mut self, nst: Idx<cst::Type<TyVarId>>, eff: ScopedRow<InDb>) -> Ty {
     match &self.arenas[nst] {
       cst::Type::Int(_) => self.db.as_ty_db().mk_ty(TypeKind::IntTy),
       cst::Type::Named(ty_var) => self.db.as_ty_db().mk_ty(TypeKind::VarTy(ty_var.value)),
@@ -466,8 +471,37 @@ impl<'a> DesugarCtx<'a> {
         domain, codomain, ..
       } => self.db.as_ty_db().mk_ty(TypeKind::FunTy(
         self.ds_type(*domain),
+        eff,
         self.ds_type(*codomain),
       )),
+      cst::Type::Parenthesized { type_, .. } => self.ds_type(*type_),
+    }
+  }
+
+  fn ds_type(&mut self, nst: Idx<cst::Type<TyVarId>>) -> Ty {
+    match &self.arenas[nst] {
+      cst::Type::Int(_) => self.db.as_ty_db().mk_ty(TypeKind::IntTy),
+      cst::Type::Named(ty_var) => self.db.as_ty_db().mk_ty(TypeKind::VarTy(ty_var.value)),
+      cst::Type::Sum { variants, .. } => self
+        .db
+        .as_ty_db()
+        .mk_ty(TypeKind::SumTy(self.ds_row(variants))),
+      cst::Type::Product { fields, .. } => self.db.as_ty_db().mk_ty(TypeKind::ProdTy(
+        fields
+          .as_ref()
+          .map(|row| self.ds_row(row))
+          .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
+      )),
+      cst::Type::Function {
+        domain, codomain, ..
+      } => {
+        let eff = self.ty_vars.push(true);
+        self.db.as_ty_db().mk_ty(TypeKind::FunTy(
+          self.ds_type(*domain),
+          Row::Open(eff),
+          self.ds_type(*codomain),
+        ))
+      }
       cst::Type::Parenthesized { type_, .. } => self.ds_type(*type_),
     }
   }

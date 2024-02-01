@@ -10,7 +10,7 @@ use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use reducir::{
   mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule, MonReducIrRowEv},
-  ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
+  ty::{Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy},
   GeneratedReducIrName, ReducIr, ReducIrGenItem, ReducIrItem,
   ReducIrKind::*,
   ReducIrLocal, ReducIrModule, ReducIrRowEv, ReducIrTermName, ReducIrVar, P,
@@ -430,7 +430,14 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
       let lower_ty_ctx = LowerTySchemeCtx::new(db.as_lower_reducir_db(), &mut tyvar_conv);
       let scheme = db.effect_member_sig(*op);
       let (ir_ty_scheme, _) = lower_ty_ctx.lower_scheme(effect.module(db.as_core_db()), &scheme);
-      let ir_ty_scheme = match ir_ty_scheme.kind(db.as_reducir_db()) {
+      let ir_ty_scheme = match ir_ty_scheme
+        // TODO: We need a real solution for this
+        .reduce_forall(
+          db.as_reducir_db(),
+          ReducIrTyApp::EffRow(ReducIrRow::Open(0)),
+        )
+        .kind(db.as_reducir_db())
+      {
         ReducIrTyKind::FunTy(args, ret) => {
           let (arg, rest) = args.split_at(1);
 
@@ -723,12 +730,12 @@ effect Reader {
     let expect = expect![[r#"
         (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
             (let
-              [ (V2 ((_row_simple_put_get @ [Ty({} -> (Int -> Int -> {Int, Int}) -> Int
-              -> {Int, Int}), Ty(Int -> ({} -> Int -> {Int, Int}) -> Int -> { Int
+              [ (V2 ((_row_simple_get_put @ [Ty(Int -> ({} -> Int -> {Int, Int}) -> Int
+              -> {Int, Int}), Ty({} -> (Int -> Int -> {Int, Int}) -> Int -> { Int
                                                                             , Int
                                                                             })]) {}))
-              , (V3 ((_row_simple_get_put @ [Ty(Int -> ({} -> Int -> {Int, Int}) -> Int
-              -> {Int, Int}), Ty({} -> (Int -> Int -> {Int, Int}) -> Int -> { Int
+              , (V3 ((_row_simple_put_get @ [Ty({} -> (Int -> Int -> {Int, Int}) -> Int
+              -> {Int, Int}), Ty(Int -> ({} -> Int -> {Int, Int}) -> Int -> { Int
                                                                             , Int
                                                                             })]) {}))
               , (V4 ((_row_simple_state_value @ [Ty(Int), Ty(Int)]) {}))
@@ -743,7 +750,7 @@ effect Reader {
               ]
               ((let
                 (V7 (V5[0]
-                  (V3[0]
+                  (V2[0]
                     (fun [V8, V9, V10] (V9 V10 V10))
                     (fun [V11, V12, V13] (V12 {} V11)))
                   (fun [V14, V15] (V4[0] V15 V14))))
@@ -751,7 +758,7 @@ effect Reader {
                   (V6[2][0]
                     V7
                     (let [ (V16 {}) , (V17 (V1[3][0] V0)) ]
-                      (yield V17[0] (fun [V18] (V3[2][0] V17[1] V16 V18)))))))) 5))))"#]];
+                      (yield V17[0] (fun [V18] (V3[3][0] V17[1] V16 V18)))))))) 5))))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"
@@ -814,12 +821,12 @@ effect Reader {
     let expect = expect![[r#"
         (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
             ((let
-              [ (V2 ((_row_simple_put_get @ [Ty({} -> (Int -> Int -> {Int, Int}) -> Int
-              -> {Int, Int}), Ty(Int -> ({} -> Int -> {Int, Int}) -> Int -> { Int
+              [ (V2 ((_row_simple_get_put @ [Ty(Int -> ({} -> Int -> {Int, Int}) -> Int
+              -> {Int, Int}), Ty({} -> (Int -> Int -> {Int, Int}) -> Int -> { Int
                                                                             , Int
                                                                             })]) {}))
-              , (V3 ((_row_simple_get_put @ [Ty(Int -> ({} -> Int -> {Int, Int}) -> Int
-              -> {Int, Int}), Ty({} -> (Int -> Int -> {Int, Int}) -> Int -> { Int
+              , (V3 ((_row_simple_put_get @ [Ty({} -> (Int -> Int -> {Int, Int}) -> Int
+              -> {Int, Int}), Ty(Int -> ({} -> Int -> {Int, Int}) -> Int -> { Int
                                                                             , Int
                                                                             })]) {}))
               , (V4 ((_row_simple_state_value @ [Ty(Int), Ty(Int)]) {}))
@@ -835,7 +842,7 @@ effect Reader {
               ((__mon_bind @ [Ty({1}), Ty(Int -> {Int, Int}), Ty({Int, Int})])
                 (let
                   (V7 (V5[0]
-                    (V3[0]
+                    (V2[0]
                       (fun [V8, V9, V10] (V9 V10 V10))
                       (fun [V11, V12, V13] (V12 {} V11)))
                     (fun [V14, V15] (V4[0] V15 V14))))
@@ -850,7 +857,7 @@ effect Reader {
                             (let [ (V16 {}) , (V17 (V1[3][0] V0)) ]
                               (fun [V0]
                                 <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {
-                                    V17[0], (fun [V18] (V3[2][0] V17[1] V16 V18)), (fun
+                                    V17[0], (fun [V18] (V3[3][0] V17[1] V16 V18)), (fun
                                       [V20
                                       ,V0] <0: V20>)})>))
                             (fun [V21]

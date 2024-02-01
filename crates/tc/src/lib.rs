@@ -546,7 +546,7 @@ mod tests {
     let db = &db;
     assert_matches!(
         db.kind(&scheme.ty),
-        FunTy(arg, ret) => {
+        FunTy(arg, _, ret) => {
             assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(a), VarTy(b)) => {
                 assert_eq!(a, b);
             });
@@ -579,7 +579,7 @@ mod tests {
     let db = &db;
     assert_matches!(
         db.kind(&scheme.ty),
-        FunTy(arg, ret)
+        FunTy(arg, _, ret)
         => {
             assert_matches!((db.kind(arg), db.kind(ret)),
                 (VarTy(a), RowTy(closed)) => {
@@ -599,8 +599,8 @@ mod tests {
     let db = &db;
     assert_matches!(
         db.kind(&scheme.ty),
-        FunTy(arg, ret) => {
-            assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(a), FunTy(arg, ret)) => {
+        FunTy(arg, _, ret) => {
+            assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(a), FunTy(arg, _, ret)) => {
                 assert_matches!((db.kind(arg), db.kind(ret)), (VarTy(_), VarTy(b)) => {
                     assert_eq!(a, b);
                 })
@@ -625,7 +625,7 @@ match <
     let db = &db;
     assert_matches!(
     db.kind(&scheme.ty),
-    FunTy(arg, ret) => {
+    FunTy(arg, _, ret) => {
         let ty_var = assert_matches!(
             db.kind(arg),
             SumTy(Row::Closed(closed)) => {
@@ -652,7 +652,7 @@ match <
     let db = &db;
     assert_matches!(
     db.kind(&scheme.ty),
-    FunTy(arg, ret) => {
+    FunTy(arg, _, ret) => {
         assert_matches!(db.kind(ret), ProdTy(Row::Closed(closed)) => {
             assert_matches!(closed.fields(db), [a, b, c, d] => {
                 assert_eq!(a.text(db), "a");
@@ -701,9 +701,9 @@ match <
     let db = &db;
     assert_matches!(
     db.kind(&scheme.ty),
-    FunTy(arg, ret) => {
+    FunTy(arg, _, ret) => {
         assert_matches!(db.kind(arg), ProdTy(Row::Open(_)));
-        assert_matches!(db.kind(ret), FunTy(arg, ret) => {
+        assert_matches!(db.kind(ret), FunTy(arg, _, ret) => {
             assert_matches!(db.kind(arg), ProdTy(Row::Open(_)));
             assert_eq!(ret, ty)
         })
@@ -733,7 +733,7 @@ match <
     );
 
     let db = &db;
-    assert_matches!(db.kind(&scheme.ty), FunTy(arg, ret) => {
+    assert_matches!(db.kind(&scheme.ty), FunTy(arg, _, ret) => {
         assert_matches!(db.kind(arg), ProdTy(Row::Open(_)));
         assert_matches_unit_ty!(db, ret);
     })
