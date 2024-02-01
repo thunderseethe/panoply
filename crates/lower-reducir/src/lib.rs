@@ -1,6 +1,6 @@
 use ast::{AstModule, AstTerm, Term};
 use base::{
-  id::{EffectName, EffectOpName, Id, IdSupply, ReducIrVarId, TermName, TyVarId, VarId},
+  id::{EffectName, Id, IdSupply, ReducIrVarId, TermName, TyVarId, VarId},
   id_converter::IdConverter,
   ident::Ident,
   modules::Module,
@@ -38,8 +38,6 @@ mod lower_mon;
 /// Slightly lower level of information than required by EffectInfo.
 /// However this is all calculatable off of the effect definition
 pub trait ReducIrEffectInfo: EffectInfo {
-  fn effect_handler_op_index(&self, effect_op: EffectOpName) -> usize;
-
   fn effect_handler_ir_ty(&self, effect: EffectName) -> ReducIrTy;
 }
 
@@ -468,10 +466,6 @@ impl<DB> ReducIrEffectInfo for DB
 where
   DB: ?Sized + crate::Db,
 {
-  fn effect_handler_op_index(&self, effect_op: EffectOpName) -> usize {
-    nameres::effect_handler_op_index(self.as_nameres_db(), effect_op)
-  }
-
   fn effect_handler_ir_ty(&self, effect: EffectName) -> ReducIrTy {
     effect_handler_ir_ty(self.as_lower_reducir_db(), effect)
   }
