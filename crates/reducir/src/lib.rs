@@ -306,13 +306,17 @@ pub enum DelimCont {
   // Generate a new prompt marker
   NewPrompt(ReducIrVar, P<ReducIr<DelimCont>>),
   // Install a prompt for a marker
-  Prompt(
-    P<ReducIr<DelimCont>>,
-    P<ReducIr<DelimCont>>,
-    P<ReducIr<DelimCont>>,
-  ),
+  Prompt {
+    marker: P<ReducIr<DelimCont>>,
+    upd_evv: P<ReducIr<DelimCont>>,
+    body: P<ReducIr<DelimCont>>,
+  },
   // Yield to a marker's prompt
-  Yield(ReducIrTy, P<ReducIr<DelimCont>>, P<ReducIr<DelimCont>>),
+  Yield {
+    ret_ty: ReducIrTy,
+    marker: P<ReducIr<DelimCont>>,
+    body: P<ReducIr<DelimCont>>,
+  },
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -975,7 +979,7 @@ impl TypeCheck for DelimCont {
           Err(ReducIrTyErr::ExpectedMarkerTy(prompt.ty))
         }
       }
-      DelimCont::Prompt(marker, _upd_handler, body) => {
+      DelimCont::Prompt { marker, body, .. } => {
         let marker_ty = marker.type_check(ctx)?;
         if let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) {
           body.type_check(ctx)
@@ -983,14 +987,18 @@ impl TypeCheck for DelimCont {
           Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty))
         }
       }
-      DelimCont::Yield(ty, marker, body) => {
+      DelimCont::Yield {
+        ret_ty,
+        marker,
+        body,
+      } => {
         let marker_ty = marker.type_check(ctx)?;
         let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) else {
           return Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty));
         };
         // We want to make sure body type checks but we don't actually use the result
         let _ = body.type_check(ctx)?;
-        Ok(*ty)
+        Ok(*ret_ty)
       }
     }
   }

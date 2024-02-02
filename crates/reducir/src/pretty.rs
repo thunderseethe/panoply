@@ -20,7 +20,11 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
         body.deref().kind.pretty(db, arena)
       ]
       .parens(),
-      DelimCont::Prompt(marker, upd_hndler, body) => arena
+      DelimCont::Prompt {
+        marker,
+        upd_evv,
+        body,
+      } => arena
         .as_string("prompt")
         .append(
           arena
@@ -28,12 +32,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
             .append(marker.deref().pretty(db, arena))
             .nest(2),
         )
-        .append(
-          arena
-            .softline()
-            .append(upd_hndler.pretty(db, arena))
-            .nest(2),
-        )
+        .append(arena.softline().append(upd_evv.pretty(db, arena)).nest(2))
         .append(
           arena
             .softline()
@@ -41,7 +40,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
             .nest(2),
         )
         .parens(),
-      DelimCont::Yield(_, marker, body) => arena
+      DelimCont::Yield { marker, body, .. } => arena
         .as_string("yield")
         .append(
           arena

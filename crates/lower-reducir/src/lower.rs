@@ -1165,14 +1165,14 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           ReducIr::local(
             handle_var,
             eff_handler,
-            ReducIr::ext(DelimCont::Yield(
-              op_ret,
-              P::new(ReducIr::field_proj(0, ReducIr::var(handle_var))),
-              P::new(ReducIr::abss(
+            ReducIr::ext(DelimCont::Yield {
+              ret_ty: op_ret,
+              marker: P::new(ReducIr::field_proj(0, ReducIr::var(handle_var))),
+              body: P::new(ReducIr::abss(
                 [kont_var],
                 ReducIr::app(handler, [ReducIr::var(value_var), ReducIr::var(kont_var)]),
               )),
-            )),
+            }),
           ),
         )
       }
@@ -1274,11 +1274,11 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           prompt_var,
           P::new(
             // Install prompt and wrap handler body in handler's return function
-            ReducIr::ext(DelimCont::Prompt(
-              P::new(ReducIr::var(prompt_var)),
-              P::new(update_evv),
-              P::new(return_),
-            )),
+            ReducIr::ext(DelimCont::Prompt {
+              marker: P::new(ReducIr::var(prompt_var)),
+              upd_evv: P::new(update_evv),
+              body: P::new(return_),
+            }),
           ),
         ));
 

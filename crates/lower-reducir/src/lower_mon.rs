@@ -580,7 +580,11 @@ impl LowerMonCtx<'_> {
           [ReducIr::abss([*mark_var], x)],
         )
       }
-      X(DelimCont::Prompt(marker, upd_evv, body)) => {
+      X(DelimCont::Prompt {
+        marker,
+        upd_evv,
+        body,
+      }) => {
         let update_evv_fn_ty = upd_evv
           .type_check(reducir_db)
           .map_err_pretty_with(reducir_db)
@@ -624,7 +628,11 @@ impl LowerMonCtx<'_> {
           [mon_marker, upd_evv.assume_no_ext(), mon_body],
         )
       }
-      X(DelimCont::Yield(ty, mark, f)) => {
+      X(DelimCont::Yield {
+        ret_ty,
+        marker,
+        body: f,
+      }) => {
         let w = ReducIrVar::new(
           ReducIrLocal {
             top_level: self.current,
@@ -632,7 +640,7 @@ impl LowerMonCtx<'_> {
           },
           evv_ty,
         );
-        let x = ReducIrVar::new(self.generate_local(), *ty);
+        let x = ReducIrVar::new(self.generate_local(), *ret_ty);
         let [a, b, c] = [
           ReducIrVarTy {
             var: ReducIrTyVarId::from_raw(0),
@@ -650,14 +658,14 @@ impl LowerMonCtx<'_> {
         ReducIr::abss(
           [w],
           ReducIr::tag(
-            self.mk_reducir_ty(ControlTy(evv_ty, *ty)),
+            self.mk_reducir_ty(ControlTy(evv_ty, *ret_ty)),
             1,
             // Wrap this struct in type variables.
             // These are used to instantiate the existentials during optimization.
             ReducIr::ty_abs(
               [a, b, c],
               ReducIr::new(Struct(vec![
-                self.lower_monadic(evv_ty, mark),
+                self.lower_monadic(evv_ty, marker),
                 self.lower_monadic(evv_ty, f),
                 ReducIr::abss([x], pure(ReducIr::var(x))),
               ]))
