@@ -107,6 +107,26 @@ impl Ty<InDb> {
       _ => None,
     })
   }
+
+  pub fn try_as_eff_row_val<DB: ?Sized + crate::Db>(
+    self,
+    db: &DB,
+  ) -> Result<(ScopedRow, Ty), Self> {
+    let ty_db = db.as_ty_db();
+    match ty_db.kind(&self) {
+      TypeKind::ProdTy(Row::Closed(row)) => {
+        let [eff, ret] = row.values(ty_db) else {
+          return Err(self);
+        };
+        let eff = match ty_db.kind(eff) {
+          TypeKind::FunTy(_, eff, _) => eff,
+          _ => return Err(self),
+        };
+        Ok((*eff, *ret))
+      }
+      _ => Err(self),
+    }
+  }
 }
 
 impl<A: TypeAlloc> Ty<A>

@@ -276,11 +276,13 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
               .db
               .lookup_effect_by_name(module, *eff_id)
               .expect("Effect Ident had no associated effect in lowering");
-            let ret_ty = self.lower_ty(*ret_ty);
-            self
-              .db
-              .effect_handler_ir_ty(eff)
-              .reduce_forall(self.db.as_reducir_db(), ReducIrTyApp::Ty(ret_ty))
+            let (outer_eff, ret_ty) = ret_ty
+              .try_as_eff_row_val(self.db)
+              .expect("Effect row value should be {eff, ret}");
+            self.db.effect_handler_ir_ty(eff).reduce_forall(
+              self.db.as_reducir_db(),
+              ReducIrTyApp::Ty(self.lower_ty(ret_ty)),
+            )
           })
           .collect::<Vec<_>>();
         RowEvIrTy {
@@ -864,11 +866,11 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                 .db
                 .lookup_effect_by_name(self.current.module(self.db), *eff_label)
                 .expect("Effect Ident had no associated effect in lowering");
-              let ret_ty = self.ty_ctx.lower_ty(*eff_ret_ty);
-              self
-                .db
-                .effect_handler_ir_ty(eff)
-                .reduce_forall(self.db.as_reducir_db(), ReducIrTyApp::Ty(ret_ty))
+              let (outer_eff, ret_ty) = eff_ret_ty.try_as_eff_row_val(self.db).unwrap();
+              self.db.effect_handler_ir_ty(eff).reduce_forall(
+                self.db.as_reducir_db(),
+                ReducIrTyApp::Ty(self.ty_ctx.lower_ty(ret_ty)),
+              )
             })
             .collect::<Vec<_>>();
           (ir_row_ev.scoped(self.db.as_reducir_db()), ty_vals)
@@ -1108,9 +1110,13 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           .expect("Evidence for operation to exist");
 
         // We know this is safe because we looked up a RowFields with one field
-        let kont_ret_ty = self
-          .ty_ctx
-          .lower_ty(*eff_vals.values(self.db.as_ty_db()).first().unwrap());
+        let (outer_eff, kont_ret_ty) = eff_vals
+          .values(self.db.as_ty_db())
+          .first()
+          .unwrap()
+          .try_as_eff_row_val(self.db)
+          .unwrap();
+        let kont_ret_ty = self.ty_ctx.lower_ty(kont_ret_ty);
         let handle_var = ReducIrVar::new(
           self.generate_local(),
           self

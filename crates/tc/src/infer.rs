@@ -40,6 +40,8 @@ struct HandlesConstraint<'infer> {
   handler: SimpleInferRow<'infer>,
   /// Effect that is handled by `handler`
   eff: ScopedInferRow<'infer>,
+  /// Effect outside the handler
+  outer_eff: ScopedInferRow<'infer>,
   /// The return type of the `handle` construct
   ret: InferTy<'infer>,
 }
@@ -103,12 +105,19 @@ impl<'infer> Constraints<'infer> {
     &mut self,
     handler: SimpleInferRow<'infer>,
     eff: ScopedInferRow<'infer>,
+    outer_eff: ScopedInferRow<'infer>,
     ret: InferTy<'infer>,
     span: Span,
   ) {
-    self
-      .handles
-      .push((HandlesConstraint { handler, eff, ret }, span))
+    self.handles.push((
+      HandlesConstraint {
+        handler,
+        eff,
+        outer_eff,
+        ret,
+      },
+      span,
+    ))
   }
 }
 
@@ -781,12 +790,20 @@ where
 
         self.state.item_wrappers.insert(term, wrapper);
 
+        let outer_eff = self.fresh_scoped_row();
+
         let core_db = self.db.as_core_db();
         let eff_name = op_name.effect(core_db);
         let ret_ty = self.fresh_var();
-        let eff = Row::Closed(self.single_row(eff_name.name(core_db), ret_ty));
+        let int = self.mk_ty(IntTy);
+        let eff = Row::Closed(self.single_row(
+          eff_name.name(core_db),
+          self.mk_ty(ProdTy(Row::Closed(self.mk_row(
+            &[self.db.ident_str("eff"), self.db.ident_str("ret")],
+            &[self.mk_ty(FunTy(int, outer_eff, int)), ret_ty],
+          )))),
+        ));
 
-        let outer_eff = self.fresh_scoped_row();
         let goal = self.fresh_scoped_row();
         self.add_effect_row_combine(outer_eff, eff, goal, current_span());
 
@@ -866,7 +883,7 @@ where
         // include the return clause.
         self
           .constraints
-          .add_handles(eff_sig_row, handled_eff, ret_ty, current_span());
+          .add_handles(eff_sig_row, handled_eff, out_eff, ret_ty, current_span());
 
         // Handle removes an effect so our out_eff should be whatever body_eff was minus
         // our handled effect
@@ -1071,9 +1088,18 @@ where
     // We want to handle these constraints only after all our row constraints are solved.
     // That way if a handler doesn't have a concrete row type yet, we know it's because it
     // won't have one ever and we can fail with a type error.
-    for (HandlesConstraint { handler, eff, ret }, span) in constraints.handles {
+    for (
+      HandlesConstraint {
+        handler,
+        eff,
+        outer_eff,
+        ret,
+      },
+      span,
+    ) in constraints.handles
+    {
       self
-        .lookup_effect_and_unify(handler, eff, ret)
+        .lookup_effect_and_unify(handler, eff, outer_eff, ret)
         .map_err(|err| self.errors.push(into_diag(self.db, err, span)))
         .unwrap_or_default();
     }
@@ -1325,11 +1351,19 @@ where
     &mut self,
     handler: SimpleInferRow<'infer>,
     eff: ScopedInferRow<'infer>,
+    outer_eff: ScopedInferRow<'infer>,
     ret: InferTy<'infer>,
   ) -> Result<(), TypeCheckError<'infer>> {
     let normal_handler = self.normalize_row(handler);
     let normal_eff = self.normalize_row(eff);
+    let normal_out_eff = self.normalize_row(outer_eff);
     let normal_ret = self.normalize_ty(ret);
+
+    let int = self.mk_ty(IntTy);
+    let normal_eff_val = self.mk_ty(ProdTy(Row::Closed(self.mk_row(
+      &[self.db.ident_str("eff"), self.db.ident_str("ret")],
+      &[self.mk_ty(FunTy(int, normal_out_eff, int)), normal_ret],
+    ))));
 
     let unify_sig_handler =
       |ctx: &mut Self, scheme: &TyScheme, sig: SimpleClosedRow<InArena<'infer>>| {
@@ -1388,14 +1422,14 @@ where
         // We succesfully unified the handler against it's expected signature.
         // That means we can unify our eff_var against our effect
         let name = self.db.effect_name(eff_name);
-        let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[normal_ret]);
+        let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[normal_eff_val]);
         self.unify(eff_var, eff_row)
       }
       (Row::Closed(handler), Row::Closed(eff)) => {
         debug_assert!(eff.len(&*self) == 1);
         let eff_ident = *eff.fields(&*self).first().unwrap();
-        let eff_ret_ty = *eff.values(&*self).first().unwrap();
-        self.unify(normal_ret, eff_ret_ty)?;
+        let eff_value = *eff.values(&*self).first().unwrap();
+        self.unify(eff_value, normal_eff_val)?;
 
         let eff_name = self
           .db
@@ -1408,8 +1442,8 @@ where
       (Row::Open(handler_var), Row::Closed(eff)) => {
         debug_assert!(eff.len(&*self) == 1);
         let eff_ident = *eff.fields(&*self).first().unwrap();
-        let eff_ret_ty = *eff.values(&*self).first().unwrap();
-        self.unify(normal_ret, eff_ret_ty)?;
+        let eff_val = *eff.values(&*self).first().unwrap();
+        self.unify(eff_val, normal_eff_val)?;
         let eff_name = self
           .db
           .lookup_effect_by_name(self.module, eff_ident)
