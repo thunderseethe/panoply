@@ -436,10 +436,11 @@ where
         // Check an abstraction against a function type by checking the body checks against
         // the function return type with the function argument type in scope.
         self.local_env.insert(*arg, arg_ty);
-        self
-          .constraints
-          .add_effect_row_eq(eff, expected.eff, current_span());
-        self._check(*body, InferResult::new(body_ty, expected.eff));
+
+        let unused = self.fresh_scoped_row();
+        self.add_effect_row_combine(eff, unused, expected.eff, current_span());
+
+        self._check(*body, InferResult::new(body_ty, eff));
         self.local_env.remove(arg);
       }
       (Label { .. }, ProdTy(Row::Closed(row))) => {
@@ -649,11 +650,7 @@ where
         let fun_infer = self._infer(*func);
         // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
         // for arg and ret type.
-        let (arg_ty, eff, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
-
-        self
-          .constraints
-          .add_effect_row_eq(eff, fun_infer.eff, current_span());
+        let (arg_ty, _, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
 
         self._check(*arg, InferResult::new(arg_ty, fun_infer.eff));
 
@@ -1393,6 +1390,7 @@ where
         // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
         let member_ty = scheme.ty.try_fold_with(&mut inst).unwrap();
 
+        ctx.unify(scheme.eff.try_fold_with(&mut inst).unwrap(), normal_out_eff)?;
         ctx.unify(ret_tyvar, normal_ret)?;
         // Unify our instantiated and transformed member type agaisnt the handler field
         // type.
@@ -1472,6 +1470,8 @@ where
             .map(|key| (*key, self.eff_row_unifiers.new_key(None)))
             .collect(),
         };
+        self.unify(scheme.eff.try_fold_with(&mut inst).unwrap(), normal_out_eff)?;
+
         let ty = scheme.ty.try_fold_with(&mut inst).unwrap();
         let handler_row = match *ty {
           ProdTy(Row::Closed(handler_row)) => handler_row,

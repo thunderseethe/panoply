@@ -173,7 +173,7 @@ pub fn effect_op_tyscheme_of(db: &dyn crate::Db, effect_op: EffectOpName) -> TyS
     })
     .unwrap_or_else(|| {
       panic!(
-        "ICE: Constructed EffectOpName {:?} with an Effect Operation defintion",
+        "ICE: Constructed EffectOpName {:?} without an Effect Operation definition",
         effect_op.name(db.as_core_db()).text(db.as_core_db())
       )
     })

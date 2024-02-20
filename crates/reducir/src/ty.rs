@@ -46,14 +46,14 @@ pub enum ReducIrTyKind {
   CoprodVarTy(i32),
   FunTy(Box<[ReducIrTy]>, ReducIrTy),
   ForallTy(Kind, ReducIrTy),
-  //ExistsTy(Kind, ReducIrTy),
   ProductTy(Vec<ReducIrTy>),
   CoproductTy(Vec<ReducIrTy>),
   // TODO: Figure out how to not build this in
   MarkerTy(ReducIrTy),
   /// Our delimited continuation monad type.
-  /// It's specialized as a type to handle recursion without full support for recursive types.a
+  /// It's specialized as a type to handle recursion without full support for recursive types.
   ControlTy(ReducIrTy, ReducIrTy),
+  FunETy(ReducIrTy, ReducIrTy, ReducIrTy),
 }
 
 #[salsa::interned]
@@ -106,8 +106,26 @@ impl ReducIrTy {
 
   /// Drops n args off of self if self is a function type. Returns Err if self is not a function type.
   pub fn drop_args(self, db: &dyn crate::Db, n_args: usize) -> Result<Self, Self> {
+    if n_args == 0 {
+      return Ok(self);
+    }
     match self.kind(db) {
       ReducIrTyKind::FunTy(args, ret) => Ok(db.mk_fun_ty(args.iter().skip(n_args).copied(), ret)),
+      ReducIrTyKind::FunETy(_arg, _, ret) => ret.drop_args(db, n_args - 1),
+      _ => Err(self),
+    }
+  }
+
+  pub fn split_args<DB: ?Sized + crate::Db>(
+    self,
+    db: &DB,
+    n_args: usize,
+  ) -> Result<(Vec<Self>, Self), Self> {
+    match self.kind(db.as_reducir_db()) {
+      ReducIrTyKind::FunTy(args, ret) => {
+        let (args, ret_args) = args.split_at(n_args);
+        Ok((args.to_vec(), db.mk_fun_ty(ret_args.iter().copied(), ret)))
+      }
       _ => Err(self),
     }
   }
@@ -123,7 +141,7 @@ impl ReducIrTy {
   }
 }
 
-fn default_fold_tykind<'db>(
+pub fn default_fold_tykind<'db>(
   fold: &mut (impl FoldReducIrTy<'db> + ?Sized),
   kind: ReducIrTyKind,
 ) -> ReducIrTy {
@@ -167,11 +185,17 @@ fn default_fold_tykind<'db>(
       let a_ty = fold.fold_ty(a_ty);
       ReducIrTyKind::ControlTy(evv_ty, a_ty)
     }
+    ReducIrTyKind::FunETy(arg, eff, ret) => {
+      let arg = fold.fold_ty(arg);
+      let eff = fold.fold_ty(eff);
+      let ret = fold.fold_ty(ret);
+      ReducIrTyKind::FunETy(arg, eff, ret)
+    }
   };
   fold.mk_ty(kind)
 }
 
-trait FoldReducIrTy<'db> {
+pub trait FoldReducIrTy<'db> {
   fn db(&self) -> &'db dyn crate::Db;
 
   fn mk_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
@@ -205,8 +229,8 @@ impl ReducIrTy {
   }
   /// Assume `self` is a forall and reduce it by applying `ty` as it's argument.
   /// This applies type substitution without having to create a TyApp ReducIr node.
-  pub fn reduce_forall(self, db: &dyn crate::Db, ty_app: ReducIrTyApp) -> ReducIrTy {
-    match (self.kind(db), ty_app) {
+  pub fn reduce_forall<DB: ?Sized + crate::Db>(self, db: &DB, ty_app: ReducIrTyApp) -> ReducIrTy {
+    match (self.kind(db.as_reducir_db()), ty_app) {
       (ReducIrTyKind::ForallTy(Kind::Type, ret_ty), ReducIrTyApp::Ty(ty)) => {
         ret_ty.subst_single(db, ty)
       }
@@ -220,11 +244,14 @@ impl ReducIrTy {
     }
   }
 
-  pub fn subst(self, db: &dyn crate::Db, subst: Subst) -> Self {
-    self.fold(&mut SubstFold { db, subst })
+  pub fn subst<DB: ?Sized + crate::Db>(self, db: &DB, subst: Subst) -> Self {
+    self.fold(&mut SubstFold {
+      db: db.as_reducir_db(),
+      subst,
+    })
   }
 
-  pub fn subst_single(self, db: &dyn crate::Db, payload: impl IntoPayload) -> Self {
+  pub fn subst_single<DB: ?Sized + crate::Db>(self, db: &DB, payload: impl IntoPayload) -> Self {
     self.subst(db, Subst::single(payload.into_payload(db)))
   }
 

@@ -6,6 +6,7 @@ use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
 use crate::ty::{Kind, ReducIrVarTy};
 use crate::{
   Bind, DelimCont, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrTyErr, ReducIrVar,
+  TypeCheck,
 };
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
@@ -23,6 +24,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
       DelimCont::Prompt {
         marker,
         upd_evv,
+        ret,
         body,
       } => arena
         .as_string("prompt")
@@ -33,6 +35,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
             .nest(2),
         )
         .append(arena.softline().append(upd_evv.pretty(db, arena)).nest(2))
+        .append(arena.softline().append(ret.pretty(db, arena).nest(2)))
         .append(
           arena
             .softline()
@@ -40,8 +43,13 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
             .nest(2),
         )
         .parens(),
-      DelimCont::Yield { marker, body, .. } => arena
+      DelimCont::Yield {
+        marker,
+        body,
+        ret_ty,
+      } => arena
         .as_string("yield")
+        .append(ret_ty.pretty(db, arena).angles())
         .append(
           arena
             .softline()
@@ -55,18 +63,29 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
             .nest(2),
         )
         .parens(),
+      DelimCont::AbsE(arg, eff, body) => docs![
+        arena,
+        "fun",
+        eff.pretty(db, arena).angles(),
+        arena.space(),
+        arg.pretty(arena).brackets(),
+        arena.line().append(body.pretty(db, arena)).nest(2).group(),
+      ]
+      .parens(),
     }
   }
 }
 
-impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB> for ReducIr<Ext> {
+impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
+  PrettyWithCtx<DB> for ReducIr<Ext>
+{
   fn pretty<'a>(&self, db: &DB, allocator: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
     self.kind.pretty(db, allocator)
   }
 }
 
-impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
-  for ReducIrKind<Ext>
+impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
+  PrettyWithCtx<DB> for ReducIrKind<Ext>
 {
   fn pretty<'a>(&self, db: &DB, arena: &'a RcAllocator) -> pretty::DocBuilder<'a, RcAllocator> {
     use ReducIrKind::*;
@@ -85,6 +104,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
     match self {
       Int(i) => i.to_string().pretty(arena),
       Var(v) => v.pretty(arena),
+      //Var(v) => v.pretty_with_local(db, arena),
       //Var(v) => v.pretty_with_type(db, arena),
       Abs(vars, body) => {
         let param_single = arena.space().append(
@@ -305,8 +325,8 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
     }
   }
 }
-impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<DB>
-  for ReducIrTyErr<'ir, Ext>
+impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
+  PrettyWithCtx<DB> for ReducIrTyErr<'ir, Ext>
 {
   fn pretty<'a>(&self, db: &DB, a: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
     match self {
@@ -334,6 +354,35 @@ impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + Clone> PrettyWithCtx<
             .append(a.text(":"))
             .append(a.softline())
             .append(right_ty.pretty(db, a)),
+        ),
+      ReducIrTyErr::ArgMismatch {
+        fun_ir,
+        arg_ir,
+        expected_ty,
+        actual_ty,
+      } => a
+        .text("Function argument:")
+        .append(
+          a.softline()
+            .append(
+              arg_ir
+                .pretty(db, a)
+                .append(a.text(":"))
+                .append(a.line())
+                .append(actual_ty.pretty(db, a).parens().group()),
+            )
+            .nest(2),
+        )
+        .append(
+          a.line()
+            .append(a.text("expected to have type:"))
+            .append(a.softline().append(expected_ty.pretty(db, a)).nest(2)),
+        )
+        .append(
+          a.line().append(
+            a.text("from function:")
+              .append(a.softline().append(fun_ir.pretty(db, a)).nest(2)),
+          ),
         ),
       ReducIrTyErr::KindMistmatch(lhs, rhs) => a.text("KindMistmatch").append(
         lhs

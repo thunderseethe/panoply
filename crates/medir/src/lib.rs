@@ -243,7 +243,9 @@ impl MedIr {
         },
         Call::Unknown(var) => match var.ty.kind(db.as_medir_db()) {
           MedIrTyKind::FunTy(_, ret_ty) => *ret_ty,
-          _ => todo!(),
+          kind => {
+            todo!("{}", kind.pretty_with(db).pprint().pretty(80))
+          }
         },
       },
       MedIrKind::Closure(item, args) => {

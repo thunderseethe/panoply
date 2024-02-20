@@ -104,6 +104,14 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyKind {
         .append(a.space())
         .append(t.pretty(db, a))
         .parens(),
+      ReducIrTyKind::FunETy(arg, eff, ret) => arg
+        .pretty(db, a)
+        .append(a.space())
+        .append("->")
+        .append(a.softline())
+        .append(eff.pretty(db, a))
+        .append(a.space())
+        .append(ret.pretty(db, a)),
     }
   }
 }

@@ -1,3 +1,4 @@
+use base::pretty::{PrettyPrint, PrettyWithCtx};
 use base::{id::MedIrVarId, id_converter::IdConverter, pretty::PrettyErrorWithDb};
 use medir::MedIrItemName;
 use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar};
@@ -43,6 +44,9 @@ fn from_reducir_ty<DB: ?Sized + crate::Db>(db: &DB, ty: ReducIrTy) -> MedIrTy {
     ReducIrTyKind::VarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
     ReducIrTyKind::ProdVarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
     ReducIrTyKind::CoprodVarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
+    ReducIrTyKind::FunETy(_, _, _) => {
+      unreachable!("{}", ty.pretty_with(db.as_reducir_db()).pprint().pretty(80))
+    }
   }
 }
 
@@ -110,8 +114,8 @@ impl<'a> LowerCtx<'a> {
         ),
         vec![],
       )),
-      ReducIrKind::Abs(vars, body) => {
-        let (name, free_vars) = self.closure_convert(vars, body);
+      ReducIrKind::Abs(vars, abs_body) => {
+        let (name, free_vars) = self.closure_convert(vars, abs_body);
         MedIr::new(MedIrKind::Closure(name, free_vars))
       }
       ReducIrKind::App(head, spine) => {
@@ -286,10 +290,11 @@ impl<'a> LowerCtx<'a> {
     vars: &[ReducIrVar],
     body: &ReducIr,
   ) -> (MedIrTypedItem, Vec<MedIrVar>) {
+    let locals = vars.iter().map(|var| var.var).collect::<Vec<_>>();
     let mut free_vars = body
       .free_var_set()
       .into_iter()
-      .filter(|var| !vars.contains(var))
+      .filter(|var| !locals.contains(&var.var))
       .map(|var| {
         MedIrVar::new(
           self.var_converter.convert(var.var),

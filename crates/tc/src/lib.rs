@@ -198,9 +198,11 @@ pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) ->
   let ret_ty_id = supply.supply_id();
   let ret_ty = db.mk_ty(TypeKind::VarTy(ret_ty_id));
 
+  let outer_eff_id = supply.supply_id();
+
   let mut tys = vec![ret_ty_id];
   let mut datas = vec![];
-  let mut effs = vec![];
+  let mut effs = vec![outer_eff_id];
 
   let mut constrs = vec![];
   let mut row = vec![];
@@ -221,9 +223,8 @@ pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) ->
       subst.insert(*data_id, new_data_id);
     }
     for eff_id in scheme.bound_eff_row.iter() {
-      let new_eff_id = supply.supply_id();
-      effs.push(new_eff_id);
-      subst.insert(*eff_id, new_eff_id);
+      effs.push(outer_eff_id);
+      subst.insert(*eff_id, outer_eff_id);
     }
 
     let mut tyvarid_subst = TyVarIdSubst { db, subst };
@@ -251,7 +252,7 @@ pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) ->
       bound_data_row: datas,
       bound_eff_row: effs,
       constrs,
-      eff: Row::Closed(db.empty_row()),
+      eff: Row::Open(outer_eff_id),
       ty: db.mk_ty(TypeKind::ProdTy(Row::Closed(handler_row))),
     },
   )
@@ -461,6 +462,7 @@ mod tests {
     diagnostic::{error::PanoplyError, tc::TypeCheckDiagnostic},
     file::{FileId, SourceFile, SourceFileSet},
     id::{TermName, TyVarId},
+    pretty::{PrettyPrint, PrettyWithCtx},
     Db,
   };
   use parser::Db as ParserDb;
@@ -822,10 +824,43 @@ main = (|x| x)({})
     );
 
     assert_matches!((&db).kind(&scheme.ty), TypeKind::IntTy);
-    //assert_matches_unit_ty!(&db, &scheme.ty);
     assert_matches!(scheme.eff, Row::Closed(closed) => {
         assert!(closed.fields(&db).is_empty());
         assert!(closed.values(&db).is_empty());
     })
+  }
+
+  #[test]
+  fn test_entry_point_reader() {
+    let db = TestDatabase::default();
+
+    let scheme = type_check_file(
+      &db,
+      "foo",
+      r#"
+effect Reader {
+  ask : {} -> Int
+}
+
+foo = with {
+  ask = |x| |k| k(374),
+  return = |x| { value = x, random = 5 }
+} do Reader.ask({})
+"#,
+    );
+
+    let expect = expect_test::expect![[r#"
+        forall<Eff> ty_var<0> ty_var<1> . 
+          (TyVarId(0) ⊙ Reader |> { eff |> Int -> TyVarId(0) Int, ret |> { value |> Int
+        , random |> Int } } ~eff~ TyVarId(1)) => { value |> Int, random |> Int
+        } | TyVarId(0)"#]];
+    expect.assert_eq(
+      scheme
+        .pretty_with(&(&db, &db))
+        .pprint()
+        .pretty(80)
+        .to_string()
+        .as_str(),
+    );
   }
 }

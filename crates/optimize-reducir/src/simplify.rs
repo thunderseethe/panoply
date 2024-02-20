@@ -3,15 +3,15 @@ use std::ops::Deref;
 
 use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
-use base::pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx};
+use base::pretty::PrettyErrorWithDb;
 use reducir::mon::MonReducIrRowEv;
 use reducir::ty::{
   IntoPayload, Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
   UnwrapMonTy,
 };
 use reducir::{
-  Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrItemOccurence, ReducIrKind, ReducIrLocal,
-  ReducIrTermName, ReducIrVar, TypeCheck, P,
+  default_endotraverse_ir, Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrItemOccurence,
+  ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
 };
 use rustc_hash::FxHashMap;
 
@@ -42,6 +42,8 @@ fn is_value(ir: &ReducIr) -> bool {
 struct Simplify<'a> {
   db: &'a dyn crate::Db,
   builtin_evs: FxHashMap<ReducIrTermName, &'a ReducIr>,
+  supply: &'a mut IdSupply<ReducIrVarId>,
+  top_level: ReducIrTermName,
 }
 impl ReducIrFold for Simplify<'_> {
   type InExt = Infallible;
@@ -190,10 +192,91 @@ impl ReducIrFold for Simplify<'_> {
       },
       // Always inline row evidence
       Item(occ) if occ.inline => match self.builtin_evs.get(&occ.name) {
-        Some(builtin) => self.traverse_ir(builtin),
+        Some(builtin) => {
+          let builtin = builtin.fold(&mut RenumberVars {
+            supply: self.supply,
+            top_level: self.top_level,
+            subst: FxHashMap::default(),
+          });
+          self.traverse_ir(&builtin)
+        }
         None => ReducIr::new(ir),
       },
       ir => ReducIr::new(ir),
+    }
+  }
+}
+
+struct RenumberVars<'a> {
+  supply: &'a mut IdSupply<ReducIrVarId>,
+  top_level: ReducIrTermName,
+  subst: FxHashMap<ReducIrLocal, ReducIrLocal>,
+}
+impl<'a> RenumberVars<'a> {
+  fn gen_local(&mut self) -> ReducIrLocal {
+    ReducIrLocal {
+      id: self.supply.supply_id(),
+      top_level: self.top_level,
+    }
+  }
+}
+impl<'a> ReducIrEndoFold for RenumberVars<'a> {
+  type Ext = Infallible;
+
+  fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
+    // TODO Replace bound variables with new variables and add them to the substitution
+    match kind {
+      ReducIrKind::Var(v) => match self.subst.get(&v.var) {
+        Some(new_v) => ReducIr::var(ReducIrVar::new(*new_v, v.ty)),
+        None => ReducIr::var(v),
+      },
+      kind => ReducIr::new(kind),
+    }
+  }
+
+  fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
+    // TODO Replace binders and add them to the substitution
+    match ir.kind() {
+      ReducIrKind::Locals(binds, body) => {
+        let body = body.fold(self);
+        let mut removals = vec![];
+        let binds = binds
+          .iter()
+          .map(|local| {
+            let new_var = self.gen_local();
+            self.subst.insert(local.var.var, new_var);
+            removals.push(local.var.var);
+            let mut local = local.fold(self);
+            local.var = ReducIrVar::new(new_var, local.var.ty);
+            local
+          })
+          .collect::<Vec<_>>();
+        let kind = ReducIr::locals(binds, body.fold(self)).kind;
+        for var in removals {
+          self.subst.remove(&var);
+        }
+        self.fold_ir(kind)
+      }
+      ReducIrKind::Abs(vars, body) => {
+        let body = body.fold(self);
+        let mut removals = vec![];
+        let vars = vars
+          .iter()
+          .map(|var| {
+            let new_var = self.gen_local();
+            self.subst.insert(var.var, new_var);
+            removals.push(var.var);
+            ReducIrVar::new(new_var, var.ty)
+          })
+          .collect::<Vec<_>>();
+        // We do it this way to reuse smart constructor logic
+        let kind = ReducIr::abss(vars, body.fold(self)).kind;
+        for var in removals {
+          self.subst.remove(&var);
+        }
+        self.fold_ir(kind)
+      }
+      _ => default_endotraverse_ir(self, ir),
     }
   }
 }
@@ -227,12 +310,7 @@ impl<DB: ?Sized + crate::Db> ReducIrEndoFold for EtaExpand<'_, DB> {
     }
     match kind {
       ReducIrKind::App(head, mut spine) => match try_as_item(&head) {
-        Some(occ) => {
-          println!(
-            "eta expand: {} {}",
-            occ.name.name(self.db).text(self.db.as_core_db()),
-            occ.ty.pretty_with(self.db).pprint().pretty(80)
-          );
+        Some(_occ) => {
           // We do this in case our head is ty_app
           if let ReducIrTyKind::FunTy(params, ret) = head
             .type_check(self.db)
@@ -245,7 +323,6 @@ impl<DB: ?Sized + crate::Db> ReducIrEndoFold for EtaExpand<'_, DB> {
               params.push(evv_ty);
             }
             if params.len() > spine.len() {
-              println!("we did it!");
               let vars = params
                 .iter()
                 .skip(spine.len())
@@ -314,12 +391,17 @@ pub(crate) fn simplify(
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
-  ir.fold(&mut Simplify { db, builtin_evs })
-    .fold(&mut EtaExpand {
-      db,
-      supply,
-      name: ReducIrTermName::Term(name),
-    })
+  ir.fold(&mut Simplify {
+    db,
+    builtin_evs,
+    supply,
+    top_level: ReducIrTermName::Term(name),
+  })
+  .fold(&mut EtaExpand {
+    db,
+    supply,
+    name: ReducIrTermName::Term(name),
+  })
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {
@@ -376,14 +458,16 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
 /// updated effect row
 pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> ReducIr {
   use ReducIrTyKind::*;
-  let m_ty = db.mk_reducir_ty(VarTy(2));
-  let upd_m = db.mk_reducir_ty(VarTy(1));
-  let a = db.mk_reducir_ty(VarTy(0));
+  let m_ty = db.mk_reducir_ty(VarTy(3));
+  let upd_m = db.mk_reducir_ty(VarTy(2));
+  let a = db.mk_reducir_ty(VarTy(1));
+  let b = db.mk_reducir_ty(VarTy(0));
 
-  let mark_ty = db.mk_reducir_ty(MarkerTy(a));
+  let mark_ty = db.mk_reducir_ty(MarkerTy(b));
   let upd_fun_ty = db.mk_fun_ty([m_ty], upd_m);
   let body_fun_ty = db.mk_mon_ty(upd_m, a);
-  let ret_ty = db.mk_reducir_ty(ControlTy(m_ty, a));
+  let ret_clause_ty = db.mk_fun_ty([a], db.mk_mon_ty(m_ty, b));
+  let ret_ty = db.mk_mon_ty(m_ty, b);
 
   let mut var_gen = IdSupply::default();
   let mut gen_local = || ReducIrLocal {
@@ -392,6 +476,7 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   };
   let mark = ReducIrVar::new(gen_local(), mark_ty);
   let upd = ReducIrVar::new(gen_local(), upd_fun_ty);
+  let ret = ReducIrVar::new(gen_local(), ret_clause_ty);
   let body = ReducIrVar::new(gen_local(), body_fun_ty);
   let evv = ReducIrVar::new(gen_local(), m_ty);
 
@@ -416,7 +501,7 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
         False -> Yield m' f (\x . prompt upd m h (k x))
         True -> f (\x . prompt upd m h (k x)) w
   */
-  let y_var = ReducIrVar::new(gen_local(), db.mk_yield_ty(VarTy(1), VarTy(0)));
+  let y_var = ReducIrVar::new(gen_local(), db.mk_yield_ty(VarTy(2), VarTy(1)));
   let mut tyvar_supply = IdSupply::default();
   let mut tyvars = |n| {
     std::iter::from_fn(|| {
@@ -428,18 +513,22 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
     .take(n)
     .collect::<Vec<_>>()
   };
+  let tag_ty = db.mk_reducir_ty(ControlTy(m_ty, b));
   ReducIr::ty_abs(
-    tyvars(3),
+    tyvars(4),
     ReducIr::abss(
-      [mark, upd, body, evv],
+      [mark, upd, ret, body, evv],
       ReducIr::case(
-        ret_ty,
+        tag_ty,
         ReducIr::app(
           ReducIr::var(body),
           [ReducIr::app(ReducIr::var(upd), [ReducIr::var(evv)])],
         ),
         [
-          ReducIr::abss([x], ReducIr::tag(ret_ty, 0, ReducIr::var(x))),
+          ReducIr::abss(
+            [x],
+            ReducIr::app(ReducIr::var(ret), [ReducIr::var(x), ReducIr::var(evv)]),
+          ),
           {
             // Instantiate y as if our markers are equal
             let y = ReducIr::ty_app(
@@ -447,20 +536,20 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
               [
                 ReducIrTyApp::Ty(a), // TODO figure out what beta should be here
                 ReducIrTyApp::Ty(m_ty),
-                ReducIrTyApp::Ty(a),
+                ReducIrTyApp::Ty(b),
               ],
             );
             ReducIr::abss(
               [y_var],
               ReducIr::case(
-                ret_ty,
+                tag_ty,
                 ReducIr::app(meq, [ReducIr::var(mark), ReducIr::field_proj(0, y.clone())]),
                 [
                   // False branch
                   ReducIr::abss(
                     [unused],
                     ReducIr::tag(
-                      ret_ty,
+                      tag_ty,
                       1,
                       ReducIr::ty_abs(tyvars(3), {
                         let beta_ty = db.mk_reducir_ty(VarTy(2));
@@ -482,7 +571,46 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
                           ReducIr::new(ReducIrKind::Struct(vec![
                             ReducIr::field_proj(0, ReducIr::var(reinst_y)),
                             ReducIr::field_proj(1, ReducIr::var(reinst_y)),
-                            ReducIr::field_proj(2, ReducIr::var(reinst_y)),
+                            {
+                              let x = ReducIrVar::new(gen_local(), beta_ty);
+                              let evv =
+                                ReducIrVar::new(gen_local(), evv.ty.subst(db, Subst::Inc(3)));
+                              let prompt_ty = db.mk_forall_ty(
+                                [Kind::Type, Kind::Type, Kind::Type, Kind::Type],
+                                db.mk_fun_ty(
+                                  [mark_ty, upd_fun_ty, ret_clause_ty, body_fun_ty],
+                                  ret_ty,
+                                ),
+                              );
+                              let prompt_item = ReducIr::new(ReducIrKind::Item(
+                                ReducIrItemOccurence::with_inline(name, prompt_ty, false),
+                              ));
+                              ReducIr::abss(
+                                [x, evv],
+                                ReducIr::app(
+                                  ReducIr::ty_app(
+                                    prompt_item,
+                                    [
+                                      ReducIrTyApp::Ty(m_ty),
+                                      ReducIrTyApp::Ty(upd_m),
+                                      ReducIrTyApp::Ty(a),
+                                      ReducIrTyApp::Ty(b),
+                                    ],
+                                  )
+                                  .subst(db, Subst::Inc(3)),
+                                  [
+                                    ReducIr::var(mark).subst(db, Subst::Inc(3)),
+                                    ReducIr::var(upd).subst(db, Subst::Inc(3)),
+                                    ReducIr::var(ret).subst(db, Subst::Inc(3)),
+                                    ReducIr::app(
+                                      ReducIr::field_proj(2, ReducIr::var(reinst_y)),
+                                      [ReducIr::var(x)],
+                                    ),
+                                    ReducIr::var(evv),
+                                  ],
+                                ),
+                              )
+                            },
                           ])),
                         )
                       }),
@@ -490,25 +618,43 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
                   ),
                   // True branch
                   ReducIr::abss([unused], {
-                    let ty = db.mk_yield_ty(VarTy(2), VarTy(0));
-                    let lie = ReducIrVar::new(gen_local(), ty);
-                    let ty_apply = |var| {
-                      ReducIr::ty_app(
-                        ReducIr::var(var),
-                        [
-                          ReducIrTyApp::Ty(a), // TODO figure out what beta should be here
-                          ReducIrTyApp::Ty(m_ty),
-                          ReducIrTyApp::Ty(a),
-                        ],
-                      )
-                    };
-                    ReducIr::local(
-                      lie,
-                      ReducIr::new(ReducIrKind::Coerce(ty, P::new(ReducIr::var(y_var)))),
-                      ReducIr::app(
-                        ReducIr::field_proj(1, ty_apply(lie)),
-                        [ReducIr::field_proj(2, ty_apply(lie)), ReducIr::var(evv)],
-                      ),
+                    ReducIr::app(
+                      ReducIr::field_proj(1, y.clone()),
+                      [
+                        {
+                          let x = ReducIrVar::new(gen_local(), a);
+                          let evv = ReducIrVar::new(gen_local(), evv.ty);
+                          let prompt_ty = db.mk_forall_ty(
+                            [Kind::Type, Kind::Type, Kind::Type, Kind::Type],
+                            db.mk_fun_ty([mark_ty, upd_fun_ty, ret_clause_ty, body_fun_ty], ret_ty),
+                          );
+                          let prompt_item = ReducIr::new(ReducIrKind::Item(
+                            ReducIrItemOccurence::with_inline(name, prompt_ty, false),
+                          ));
+                          ReducIr::abss(
+                            [x, evv],
+                            ReducIr::app(
+                              ReducIr::ty_app(
+                                prompt_item,
+                                [
+                                  ReducIrTyApp::Ty(m_ty),
+                                  ReducIrTyApp::Ty(upd_m),
+                                  ReducIrTyApp::Ty(a),
+                                  ReducIrTyApp::Ty(b),
+                                ],
+                              ),
+                              [
+                                ReducIr::var(mark),
+                                ReducIr::var(upd),
+                                ReducIr::var(ret),
+                                ReducIr::app(ReducIr::field_proj(2, y.clone()), [ReducIr::var(x)]),
+                                ReducIr::var(evv),
+                              ],
+                            ),
+                          )
+                        },
+                        ReducIr::var(evv),
+                      ],
                     )
                   }),
                 ],
@@ -623,12 +769,11 @@ pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) 
                         ReducIr::ty_app(
                           bind_item,
                           [
-                            ReducIrTyApp::Ty(m),
-                            ReducIrTyApp::Ty(a),
-                            ReducIrTyApp::Ty(b),
+                            ReducIrTyApp::Ty(m.subst(db, Subst::Inc(3))),
+                            ReducIrTyApp::Ty(a.subst(db, Subst::Inc(3))),
+                            ReducIrTyApp::Ty(b.subst(db, Subst::Inc(3))),
                           ],
-                        )
-                        .subst(db, Subst::Inc(3)),
+                        ),
                         [
                           ReducIr::app(k, [ReducIr::var(x)]),
                           ReducIr::var(g).subst(db, Subst::Inc(3)),

@@ -265,6 +265,13 @@ impl ReducIrVar {
       is_join_point: true,
     }
   }
+
+  pub fn map_type(self, op: impl FnOnce(ReducIrTy) -> ReducIrTy) -> ReducIrVar {
+    Self {
+      ty: op(self.ty),
+      ..self
+    }
+  }
 }
 
 /// An owned T that is frozen and exposes a reduced Box API.
@@ -309,6 +316,7 @@ pub enum DelimCont {
   Prompt {
     marker: P<ReducIr<DelimCont>>,
     upd_evv: P<ReducIr<DelimCont>>,
+    ret: P<ReducIr<DelimCont>>,
     body: P<ReducIr<DelimCont>>,
   },
   // Yield to a marker's prompt
@@ -317,6 +325,7 @@ pub enum DelimCont {
     marker: P<ReducIr<DelimCont>>,
     body: P<ReducIr<DelimCont>>,
   },
+  AbsE(ReducIrVar, ReducIrTy, P<ReducIr<DelimCont>>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -330,7 +339,7 @@ impl<Ext> Bind<Ext> {
     Self { var, defn }
   }
 
-  fn fold<F: ?Sized + ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> Bind<F::OutExt> {
+  pub fn fold<F: ?Sized + ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> Bind<F::OutExt> {
     Bind {
       var: self.var,
       defn: self.defn.fold(fold),
@@ -979,12 +988,30 @@ impl TypeCheck for DelimCont {
           Err(ReducIrTyErr::ExpectedMarkerTy(prompt.ty))
         }
       }
-      DelimCont::Prompt { marker, body, .. } => {
+      DelimCont::Prompt {
+        marker, body, ret, ..
+      } => {
         let marker_ty = marker.type_check(ctx)?;
-        if let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) {
-          body.type_check(ctx)
+        let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) else {
+          return Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty));
+        };
+        let ret_ty = ret.type_check(ctx)?;
+        let FunETy(arg, _, ret_ret_ty) = ret_ty.kind(ctx.as_reducir_db()) else {
+          return Err(ReducIrTyErr::ExpectedFunTy {
+            ty: ret_ty,
+            func: ret,
+          });
+        };
+        let body_ty = body.type_check(ctx)?;
+        if arg == body_ty {
+          Ok(ret_ret_ty)
         } else {
-          Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty))
+          Err(ReducIrTyErr::ArgMismatch {
+            fun_ir: Cow::Borrowed(ret),
+            arg_ir: Cow::Borrowed(body),
+            expected_ty: arg,
+            actual_ty: body_ty,
+          })
         }
       }
       DelimCont::Yield {
@@ -999,6 +1026,10 @@ impl TypeCheck for DelimCont {
         // We want to make sure body type checks but we don't actually use the result
         let _ = body.type_check(ctx)?;
         Ok(*ret_ty)
+      }
+      DelimCont::AbsE(var, eff, body) => {
+        let body_ty = body.type_check(ctx)?;
+        Ok(ctx.mk_reducir_ty(FunETy(var.ty, *eff, body_ty)))
       }
     }
   }
@@ -1030,33 +1061,69 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
       App(func, args) => {
         let func_ty = func.type_check(ctx)?;
         let args_iter = args.iter();
-        match func_ty.kind(ctx.as_reducir_db()) {
-          FunTy(fun_arg_tys, ret_ty) => {
-            let mut fun_args = fun_arg_tys.iter().peekable();
-            for (fun_arg_ty, (arg_index, arg)) in
-              fun_args.zip_non_consuming(&mut args_iter.enumerate().peekable())
-            {
-              let arg_ty = arg.type_check(ctx)?;
-              if *fun_arg_ty != arg_ty {
-                return Err(ReducIrTyErr::TyMismatch {
-                  left_ty: ctx.mk_fun_ty(
-                    std::iter::once(*fun_arg_ty).chain(fun_args.copied()),
-                    ret_ty,
-                  ),
-                  left_ir: Cow::Owned(ReducIr::app(
-                    func.deref().clone(),
-                    args[0..arg_index].to_vec(),
-                  )),
-                  right_ty: arg_ty,
-                  right_ir: Cow::Borrowed(arg),
-                });
+        fn collect_args(
+          db: &dyn crate::Db,
+          ty: ReducIrTy,
+          out_args: &mut Vec<(ReducIrTy, Option<ReducIrTy>)>,
+        ) -> ReducIrTy {
+          match ty.kind(db) {
+            FunTy(args, ret) => {
+              out_args.extend(args.iter().map(|ty| (*ty, None)));
+              match ret.kind(db) {
+                FunETy(arg, eff, ret) => {
+                  out_args.push((arg, Some(eff)));
+                  ret
+                }
+                _ => ret,
               }
             }
-
-            Ok(ctx.mk_fun_ty(fun_args.copied(), ret_ty))
+            FunETy(arg, eff, ret) => {
+              out_args.push((arg, Some(eff)));
+              collect_args(db, ret, out_args)
+            }
+            _ => ty,
           }
-          _ => Err(ReducIrTyErr::ExpectedFunTy { ty: func_ty, func }),
         }
+
+        fn back_to_fun_ty(
+          db: &dyn crate::Db,
+          mut args: impl Iterator<Item = (ReducIrTy, Option<ReducIrTy>)>,
+          ret: ReducIrTy,
+        ) -> ReducIrTy {
+          match args.next() {
+            Some((arg, eff)) => match eff {
+              Some(eff) => back_to_fun_ty(db, args, db.mk_reducir_ty(FunETy(arg, eff, ret))),
+              None => back_to_fun_ty(db, args, db.mk_fun_ty([arg], ret)),
+            },
+            None => ret,
+          }
+        }
+
+        let mut fun_arg_tys = vec![];
+        let ret_ty = collect_args(ctx.as_reducir_db(), func_ty, &mut fun_arg_tys);
+        if fun_arg_tys.is_empty() {
+          return Err(ReducIrTyErr::ExpectedFunTy { ty: func_ty, func });
+        }
+        let mut fun_args = fun_arg_tys.iter().peekable();
+        for ((fun_arg_ty, _), (arg_index, arg)) in
+          fun_args.zip_non_consuming(&mut args_iter.enumerate().peekable())
+        {
+          let arg_ty = arg.type_check(ctx)?;
+          if *fun_arg_ty != arg_ty {
+            return Err(ReducIrTyErr::ArgMismatch {
+              fun_ir: Cow::Owned(ReducIr::app(
+                func.clone().into_inner(),
+                args[0..arg_index].iter().cloned(),
+              )),
+              arg_ir: Cow::Borrowed(arg),
+              actual_ty: arg_ty,
+              expected_ty: *fun_arg_ty,
+            });
+          }
+        }
+
+        let fun_ty = back_to_fun_ty(ctx.as_reducir_db(), fun_args.copied().rev(), ret_ty);
+        Ok(fun_ty)
       }
       Locals(binds, body) => {
         for Bind { var, defn } in binds.iter() {
@@ -1124,19 +1191,6 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
           // We have to coerce control to an enum type here
           // This is the toil we pay for special casing control
           ControlTy(m_ty, a_ty) => {
-            /*let exists_b = ctx.mk_reducir_ty(VarTy(2));
-            let exists_m = ctx.mk_reducir_ty(VarTy(1));
-            let exists_r = ctx.mk_reducir_ty(VarTy(0));
-            let exists_mon_m_r = ctx.mk_mon_ty(exists_m, exists_r);
-            let exists_body_fun_ty = ctx.mk_mon_ty(m_ty, a_ty).shift(ctx, 3);
-            let yield_ty = ctx.mk_forall_ty(
-              [Kind::Type, Kind::Type, Kind::Type],
-              ProductTy(vec![
-                ctx.mk_reducir_ty(MarkerTy(exists_r)),
-                ctx.mk_fun_ty([ctx.mk_fun_ty([exists_b], exists_mon_m_r)], exists_mon_m_r),
-                ctx.mk_fun_ty([exists_b], exists_body_fun_ty),
-              ]),
-            );*/
             vec![a_ty, ctx.mk_yield_ty(m_ty, a_ty)]
           }
           _ => {
@@ -1145,9 +1199,8 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         };
         for (branch, ty) in branches.iter().zip(tys.into_iter()) {
           let branch_ty = branch.type_check(ctx)?;
-          match branch_ty.kind(ctx.as_reducir_db()) {
-            FunTy(arg_tys, ret_ty) => {
-              debug_assert!(arg_tys.len() == 1);
+          match branch_ty.split_args(ctx, 1) {
+            Ok((arg_tys, ret_ty)) => {
               if arg_tys[0] != ty {
                 return Err(ReducIrTyErr::TyMismatch {
                   left_ir: Cow::Borrowed(branch),
@@ -1180,26 +1233,14 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         Ok(*ty)
       }
       X(xt) => xt.type_check(ctx),
-      Tag(ty, _, _) => Ok(*ty),
+      Tag(ty, _, body) => {
+        // Sanity check: Body should typecheck.
+        let _ = body.type_check(ctx)?;
+        Ok(*ty)
+      }
       Item(occ) => Ok(occ.ty),
     }
   }
-}
-
-impl DelimReducIr {
-  /*pub fn unbound_vars(&self) -> impl Iterator<Item = ReducIrVar> + '_ {
-    self.unbound_vars_with_bound(FxHashSet::default())
-  }
-
-  pub fn unbound_vars_with_bound(
-    &self,
-    bound: FxHashSet<ReducIrLocal>,
-  ) -> impl Iterator<Item = ReducIrVar> + '_ {
-    UnboundVars {
-      bound,
-      stack: vec![self],
-    }
-  }*/
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1209,6 +1250,12 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
     left_ir: Cow<'a, ReducIr<Ext>>,
     right_ty: ReducIrTy,
     right_ir: Cow<'a, ReducIr<Ext>>,
+  },
+  ArgMismatch {
+    fun_ir: Cow<'a, ReducIr<Ext>>,
+    arg_ir: Cow<'a, ReducIr<Ext>>,
+    expected_ty: ReducIrTy,
+    actual_ty: ReducIrTy,
   },
   KindMistmatch(Kind, Kind),
   ExpectedFunTy {
@@ -1224,57 +1271,3 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
   ExpectedCoprodTy(ReducIrTy, Cow<'a, ReducIr<Ext>>),
   ExpectedMarkerTy(ReducIrTy),
 }
-
-/*struct UnboundVars<'a> {
-  bound: FxHashSet<ReducIrLocal>,
-  stack: Vec<&'a DelimReducIr>,
-}
-impl Iterator for UnboundVars<'_> {
-  type Item = ReducIrVar;
-
-  fn next(&mut self) -> Option<Self::Item> {
-    self.stack.pop().and_then(|ir| match ir.kind() {
-      Int(_) => self.next(),
-      Item(_, _) => self.next(),
-      Var(v) => (!self.bound.contains(&v.var))
-        .then_some(*v)
-        .or_else(|| self.next()),
-      Abs(vs, body) => {
-        self.bound.extend(vs.iter().map(|v| v.var));
-        self.stack.push(body.deref());
-        self.next()
-      }
-      App(head, spine) => {
-        self.stack.push(head);
-        self.stack.extend(spine.iter());
-        self.next()
-      }
-      X(DelimCont::NewPrompt(v, body)) => {
-        self.bound.insert(v.var);
-        self.stack.push(body.deref());
-        self.next()
-      }
-      X(DelimCont::Yield(_, a, b)) => {
-        self.stack.extend([a.deref(), b.deref()]);
-        self.next()
-      }
-      X(DelimCont::Prompt(a, b, c)) => {
-        self.stack.extend([a.deref(), b.deref(), c.deref()]);
-        self.next()
-      }
-      TyAbs(_, a) | TyApp(a, _) | FieldProj(_, a) | Tag(_, _, a) => {
-        self.stack.extend([a.deref()]);
-        self.next()
-      }
-      Struct(irs) => {
-        self.stack.extend(irs.iter());
-        self.next()
-      }
-      Case(_, discr, branches) => {
-        self.stack.push(discr.deref());
-        self.stack.extend(branches.iter());
-        self.next()
-      }
-    })
-  }
-}*/

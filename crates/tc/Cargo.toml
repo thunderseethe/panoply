@@ -8,6 +8,7 @@ edition.workspace = true
 parser.workspace = true
 test-utils.workspace = true
 assert_matches.workspace = true
+expect-test.workspace = true
 
 [dependencies]
 ast.workspace = true
