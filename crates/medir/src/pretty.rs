@@ -66,7 +66,9 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Call {
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     match self {
       Call::Known(item) => item.name.pretty(ctx, alloc),
-      Call::Unknown(v) => alloc.text("apply_closure").append(v.pretty(alloc).parens()),
+      Call::Unknown(v) => alloc
+        .text("apply_closure")
+        .append(PrettyWithType(*v).pretty(ctx, alloc).parens()),
     }
   }
 }

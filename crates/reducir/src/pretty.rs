@@ -104,8 +104,8 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
     match self {
       Int(i) => i.to_string().pretty(arena),
       Var(v) => v.pretty(arena),
-      //Var(v) => v.pretty_with_local(db, arena),
       //Var(v) => v.pretty_with_type(db, arena),
+      //Var(v) => v.pretty_with_local(db, arena),
       Abs(vars, body) => {
         let param_single = arena.space().append(
           arena
@@ -383,7 +383,18 @@ impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> 
             a.text("from function:")
               .append(a.softline().append(fun_ir.pretty(db, a)).nest(2)),
           ),
-        ),
+        )
+        .append(a.line())
+        .append({
+          let mut actual = String::new();
+          actual_ty.pretty(db, a).render_fmt(80, &mut actual).unwrap();
+          let mut expected = String::new();
+          expected_ty
+            .pretty(db, a)
+            .render_fmt(80, &mut expected)
+            .unwrap();
+          a.text(difference::Changeset::new(&actual, &expected, "").to_string())
+        }),
       ReducIrTyErr::KindMistmatch(lhs, rhs) => a.text("KindMistmatch").append(
         lhs
           .pretty(a)

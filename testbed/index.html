@@ -1,9 +1,15 @@
+<!DOCTYPE html>
 <html>
-  <body>
+  <head>
     <script>
       WebAssembly.instantiateStreaming(fetch("wand.wasm"), {}).then(
-        (obj) => obj.instance.exports.main(),
+        (obj) => {
+          console.log('main output: ', obj.instance.exports.main());
+          console.log('We ran wasm')
+        },
       )
     </script>
+  </head>
+  <body>
   </body>
 </html>

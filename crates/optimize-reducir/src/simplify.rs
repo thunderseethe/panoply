@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::ops::Deref;
 
-use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
+use base::id::{Id, IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
 use base::pretty::PrettyErrorWithDb;
 use reducir::mon::MonReducIrRowEv;
@@ -43,18 +43,12 @@ struct Simplify<'a> {
   db: &'a dyn crate::Db,
   builtin_evs: FxHashMap<ReducIrTermName, &'a ReducIr>,
   supply: &'a mut IdSupply<ReducIrVarId>,
+  evv_var_id: ReducIrVarId,
   top_level: ReducIrTermName,
 }
-impl ReducIrFold for Simplify<'_> {
-  type InExt = Infallible;
-
-  type OutExt = Infallible;
-
-  fn fold_ext(&mut self, _: &Self::InExt) -> Self::OutExt {
-    unreachable!()
-  }
-
-  fn fold_ir(&mut self, ir: ReducIrKind<Self::OutExt>) -> ReducIr<Self::OutExt> {
+impl ReducIrEndoFold for Simplify<'_> {
+  type Ext = Infallible;
+  fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
     use reducir::ReducIrKind::*;
     fn apply_tyabs<'a>(
       body: &'a ReducIr,
@@ -72,7 +66,7 @@ impl ReducIrFold for Simplify<'_> {
         _ => (body, out_app),
       }
     }
-    match ir {
+    match kind {
       TyApp(body, mut ty_app) => {
         ty_app.reverse();
         let (body, apps) = apply_tyabs(&body, &mut ty_app, vec![]);
@@ -92,7 +86,7 @@ impl ReducIrFold for Simplify<'_> {
       }
       FieldProj(indx, ref base) => match base.kind() {
         Struct(elems) => self.traverse_ir(&elems[indx]),
-        _ => ReducIr::new(ir),
+        _ => ReducIr::new(kind),
       },
       Locals(binds, body) => {
         let occs = occurence_analysis(&Locals(binds.clone(), body.clone()));
@@ -100,7 +94,10 @@ impl ReducIrFold for Simplify<'_> {
         let binds = binds
           .into_iter()
           .filter_map(|bind| {
-            let arg = bind.defn.fold(&mut Inline::new(self.db, &env)).fold(self);
+            let arg = bind
+              .defn
+              .fold(&mut Inline::new(self.db, &mut env, self.evv_var_id))
+              .fold(self);
             if is_value(&arg)
               || occs[bind.var] == Occurrence::Once
               || occs[bind.var] == Occurrence::ManyBranch
@@ -112,7 +109,12 @@ impl ReducIrFold for Simplify<'_> {
             }
           })
           .collect::<Vec<_>>();
-        ReducIr::locals(binds, body.fold(&mut Inline::new(self.db, &env)).fold(self))
+        ReducIr::locals(
+          binds,
+          body
+            .fold(&mut Inline::new(self.db, &mut env, self.evv_var_id))
+            .fold(self),
+        )
       }
       App(head, spine) => {
         let mut app_binds = vec![];
@@ -192,17 +194,15 @@ impl ReducIrFold for Simplify<'_> {
       },
       // Always inline row evidence
       Item(occ) if occ.inline => match self.builtin_evs.get(&occ.name) {
-        Some(builtin) => {
-          let builtin = builtin.fold(&mut RenumberVars {
-            supply: self.supply,
-            top_level: self.top_level,
-            subst: FxHashMap::default(),
-          });
-          self.traverse_ir(&builtin)
-        }
-        None => ReducIr::new(ir),
+        Some(builtin) => builtin.fold(&mut RenumberVars {
+          supply: self.supply,
+          top_level: self.top_level,
+          subst: FxHashMap::default(),
+          evv_var_id: self.evv_var_id,
+        }),
+        None => ReducIr::new(kind),
       },
-      ir => ReducIr::new(ir),
+      kind => ReducIr::new(kind),
     }
   }
 }
@@ -211,6 +211,7 @@ struct RenumberVars<'a> {
   supply: &'a mut IdSupply<ReducIrVarId>,
   top_level: ReducIrTermName,
   subst: FxHashMap<ReducIrLocal, ReducIrLocal>,
+  evv_var_id: ReducIrVarId,
 }
 impl<'a> RenumberVars<'a> {
   fn gen_local(&mut self) -> ReducIrLocal {
@@ -243,6 +244,10 @@ impl<'a> ReducIrEndoFold for RenumberVars<'a> {
         let binds = binds
           .iter()
           .map(|local| {
+            // Don't renumber evv
+            if local.var.var.id == self.evv_var_id {
+              return local.fold(self);
+            }
             let new_var = self.gen_local();
             self.subst.insert(local.var.var, new_var);
             removals.push(local.var.var);
@@ -263,6 +268,10 @@ impl<'a> ReducIrEndoFold for RenumberVars<'a> {
         let vars = vars
           .iter()
           .map(|var| {
+            // Don't renumber evv
+            if var.var.id == self.evv_var_id {
+              return *var;
+            }
             let new_var = self.gen_local();
             self.subst.insert(var.var, new_var);
             removals.push(var.var);
@@ -393,8 +402,9 @@ pub(crate) fn simplify(
 
   ir.fold(&mut Simplify {
     db,
-    builtin_evs,
+    builtin_evs: builtin_evs.clone(),
     supply,
+    evv_var_id: ReducIrVarId::from_raw(0),
     top_level: ReducIrTermName::Term(name),
   })
   .fold(&mut EtaExpand {
@@ -474,11 +484,12 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
     top_level: name,
     id: var_gen.supply_id(),
   };
+  // Make sure evv is var id 0.
+  let evv = ReducIrVar::new(gen_local(), m_ty);
   let mark = ReducIrVar::new(gen_local(), mark_ty);
   let upd = ReducIrVar::new(gen_local(), upd_fun_ty);
   let ret = ReducIrVar::new(gen_local(), ret_clause_ty);
   let body = ReducIrVar::new(gen_local(), body_fun_ty);
-  let evv = ReducIrVar::new(gen_local(), m_ty);
 
   let unit_ty = db.mk_prod_ty(vec![]);
   let x = ReducIrVar::new(gen_local(), a);

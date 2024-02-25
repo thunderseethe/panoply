@@ -938,10 +938,22 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
     );
     let ir = ReducIr::ty_app(
       ir,
-      wrapper
-        .eff_rows
-        .iter()
-        .map(|row| ReducIrTyApp::EffRow(self.ty_ctx.lower_row(*row))),
+      wrapper.eff_rows.iter().map(|row| {
+        ReducIrTyApp::EffRow({
+          let ty = self.ty_ctx.eff_row_into_evv_ty(*row).prod;
+          match ty.kind(self.db.as_reducir_db()) {
+            ProdVarTy(var) => ReducIrRow::Open(var),
+            ProductTy(row) if row.is_empty() => ReducIrRow::Closed(vec![]),
+            // If the first item of the row is a marker then the row is a handler,
+            // not an evv and we should wrap it treat it as a type when passing to effect row.
+            ProductTy(row) => match row[0].kind(self.db.as_reducir_db()) {
+              MarkerTy(_) => ReducIrRow::Closed(vec![ty]),
+              _ => ReducIrRow::Closed(row),
+            },
+            _ => unreachable!("Product of effrow must be product type"),
+          }
+        })
+      }),
     );
     let ir = ReducIr::ty_app(
       ir,
@@ -1134,12 +1146,13 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         // Always project out the right one for row evidence because we want the innermost
         // scoped effect handler.
         let prj = ReducIr::field_proj(0, ReducIr::field_proj(3, ReducIr::var(eff_ev_param)));
+        let eff_ty = self.ty_ctx.eff_row_into_evv_ty(term_infer.eff).prod;
         let eff_var = ReducIrVar::new(
           ReducIrLocal {
             top_level: self.current,
             id: self.evv_var_id,
           },
-          self.ty_ctx.eff_row_into_evv_ty(term_infer.eff).prod,
+          eff_ty,
         );
         let eff_handler = ReducIr::app(prj, [ReducIr::var(eff_var)]);
 

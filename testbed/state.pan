@@ -3,8 +3,10 @@ effect State {
     put : Int -> {}
 }
 
-main = (with {
+f = |x| (with {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| { state = s, value = x },
-} do State.get({}))(16777215).value
+} do State.get({}))(x)
+
+main = f(16777215).value
