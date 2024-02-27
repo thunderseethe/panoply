@@ -374,17 +374,13 @@ impl LowerMonCtx<'_> {
 
   fn lower_monadic(&mut self, evv_ty: ReducIrTy, ir: &ReducIr<DelimCont>) -> ReducIr {
     let reducir_db = self.db.as_reducir_db();
-    let evv_var_id = ReducIrLocal {
-      top_level: self.current,
-      id: self.evv_var_id,
-    };
-    let pure = |ir: ReducIr| {
+    let pure = |this: &mut Self, ir: ReducIr| {
       let ty = ir
         .type_check(reducir_db)
         .map_err_pretty_with(reducir_db)
         .expect("ICE: lower_monadic type check error");
       ReducIr::abss(
-        [ReducIrVar::new(evv_var_id, evv_ty)],
+        [ReducIrVar::new(this.generate_local(), evv_ty)],
         ReducIr::new(ReducIrKind::Tag(
           reducir_db.mk_reducir_ty(ControlTy(evv_ty, ty)),
           0,
@@ -462,10 +458,10 @@ impl LowerMonCtx<'_> {
                 self.bind(
                   mon_arg,
                   |_| ret_ty,
-                  |_, arg_var| {
+                  |this, arg_var| {
                     let app = ReducIr::app(func, [ReducIr::var(arg_var)]);
                     if needs_pure {
-                      pure(app)
+                      pure(this, app)
                     } else {
                       app
                     }
@@ -531,7 +527,7 @@ impl LowerMonCtx<'_> {
         // Handle whether or not body is monadic
         let (mut body, body_ty) = match body_ty.try_unwrap_monadic(self.db) {
           Ok(UnwrapMonTy { a_ty, .. }) => (body, a_ty),
-          _ => (pure(body), body_ty),
+          _ => (pure(self, body), body_ty),
         };
         if !needs_mon_bind.is_empty() {
           body = needs_mon_bind.into_iter().fold(body, |body, mon_defn| {
@@ -575,9 +571,10 @@ impl LowerMonCtx<'_> {
         // If all our elements are variables we just return the pure Struct
         if binds.is_empty() {
           if is_mon {
-            return pure(ReducIr::new(Struct(
-              vars.into_iter().map(ReducIr::var).collect(),
-            )));
+            return pure(
+              self,
+              ReducIr::new(Struct(vars.into_iter().map(ReducIr::var).collect())),
+            );
           } else {
             return ReducIr::new(Struct(vars.into_iter().map(ReducIr::var).collect()));
           }
@@ -601,7 +598,7 @@ impl LowerMonCtx<'_> {
               ProductTy(ref elems) => elems[*indx],
               _ => unreachable!(),
             },
-            |_, s| pure(ReducIr::field_proj(*indx, ReducIr::var(s))),
+            |this, s| pure(this, ReducIr::field_proj(*indx, ReducIr::var(s))),
           ),
           // No bind required
           Err(_) => ReducIr::field_proj(*indx, strukt),
@@ -613,7 +610,7 @@ impl LowerMonCtx<'_> {
         self.bind(
           ir,
           |_| mon_ty,
-          |_, t| pure(ReducIr::tag(mon_ty, *tag, ReducIr::var(t))),
+          |this, t| pure(this, ReducIr::tag(mon_ty, *tag, ReducIr::var(t))),
         )
       }
       Case(ty, disc, branches) => {
@@ -680,7 +677,15 @@ impl LowerMonCtx<'_> {
         };
         let upd_evv_ty = self.lower_monadic_ty(upd_evv_ty);
 
-        let mon_body = self.lower_monadic(upd_evv_ty, body);
+        // Reuse the var id we got from lowering so we can use
+        let (w, mon_body) = //self.lower_monadic(upd_evv_ty, body);
+            // This invariant is maintained by lowering so we can trust body will have this shape
+            match body.kind() {
+                ReducIrKind::Abs(vars, body) => {
+                    (vars[0].map_type(|ty| self.lower_monadic_ty(ty)), self.lower_monadic(upd_evv_ty, body))
+                },
+                _ => unreachable!(),
+            };
         let mon_marker = self.lower_monadic(evv_ty, marker);
         let mon_body_ty = mon_body
           .type_check(reducir_db)
@@ -713,13 +718,7 @@ impl LowerMonCtx<'_> {
             ],
           ),
           [mon_marker, self.lower_monadic_ty_only(upd_evv), mon_ret, {
-            let w = ReducIrVar::new(
-              ReducIrLocal {
-                id: self.evv_var_id,
-                top_level: self.current,
-              },
-              upd_evv_ty,
-            );
+            //let w = ReducIrVar::new(self.generate_local(), upd_evv_ty);
             ReducIr::abss([w], ReducIr::app(mon_body, [ReducIr::var(w)]))
           }],
         )
@@ -729,13 +728,7 @@ impl LowerMonCtx<'_> {
         marker,
         body: f,
       }) => {
-        let w = ReducIrVar::new(
-          ReducIrLocal {
-            top_level: self.current,
-            id: self.evv_var_id,
-          },
-          evv_ty,
-        );
+        let w = ReducIrVar::new(self.generate_local(), evv_ty);
         let ret_ty = self.lower_monadic_ty(*ret_ty);
         let x = ReducIrVar::new(self.generate_local(), ret_ty);
         let [a, b, c] = [
@@ -764,7 +757,7 @@ impl LowerMonCtx<'_> {
               ReducIr::new(Struct(vec![
                 self.lower_monadic(evv_ty, marker),
                 self.lower_monadic(evv_ty, f),
-                ReducIr::abss([x], pure(ReducIr::var(x))),
+                ReducIr::abss([x], pure(self, ReducIr::var(x))),
               ]))
               .subst(self.db, Subst::Inc(3)),
             ),
@@ -782,7 +775,7 @@ impl LowerMonCtx<'_> {
           [arg.map_type(|ty| self.lower_monadic_ty(ty))],
           match mon_body_ty.try_unwrap_monadic(self.db) {
             Ok(_) => mon_body,
-            Err(_) => pure(mon_body),
+            Err(_) => pure(self, mon_body),
           },
         )
       }

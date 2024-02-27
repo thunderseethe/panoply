@@ -287,6 +287,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
 
   let required_evidence = typed_item.required_evidence(tc_db);
   let op_sel = typed_item.operation_selectors(tc_db);
+  let evv_var_id = var_conv.generate();
   let (mut lower_ctx, ev_solved, ev_params, ev_row_items) = LowerCtx::new(
     db,
     &mut var_conv,
@@ -296,7 +297,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
   )
   .collect_evidence_params(required_evidence.iter());
 
-  let body = lower_ctx.lower_term(ast, ast.root());
+  let body = lower_ctx.lower_term(ast, ast.root(), evv_var_id);
   // TODO: Bit of a hack. Eventually we'd like to generate our solved row ev in a central location.
   // Add row evidence as parameters of the term
   let body = ev_solved
@@ -307,7 +308,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
   let evv_param = if is_entry_point {
     vec![]
   } else {
-    let evv_var = lower_ctx.evv_var(ast);
+    let evv_var = lower_ctx.evv_var(ast, evv_var_id);
     vec![evv_var]
   };
   let body = ReducIr::abss_with_innermost(ev_params.into_iter(), evv_param, body);
@@ -733,29 +734,29 @@ main = with {
             (Control {} Int)) -> {} -> (Control {} Int))), Ty(Int -> {} ->
             (Control {} Int))]) {}))
             , (V5 (V3[0]
-              (fun [V6, V0] <0: (fun [V7] (V7 374))>)
-              (fun [V8, V0] <0: V8>)))
+              (fun [V6, V15] <0: (fun [V7] (V7 374))>)
+              (fun [V8, V16] <0: V8>)))
             ]
             ((__mon_freshm @ [Ty(Int), Ty({} -> (Control {} Int))])
-              (fun [V12]
+              (fun [V13]
                 ((__mon_prompt @ [Ty({}), Ty({ (Marker Int)
                                              , {} -> {} -> (Control {} (Int -> {} ->
                                              (Control {} Int)) -> {} ->
                                              (Control {} Int))
                                              }), Ty(Int), Ty(Int)])
-                  V12
-                  (fun [V0] (V1[0] V0 {V12, (V4[3][0] V5)}))
+                  V13
+                  (fun [V14] (V1[0] V14 {V13, (V4[3][0] V5)}))
                   (V4[2][0] V5)
-                  (fun [V0]
-                    ((let [ (V9 {}) , (V10 (V1[3][0] V0)) ]
-                      (fun [V0]
-                        <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V10[0], (fun
-                              [V11]
+                  (fun [V9]
+                    ((let [ (V10 {}) , (V11 (V1[3][0] V9)) ]
+                      (fun [V17]
+                        <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V11[0], (fun
+                              [V12]
                               ((__mon_bind @ [Ty({}), Ty((Int -> {} -> (Control {} Int))
                               -> {} -> (Control {} Int)), Ty(Int)])
-                                (V2[3][0] V10[1] V9)
-                                (fun [V14] (V14 V11)))), (fun [V13, V0] <0: V13>)})>))
-                      V0)))))) {})
+                                (V2[3][0] V11[1] V10)
+                                (fun [V19] (V19 V12)))), (fun [V18, V20] <0: V18>)})>))
+                      V9)))))) {})
           (fun [V0] V0)
           (fun [V0] 5467))"#]];
     expect.assert_eq(pretty_ir.as_str());
@@ -823,9 +824,11 @@ main = with {
                     (fun<{1}> [V8] (fun<{1}> [V9] (fun<{1}> [V10] (V9 V10 V10))))
                     (fun<{1}> [V11] (fun<{1}> [V12] (fun<{1}> [V13] (V12 {} V11)))))
                   (fun<{1}> [V14] (fun<{1}> [V15] (V4[0] V15 V14)))))
-                (new_prompt [V19] (prompt V19 (fun [V0] (V1[0] V0 {V19, (V6[3][0] V7)}))
-                (V6[2][0] V7) (let [ (V16 {}) , (V17 (V1[3][0] V0)) ]
-                    (yield<Int> V17[0] (fun [V18] (V3[2][0] V17[1] V16 V18))))))) 5))))"#]];
+                (new_prompt [V20] (prompt V20 (fun [V21]
+                    (V1[0] V21 {V20, (V6[3][0] V7)})) (V6[2][0] V7) (fun [V16]
+                    (let [ (V17 {}) , (V18 (V1[3][0] V16)) ]
+                      (yield<Int> V18[0] (fun [V19] (V3[2][0] V18[1] V17 V19))))))))
+                5))))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"
@@ -938,34 +941,34 @@ main = with {
                 (let
                   (V7 (V5[0]
                     (V3[0]
-                      (fun [V8, V0]
-                        <0: (fun [V9, V0]
+                      (fun [V8, V24]
+                        <0: (fun [V9, V23]
                             <0: (fun [V10]
                                 ((__mon_bind @ [Ty({1}), Ty(Int -> {1} ->
                                 (Control {1} {Int, Int})), Ty({Int, Int})])
                                   (V9 V10)
-                                  (fun [V20] (V20 V10))))>)>)
-                      (fun [V11, V0]
-                        <0: (fun [V12, V0]
+                                  (fun [V22] (V22 V10))))>)>)
+                      (fun [V11, V27]
+                        <0: (fun [V12, V26]
                             <0: (fun [V13]
                                 ((__mon_bind @ [Ty({1}), Ty(Int -> {1} ->
                                 (Control {1} {Int, Int})), Ty({Int, Int})])
                                   (V12 {})
-                                  (fun [V21] (V21 V11))))>)>))
-                    (fun [V14, V0] <0: (fun [V15, V0] <0: (V4[0] V15 V14)>)>)))
+                                  (fun [V25] (V25 V11))))>)>))
+                    (fun [V14, V29] <0: (fun [V15, V28] <0: (V4[0] V15 V14)>)>)))
                   ((__mon_freshm @ [Ty(Int -> {1} {Int, Int}), Ty({1} ->
                   (Control {1} Int -> {1} -> (Control {1} {Int, Int})))])
-                    (fun [V19]
+                    (fun [V20]
                       ((__mon_prompt @ [Ty({1}), Ty({0}), Ty(Int), Ty(Int -> {1} ->
                       (Control {1} {Int, Int}))])
-                        V19
-                        (fun [V0] (V1[0] V0 {V19, (V6[3][0] V7)}))
+                        V20
+                        (fun [V21] (V1[0] V21 {V20, (V6[3][0] V7)}))
                         (V6[2][0] V7)
-                        (fun [V0]
-                          ((let [ (V16 {}) , (V17 (V1[3][0] V0)) ]
-                            (fun [V0]
+                        (fun [V16]
+                          ((let [ (V17 {}) , (V18 (V1[3][0] V16)) ]
+                            (fun [V30]
                               <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {
-                                  V17[0], (fun [V18]
+                                  V18[0], (fun [V19]
                                     ((__mon_bind @ [Ty({4}), Ty((Int -> {4} ->
                                     (Control {4} Int -> {4} -> (Control {4} { Int
                                                                             , Int
@@ -974,10 +977,10 @@ main = with {
                                                                                , Int
                                                                                }))), Ty(Int
                                     -> {4} -> (Control {4} {Int, Int}))])
-                                      (V3[2][0] V17[1] V16)
-                                      (fun [V23] (V23 V18)))), (fun [V22, V0] <0: V22>)
-                                  })>)) V0))))))
-                (fun [V24] (V24 5)))) V0)))"#]];
+                                      (V3[2][0] V18[1] V17)
+                                      (fun [V32] (V32 V19)))), (fun [V31, V33] <0: V31>)
+                                  })>)) V16))))))
+                (fun [V34] (V34 5)))) V0)))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"
@@ -1055,7 +1058,7 @@ main = with {
           (forall
             [(T5: Type) (T4: ScopedRow) (T3: SimpleRow) (T2: SimpleRow) (T1: SimpleRow) (T0: SimpleRow)]
             (fun [V1, V2, V0]
-              <0: (fun [V3, V0] <0: (fun [V4, V0] <0: (V2[3][0] (V1[0] V3 V4))>)>)>))"#]],
+              <0: (fun [V3, V6] <0: (fun [V4, V5] <0: (V2[3][0] (V1[0] V3 V4))>)>)>))"#]],
       // main
       expect![[r#"
           (case ((let
@@ -1069,9 +1072,9 @@ main = with {
                     ((wand @ [Ty(Int), Eff([]), Data([Int]), Data([{}]), Data([Int,{}]), Data([{}])])
                       V1
                       V2)
-                    (fun [V4] (V4 5)))
-                  (fun [V5] (V5 {})))
-                (fun [V6] (let (V3 V6) (fun [V0] <0: V3>))))) {})
+                    (fun [V5] (V5 5)))
+                  (fun [V6] (V6 {})))
+                (fun [V7] (let (V3 V7) (fun [V4] <0: V3>))))) {})
             (fun [V0] V0)
             (fun [V0] 5467))"#]],
     ];
@@ -1175,24 +1178,24 @@ main = (with {
                   (let
                     (V7 (V5[0]
                       (V3[0]
-                        (fun [V8, V0]
-                          <0: (fun [V9, V0]
+                        (fun [V8, V24]
+                          <0: (fun [V9, V23]
                               <0: (fun [V10]
                                   ((__mon_bind @ [Ty({}), Ty(Int -> {} ->
                                   (Control {} {Int, Int})), Ty({Int, Int})])
                                     (V9 V10)
-                                    (fun [V20] (V20 V10))))>)>)
-                        (fun [V11, V0]
-                          <0: (fun [V12, V0]
+                                    (fun [V22] (V22 V10))))>)>)
+                        (fun [V11, V27]
+                          <0: (fun [V12, V26]
                               <0: (fun [V13]
                                   ((__mon_bind @ [Ty({}), Ty(Int -> {} ->
                                   (Control {} {Int, Int})), Ty({Int, Int})])
                                     (V12 {})
-                                    (fun [V21] (V21 V11))))>)>))
-                      (fun [V14, V0] <0: (fun [V15, V0] <0: (V4[0] V15 V14)>)>)))
+                                    (fun [V25] (V25 V11))))>)>))
+                      (fun [V14, V29] <0: (fun [V15, V28] <0: (V4[0] V15 V14)>)>)))
                     ((__mon_freshm @ [Ty(Int -> {} {Int, Int}), Ty({} -> (Control {} Int
                     -> {} -> (Control {} {Int, Int})))])
-                      (fun [V19]
+                      (fun [V20]
                         ((__mon_prompt @ [Ty({}), Ty({ (Marker Int -> {} ->
                                                      (Control {} {Int, Int}))
                                                      , { Int -> {} -> (Control {} ({} ->
@@ -1208,25 +1211,25 @@ main = (with {
                                                        }
                                                      }), Ty(Int), Ty(Int -> {} ->
                         (Control {} {Int, Int}))])
-                          V19
-                          (fun [V0] (V1[0] V0 {V19, (V6[3][0] V7)}))
+                          V20
+                          (fun [V21] (V1[0] V21 {V20, (V6[3][0] V7)}))
                           (V6[2][0] V7)
-                          (fun [V0]
-                            ((let [ (V16 {}) , (V17 (V1[3][0] V0)) ]
-                              (fun [V0]
+                          (fun [V16]
+                            ((let [ (V17 {}) , (V18 (V1[3][0] V16)) ]
+                              (fun [V30]
                                 <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {
-                                    V17[0], (fun [V18]
+                                    V18[0], (fun [V19]
                                       ((__mon_bind @ [Ty({}), Ty((Int -> {} ->
                                       (Control {} Int -> {} -> (Control {} {Int, Int})))
                                       -> {} -> (Control {} Int -> {} -> (Control {} { Int
                                                                                     , Int
                                                                                     }))), Ty(Int
                                       -> {} -> (Control {} {Int, Int}))])
-                                        (V3[2][0] V17[1] V16)
-                                        (fun [V23] (V23 V18)))), (fun [V22, V0] <0: V22>)
-                                    })>)) V0))))))
-                  (fun [V24] (V24 825)))
-                (fun [V25, V0] <0: (V4[3][0] V25)>))) {})
+                                        (V3[2][0] V18[1] V17)
+                                        (fun [V32] (V32 V19)))), (fun [V31, V33] <0: V31>)
+                                    })>)) V16))))))
+                  (fun [V34] (V34 825)))
+                (fun [V35, V36] <0: (V4[3][0] V35)>))) {})
             (fun [V0] V0)
             (fun [V0] 5467))"#]],
     ];

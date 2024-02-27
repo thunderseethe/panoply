@@ -80,7 +80,6 @@ pub(crate) struct LowerCtx<'a, 'b, State = Evidenceless> {
   op_sel: &'a FxHashMap<Idx<Term<VarId>>, OpSelector>,
   ty_ctx: LowerTyCtx<'a, 'b>,
   ev_map: EvidenceMap,
-  evv_var_id: ReducIrVarId,
   _marker: std::marker::PhantomData<State>,
 }
 
@@ -436,17 +435,14 @@ impl<'a, S> LowerCtx<'a, '_, S> {
     self.ty_ctx.tyvar_conv
   }
 
-  pub(crate) fn evv_var(&mut self, ast: &Ast<VarId>) -> ReducIrVar {
+  pub(crate) fn evv_var(&mut self, ast: &Ast<VarId>, evv_var_id: ReducIrVarId) -> ReducIrVar {
     let term_infer = self.lookup_term(ast.root());
     ReducIrVar::new(
       ReducIrLocal {
         top_level: self.current,
-        id: self.evv_var_id,
+        id: evv_var_id,
       },
-      match self.ty_ctx.lower_row(term_infer.eff) {
-        ReducIrRow::Open(i) => self.db.mk_reducir_ty(ProdVarTy(i)),
-        ReducIrRow::Closed(tys) => self.mk_prod_ty(tys),
-      },
+      self.ty_ctx.eff_row_into_evv_ty(term_infer.eff).prod,
     )
   }
 }
@@ -795,7 +791,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
     op_sel: &'a FxHashMap<Idx<Term<VarId>>, OpSelector>,
     current: ReducIrTermName,
   ) -> Self {
-    let evv_id = var_conv.generate();
     Self {
       db,
       current,
@@ -803,7 +798,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
       ty_ctx,
       op_sel,
       ev_map: EvidenceMap::default(),
-      evv_var_id: evv_id,
       _marker: std::marker::PhantomData,
     }
   }
@@ -922,7 +916,6 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       ty_ctx: prior.ty_ctx,
       op_sel: prior.op_sel,
       ev_map: prior.ev_map,
-      evv_var_id: prior.evv_var_id,
       _marker: std::marker::PhantomData,
     }
   }
@@ -972,7 +965,12 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
     ir
   }
 
-  pub(crate) fn lower_term(&mut self, ast: &Ast<VarId>, term: Idx<Term<VarId>>) -> DelimReducIr {
+  pub(crate) fn lower_term(
+    &mut self,
+    ast: &Ast<VarId>,
+    term: Idx<Term<VarId>>,
+    evv_var_id: ReducIrVarId,
+  ) -> DelimReducIr {
     use Term::*;
     match ast.view(term) {
       Unit => ReducIr::new(Struct(vec![])),
@@ -990,17 +988,20 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         ReducIr::ext(DelimCont::AbsE(
           var,
           self.ty_ctx.eff_row_into_evv_ty(body_infer.eff).prod,
-          P::new(self.lower_term(ast, *body)),
+          P::new(self.lower_term(ast, *body, evv_var_id)),
         ))
       }
       Application { func, arg } => {
         let mut func = *func;
-        let mut args = vec![self.lower_term(ast, *arg)];
+        let mut args = vec![self.lower_term(ast, *arg, evv_var_id)];
         while let Application { func: next, arg } = ast.view(func) {
-          args.push(self.lower_term(ast, *arg));
+          args.push(self.lower_term(ast, *arg, evv_var_id));
           func = *next;
         }
-        ReducIr::app(self.lower_term(ast, func), args.into_iter().rev())
+        ReducIr::app(
+          self.lower_term(ast, func, evv_var_id),
+          args.into_iter().rev(),
+        )
       }
       Variable(var) => {
         let ty = self.lookup_var(*var);
@@ -1029,8 +1030,8 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         self.apply_wrapper(wrapper, ir)
       }
       // At this level Label/Unlabel are removed
-      Label { term, .. } => self.lower_term(ast, *term),
-      Unlabel { term, .. } => self.lower_term(ast, *term),
+      Label { term, .. } => self.lower_term(ast, *term, evv_var_id),
+      Unlabel { term, .. } => self.lower_term(ast, *term, evv_var_id),
       // Row stuff
       Concat { left, right } => {
         let goal_row = expect_prod_ty(&self.db, self.lookup_term(term).ty);
@@ -1046,7 +1047,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
 
         ReducIr::app(
           concat,
-          [self.lower_term(ast, *left), self.lower_term(ast, *right)],
+          [
+            self.lower_term(ast, *left, evv_var_id),
+            self.lower_term(ast, *right, evv_var_id),
+          ],
         )
       }
       Branch { left, right } => {
@@ -1063,7 +1067,10 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
 
         ReducIr::app(
           branch,
-          [self.lower_term(ast, *left), self.lower_term(ast, *right)],
+          [
+            self.lower_term(ast, *left, evv_var_id),
+            self.lower_term(ast, *right, evv_var_id),
+          ],
         )
       }
       Project {
@@ -1080,7 +1087,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         };
 
         let prj = ReducIr::field_proj(0, ReducIr::field_proj(idx, ReducIr::var(param)));
-        ReducIr::app(prj, [self.lower_term(ast, *subterm)])
+        ReducIr::app(prj, [self.lower_term(ast, *subterm, evv_var_id)])
       }
       Inject {
         direction,
@@ -1096,7 +1103,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         };
 
         let inj = ReducIr::field_proj(1, ReducIr::field_proj(idx, ReducIr::var(param)));
-        ReducIr::app(inj, [self.lower_term(ast, *subterm)])
+        ReducIr::app(inj, [self.lower_term(ast, *subterm, evv_var_id)])
       }
       // Effect stuff
       Operation(op) => {
@@ -1150,7 +1157,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         let eff_var = ReducIrVar::new(
           ReducIrLocal {
             top_level: self.current,
-            id: self.evv_var_id,
+            id: evv_var_id,
           },
           eff_ty,
         );
@@ -1247,7 +1254,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           ),
           [ReducIr::var(handler_var)],
         );
-        let handler_ir = self.lower_term(ast, *handler);
+        let handler_ir = self.lower_term(ast, *handler, evv_var_id);
 
         let term_infer = self.lookup_term(term);
 
@@ -1257,7 +1264,12 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           right: handler_infer.eff,
           goal: body_infer.eff,
         }];
-        let body = self.lower_term(ast, *body);
+        let inner_evv_id = self.generate_local();
+        let inner_evv_var = ReducIrVar::new(
+          inner_evv_id,
+          self.ty_ctx.eff_row_into_evv_ty(body_infer.eff).prod,
+        );
+        let body = self.lower_term(ast, *body, inner_evv_id.id);
 
         // Peel off one arg of handler_ret_ty because it will be applied to body.
         let handler_ret_ty = self
@@ -1271,10 +1283,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         );
         let update_evv = {
           let outer_evv_var = ReducIrVar::new(
-            ReducIrLocal {
-              top_level: self.current,
-              id: self.evv_var_id,
-            },
+            self.generate_local(),
             self.ty_ctx.eff_row_into_evv_ty(term_infer.eff).prod,
           );
           ReducIr::abss(
@@ -1296,7 +1305,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
               marker: P::new(ReducIr::var(prompt_var)),
               upd_evv: P::new(update_evv),
               ret: P::new(handler_prj_ret),
-              body: P::new(body),
+              body: P::new(ReducIr::abss([inner_evv_var], body)),
             }),
           ),
         ));
@@ -1305,7 +1314,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       }
       Annotated { term, .. } => {
         // We type checked so this is handled, we can just unwrap here.
-        self.lower_term(ast, *term)
+        self.lower_term(ast, *term, evv_var_id)
       }
     }
   }

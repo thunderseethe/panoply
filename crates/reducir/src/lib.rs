@@ -991,27 +991,29 @@ impl TypeCheck for DelimCont {
       DelimCont::Prompt {
         marker, body, ret, ..
       } => {
+        let ir_db = ctx.as_reducir_db();
         let marker_ty = marker.type_check(ctx)?;
-        let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) else {
+        let MarkerTy(_) = marker_ty.kind(ir_db) else {
           return Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty));
         };
         let ret_ty = ret.type_check(ctx)?;
-        let FunETy(arg, _, ret_ret_ty) = ret_ty.kind(ctx.as_reducir_db()) else {
+        let FunETy(arg, _, ret_ret_ty) = ret_ty.kind(ir_db) else {
           return Err(ReducIrTyErr::ExpectedFunTy {
             ty: ret_ty,
             func: ret,
           });
         };
         let body_ty = body.type_check(ctx)?;
-        if arg == body_ty {
-          Ok(ret_ret_ty)
-        } else {
-          Err(ReducIrTyErr::ArgMismatch {
+        // Body is wrapped in the updated evv param, so unwrap one argument to access the real body
+        // type.
+        match body_ty.drop_args(ir_db, 1) {
+          Ok(ty) if arg == ty => Ok(ret_ret_ty),
+          _ => Err(ReducIrTyErr::ArgMismatch {
             fun_ir: Cow::Borrowed(ret),
             arg_ir: Cow::Borrowed(body),
             expected_ty: arg,
             actual_ty: body_ty,
-          })
+          }),
         }
       }
       DelimCont::Yield {
