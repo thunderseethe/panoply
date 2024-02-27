@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::ops::Deref;
 
-use base::id::{Id, IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
+use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
 use base::pretty::PrettyErrorWithDb;
 use reducir::mon::MonReducIrRowEv;
@@ -43,7 +43,6 @@ struct Simplify<'a> {
   db: &'a dyn crate::Db,
   builtin_evs: FxHashMap<ReducIrTermName, &'a ReducIr>,
   supply: &'a mut IdSupply<ReducIrVarId>,
-  evv_var_id: ReducIrVarId,
   top_level: ReducIrTermName,
 }
 impl ReducIrEndoFold for Simplify<'_> {
@@ -96,7 +95,7 @@ impl ReducIrEndoFold for Simplify<'_> {
           .filter_map(|bind| {
             let arg = bind
               .defn
-              .fold(&mut Inline::new(self.db, &mut env, self.evv_var_id))
+              .fold(&mut Inline::new(self.db, &mut env))
               .fold(self);
             if is_value(&arg)
               || occs[bind.var] == Occurrence::Once
@@ -111,9 +110,7 @@ impl ReducIrEndoFold for Simplify<'_> {
           .collect::<Vec<_>>();
         ReducIr::locals(
           binds,
-          body
-            .fold(&mut Inline::new(self.db, &mut env, self.evv_var_id))
-            .fold(self),
+          body.fold(&mut Inline::new(self.db, &mut env)).fold(self),
         )
       }
       App(head, spine) => {
@@ -198,7 +195,6 @@ impl ReducIrEndoFold for Simplify<'_> {
           supply: self.supply,
           top_level: self.top_level,
           subst: FxHashMap::default(),
-          evv_var_id: self.evv_var_id,
         }),
         None => ReducIr::new(kind),
       },
@@ -211,7 +207,6 @@ struct RenumberVars<'a> {
   supply: &'a mut IdSupply<ReducIrVarId>,
   top_level: ReducIrTermName,
   subst: FxHashMap<ReducIrLocal, ReducIrLocal>,
-  evv_var_id: ReducIrVarId,
 }
 impl<'a> RenumberVars<'a> {
   fn gen_local(&mut self) -> ReducIrLocal {
@@ -244,10 +239,6 @@ impl<'a> ReducIrEndoFold for RenumberVars<'a> {
         let binds = binds
           .iter()
           .map(|local| {
-            // Don't renumber evv
-            if local.var.var.id == self.evv_var_id {
-              return local.fold(self);
-            }
             let new_var = self.gen_local();
             self.subst.insert(local.var.var, new_var);
             removals.push(local.var.var);
@@ -268,10 +259,6 @@ impl<'a> ReducIrEndoFold for RenumberVars<'a> {
         let vars = vars
           .iter()
           .map(|var| {
-            // Don't renumber evv
-            if var.var.id == self.evv_var_id {
-              return *var;
-            }
             let new_var = self.gen_local();
             self.subst.insert(var.var, new_var);
             removals.push(var.var);
@@ -404,7 +391,6 @@ pub(crate) fn simplify(
     db,
     builtin_evs: builtin_evs.clone(),
     supply,
-    evv_var_id: ReducIrVarId::from_raw(0),
     top_level: ReducIrTermName::Term(name),
   })
   .fold(&mut EtaExpand {
