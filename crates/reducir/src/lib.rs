@@ -902,65 +902,88 @@ impl<Ext> ReducIr<Ext> {
   }
 }
 
-impl ReducIr {
-  fn free_var_aux(
-    &self,
-    in_scope: &mut FxHashSet<ReducIrLocal>,
-    bound: &mut FxHashSet<ReducIrVar>,
-  ) {
-    match &self.kind {
+struct FreeVarAux<'a, DB: ?Sized> {
+  db: &'a DB,
+  in_scope: FxHashSet<ReducIrLocal>,
+  bound: FxHashSet<ReducIrVar>,
+  under_binders: i32,
+}
+impl<'a, DB: ?Sized> FreeVarAux<'a, DB> {
+  fn new(db: &'a DB) -> Self {
+    Self {
+      db,
+      in_scope: FxHashSet::default(),
+      bound: FxHashSet::default(),
+      under_binders: 0,
+    }
+  }
+}
+impl<DB: ?Sized + crate::Db> FreeVarAux<'_, DB> {
+  fn visit(&mut self, ir: &ReducIr) {
+    match ir.kind() {
       Int(_) | Item(_) => {}
       Var(v) => {
-        if !in_scope.contains(&v.var) {
-          bound.insert(*v);
+        if !self.in_scope.contains(&v.var) {
+          let var = if self.under_binders > 0 {
+            v.map_type(|ty| ty.subst(self.db, Subst::Inc(-self.under_binders)))
+          } else {
+            *v
+          };
+          self.bound.insert(var);
         }
       }
       Abs(vars, body) => {
-        let tmp = in_scope.clone();
-        in_scope.extend(vars.iter().map(|v| v.var));
-        body.free_var_aux(in_scope, bound);
-        *in_scope = tmp;
+        self.in_scope.extend(vars.iter().map(|v| v.var));
+        self.visit(body);
+        for var in vars.iter() {
+          self.in_scope.remove(&var.var);
+        }
       }
       App(func, spine) => {
-        func.free_var_aux(in_scope, bound);
+        self.visit(func);
         for arg in spine.iter() {
-          arg.free_var_aux(in_scope, bound);
+          self.visit(arg);
         }
       }
-      TyAbs(_, body) => body.free_var_aux(in_scope, bound),
-      TyApp(body, _) => body.free_var_aux(in_scope, bound),
+      TyAbs(_, body) => {
+        self.under_binders += 1;
+        self.visit(body);
+        self.under_binders -= 1;
+      }
+      TyApp(body, _) => self.visit(body),
       Struct(elems) => {
         for e in elems.iter() {
-          e.free_var_aux(in_scope, bound);
+          self.visit(e);
         }
       }
-      FieldProj(_, base) => base.free_var_aux(in_scope, bound),
-      Tag(_, _, val) => val.free_var_aux(in_scope, bound),
+      FieldProj(_, base) => self.visit(base),
+      Tag(_, _, val) => self.visit(val),
       Case(_, discr, branches) => {
-        discr.free_var_aux(in_scope, bound);
+        self.visit(discr);
         for branch in branches.iter() {
-          branch.free_var_aux(in_scope, bound);
+          self.visit(branch);
         }
       }
       Locals(binds, body) => {
         for Bind { var, defn } in binds.iter() {
-          defn.free_var_aux(in_scope, bound);
-          in_scope.insert(var.var);
+          self.visit(defn);
+          self.in_scope.insert(var.var);
         }
-        body.free_var_aux(in_scope, bound);
+        self.visit(body);
       }
       Coerce(_, body) => {
-        body.free_var_aux(in_scope, bound);
+        self.visit(body);
       }
       X(_) => unreachable!(),
     }
   }
+}
 
-  pub fn free_var_set(&self) -> FxHashSet<ReducIrVar> {
-    let mut free_vars = FxHashSet::default();
-    let mut in_scope = FxHashSet::default();
-    self.free_var_aux(&mut in_scope, &mut free_vars);
-    free_vars
+impl ReducIr {
+  pub fn free_var_set<DB: ?Sized + crate::Db>(&self, db: &DB) -> FxHashSet<ReducIrVar> {
+    let mut aux = FreeVarAux::new(db);
+    aux.visit(self);
+    aux.bound
   }
 }
 

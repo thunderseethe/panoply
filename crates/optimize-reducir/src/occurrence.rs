@@ -164,37 +164,37 @@ impl AsKindRef for P<ReducIr> {
   }
 }
 
-pub(crate) fn occurence_analysis(ir: &impl AsKindRef) -> Occurrences {
+pub(crate) fn occurrence_analysis(ir: &impl AsKindRef) -> Occurrences {
   match ir.as_kind_ref() {
     ReducIrKind::Int(_) => Occurrences::default(),
     ReducIrKind::Var(var) => Occurrences::with_binder(*var),
     ReducIrKind::Item(occ) => Occurrences::with_item(occ.name),
-    ReducIrKind::Abs(vars, body) => occurence_analysis(body).mark_in_abs(vars),
+    ReducIrKind::Abs(vars, body) => occurrence_analysis(body).mark_in_abs(vars),
     ReducIrKind::App(head, spine) => spine
       .iter()
-      .map(occurence_analysis)
-      .fold(occurence_analysis(head), |a, b| a.merge(b)),
+      .map(occurrence_analysis)
+      .fold(occurrence_analysis(head), |a, b| a.merge(b)),
     ReducIrKind::Locals(binds, body) => binds
       .iter()
       .map(|bind| &bind.defn)
-      .map(occurence_analysis)
-      .fold(occurence_analysis(body), |a, b| a.merge(b)),
+      .map(occurrence_analysis)
+      .fold(occurrence_analysis(body), |a, b| a.merge(b)),
     ReducIrKind::Struct(elems) => elems
       .iter()
-      .map(|ir| occurence_analysis(ir).mark_in_abs(&[]))
+      .map(|ir| occurrence_analysis(ir).mark_in_abs(&[]))
       .reduce(Occurrences::merge)
       .unwrap_or_else(Occurrences::default),
     ReducIrKind::Case(_, discr, branches) => branches
       .iter()
-      .map(occurence_analysis)
+      .map(occurrence_analysis)
       .reduce(Occurrences::merge_branch)
       .unwrap_or_else(Occurrences::default)
-      .merge(occurence_analysis(discr)),
+      .merge(occurrence_analysis(discr)),
     ReducIrKind::TyAbs(_, body)
     | ReducIrKind::TyApp(body, _)
     | ReducIrKind::FieldProj(_, body)
     | ReducIrKind::Tag(_, _, body)
-    | ReducIrKind::Coerce(_, body) => occurence_analysis(body),
+    | ReducIrKind::Coerce(_, body) => occurrence_analysis(body),
     ReducIrKind::X(_) => unreachable!(),
   }
 }
@@ -208,7 +208,7 @@ mod tests {
 
   use crate::occurrence::Occurrence;
 
-  use super::occurence_analysis;
+  use super::occurrence_analysis;
 
   fn var_supply() -> impl FnMut() -> ReducIrVar {
     let mut var_supply = IdSupply::default();
@@ -227,7 +227,7 @@ mod tests {
   fn test_var_occurs_once() {
     let mut gen_var = var_supply();
     let var = gen_var();
-    let occs = occurence_analysis(&ReducIr::var(var));
+    let occs = occurrence_analysis(&ReducIr::var(var));
     assert_eq!(occs[var], Occurrence::Once);
   }
 
@@ -237,7 +237,7 @@ mod tests {
 
     let var = gen_var();
     let unused = gen_var();
-    let occs = occurence_analysis(&ReducIr::abss([unused], ReducIr::var(var)));
+    let occs = occurrence_analysis(&ReducIr::abss([unused], ReducIr::var(var)));
     assert_eq!(occs[var], Occurrence::OnceInAbs);
   }
 
@@ -246,7 +246,7 @@ mod tests {
     let mut gen_var = var_supply();
 
     let var = gen_var();
-    let occs = occurence_analysis(&ReducIr::abss([var], ReducIr::var(var)));
+    let occs = occurrence_analysis(&ReducIr::abss([var], ReducIr::var(var)));
     assert_eq!(occs[var], Occurrence::Once);
   }
 
@@ -256,7 +256,7 @@ mod tests {
 
     let var = gen_var();
     let unused = gen_var();
-    let occs = occurence_analysis(&ReducIr::abss([var, unused], ReducIr::var(var)));
+    let occs = occurrence_analysis(&ReducIr::abss([var, unused], ReducIr::var(var)));
     assert_eq!(occs[unused], Occurrence::Dead);
   }
 
@@ -265,7 +265,7 @@ mod tests {
     let mut gen_var = var_supply();
 
     let var = gen_var();
-    let occs = occurence_analysis(&ReducIr::app(ReducIr::var(var), [ReducIr::var(var)]));
+    let occs = occurrence_analysis(&ReducIr::app(ReducIr::var(var), [ReducIr::var(var)]));
     assert_eq!(occs[var], Occurrence::Many);
   }
 
@@ -275,7 +275,7 @@ mod tests {
 
     let var = gen_var();
     let discr = gen_var();
-    let occs = occurence_analysis(&ReducIr::case(
+    let occs = occurrence_analysis(&ReducIr::case(
       ReducIrTy::from_id(salsa::Id::from_u32(0)),
       ReducIr::var(discr),
       [ReducIr::var(var), ReducIr::var(var)],
@@ -288,7 +288,7 @@ mod tests {
     let mut gen_var = var_supply();
 
     let var = gen_var();
-    let occs = occurence_analysis(&ReducIr::case(
+    let occs = occurrence_analysis(&ReducIr::case(
       ReducIrTy::from_id(salsa::Id::from_u32(0)),
       ReducIr::var(var),
       [ReducIr::var(var), ReducIr::var(var)],
@@ -302,7 +302,7 @@ mod tests {
 
     let var = gen_var();
     let discr = gen_var();
-    let occs = occurence_analysis(&ReducIr::case(
+    let occs = occurrence_analysis(&ReducIr::case(
       ReducIrTy::from_id(salsa::Id::from_u32(0)),
       ReducIr::var(discr),
       [
@@ -319,7 +319,7 @@ mod tests {
 
     let var = gen_var();
     let discr = gen_var();
-    let occs = occurence_analysis(&ReducIr::abss(
+    let occs = occurrence_analysis(&ReducIr::abss(
       [discr],
       ReducIr::case(
         ReducIrTy::from_id(salsa::Id::from_u32(0)),

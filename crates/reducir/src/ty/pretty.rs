@@ -14,6 +14,7 @@ where
 }
 
 impl ReducIrVarTy {
+  #[allow(dead_code)]
   pub(crate) fn pretty_with_kind<'a, D, A>(self, a: &'a D) -> DocBuilder<'a, D, A>
   where
     A: 'a,

@@ -291,11 +291,13 @@ impl<'a> LowerCtx<'a> {
     body: &ReducIr,
   ) -> (MedIrTypedItem, Vec<MedIrVar>) {
     let locals = vars.iter().map(|var| var.var).collect::<Vec<_>>();
+    let mut reducir_vars = vec![];
     let mut free_vars = body
-      .free_var_set()
+      .free_var_set(self.db)
       .into_iter()
       .filter(|var| !locals.contains(&var.var))
       .map(|var| {
+        reducir_vars.push(var);
         MedIrVar::new(
           self.var_converter.convert(var.var),
           from_reducir_ty(self.db, var.ty),
@@ -304,18 +306,28 @@ impl<'a> LowerCtx<'a> {
       .collect::<Vec<_>>();
     free_vars.sort();
 
-    let params = free_vars
+    let env_ty = self.db.mk_medir_ty(MedIrTyKind::BlockTy(
+      free_vars.iter().map(|var| var.ty).collect(),
+    ));
+    let env_var = MedIrVar::new(self.var_converter.generate(), env_ty);
+
+    let mut params = vars
       .iter()
       .copied()
-      .chain(vars.iter().copied().map(|var| {
+      .map(|var| {
         MedIrVar::new(
           self.var_converter.convert(var.var),
           from_reducir_ty(self.db, var.ty),
         )
-      }))
+      })
       .collect::<Vec<_>>();
+    params.insert(0, env_var);
     let param_tys = params.iter().map(|var| var.ty).collect();
-    let mut binds = vec![];
+    let mut binds = free_vars
+      .iter()
+      .enumerate()
+      .map(|(indx, var)| (*var, MedIr::new(MedIrKind::BlockAccess(env_var, indx))))
+      .collect();
 
     let ty = body
       .type_check(self.db.as_reducir_db())

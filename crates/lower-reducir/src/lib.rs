@@ -10,7 +10,7 @@ use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use reducir::{
   mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule, MonReducIrRowEv},
   ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
-  GeneratedReducIrName, ReducIr, ReducIrGenItem, ReducIrItem,
+  Bind, GeneratedReducIrName, ReducIr, ReducIrGenItem, ReducIrItem,
   ReducIrKind::*,
   ReducIrLocal, ReducIrModule, ReducIrRowEv, ReducIrTermName, ReducIrVar, P,
 };
@@ -300,9 +300,14 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
   let body = lower_ctx.lower_term(ast, ast.root(), evv_var_id);
   // TODO: Bit of a hack. Eventually we'd like to generate our solved row ev in a central location.
   // Add row evidence as parameters of the term
-  let body = ev_solved
-    .into_iter()
-    .rfold(body, |body, (arg, term)| ReducIr::local(arg, term, body));
+  let body = body.map_within_abss(|body| {
+    ReducIr::locals(
+      ev_solved
+        .into_iter()
+        .map(|(var, defn)| Bind::new(var, defn)),
+      body,
+    )
+  });
   // Wrap our term in any unsolved row evidence params we need
   let is_entry_point = name.name(db.as_core_db()) == db.ident_str("main");
   let evv_param = if is_entry_point {
@@ -628,7 +633,7 @@ effect Reader {
     let ir = lower_snippet(&db, "|x| x");
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
-    let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V0] (fun<{0}> [V1] V1)))"];
+    let expect = expect!["(forall [(1: Type) (0: ScopedRow)] (fun [V0] (fun<{0}> [V1] V1)))"];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> {0} T1"];
@@ -642,7 +647,7 @@ effect Reader {
     let ir = lower_snippet(&db, "|m| { fst = m }");
 
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
-    let expect = expect!["(forall [(T1: Type) (T0: ScopedRow)] (fun [V0] (fun<{0}> [V1] V1)))"];
+    let expect = expect!["(forall [(1: Type) (0: ScopedRow)] (fun [V0] (fun<{0}> [V1] V1)))"];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> {0} T1"];
@@ -657,7 +662,7 @@ effect Reader {
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
     let expect = expect![[r#"
-        (forall [(T1: Type) (T0: ScopedRow)] (fun [V0]
+        (forall [(1: Type) (0: ScopedRow)] (fun [V0]
             (let (V1 ((_row_simple_x_y @ [Ty(T1), Ty(T1)]) {}))
               (fun<{0}> [V2] (V1[0] V2 V2)))))"#]];
     expect.assert_eq(&pretty_ir);
@@ -675,7 +680,7 @@ effect Reader {
 
     let expect = expect![[r#"
         (forall
-          [(T5: Type) (T4: ScopedRow) (T3: SimpleRow) (T2: SimpleRow) (T1: SimpleRow) (T0: SimpleRow)]
+          [(5: Type) (4: ScopedRow) (3: SimpleRow) (2: SimpleRow) (1: SimpleRow) (0: SimpleRow)]
           (fun [V1, V2, V0] (fun<{4}> [V3] (fun<{4}> [V4] (V2[3][0] (V1[0] V3 V4))))))"#]];
     expect.assert_eq(&pretty_ir);
 
@@ -750,8 +755,7 @@ main = with {
                   (fun [V9]
                     ((let [ (V10 {}) , (V11 (V1[3][0] V9)) ]
                       (fun [V17]
-                        <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {V11[0], (fun
-                              [V12]
+                        <1: (forall [(0: Type) (1: Type) (2: Type)] {V11[0], (fun [V12]
                               ((__mon_bind @ [Ty({}), Ty((Int -> {} -> (Control {} Int))
                               -> {} -> (Control {} Int)), Ty(Int)])
                                 (V2[3][0] V11[1] V10)
@@ -789,7 +793,7 @@ main = with {
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
     let expect = expect![[r#"
-        (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
+        (forall [(1: ScopedRow) (0: ScopedRow)] (fun [V1, V0]
             (let
               [ (V2 ((_row_simple_put_get @ [Ty({} -> {1} Int -> {1} Int -> {1} { Int
                                                                                 , Int
@@ -899,7 +903,7 @@ main = with {
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
     let expect = expect![[r#"
-        (forall [(T1: ScopedRow) (T0: ScopedRow)] (fun [V1, V0]
+        (forall [(1: ScopedRow) (0: ScopedRow)] (fun [V1, V0]
             ((let
               [ (V2 ((_row_simple_put_get @ [Ty({} -> {1} -> (Control {1} (Int -> {1} ->
               (Control {1} Int -> {1} -> (Control {1} {Int, Int}))) -> {1} ->
@@ -967,8 +971,8 @@ main = with {
                         (fun [V16]
                           ((let [ (V17 {}) , (V18 (V1[3][0] V16)) ]
                             (fun [V30]
-                              <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {
-                                  V18[0], (fun [V19]
+                              <1: (forall [(0: Type) (1: Type) (2: Type)] {V18[0], (fun
+                                    [V19]
                                     ((__mon_bind @ [Ty({4}), Ty((Int -> {4} ->
                                     (Control {4} Int -> {4} -> (Control {4} { Int
                                                                             , Int
@@ -1056,7 +1060,7 @@ main = with {
       // wand
       expect![[r#"
           (forall
-            [(T5: Type) (T4: ScopedRow) (T3: SimpleRow) (T2: SimpleRow) (T1: SimpleRow) (T0: SimpleRow)]
+            [(5: Type) (4: ScopedRow) (3: SimpleRow) (2: SimpleRow) (1: SimpleRow) (0: SimpleRow)]
             (fun [V1, V2, V0]
               <0: (fun [V3, V6] <0: (fun [V4, V5] <0: (V2[3][0] (V1[0] V3 V4))>)>)>))"#]],
       // main
@@ -1217,8 +1221,8 @@ main = (with {
                           (fun [V16]
                             ((let [ (V17 {}) , (V18 (V1[3][0] V16)) ]
                               (fun [V30]
-                                <1: (forall [(T0: Type) (T1: Type) (T2: Type)] {
-                                    V18[0], (fun [V19]
+                                <1: (forall [(0: Type) (1: Type) (2: Type)] {V18[0], (fun
+                                      [V19]
                                       ((__mon_bind @ [Ty({}), Ty((Int -> {} ->
                                       (Control {} Int -> {} -> (Control {} {Int, Int})))
                                       -> {} -> (Control {} Int -> {} -> (Control {} { Int

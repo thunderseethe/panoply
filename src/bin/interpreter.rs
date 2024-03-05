@@ -30,7 +30,7 @@ fn main() -> eyre::Result<()> {
   let mut printer = wasmprinter::Printer::default();
   printer.print_offsets(true);
   let wat = printer.print(&bytes).unwrap();
-  //println!("{}", wat);
+  println!("{}", wat);
 
   match tys {
     Ok(_) => {}
@@ -46,6 +46,12 @@ fn main() -> eyre::Result<()> {
     .unwrap();
   use std::io::Write;
   writeln!(file, "{}", wat).unwrap();
+  let mut file = std::fs::OpenOptions::new()
+    .truncate(true)
+    .write(true)
+    .open("./testbed/wand.wasm")
+    .unwrap();
+  file.write_all(&bytes).unwrap();
   /*let mut file = std::fs::OpenOptions::new()
     .read(true)
     .open("./testbed/wand.wat")

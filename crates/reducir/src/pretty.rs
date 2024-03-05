@@ -253,10 +253,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
           .softline()
           .append(
             arena
-              .intersperse(
-                tyvars.iter().map(|tv| tv.pretty_with_kind(arena)),
-                arena.space(),
-              )
+              .intersperse(tyvars.iter().map(|tv| tv.pretty(arena)), arena.space())
               .align()
               .brackets(),
           )

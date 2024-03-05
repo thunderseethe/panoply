@@ -15,7 +15,7 @@ use reducir::{
 };
 use rustc_hash::FxHashMap;
 
-use crate::occurrence::{occurence_analysis, Occurrence};
+use crate::occurrence::{occurrence_analysis, Occurrence};
 use crate::subst::Inline;
 
 /// True if an ir term is a value (contains no computations), false if the term does require
@@ -88,7 +88,7 @@ impl ReducIrEndoFold for Simplify<'_> {
         _ => ReducIr::new(kind),
       },
       Locals(binds, body) => {
-        let occs = occurence_analysis(&Locals(binds.clone(), body.clone()));
+        let occs = occurrence_analysis(&Locals(binds.clone(), body.clone()));
         let mut env = FxHashMap::default();
         let binds = binds
           .into_iter()
@@ -297,46 +297,41 @@ impl<DB: ?Sized + crate::Db> ReducIrEndoFold for EtaExpand<'_, DB> {
   type Ext = Infallible;
 
   fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
-    fn try_as_item(ir: &ReducIr) -> Option<&ReducIrItemOccurence> {
+    fn try_as_callable(ir: &ReducIr) -> Option<ReducIrTy> {
       match ir.kind() {
-        ReducIrKind::TyApp(ir, _) => try_as_item(ir),
-        ReducIrKind::Item(occ) => Some(occ),
+        ReducIrKind::TyApp(ir, _) => try_as_callable(ir),
+        ReducIrKind::Item(occ) => Some(occ.ty),
+        ReducIrKind::Var(v) => Some(v.ty),
         _ => None,
       }
     }
     match kind {
-      ReducIrKind::App(head, mut spine) => match try_as_item(&head) {
-        Some(_occ) => {
-          // We do this in case our head is ty_app
-          if let ReducIrTyKind::FunTy(params, ret) = head
-            .type_check(self.db)
-            .unwrap()
-            .kind(self.db.as_reducir_db())
-          {
-            let mut params = params.into_vec();
-            //  TODO: Clean this up as some kind of combinator
-            if let Ok(UnwrapMonTy { evv_ty, .. }) = ret.try_unwrap_monadic(self.db) {
-              params.push(evv_ty);
-            }
-            if params.len() > spine.len() {
-              let vars = params
-                .iter()
-                .skip(spine.len())
-                .map(|ty| self.gen_var(*ty))
-                .collect::<Vec<_>>();
-              spine.extend(vars.iter().map(|v| ReducIr::var(*v)));
-              ReducIr::abss(vars, ReducIr::app(head.into_inner(), spine))
-            } else {
-              ReducIr::app(head.into_inner(), spine)
-            }
+      ReducIrKind::App(head, mut spine) if try_as_callable(&head).is_some() => {
+        if let ReducIrTyKind::FunTy(params, ret) = head
+          .type_check(self.db)
+          .unwrap()
+          .kind(self.db.as_reducir_db())
+        {
+          let mut params = params.into_vec();
+          //  TODO: Clean this up as some kind of combinator
+          if let Ok(UnwrapMonTy { evv_ty, .. }) = ret.try_unwrap_monadic(self.db) {
+            params.push(evv_ty);
+          }
+          if params.len() > spine.len() {
+            let vars = params
+              .iter()
+              .skip(spine.len())
+              .map(|ty| self.gen_var(*ty))
+              .collect::<Vec<_>>();
+            spine.extend(vars.iter().map(|v| ReducIr::var(*v)));
+            ReducIr::abss(vars, ReducIr::app(head.into_inner(), spine))
           } else {
             ReducIr::app(head.into_inner(), spine)
           }
+        } else {
+          ReducIr::app(head.into_inner(), spine)
         }
-        None => ReducIr::app(head.into_inner(), spine),
-      },
-      // Just in case
-      ReducIrKind::Abs(vars, body) => ReducIr::abss(vars.iter().copied(), body.into_inner()),
+      }
       _ => ReducIr::new(kind),
     }
   }
@@ -387,17 +382,20 @@ pub(crate) fn simplify(
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
-  ir.fold(&mut Simplify {
+  let mut simple = Simplify {
     db,
     builtin_evs: builtin_evs.clone(),
     supply,
     top_level: ReducIrTermName::Term(name),
-  })
-  .fold(&mut EtaExpand {
-    db,
-    supply,
-    name: ReducIrTermName::Term(name),
-  })
+  };
+  ir.fold(&mut simple)
+    .fold(&mut simple)
+    .fold(&mut simple)
+    .fold(&mut EtaExpand {
+      db,
+      supply,
+      name: ReducIrTermName::Term(name),
+    })
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {
@@ -462,8 +460,8 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
   let mark_ty = db.mk_reducir_ty(MarkerTy(b));
   let upd_fun_ty = db.mk_fun_ty([m_ty], upd_m);
   let body_fun_ty = db.mk_mon_ty(upd_m, a);
-  let ret_clause_ty = db.mk_fun_ty([a], db.mk_mon_ty(m_ty, b));
   let ret_ty = db.mk_mon_ty(m_ty, b);
+  let ret_clause_ty = db.mk_fun_ty([a], ret_ty);
 
   let mut var_gen = IdSupply::default();
   let mut gen_local = || ReducIrLocal {

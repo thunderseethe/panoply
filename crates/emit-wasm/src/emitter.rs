@@ -1,6 +1,7 @@
+use base::pretty::{PrettyPrint, PrettyWithCtx};
 use base::{id::MedIrVarId, modules::Module};
 use medir::{
-  Atom, ClosureArities, Locals, MedIr, MedIrItem, MedIrItemName, MedIrKind, MedIrModule,
+  Atom, CallAritys, Locals, MedIr, MedIrItem, MedIrItemName, MedIrKind, MedIrModule,
   MedIrTraversal, MedIrTy, MedIrTyKind,
 };
 use reducir::ReducIrTermName;
@@ -100,7 +101,7 @@ pub(crate) fn emit_wasm_module(
   }
   let num_imports = imports.len();
 
-  let mut closure_arities = ClosureArities::new(db);
+  let mut closure_arities = CallAritys::new();
   medir_module
     .items(db.as_medir_db())
     .iter()
@@ -210,33 +211,97 @@ pub(crate) fn emit_wasm_module(
     codes.function(&f);
   }
 
-  for pap in closure_arities.into_arities() {
+  let calls = closure_arities.into_calls();
+
+  let call_1_indx = funcs.len();
+  for call in 1..=calls {
     let indx = funcs.len();
-    let num_params = pap.arity - pap.provided_args;
-    let apply_ty_indx = type_sect.insert_fun_ty(fun_n_i32s(num_params + 1));
-    funcs.function(apply_ty_indx);
-    let name = format!("__apply_{}_{}", pap.arity, pap.provided_args);
+    let call_ty_indx = type_sect.insert_fun_ty(fun_n_i32s(call + 1));
+    funcs.function(call_ty_indx);
+    let name_str = format!("__call_{}", call);
     let name = MedIrItemName::new(ReducIrTermName::gen(
       db,
-      name,
+      name_str.as_str(),
       medir_module.module(db.as_medir_db()),
     ));
-    name_map.append(indx + num_imports, name.0.name(db).text(db.as_core_db()));
+    name_map.append(indx + num_imports, &name_str);
     item_indices.insert(name, indx + num_imports);
 
-    let mut f = Function::new([]);
-    for i in (0u64..pap.provided_args.try_into().unwrap()).map(|i| i + 1) {
-      f.instruction(&Instruction::LocalGet(0));
-      f.instruction(&Instruction::I32Load(default_memarg(i)));
+    let mut f = Function::new([(1, ValType::I32)]);
+
+    // Calculate pointer to the env of closure
+    let env_ptr_local = call as u32 + 1;
+    f.instruction(&Instruction::LocalGet(0))
+      .instruction(&Instruction::I32Const(12))
+      .instruction(&Instruction::I32Add)
+      .instruction(&Instruction::LocalSet(env_ptr_local));
+    for ins in std::iter::repeat(Instruction::Block(wasm_encoder::BlockType::Empty)).take(call + 1)
+    {
+      f.instruction(&ins);
     }
-    for i in (0u32..num_params.try_into().unwrap()).map(|i| i + 1) {
-      f.instruction(&Instruction::LocalGet(i));
+    f.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty))
+      .instruction(&Instruction::LocalGet(0))
+      .instruction(&Instruction::I32Load(default_memarg(0)))
+      .instruction(&Instruction::BrTable(
+        (0..=(call as u32)).collect::<Vec<_>>().into(),
+        (call as u32) + 1,
+      ))
+      .instruction(&Instruction::End);
+    for i in 0..=call {
+      // Pass our env pointer
+      f.instruction(&Instruction::LocalGet(env_ptr_local));
+      // Pass args based on arity
+      (0..(i as u32))
+        .map(|i| Instruction::LocalGet(i + 1))
+        .for_each(|ins| {
+          f.instruction(&ins);
+        });
+      let fun_ty = type_sect.insert_fun_ty(fun_n_i32s(i + 1));
+      // Load our fn pointer and call it
+      f.instruction(&Instruction::LocalGet(0))
+        .instruction(&Instruction::I32Load(default_memarg(2)))
+        .instruction(&Instruction::CallIndirect {
+          ty: fun_ty,
+          table: 0,
+        });
+      // Dispatch to call based on remaining args
+      let rest = call - i;
+      ((i as u32)..(call as u32))
+        .map(|i| Instruction::LocalGet(i + 1))
+        .for_each(|ins| {
+          f.instruction(&ins);
+        });
+      if rest > 0 {
+        f.instruction(&Instruction::Call(call_1_indx - 1 + rest as u32));
+      }
+      f.instruction(&Instruction::Return);
+      f.instruction(&Instruction::End);
     }
-    f.instruction(&Instruction::LocalGet(0));
-    f.instruction(&Instruction::I32Load(default_memarg(0)));
-    let ty = type_sect.insert_fun_ty(fun_n_i32s(pap.arity));
-    f.instruction(&Instruction::CallIndirect { ty, table: 0 });
-    f.instruction(&Instruction::End);
+    /*// Update our env pointer to point to the end of env
+    f.instruction(&Instruction::LocalGet(env_ptr_local))
+     .instruction(&Instruction::LocalGet(0))
+     .instruction(&Instruction::I32Load(default_memarg(1)))
+     .instruction(&Instruction::I32Const(4))
+     .instruction(&Instruction::I32Mul)
+     .instruction(&Instruction::I32Add)
+     .instruction(&Instruction::LocalSet(env_ptr_local));
+    for i in 0..call {
+      let i: i32 = i.try_into().unwrap();
+      f.instruction(&Instruction::LocalGet(env_ptr_local))
+       .instruction(&Instruction::LocalGet(i as u32 + 1))
+       .instruction(&Instruction::I32Store(default_memarg(i.try_into().unwrap())));
+    }
+    f.instruction(&Instruction::LocalGet(0))
+      .instruction(&Instruction::LocalGet(0))
+      .instruction(&Instruction::I32Load(default_memarg(1)))
+      .instruction(&Instruction::I32Const(call.try_into().unwrap()))
+      .instruction(&Instruction::I32Add)
+      .instruction(&Instruction::I32Store(default_memarg(1)))
+      .instruction(&Instruction::LocalGet(0))
+      .instruction(&Instruction::Return)*/
+    f.instruction(&Instruction::Unreachable)
+      .instruction(&Instruction::End);
+
     codes.function(&f);
   }
 
@@ -256,7 +321,7 @@ pub(crate) fn emit_wasm_module(
   }
 
   for item in medir_module.items(medir_db).iter() {
-    let f = emit_wasm_item(db, item, &item_indices, &mut type_sect, alloc_indx);
+    let f = emit_wasm_item(db, item, &item_indices, alloc_indx);
     codes.function(&f);
   }
 
@@ -339,7 +404,6 @@ fn emit_wasm_item(
   db: &dyn crate::Db,
   opt_item: &MedIrItem,
   item_indices: &FxHashMap<MedIrItemName, u32>,
-  type_sect: &mut TypeSect,
   alloc_fn: u32,
 ) -> wasm_encoder::Function {
   let defn = opt_item.item(db.as_medir_db());
@@ -355,9 +419,6 @@ fn emit_wasm_item(
     ins: vec![],
     locals,
     item_indices,
-    type_sect,
-    // TODO: Replace magic number with an actual lookup of the alloc function index
-    // This is annoying because we can't create alloc name here because we don't have module
     alloc_fn,
   };
 
@@ -380,7 +441,6 @@ struct InstrEmitter<'a, 'i> {
   ins: Vec<Instruction<'i>>,
   locals: FxHashMap<MedIrVarId, u32>,
   item_indices: &'a FxHashMap<MedIrItemName, u32>,
-  type_sect: &'a mut TypeSect,
   alloc_fn: u32,
 }
 impl<'i> InstrEmitter<'_, 'i> {
@@ -395,10 +455,16 @@ impl<'i> InstrEmitter<'_, 'i> {
   fn emit_atom(&self, atom: &Atom) -> Instruction<'i> {
     match atom {
       Atom::Var(v) => {
-        let local = self
-          .locals
-          .get(&v.id)
-          .expect("Local should have been set before it was got");
+        let local = self.locals.get(&v.id).unwrap_or_else(|| {
+          panic!(
+            "Local should have been set before it was got: {}",
+            MedIr::new(MedIrKind::Atom(Atom::Var(*v)))
+              .pretty_with(self.db)
+              .pprint()
+              .pretty(80)
+          );
+        });
+        //.expect("Local should have been set before it was got");
         Instruction::LocalGet(*local)
       }
       Atom::Int(i) => Instruction::I32Const((*i).try_into().unwrap()),
@@ -454,13 +520,6 @@ impl<'i> InstrEmitter<'_, 'i> {
       MedIrKind::Closure(item, env) => {
         let fun_ty = try_wasm_fun_ty(self.db, item.ty).expect("Closure has to have function type");
         let arity = fun_ty.params().len();
-        let apply_name_str = format!("__apply_{}_{}", arity, env.len());
-        let apply_name =
-          MedIrItemName::new(ReducIrTermName::gen(self.db, &apply_name_str, self.module));
-        let apply_indx = self
-          .item_indices
-          .get(&apply_name)
-          .unwrap_or_else(|| panic!("__apply_n_m indices not found for {}", apply_name_str));
         let fn_indx = self.item_indices.get(&item.name).unwrap_or_else(|| {
           panic!(
             "Item indices not found for {}",
@@ -468,23 +527,39 @@ impl<'i> InstrEmitter<'_, 'i> {
           )
         });
 
+        let env_len = match item.ty.kind(self.db) {
+          MedIrTyKind::FunTy(args, _) => {
+            // Env parameter type
+            match args[0].kind(self.db) {
+              MedIrTyKind::BlockTy(env_ty) => env_ty.len(),
+              _ => 0,
+            }
+          }
+          _ => unreachable!(),
+        } as i32;
+
         let addr = self.locals.len() as u32;
-        let env_len: i32 = env.len().try_into().unwrap();
+        //let env_len: i32 = env.len().try_into().unwrap();
         self.inss([
-          Instruction::I32Const((env_len + 2) * 4),
+          Instruction::I32Const((env_len + 3) * 4),
           Instruction::Call(self.alloc_fn),
           Instruction::LocalSet(addr),
         ]);
 
         self.inss([
-          // Store apply_n indx in slot 0
+          // Store call arity in slot 0
           Instruction::LocalGet(addr),
-          Instruction::I32Const((*apply_indx).try_into().unwrap()),
+          // Remove 1 from arity for env param
+          Instruction::I32Const((arity - 1).try_into().unwrap()),
           Instruction::I32Store(default_memarg(0)),
-          // Store fn indx in slot 1
+          // Store env len in slot 1
+          Instruction::LocalGet(addr),
+          Instruction::I32Const(env.len().try_into().unwrap()),
+          Instruction::I32Store(default_memarg(1)),
+          // Store fn indx in slot 2
           Instruction::LocalGet(addr),
           Instruction::I32Const((*fn_indx).try_into().unwrap()),
-          Instruction::I32Store(default_memarg(1)),
+          Instruction::I32Store(default_memarg(2)),
         ]);
 
         // Store each env capture in slot 2..n
@@ -493,7 +568,7 @@ impl<'i> InstrEmitter<'_, 'i> {
           self.inss([
             Instruction::LocalGet(addr),
             self.emit_atom(&Atom::Var(*capt)),
-            Instruction::I32Store(default_memarg(i + 2)),
+            Instruction::I32Store(default_memarg(i + 3)),
           ]);
         }
         // Leave
@@ -515,27 +590,17 @@ impl<'i> InstrEmitter<'_, 'i> {
         }
         medir::Call::Unknown(v) => {
           let get_local = self.emit_atom(&Atom::Var(*v));
-          self.inss([
-            get_local.clone(),
-            Instruction::I32Const(4),
-            Instruction::I32Add,
-          ]);
+          self.inss([get_local.clone()]);
           for arg in args.iter() {
             self.ins(self.emit_atom(arg));
           }
-          let fun_ty_indx = self.type_sect.insert_fun_ty(fun_n_i32s(args.len() + 1));
-          self.inss([
-            get_local.clone(),
-            Instruction::I32Load(MemArg {
-              offset: 0,
-              align: 2,
-              memory_index: 0,
-            }),
-            Instruction::CallIndirect {
-              ty: fun_ty_indx,
-              table: 0,
-            },
-          ]);
+          let name_str = format!("__call_{}", args.len());
+          let name = MedIrItemName::new(ReducIrTermName::gen(
+            self.db,
+            name_str.as_str(),
+            self.module,
+          ));
+          self.ins(Instruction::Call(self.item_indices[&name]));
         }
       },
       MedIrKind::Typecast(_, term) => self.emit(term),

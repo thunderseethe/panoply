@@ -39,42 +39,33 @@ pub struct PartialAppArity {
   pub provided_args: usize,
 }
 
-pub struct ClosureArities<'db> {
-  db: &'db dyn crate::Db,
-  arities: BTreeSet<PartialAppArity>,
+#[derive(Default)]
+pub struct CallAritys {
+  calls: usize,
 }
-impl<'db> ClosureArities<'db> {
-  pub fn new<DB: ?Sized + crate::Db>(db: &'db DB) -> Self {
-    Self {
-      db: db.as_medir_db(),
-      arities: Default::default(),
-    }
+impl CallAritys {
+  pub fn new() -> Self {
+    Self::default()
   }
 }
-impl ClosureArities<'_> {
+
+impl CallAritys {
   fn add_closure_arity_if_present(&mut self, kind: &MedIrKind) {
-    if let MedIrKind::Closure(item, elems) = kind {
-      let arity = match item.ty.kind(self.db) {
-        MedIrTyKind::FunTy(args, _) => args.len(),
-        _ => panic!("Closure item must be a function type"),
-      };
-      self.arities.insert(PartialAppArity {
-        arity,
-        provided_args: elems.len(),
-      });
+    if let MedIrKind::Call(Call::Unknown(_), args) = kind {
+      self.calls = max(self.calls, args.len());
     }
   }
 
-  pub fn into_arities(self) -> BTreeSet<PartialAppArity> {
-    self.arities
+  pub fn into_calls(self) -> usize {
+    self.calls
   }
 }
-impl MedIrFoldInPlace for ClosureArities<'_> {
+impl MedIrFoldInPlace for CallAritys {
   fn fold_medir(&mut self, kind: &mut MedIrKind) {
     self.add_closure_arity_if_present(kind);
   }
 }
-impl MedIrVisit for ClosureArities<'_> {
+impl MedIrVisit for CallAritys {
   fn visit_medir(&mut self, kind: &MedIrKind) {
     self.add_closure_arity_if_present(kind);
   }
@@ -280,7 +271,7 @@ impl MedIrTraversal for MedIr {
   }
 }
 
-use std::collections::BTreeSet;
+use std::cmp::max;
 use std::fmt;
 impl fmt::Debug for MedIr {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
