@@ -851,7 +851,7 @@ foo = with {
 
     let expect = expect_test::expect![[r#"
         forall<Eff> ty_var<0> ty_var<1> . 
-          (TyVarId(0) ⊙ Reader |> { eff |> Int -> TyVarId(0) Int, ret |> { value |> Int
+        (TyVarId(0) ⊙ Reader |> { eff |> Int -> TyVarId(0) Int, ret |> { value |> Int
         , random |> Int } } ~eff~ TyVarId(1)) => { value |> Int, random |> Int
         } | TyVarId(0)"#]];
     expect.assert_eq(

@@ -277,28 +277,6 @@ pub(crate) fn emit_wasm_module(
       f.instruction(&Instruction::Return);
       f.instruction(&Instruction::End);
     }
-    /*// Update our env pointer to point to the end of env
-    f.instruction(&Instruction::LocalGet(env_ptr_local))
-     .instruction(&Instruction::LocalGet(0))
-     .instruction(&Instruction::I32Load(default_memarg(1)))
-     .instruction(&Instruction::I32Const(4))
-     .instruction(&Instruction::I32Mul)
-     .instruction(&Instruction::I32Add)
-     .instruction(&Instruction::LocalSet(env_ptr_local));
-    for i in 0..call {
-      let i: i32 = i.try_into().unwrap();
-      f.instruction(&Instruction::LocalGet(env_ptr_local))
-       .instruction(&Instruction::LocalGet(i as u32 + 1))
-       .instruction(&Instruction::I32Store(default_memarg(i.try_into().unwrap())));
-    }
-    f.instruction(&Instruction::LocalGet(0))
-      .instruction(&Instruction::LocalGet(0))
-      .instruction(&Instruction::I32Load(default_memarg(1)))
-      .instruction(&Instruction::I32Const(call.try_into().unwrap()))
-      .instruction(&Instruction::I32Add)
-      .instruction(&Instruction::I32Store(default_memarg(1)))
-      .instruction(&Instruction::LocalGet(0))
-      .instruction(&Instruction::Return)*/
     f.instruction(&Instruction::Unreachable)
       .instruction(&Instruction::End);
 
