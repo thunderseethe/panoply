@@ -1206,153 +1206,171 @@ mod tests {
     );
     let module = db.parse_module(file);
     let expect = expect![[r#"
-            CstModule {
-                indices: CstIndxAlloc {
-                    types: Arena {
-                        len: 3,
-                        data: [
-                            Named(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 23,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 3,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 24,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Named(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 18,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 3,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 19,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Function {
-                                domain: Idx::<Ident>>(1),
-                                arrow: Span {
-                                    start: Loc {
-                                        byte: 20,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 22,
-                                        ..
-                                    },
-                                },
-                                codomain: Idx::<Ident>>(0),
-                            },
-                        ],
-                    },
-                    terms: Arena {
-                        len: 0,
-                        data: [],
-                    },
-                    pats: Arena {
-                        len: 0,
-                        data: [],
-                    },
-                },
-                items: [
-                    Effect(
-                        EffectDefn {
-                            effect: Span {
+        CstModule {
+            indices: CstIndxAlloc {
+                types: Arena {
+                    len: 3,
+                    data: [
+                        Named(
+                            SpanOf {
                                 start: Loc {
-                                    byte: 0,
-                                    ..
-                                },
-                                end: Loc {
-                                    byte: 6,
-                                    ..
-                                },
-                            },
-                            name: SpanOf {
-                                start: Loc {
-                                    byte: 7,
+                                    line: 0,
+                                    col: 23,
                                     ..
                                 },
                                 value: Ident(
                                     Id {
-                                        value: 2,
+                                        value: 3,
                                     },
                                 ),
                                 end: Loc {
-                                    byte: 10,
+                                    line: 0,
+                                    col: 24,
                                     ..
                                 },
                             },
-                            lbrace: Span {
+                        ),
+                        Named(
+                            SpanOf {
                                 start: Loc {
-                                    byte: 11,
+                                    line: 0,
+                                    col: 18,
                                     ..
                                 },
+                                value: Ident(
+                                    Id {
+                                        value: 3,
+                                    },
+                                ),
                                 end: Loc {
-                                    byte: 12,
+                                    line: 0,
+                                    col: 19,
                                     ..
                                 },
                             },
-                            ops: [
-                                EffectOp {
-                                    name: SpanOf {
-                                        start: Loc {
-                                            byte: 13,
-                                            ..
-                                        },
-                                        value: Ident(
-                                            Id {
-                                                value: 2,
-                                            },
-                                        ),
-                                        end: Loc {
-                                            byte: 16,
-                                            ..
-                                        },
-                                    },
-                                    colon: Span {
-                                        start: Loc {
-                                            byte: 16,
-                                            ..
-                                        },
-                                        end: Loc {
-                                            byte: 17,
-                                            ..
-                                        },
-                                    },
-                                    type_: Idx::<Ident>>(2),
-                                },
-                            ],
-                            rbrace: Span {
+                        ),
+                        Function {
+                            domain: Idx::<Ident>>(1),
+                            arrow: Span {
                                 start: Loc {
-                                    byte: 25,
+                                    line: 0,
+                                    col: 20,
                                     ..
                                 },
                                 end: Loc {
-                                    byte: 26,
+                                    line: 0,
+                                    col: 22,
                                     ..
                                 },
+                            },
+                            codomain: Idx::<Ident>>(0),
+                        },
+                    ],
+                },
+                terms: Arena {
+                    len: 0,
+                    data: [],
+                },
+                pats: Arena {
+                    len: 0,
+                    data: [],
+                },
+            },
+            items: [
+                Effect(
+                    EffectDefn {
+                        effect: Span {
+                            start: Loc {
+                                line: 0,
+                                col: 0,
+                                ..
+                            },
+                            end: Loc {
+                                line: 0,
+                                col: 6,
+                                ..
                             },
                         },
-                    ),
-                ],
-            }
-        "#]];
+                        name: SpanOf {
+                            start: Loc {
+                                line: 0,
+                                col: 7,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 2,
+                                },
+                            ),
+                            end: Loc {
+                                line: 0,
+                                col: 10,
+                                ..
+                            },
+                        },
+                        lbrace: Span {
+                            start: Loc {
+                                line: 0,
+                                col: 11,
+                                ..
+                            },
+                            end: Loc {
+                                line: 0,
+                                col: 12,
+                                ..
+                            },
+                        },
+                        ops: [
+                            EffectOp {
+                                name: SpanOf {
+                                    start: Loc {
+                                        line: 0,
+                                        col: 13,
+                                        ..
+                                    },
+                                    value: Ident(
+                                        Id {
+                                            value: 2,
+                                        },
+                                    ),
+                                    end: Loc {
+                                        line: 0,
+                                        col: 16,
+                                        ..
+                                    },
+                                },
+                                colon: Span {
+                                    start: Loc {
+                                        line: 0,
+                                        col: 16,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        line: 0,
+                                        col: 17,
+                                        ..
+                                    },
+                                },
+                                type_: Idx::<Ident>>(2),
+                            },
+                        ],
+                        rbrace: Span {
+                            start: Loc {
+                                line: 0,
+                                col: 25,
+                                ..
+                            },
+                            end: Loc {
+                                line: 0,
+                                col: 26,
+                                ..
+                            },
+                        },
+                    },
+                ),
+            ],
+        }
+    "#]];
     expect.assert_debug_eq(module.data(&db));
   }
 
@@ -1366,175 +1384,122 @@ mod tests {
     );
     let module = db.parse_module(file);
     let expect = expect![[r#"
-            CstModule {
-                indices: CstIndxAlloc {
-                    types: Arena {
-                        len: 0,
-                        data: [],
-                    },
-                    terms: Arena {
-                        len: 6,
-                        data: [
-                            SymbolRef(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 4,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 3,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 5,
-                                        ..
-                                    },
-                                },
-                            ),
-                            SymbolRef(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 14,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 5,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 15,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Abstraction {
-                                lbar: Span {
-                                    start: Loc {
-                                        byte: 10,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 11,
-                                        ..
-                                    },
-                                },
-                                arg: SpanOf {
-                                    start: Loc {
-                                        byte: 11,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 5,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 12,
-                                        ..
-                                    },
-                                },
-                                annotation: None,
-                                rbar: Span {
-                                    start: Loc {
-                                        byte: 12,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 13,
-                                        ..
-                                    },
-                                },
-                                body: Idx::<Term>(1),
-                            },
-                            SymbolRef(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 27,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 7,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 28,
-                                        ..
-                                    },
-                                },
-                            ),
-                            SymbolRef(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 24,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 2,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 25,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Binding {
-                                var: SpanOf {
-                                    start: Loc {
-                                        byte: 20,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 7,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 21,
-                                        ..
-                                    },
-                                },
-                                annotation: None,
-                                eq: Span {
-                                    start: Loc {
-                                        byte: 22,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 23,
-                                        ..
-                                    },
-                                },
-                                value: Idx::<Term>(4),
-                                semi: Span {
-                                    start: Loc {
-                                        byte: 25,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 26,
-                                        ..
-                                    },
-                                },
-                                expr: Idx::<Term>(3),
-                            },
-                        ],
-                    },
-                    pats: Arena {
-                        len: 0,
-                        data: [],
-                    },
+        CstModule {
+            indices: CstIndxAlloc {
+                types: Arena {
+                    len: 0,
+                    data: [],
                 },
-                items: [
-                    Term(
-                        TermDefn {
-                            name: SpanOf {
+                terms: Arena {
+                    len: 6,
+                    data: [
+                        SymbolRef(
+                            SpanOf {
                                 start: Loc {
-                                    byte: 0,
+                                    line: 0,
+                                    col: 4,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 3,
+                                    },
+                                ),
+                                end: Loc {
+                                    line: 0,
+                                    col: 5,
+                                    ..
+                                },
+                            },
+                        ),
+                        SymbolRef(
+                            SpanOf {
+                                start: Loc {
+                                    line: 1,
+                                    col: 8,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 5,
+                                    },
+                                ),
+                                end: Loc {
+                                    line: 1,
+                                    col: 9,
+                                    ..
+                                },
+                            },
+                        ),
+                        Abstraction {
+                            lbar: Span {
+                                start: Loc {
+                                    line: 1,
+                                    col: 4,
+                                    ..
+                                },
+                                end: Loc {
+                                    line: 1,
+                                    col: 5,
+                                    ..
+                                },
+                            },
+                            arg: SpanOf {
+                                start: Loc {
+                                    line: 1,
+                                    col: 5,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 5,
+                                    },
+                                ),
+                                end: Loc {
+                                    line: 1,
+                                    col: 6,
+                                    ..
+                                },
+                            },
+                            annotation: None,
+                            rbar: Span {
+                                start: Loc {
+                                    line: 1,
+                                    col: 6,
+                                    ..
+                                },
+                                end: Loc {
+                                    line: 1,
+                                    col: 7,
+                                    ..
+                                },
+                            },
+                            body: Idx::<Term>(1),
+                        },
+                        SymbolRef(
+                            SpanOf {
+                                start: Loc {
+                                    line: 2,
+                                    col: 11,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 7,
+                                    },
+                                ),
+                                end: Loc {
+                                    line: 2,
+                                    col: 12,
+                                    ..
+                                },
+                            },
+                        ),
+                        SymbolRef(
+                            SpanOf {
+                                start: Loc {
+                                    line: 2,
+                                    col: 8,
                                     ..
                                 },
                                 value: Ident(
@@ -1543,89 +1508,174 @@ mod tests {
                                     },
                                 ),
                                 end: Loc {
-                                    byte: 1,
+                                    line: 2,
+                                    col: 9,
                                     ..
                                 },
                             },
-                            annotation: None,
-                            eq: Span {
+                        ),
+                        Binding {
+                            var: SpanOf {
                                 start: Loc {
-                                    byte: 2,
-                                    ..
-                                },
-                                end: Loc {
-                                    byte: 3,
-                                    ..
-                                },
-                            },
-                            value: Idx::<Term>(0),
-                        },
-                    ),
-                    Term(
-                        TermDefn {
-                            name: SpanOf {
-                                start: Loc {
-                                    byte: 6,
+                                    line: 2,
+                                    col: 4,
                                     ..
                                 },
                                 value: Ident(
                                     Id {
-                                        value: 4,
+                                        value: 7,
                                     },
                                 ),
                                 end: Loc {
-                                    byte: 7,
+                                    line: 2,
+                                    col: 5,
                                     ..
                                 },
                             },
                             annotation: None,
                             eq: Span {
                                 start: Loc {
-                                    byte: 8,
+                                    line: 2,
+                                    col: 6,
                                     ..
                                 },
                                 end: Loc {
-                                    byte: 9,
+                                    line: 2,
+                                    col: 7,
                                     ..
                                 },
                             },
-                            value: Idx::<Term>(2),
-                        },
-                    ),
-                    Term(
-                        TermDefn {
-                            name: SpanOf {
+                            value: Idx::<Term>(4),
+                            semi: Span {
                                 start: Loc {
-                                    byte: 16,
-                                    ..
-                                },
-                                value: Ident(
-                                    Id {
-                                        value: 6,
-                                    },
-                                ),
-                                end: Loc {
-                                    byte: 17,
-                                    ..
-                                },
-                            },
-                            annotation: None,
-                            eq: Span {
-                                start: Loc {
-                                    byte: 18,
+                                    line: 2,
+                                    col: 9,
                                     ..
                                 },
                                 end: Loc {
-                                    byte: 19,
+                                    line: 2,
+                                    col: 10,
                                     ..
                                 },
                             },
-                            value: Idx::<Term>(5),
+                            expr: Idx::<Term>(3),
                         },
-                    ),
-                ],
-            }
-        "#]];
+                    ],
+                },
+                pats: Arena {
+                    len: 0,
+                    data: [],
+                },
+            },
+            items: [
+                Term(
+                    TermDefn {
+                        name: SpanOf {
+                            start: Loc {
+                                line: 0,
+                                col: 0,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 2,
+                                },
+                            ),
+                            end: Loc {
+                                line: 0,
+                                col: 1,
+                                ..
+                            },
+                        },
+                        annotation: None,
+                        eq: Span {
+                            start: Loc {
+                                line: 0,
+                                col: 2,
+                                ..
+                            },
+                            end: Loc {
+                                line: 0,
+                                col: 3,
+                                ..
+                            },
+                        },
+                        value: Idx::<Term>(0),
+                    },
+                ),
+                Term(
+                    TermDefn {
+                        name: SpanOf {
+                            start: Loc {
+                                line: 1,
+                                col: 0,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 4,
+                                },
+                            ),
+                            end: Loc {
+                                line: 1,
+                                col: 1,
+                                ..
+                            },
+                        },
+                        annotation: None,
+                        eq: Span {
+                            start: Loc {
+                                line: 1,
+                                col: 2,
+                                ..
+                            },
+                            end: Loc {
+                                line: 1,
+                                col: 3,
+                                ..
+                            },
+                        },
+                        value: Idx::<Term>(2),
+                    },
+                ),
+                Term(
+                    TermDefn {
+                        name: SpanOf {
+                            start: Loc {
+                                line: 2,
+                                col: 0,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 6,
+                                },
+                            ),
+                            end: Loc {
+                                line: 2,
+                                col: 1,
+                                ..
+                            },
+                        },
+                        annotation: None,
+                        eq: Span {
+                            start: Loc {
+                                line: 2,
+                                col: 2,
+                                ..
+                            },
+                            end: Loc {
+                                line: 2,
+                                col: 3,
+                                ..
+                            },
+                        },
+                        value: Idx::<Term>(5),
+                    },
+                ),
+            ],
+        }
+    "#]];
     expect.assert_debug_eq(module.data(&db));
   }
 
@@ -1639,301 +1689,337 @@ mod tests {
     );
     let module = db.parse_module(file);
     let expect = expect![[r#"
-            CstModule {
-                indices: CstIndxAlloc {
-                    types: Arena {
-                        len: 4,
-                        data: [
-                            Named(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 3,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 3,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 4,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Named(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 27,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 5,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 28,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Named(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 22,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 5,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 23,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Function {
-                                domain: Idx::<Ident>>(2),
-                                arrow: Span {
-                                    start: Loc {
-                                        byte: 24,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 26,
-                                        ..
-                                    },
-                                },
-                                codomain: Idx::<Ident>>(1),
-                            },
-                        ],
-                    },
-                    terms: Arena {
-                        len: 3,
-                        data: [
-                            SymbolRef(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 7,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 3,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 8,
-                                        ..
-                                    },
-                                },
-                            ),
-                            SymbolRef(
-                                SpanOf {
-                                    start: Loc {
-                                        byte: 35,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 5,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 36,
-                                        ..
-                                    },
-                                },
-                            ),
-                            Abstraction {
-                                lbar: Span {
-                                    start: Loc {
-                                        byte: 31,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 32,
-                                        ..
-                                    },
-                                },
-                                arg: SpanOf {
-                                    start: Loc {
-                                        byte: 32,
-                                        ..
-                                    },
-                                    value: Ident(
-                                        Id {
-                                            value: 5,
-                                        },
-                                    ),
-                                    end: Loc {
-                                        byte: 33,
-                                        ..
-                                    },
-                                },
-                                annotation: None,
-                                rbar: Span {
-                                    start: Loc {
-                                        byte: 33,
-                                        ..
-                                    },
-                                    end: Loc {
-                                        byte: 34,
-                                        ..
-                                    },
-                                },
-                                body: Idx::<Term>(1),
-                            },
-                        ],
-                    },
-                    pats: Arena {
-                        len: 0,
-                        data: [],
-                    },
-                },
-                items: [
-                    Term(
-                        TermDefn {
-                            name: SpanOf {
+        CstModule {
+            indices: CstIndxAlloc {
+                types: Arena {
+                    len: 4,
+                    data: [
+                        Named(
+                            SpanOf {
                                 start: Loc {
-                                    byte: 0,
+                                    line: 0,
+                                    col: 3,
                                     ..
                                 },
                                 value: Ident(
                                     Id {
-                                        value: 2,
+                                        value: 3,
                                     },
                                 ),
                                 end: Loc {
-                                    byte: 1,
+                                    line: 0,
+                                    col: 4,
                                     ..
                                 },
                             },
-                            annotation: Some(
-                                Annotation {
-                                    colon: Span {
-                                        start: Loc {
-                                            byte: 1,
-                                            ..
-                                        },
-                                        end: Loc {
-                                            byte: 2,
-                                            ..
-                                        },
-                                    },
-                                    type_: Scheme {
-                                        quantifiers: [],
-                                        qualifiers: None,
-                                        type_: Idx::<Ident>>(0),
-                                    },
-                                },
-                            ),
-                            eq: Span {
+                        ),
+                        Named(
+                            SpanOf {
                                 start: Loc {
-                                    byte: 5,
+                                    line: 1,
+                                    col: 18,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 5,
+                                    },
+                                ),
+                                end: Loc {
+                                    line: 1,
+                                    col: 19,
+                                    ..
+                                },
+                            },
+                        ),
+                        Named(
+                            SpanOf {
+                                start: Loc {
+                                    line: 1,
+                                    col: 13,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 5,
+                                    },
+                                ),
+                                end: Loc {
+                                    line: 1,
+                                    col: 14,
+                                    ..
+                                },
+                            },
+                        ),
+                        Function {
+                            domain: Idx::<Ident>>(2),
+                            arrow: Span {
+                                start: Loc {
+                                    line: 1,
+                                    col: 15,
                                     ..
                                 },
                                 end: Loc {
-                                    byte: 6,
+                                    line: 1,
+                                    col: 17,
                                     ..
                                 },
                             },
-                            value: Idx::<Term>(0),
+                            codomain: Idx::<Ident>>(1),
                         },
-                    ),
-                    Term(
-                        TermDefn {
-                            name: SpanOf {
+                    ],
+                },
+                terms: Arena {
+                    len: 3,
+                    data: [
+                        SymbolRef(
+                            SpanOf {
                                 start: Loc {
-                                    byte: 9,
+                                    line: 0,
+                                    col: 7,
                                     ..
                                 },
                                 value: Ident(
                                     Id {
-                                        value: 4,
+                                        value: 3,
                                     },
                                 ),
                                 end: Loc {
-                                    byte: 10,
+                                    line: 0,
+                                    col: 8,
                                     ..
                                 },
                             },
-                            annotation: Some(
-                                Annotation {
-                                    colon: Span {
-                                        start: Loc {
-                                            byte: 10,
-                                            ..
-                                        },
-                                        end: Loc {
-                                            byte: 11,
-                                            ..
-                                        },
+                        ),
+                        SymbolRef(
+                            SpanOf {
+                                start: Loc {
+                                    line: 1,
+                                    col: 26,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 5,
                                     },
-                                    type_: Scheme {
-                                        quantifiers: [
-                                            Quantifier {
-                                                forall: Span {
-                                                    start: Loc {
-                                                        byte: 12,
-                                                        ..
-                                                    },
-                                                    end: Loc {
-                                                        byte: 18,
-                                                        ..
-                                                    },
+                                ),
+                                end: Loc {
+                                    line: 1,
+                                    col: 27,
+                                    ..
+                                },
+                            },
+                        ),
+                        Abstraction {
+                            lbar: Span {
+                                start: Loc {
+                                    line: 1,
+                                    col: 22,
+                                    ..
+                                },
+                                end: Loc {
+                                    line: 1,
+                                    col: 23,
+                                    ..
+                                },
+                            },
+                            arg: SpanOf {
+                                start: Loc {
+                                    line: 1,
+                                    col: 23,
+                                    ..
+                                },
+                                value: Ident(
+                                    Id {
+                                        value: 5,
+                                    },
+                                ),
+                                end: Loc {
+                                    line: 1,
+                                    col: 24,
+                                    ..
+                                },
+                            },
+                            annotation: None,
+                            rbar: Span {
+                                start: Loc {
+                                    line: 1,
+                                    col: 24,
+                                    ..
+                                },
+                                end: Loc {
+                                    line: 1,
+                                    col: 25,
+                                    ..
+                                },
+                            },
+                            body: Idx::<Term>(1),
+                        },
+                    ],
+                },
+                pats: Arena {
+                    len: 0,
+                    data: [],
+                },
+            },
+            items: [
+                Term(
+                    TermDefn {
+                        name: SpanOf {
+                            start: Loc {
+                                line: 0,
+                                col: 0,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 2,
+                                },
+                            ),
+                            end: Loc {
+                                line: 0,
+                                col: 1,
+                                ..
+                            },
+                        },
+                        annotation: Some(
+                            Annotation {
+                                colon: Span {
+                                    start: Loc {
+                                        line: 0,
+                                        col: 1,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        line: 0,
+                                        col: 2,
+                                        ..
+                                    },
+                                },
+                                type_: Scheme {
+                                    quantifiers: [],
+                                    qualifiers: None,
+                                    type_: Idx::<Ident>>(0),
+                                },
+                            },
+                        ),
+                        eq: Span {
+                            start: Loc {
+                                line: 0,
+                                col: 5,
+                                ..
+                            },
+                            end: Loc {
+                                line: 0,
+                                col: 6,
+                                ..
+                            },
+                        },
+                        value: Idx::<Term>(0),
+                    },
+                ),
+                Term(
+                    TermDefn {
+                        name: SpanOf {
+                            start: Loc {
+                                line: 1,
+                                col: 0,
+                                ..
+                            },
+                            value: Ident(
+                                Id {
+                                    value: 4,
+                                },
+                            ),
+                            end: Loc {
+                                line: 1,
+                                col: 1,
+                                ..
+                            },
+                        },
+                        annotation: Some(
+                            Annotation {
+                                colon: Span {
+                                    start: Loc {
+                                        line: 1,
+                                        col: 1,
+                                        ..
+                                    },
+                                    end: Loc {
+                                        line: 1,
+                                        col: 2,
+                                        ..
+                                    },
+                                },
+                                type_: Scheme {
+                                    quantifiers: [
+                                        Quantifier {
+                                            forall: Span {
+                                                start: Loc {
+                                                    line: 1,
+                                                    col: 3,
+                                                    ..
                                                 },
-                                                var: SpanOf {
-                                                    start: Loc {
-                                                        byte: 19,
-                                                        ..
-                                                    },
-                                                    value: Ident(
-                                                        Id {
-                                                            value: 5,
-                                                        },
-                                                    ),
-                                                    end: Loc {
-                                                        byte: 20,
-                                                        ..
-                                                    },
-                                                },
-                                                dot: Span {
-                                                    start: Loc {
-                                                        byte: 20,
-                                                        ..
-                                                    },
-                                                    end: Loc {
-                                                        byte: 21,
-                                                        ..
-                                                    },
+                                                end: Loc {
+                                                    line: 1,
+                                                    col: 9,
+                                                    ..
                                                 },
                                             },
-                                        ],
-                                        qualifiers: None,
-                                        type_: Idx::<Ident>>(3),
-                                    },
-                                },
-                            ),
-                            eq: Span {
-                                start: Loc {
-                                    byte: 29,
-                                    ..
-                                },
-                                end: Loc {
-                                    byte: 30,
-                                    ..
+                                            var: SpanOf {
+                                                start: Loc {
+                                                    line: 1,
+                                                    col: 10,
+                                                    ..
+                                                },
+                                                value: Ident(
+                                                    Id {
+                                                        value: 5,
+                                                    },
+                                                ),
+                                                end: Loc {
+                                                    line: 1,
+                                                    col: 11,
+                                                    ..
+                                                },
+                                            },
+                                            dot: Span {
+                                                start: Loc {
+                                                    line: 1,
+                                                    col: 11,
+                                                    ..
+                                                },
+                                                end: Loc {
+                                                    line: 1,
+                                                    col: 12,
+                                                    ..
+                                                },
+                                            },
+                                        },
+                                    ],
+                                    qualifiers: None,
+                                    type_: Idx::<Ident>>(3),
                                 },
                             },
-                            value: Idx::<Term>(2),
+                        ),
+                        eq: Span {
+                            start: Loc {
+                                line: 1,
+                                col: 20,
+                                ..
+                            },
+                            end: Loc {
+                                line: 1,
+                                col: 21,
+                                ..
+                            },
                         },
-                    ),
-                ],
-            }
-        "#]];
+                        value: Idx::<Term>(2),
+                    },
+                ),
+            ],
+        }
+    "#]];
     expect.assert_debug_eq(module.data(&db));
   }
 }
