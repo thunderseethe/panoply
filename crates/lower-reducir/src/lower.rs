@@ -3,7 +3,7 @@ use base::{
   id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
   id_converter::IdConverter,
   modules::Module,
-  pretty::PrettyErrorWithDb,
+  pretty::{PrettyErrorWithDb, PrettyWithCtx},
 };
 use la_arena::Idx;
 use reducir::{

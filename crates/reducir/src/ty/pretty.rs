@@ -46,16 +46,31 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyKind {
       ReducIrTyKind::ProdVarTy(ty_var) => a.as_string(ty_var).braces(),
       ReducIrTyKind::CoprodVarTy(ty_var) => a.as_string(ty_var).angles(),
       ReducIrTyKind::FunTy(args, ret) => {
-        let docs = args.iter().map(|arg| {
+        let mut arg_slice = &args[..];
+        let mut ret_doc = ret.pretty(db, a);
+        if let ReducIrTyKind::ControlTy(evv_ty, a_ty) = ret.kind(db.as_reducir_db()) {
+          if args.last() == Some(&evv_ty) {
+            ret_doc = a
+              .text("Mon")
+              .append(a.space())
+              .append(evv_ty.pretty(db, a))
+              .append(a.space())
+              .append(a_ty.pretty(db, a))
+              .parens();
+            arg_slice = &args[..args.len() - 1];
+          }
+        }
+        let docs = arg_slice.iter().map(|arg| {
           let mut arg_doc = arg.pretty_with(db).pretty(a);
           if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_reducir_db()) {
             arg_doc = arg_doc.parens();
           }
           arg_doc
         });
+
         a.intersperse(docs, a.text("->").enclose(a.softline(), a.softline()))
           .append(a.text("->").enclose(a.softline(), a.softline()))
-          .append(ret.pretty(db, a))
+          .append(ret_doc)
       }
       ReducIrTyKind::ForallTy(kind, ty) => {
         let preamble = a

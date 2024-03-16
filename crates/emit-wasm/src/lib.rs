@@ -1855,11 +1855,11 @@ f = (with {
     );
 
     let bytes = wasm_module.finish();
-    /*let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
-        function_references: true,
-        ..Default::default()
+    let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
+      function_references: true,
+      ..Default::default()
     });
-    let validate_res = validator.validate_all(&bytes);*/
+    let validate_res = validator.validate_all(&bytes);
     let string = wasmprinter::print_bytes(bytes).unwrap();
     let expect = expect![[r#"
         (module $test
@@ -5740,11 +5740,11 @@ f = (with {
         )"#]];
     expect.assert_eq(&string);
 
-    /*match validate_res {
-        Ok(_) => {},
-        Err(bin_reader_err) => {
-            panic!("{}", bin_reader_err.message());
-        },
-    }*/
+    match validate_res {
+      Ok(_) => {}
+      Err(bin_reader_err) => {
+        panic!("{}", bin_reader_err.message());
+      }
+    }
   }
 }

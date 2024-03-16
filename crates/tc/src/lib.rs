@@ -741,6 +741,50 @@ match <
   }
 
   #[test]
+  fn test_multi_effect_not_entrypoint() {
+    let db = TestDatabase::default();
+    let scheme = type_check_file(
+      &db,
+      "foo",
+      r#"
+effect State {
+    get : {} -> Int,
+    put : Int -> {} 
+}
+effect Reader {
+    ask : {} -> Int
+}
+
+foo = (with  {
+  get = |x| |k| |s| k(s)(s),
+  put = |x| |k| |s| k({})(x),
+  return = |x| |s| { state = s, value = x },
+} do (with {
+  ask = |x| |k| k(16777215),
+  return = |x| x,
+} do w = Reader.ask({}); State.put(w)))(14).state
+"#,
+    );
+
+    let expect = expect_test::expect![[r#"
+        forall<Ty> ty_var<5> .
+          forall<Eff> ty_var<0> ty_var<1> ty_var<2> ty_var<3> ty_var<4> . 
+        (TyVarId(0) ⊙ State |> { eff |> Int -> TyVarId(0) Int, ret |> Int ->
+          TyVarId(0) { state |> Int, value |> { ∅ } } } ~eff~ TyVarId(1)) => (TyVarId(1)
+        ⊙ Reader |> { eff |> Int -> TyVarId(1) Int, ret |> { ∅ } } ~eff~ TyVarId(2))
+        => (TyVarId(4) ⊙ State |> { eff |> Int -> TyVarId(3) Int, ret |> ty_var<5> }
+        ~eff~ TyVarId(2)) => Int | TyVarId(0)"#]];
+    expect.assert_eq(
+      scheme
+        .pretty_with(&(&db, &db))
+        .pprint()
+        .pretty(80)
+        .to_string()
+        .as_str(),
+    );
+  }
+
+  #[test]
   fn test_tc_eff_operation_infers_correct_effect() {
     let db = TestDatabase::default();
     let content = r#"
@@ -864,7 +908,7 @@ foo = with {
   }
 
   #[test]
-  fn test_multi_effect() {
+  fn test_multi_effect_in_main() {
     let db = TestDatabase::default();
     let scheme = type_check_file(
       &db,

@@ -14,4 +14,4 @@ main = (with  {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do w = State.put(Reader.ask({})); State.get({})))(14).value
+} do w = Reader.ask({}); State.put(w)))(14).state

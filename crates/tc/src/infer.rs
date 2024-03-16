@@ -582,18 +582,6 @@ where
           .add_effect_row_eq(ty_chk.eff, expected.eff, span);
         self.constraints.add_ty_eq(ty_chk.ty, expected.ty, span);
       }
-      (Operation(_), _) => {
-        // Infer a type for our term and check that the expected type is equal to the
-        // inferred type.
-        let inferred = self._infer(term);
-
-        self
-          .constraints
-          .add_ty_eq(expected.ty, inferred.ty, current_span());
-        self
-          .constraints
-          .add_effect_row_eq(expected.eff, inferred.eff, current_span());
-      }
       // Bucket case for when we need to check a rule against a type but no case applies
       (_, _) => {
         // Infer a type for our term and check that the expected type is equal to the

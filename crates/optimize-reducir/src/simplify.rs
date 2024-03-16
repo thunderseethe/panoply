@@ -388,6 +388,7 @@ pub(crate) fn simplify(
     supply,
     top_level: ReducIrTermName::Term(name),
   };
+  // TODO: Figure out a way to do this.
   ir.fold(&mut simple)
     .fold(&mut simple)
     .fold(&mut simple)
