@@ -1108,7 +1108,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       // Effect stuff
       Operation(op) => {
         let term_infer = self.lookup_term(term);
-        let (value_ty, op_eff, op_ret) = term_infer
+        let (value_ty, _, op_ret) = term_infer
           .ty
           .try_as_fn_ty(&self.db)
           .unwrap_or_else(|_| unreachable!());
@@ -1142,12 +1142,9 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             .reduce_forall(self.db, ReducIrTyApp::Ty(kont_ret_ty)),
         );
         let op_ret = self.ty_ctx.lower_ty(op_ret);
-        let op_eff = self.ty_ctx.eff_row_into_evv_ty(op_eff).prod;
         let kont_var = ReducIrVar::new(
           self.generate_local(),
-          self.mk_reducir_ty(
-            ReducIrTyKind::FunETy(op_ret, op_eff, kont_ret_ty), /*[op_ret], kont_ret_ty*/
-          ),
+          self.mk_reducir_ty(ReducIrTyKind::FunETy(op_ret, outer_eff_ty, kont_ret_ty)),
         );
 
         // Always project out the right one for row evidence because we want the innermost

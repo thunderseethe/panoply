@@ -494,7 +494,7 @@ mod tests {
     assert_eq!(
       out,
       r#"{ x |> Int, y |> Int, z |> Int }
-  ->  ty_var<0>"#
+  -> ∅ ty_var<0>"#
     );
     let out = ty.pretty_with(&(&db, &db)).pprint().pretty(10).to_string();
     assert_eq!(
@@ -503,7 +503,7 @@ mod tests {
 , y |> Int
 , z |> Int
 } ->
-   ty_var<0>"#
+  ∅ ty_var<0>"#
     );
   }
 }

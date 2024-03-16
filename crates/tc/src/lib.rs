@@ -202,7 +202,7 @@ pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) ->
 
   let mut tys = vec![ret_ty_id];
   let mut datas = vec![];
-  let mut effs = vec![outer_eff_id];
+  let effs = vec![outer_eff_id];
 
   let mut constrs = vec![];
   let mut row = vec![];
@@ -223,7 +223,6 @@ pub(crate) fn effect_handler_scheme(db: &dyn crate::Db, eff_name: EffectName) ->
       subst.insert(*data_id, new_data_id);
     }
     for eff_id in scheme.bound_eff_row.iter() {
-      effs.push(outer_eff_id);
       subst.insert(*eff_id, outer_eff_id);
     }
 
@@ -854,6 +853,43 @@ foo = with {
         (TyVarId(0) ⊙ Reader |> { eff |> Int -> TyVarId(0) Int, ret |> { value |> Int
         , random |> Int } } ~eff~ TyVarId(1)) => { value |> Int, random |> Int
         } | TyVarId(0)"#]];
+    expect.assert_eq(
+      scheme
+        .pretty_with(&(&db, &db))
+        .pprint()
+        .pretty(80)
+        .to_string()
+        .as_str(),
+    );
+  }
+
+  #[test]
+  fn test_multi_effect() {
+    let db = TestDatabase::default();
+    let scheme = type_check_file(
+      &db,
+      "main",
+      r#"
+effect State {
+    get : {} -> Int,
+    put : Int -> {} 
+}
+effect Reader {
+    ask : {} -> Int
+}
+
+main = (with  {
+  get = |x| |k| |s| k(s)(s),
+  put = |x| |k| |s| k({})(x),
+  return = |x| |s| { state = s, value = x },
+} do (with {
+  ask = |x| |k| k(16777215),
+  return = |x| x,
+} do w = Reader.ask({}); State.put(w)))(14).state
+"#,
+    );
+
+    let expect = expect_test::expect!["Int | ∅"];
     expect.assert_eq(
       scheme
         .pretty_with(&(&db, &db))

@@ -1,6 +1,7 @@
 use ast::{Ast, Direction, Term, Term::*};
 use base::{
-  diagnostic::tc::TypeCheckDiagnostic, id::VarId, memory::handle, modules::Module, span::Span,
+  diagnostic::tc::TypeCheckDiagnostic, id::VarId, memory::handle, modules::Module,
+  pretty::PrettyWithCtx, span::Span,
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
@@ -437,8 +438,9 @@ where
         // the function return type with the function argument type in scope.
         self.local_env.insert(*arg, arg_ty);
 
-        let unused = self.fresh_scoped_row();
-        self.add_effect_row_combine(eff, unused, expected.eff, current_span());
+        self
+          .constraints
+          .add_effect_row_eq(eff, expected.eff, current_span());
 
         self._check(*body, InferResult::new(body_ty, eff));
         self.local_env.remove(arg);
@@ -580,11 +582,24 @@ where
           .add_effect_row_eq(ty_chk.eff, expected.eff, span);
         self.constraints.add_ty_eq(ty_chk.ty, expected.ty, span);
       }
+      (Operation(_), _) => {
+        // Infer a type for our term and check that the expected type is equal to the
+        // inferred type.
+        let inferred = self._infer(term);
+
+        self
+          .constraints
+          .add_ty_eq(expected.ty, inferred.ty, current_span());
+        self
+          .constraints
+          .add_effect_row_eq(expected.eff, inferred.eff, current_span());
+      }
       // Bucket case for when we need to check a rule against a type but no case applies
       (_, _) => {
         // Infer a type for our term and check that the expected type is equal to the
         // inferred type.
         let inferred = self._infer(term);
+
         self
           .constraints
           .add_ty_eq(expected.ty, inferred.ty, current_span());
@@ -647,14 +662,18 @@ where
       // We then check the arg of the application against the arg type of the function type
       // The resulting type of this application is the function result type.
       Application { func, arg } => {
-        let fun_infer = self._infer(*func);
-        // Optimization: eagerly use FunTy if available. Otherwise dispatch fresh unifiers
-        // for arg and ret type.
-        let (arg_ty, _, ret_ty) = self.equate_as_fn_ty(fun_infer.ty, current_span);
+        let arg_infer = self._infer(*arg);
 
-        self._check(*arg, InferResult::new(arg_ty, fun_infer.eff));
+        let ret_ty = self.fresh_var();
+        self._check(
+          *func,
+          InferResult::new(
+            self.mk_ty(FunTy(arg_infer.ty, arg_infer.eff, ret_ty)),
+            arg_infer.eff,
+          ),
+        );
 
-        InferResult::new(ret_ty, fun_infer.eff)
+        InferResult::new(ret_ty, arg_infer.eff)
       }
       // If the variable is in environemnt return it's type, otherwise return an error.
       Variable(var) => {
@@ -802,7 +821,9 @@ where
         ));
 
         let goal = self.fresh_scoped_row();
-        self.add_effect_row_combine(outer_eff, eff, goal, current_span());
+
+        let unused = self.fresh_scoped_row();
+        self.add_effect_row_combine(unused, eff, goal, current_span());
 
         let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
         let (handler_wrap, handler_res) = self.instantiate(handler_scheme.clone(), current_span());
@@ -827,6 +848,7 @@ where
           .ty
           .transform_to_cps_handler_ty(self, ret_ty)
           .expect("Op signature expected to be function type for CPS transformation");
+
         let op_row = Row::Closed(self.single_row(op_name.name(core_db), op_cps_ty));
         self.add_data_row_combine(unused, op_row, Row::Closed(handler_row), current_span());
 
@@ -838,7 +860,15 @@ where
           },
         );
 
-        InferResult::new(sig.ty, goal)
+        let sig_ty = match *sig.ty {
+          FunTy(arg, _, ret) => self.mk_ty(FunTy(arg, goal, ret)),
+          _ => unreachable!(
+            "expected op sig to have FunTy: {}",
+            sig.ty.pretty_string(&(self.db, ()), 80),
+          ),
+        };
+
+        InferResult::new(sig_ty, goal)
       }
       Term::Handle { handler, body } => {
         let ret_ty = self.fresh_var();
@@ -857,7 +887,7 @@ where
         let eff_sig_row = self.fresh_simple_row();
         let handler_row = self.fresh_simple_row();
 
-        // Our handler should be an effect signature plus a return clause
+        // Our handler should be an effect signature plus a return clause.
         self.add_data_row_combine(
           Row::Closed(ret_row),
           eff_sig_row,
@@ -977,22 +1007,6 @@ where
       },
       res,
     )
-  }
-
-  pub(crate) fn equate_as_fn_ty(
-    &mut self,
-    ty: InferTy<'infer>,
-    span: impl FnOnce() -> Span,
-  ) -> (InferTy<'infer>, ScopedInferRow<'infer>, InferTy<'infer>) {
-    ty.try_as_fn_ty().unwrap_or_else(|ty| {
-      let arg = self.fresh_var();
-      let eff = self.fresh_scoped_row();
-      let ret = self.fresh_var();
-      self
-        .constraints
-        .add_ty_eq(ty, self.mk_ty(FunTy(arg, eff, ret)), span());
-      (arg, eff, ret)
-    })
   }
 
   /// Make this type equal to a row and return that equivalent row.
@@ -1147,30 +1161,32 @@ where
   where
     Self: RowEquationSolver<'infer, Sema>,
     Sema: Ord + Clone,
-    Sema::Closed<InArena<'infer>>: Copy + std::fmt::Debug,
+    Sema::Open<InArena<'infer>>: Copy,
+    Sema::Closed<InArena<'infer>>: Copy,
   {
     let mut combos: Vec<RowCombination<Row<Sema, InArena<'infer>>>> = vec![];
-    self.with_equations(|eqns| {
-      eqns
-        .into_iter()
-        .filter_map(|eqn| match eqn {
-          UnsolvedRowEquation::ClosedGoal(cand) if cand.left == var => {
-            combos.push(RowCombination {
-              left: Row::Closed(row),
-              right: Row::Open(cand.right),
-              goal: Row::Closed(cand.goal),
-            });
-            None
-          }
-          UnsolvedRowEquation::ClosedGoal(cand) if cand.right == var => {
-            combos.push(RowCombination {
-              left: Row::Open(cand.left),
-              right: Row::Closed(row),
-              goal: Row::Closed(cand.goal),
-            });
-            None
-          }
-          UnsolvedRowEquation::OpenGoal(cand) if cand.goal == var => match cand.ops {
+    let eqns = std::mem::take(self.equations_mut());
+    *self.equations_mut() = eqns
+      .into_iter()
+      .filter_map(|eqn| match eqn {
+        UnsolvedRowEquation::ClosedGoal(cand) if self.find_root_var(cand.left) == var => {
+          combos.push(RowCombination {
+            left: Row::Closed(row),
+            right: Row::Open(cand.right),
+            goal: Row::Closed(cand.goal),
+          });
+          None
+        }
+        UnsolvedRowEquation::ClosedGoal(cand) if self.find_root_var(cand.right) == var => {
+          combos.push(RowCombination {
+            left: Row::Open(cand.left),
+            right: Row::Closed(row),
+            goal: Row::Closed(cand.goal),
+          });
+          None
+        }
+        UnsolvedRowEquation::OpenGoal(cand) if self.find_root_var(cand.goal) == var => {
+          match cand.ops {
             Operatives::OpenOpen { left, right } => {
               Some(UnsolvedRowEquation::ClosedGoal(ClosedGoal {
                 goal: row,
@@ -1194,55 +1210,55 @@ where
               });
               None
             }
-          },
-          UnsolvedRowEquation::OpenGoal(OpenGoal {
-            goal,
-            ops: Operatives::OpenOpen { left, right },
-          }) if left == var => {
-            combos.push(RowCombination {
-              left: Row::Closed(row),
-              right: Row::Open(right),
-              goal: Row::Open(goal),
-            });
-            None
           }
-          UnsolvedRowEquation::OpenGoal(OpenGoal {
-            goal,
-            ops: Operatives::OpenOpen { left, right },
-          }) if right == var => {
-            combos.push(RowCombination {
-              left: Row::Open(left),
-              right: Row::Closed(row),
-              goal: Row::Open(goal),
-            });
-            None
-          }
-          UnsolvedRowEquation::OpenGoal(OpenGoal {
-            goal,
-            ops: Operatives::ClosedOpen { left, right },
-          }) if right == var => {
-            combos.push(RowCombination {
-              left: Row::Closed(left),
-              right: Row::Closed(row),
-              goal: Row::Open(goal),
-            });
-            None
-          }
-          UnsolvedRowEquation::OpenGoal(OpenGoal {
-            goal,
-            ops: Operatives::OpenClosed { left, right },
-          }) if left == var => {
-            combos.push(RowCombination {
-              left: Row::Closed(row),
-              right: Row::Closed(right),
-              goal: Row::Open(goal),
-            });
-            None
-          }
-          eqn => Some(eqn),
-        })
-        .collect()
-    });
+        }
+        UnsolvedRowEquation::OpenGoal(OpenGoal {
+          goal,
+          ops: Operatives::OpenOpen { left, right },
+        }) if self.find_root_var(left) == var => {
+          combos.push(RowCombination {
+            left: Row::Closed(row),
+            right: Row::Open(right),
+            goal: Row::Open(goal),
+          });
+          None
+        }
+        UnsolvedRowEquation::OpenGoal(OpenGoal {
+          goal,
+          ops: Operatives::OpenOpen { left, right },
+        }) if self.find_root_var(right) == var => {
+          combos.push(RowCombination {
+            left: Row::Open(left),
+            right: Row::Closed(row),
+            goal: Row::Open(goal),
+          });
+          None
+        }
+        UnsolvedRowEquation::OpenGoal(OpenGoal {
+          goal,
+          ops: Operatives::ClosedOpen { left, right },
+        }) if self.find_root_var(right) == var => {
+          combos.push(RowCombination {
+            left: Row::Closed(left),
+            right: Row::Closed(row),
+            goal: Row::Open(goal),
+          });
+          None
+        }
+        UnsolvedRowEquation::OpenGoal(OpenGoal {
+          goal,
+          ops: Operatives::OpenClosed { left, right },
+        }) if self.find_root_var(left) == var => {
+          combos.push(RowCombination {
+            left: Row::Closed(row),
+            right: Row::Closed(right),
+            goal: Row::Open(goal),
+          });
+          None
+        }
+        eqn => Some(eqn),
+      })
+      .collect();
 
     for RowCombination { left, right, goal } in combos {
       self.unify_row_combine(left, right, goal)?;
@@ -1259,11 +1275,10 @@ where
   where
     Self: RowEquationSolver<'infer, Sema>,
     Sema: RowTheory + Ord + Clone,
-    Sema::Closed<InArena<'infer>>: std::fmt::Debug,
   {
-    let left = self.normalize_row(unnorm_left);
-    let right = self.normalize_row(unnorm_right);
-    let goal = self.normalize_row(unnorm_goal);
+    let left = self.normalize_row(unnorm_left.clone());
+    let right = self.normalize_row(unnorm_right.clone());
+    let goal = self.normalize_row(unnorm_goal.clone());
 
     match (left, right, goal) {
       (Row::Closed(left), Row::Closed(right), goal) => {
@@ -1362,66 +1377,21 @@ where
       &[self.mk_ty(FunTy(int, normal_out_eff, int)), normal_ret],
     ))));
 
-    let unify_sig_handler =
-      |ctx: &mut Self, scheme: &TyScheme, sig: SimpleClosedRow<InArena<'infer>>| {
-        let ty_unifiers = scheme
-          .bound_ty
-          .iter()
-          .map(|key| (*key, ctx.ty_unifiers.new_key(None)))
-          .collect::<Vec<_>>();
-        let ret_tyvar = ty_unifiers[0].1;
-        let mut inst = Instantiate {
-          db: ctx.db,
-          ctx: ctx.ctx,
-          ty_unifiers,
-          datarow_unifiers: scheme
-            .bound_data_row
-            .iter()
-            .map(|key| (*key, ctx.data_row_unifiers.new_key(None)))
-            .collect(),
-          effrow_unifiers: scheme
-            .bound_eff_row
-            .iter()
-            .map(|key| (*key, ctx.eff_row_unifiers.new_key(None)))
-            .collect(),
-        };
-
-        // Transform our scheme ty into the type a handler should have
-        // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
-        let member_ty = scheme.ty.try_fold_with(&mut inst).unwrap();
-
-        ctx.unify(scheme.eff.try_fold_with(&mut inst).unwrap(), normal_out_eff)?;
-        ctx.unify(ret_tyvar, normal_ret)?;
-        // Unify our instantiated and transformed member type agaisnt the handler field
-        // type.
-        ctx.unify(member_ty, ctx.mk_ty(RowTy(sig)))?;
-
-        for constrs in scheme.constrs.iter() {
-          match constrs.try_fold_with(&mut inst).unwrap() {
-            Evidence::DataRow { left, right, goal } => ctx.unify_row_combine(left, right, goal)?,
-            Evidence::EffRow { left, right, goal } => ctx.unify_row_combine(left, right, goal)?,
-          }
-        }
-        // TODO: We should check scheme.eff here as well, at least to confirm they are
-        // all the same
-        Ok(())
-      };
-
-    match (normal_handler, normal_eff) {
+    let (eff_scheme, handler_ty) = match (normal_handler, normal_eff) {
       (Row::Closed(handler), Row::Open(eff_var)) => {
         let eff_name = self
           .db
           .lookup_effect_by_member_names(self.module, handler.fields(&*self))
           .ok_or(TypeCheckError::UndefinedEffectSignature(handler))?;
 
-        let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
-        unify_sig_handler(self, handler_scheme, handler)?;
-
         // We succesfully unified the handler against it's expected signature.
         // That means we can unify our eff_var against our effect
         let name = self.db.effect_name(eff_name);
         let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[normal_eff_val]);
-        self.unify(eff_var, eff_row)
+        self.unify(eff_var, eff_row)?;
+
+        let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+        (handler_scheme, Row::Closed(handler))
       }
       (Row::Closed(handler), Row::Closed(eff)) => {
         debug_assert!(eff.len(&*self) == 1);
@@ -1435,60 +1405,75 @@ where
           .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
 
         let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
-        unify_sig_handler(self, handler_scheme, handler)
+        (handler_scheme, Row::Closed(handler))
       }
       (Row::Open(handler_var), Row::Closed(eff)) => {
         debug_assert!(eff.len(&*self) == 1);
         let eff_ident = *eff.fields(&*self).first().unwrap();
         let eff_val = *eff.values(&*self).first().unwrap();
         self.unify(eff_val, normal_eff_val)?;
+
         let eff_name = self
           .db
           .lookup_effect_by_name(self.module, eff_ident)
           .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
 
-        let scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
-        let ty_unifiers = scheme
-          .bound_ty
-          .iter()
-          .map(|key| (*key, self.ty_unifiers.new_key(None)))
-          .collect::<Vec<_>>();
-        let ret_tyvar = ty_unifiers[0].1;
-        self.unify(ret_tyvar, normal_ret)?;
-        let mut inst = Instantiate {
-          db: self.db,
-          ctx: self.ctx,
-          ty_unifiers,
-          datarow_unifiers: scheme
-            .bound_data_row
-            .iter()
-            .map(|key| (*key, self.data_row_unifiers.new_key(None)))
-            .collect(),
-          effrow_unifiers: scheme
-            .bound_eff_row
-            .iter()
-            .map(|key| (*key, self.eff_row_unifiers.new_key(None)))
-            .collect(),
-        };
-        self.unify(scheme.eff.try_fold_with(&mut inst).unwrap(), normal_out_eff)?;
-
-        let ty = scheme.ty.try_fold_with(&mut inst).unwrap();
-        let handler_row = match *ty {
-          ProdTy(Row::Closed(handler_row)) => handler_row,
-          _ => {
-            return Err(TypeCheckError::TypeMismatch(
-              ty,
-              self.ctx.mk_ty(ProdTy(Row::Open(handler_var))),
-            ))
-          }
-        };
-        self.unify(handler_var, handler_row)
+        let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+        (handler_scheme, Row::Open(handler_var))
       }
       // We didn't learn enough info to solve our handle term, this is an error
-      (Row::Open(handler_var), Row::Open(eff_var)) => Err(TypeCheckError::UnsolvedHandle {
-        handler: handler_var,
-        eff: eff_var,
-      }),
+      (Row::Open(handler_var), Row::Open(eff_var)) => {
+        return Err(TypeCheckError::UnsolvedHandle {
+          handler: handler_var,
+          eff: eff_var,
+        })
+      }
+    };
+
+    let ty_unifiers = eff_scheme
+      .bound_ty
+      .iter()
+      .map(|key| (*key, self.ty_unifiers.new_key(None)))
+      .collect::<Vec<_>>();
+    let ret_tyvar = ty_unifiers[0].1;
+    let mut inst = Instantiate {
+      db: self.db,
+      ctx: self.ctx,
+      ty_unifiers,
+      datarow_unifiers: eff_scheme
+        .bound_data_row
+        .iter()
+        .map(|key| (*key, self.data_row_unifiers.new_key(None)))
+        .collect(),
+      effrow_unifiers: eff_scheme
+        .bound_eff_row
+        .iter()
+        .map(|key| (*key, self.eff_row_unifiers.new_key(None)))
+        .collect(),
+    };
+
+    // Transform our scheme ty into the type a handler should have
+    // This means it should take a resume parameter that is a function returning `ret` and return `ret` itself.
+    let member_ty = eff_scheme.ty.try_fold_with(&mut inst).unwrap();
+
+    self.unify(
+      eff_scheme.eff.try_fold_with(&mut inst).unwrap(),
+      normal_out_eff,
+    )?;
+    self.unify(ret_tyvar, normal_ret)?;
+
+    // Unify our instantiated and transformed member type agaisnt the handler field
+    // type.
+    self.unify(member_ty, self.mk_ty(ProdTy(handler_ty)))?;
+
+    for constrs in eff_scheme.constrs.iter() {
+      match constrs.try_fold_with(&mut inst).unwrap() {
+        Evidence::DataRow { left, right, goal } => self.unify_row_combine(left, right, goal)?,
+        Evidence::EffRow { left, right, goal } => self.unify_row_combine(left, right, goal)?,
+      }
     }
+    // TODO: We should check scheme.eff here as well, at least to confirm they are
+    // all the same
+    Ok(())
   }
 }

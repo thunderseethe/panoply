@@ -1,10 +1,12 @@
 //! Contains structs and functions for working with unsolved rows during type inference.
 use std::cmp::Ordering;
 
+use base::pretty::PrettyWithCtx;
+use pretty::DocAllocator;
 use ty::{
   infer::InArena,
   row::{Row, RowSema, Scoped, Simple},
-  Evidence, TypeAlloc,
+  AccessTy, Evidence, TypeAlloc,
 };
 
 /// An unsolved row equation.
@@ -108,6 +110,76 @@ where
       (UnsolvedRowEquation::ClosedGoal(_), UnsolvedRowEquation::OpenGoal(_)) => Ordering::Greater,
       (UnsolvedRowEquation::OpenGoal(_), UnsolvedRowEquation::ClosedGoal(_)) => Ordering::Less,
     }
+  }
+}
+
+impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Db, Acc> PrettyWithCtx<(&'db Db, Acc)>
+  for UnsolvedRowEquation<A, Sema>
+where
+  Db: ?Sized + crate::Db,
+  Acc: AccessTy<'infer, A>,
+  Row<Sema, A>: PrettyWithCtx<(&'db Db, Acc)>,
+{
+  fn pretty<'a>(
+    &self,
+    ctx: &(&'db Db, Acc),
+    alloc: &'a pretty::RcAllocator,
+  ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+    match self {
+      UnsolvedRowEquation::ClosedGoal(closed) => closed.pretty(ctx, alloc),
+      UnsolvedRowEquation::OpenGoal(open) => open.pretty(ctx, alloc),
+    }
+  }
+}
+
+impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Db, Acc> PrettyWithCtx<(&'db Db, Acc)>
+  for OpenGoal<A, Sema>
+where
+  Db: ?Sized + crate::Db,
+  Acc: AccessTy<'infer, A>,
+  Row<Sema, A>: PrettyWithCtx<(&'db Db, Acc)>,
+{
+  fn pretty<'a>(
+    &self,
+    ctx: &(&'db Db, Acc),
+    a: &'a pretty::RcAllocator,
+  ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+    let (left, right) = match &self.ops {
+      Operatives::OpenOpen { left, right } => (Row::Open(left.clone()), Row::Open(right.clone())),
+      Operatives::OpenClosed { left, right } => {
+        (Row::Open(left.clone()), Row::Closed(right.clone()))
+      }
+      Operatives::ClosedOpen { left, right } => {
+        (Row::Closed(left.clone()), Row::Open(right.clone()))
+      }
+    };
+    left
+      .pretty(ctx, a)
+      .append(a.as_string("⊙").enclose(a.space(), a.space()))
+      .append(right.pretty(ctx, a))
+      .append(a.as_string("~").enclose(a.space(), a.space()))
+      .append(Row::Open(self.goal.clone()).pretty(ctx, a))
+  }
+}
+
+impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Db, Acc> PrettyWithCtx<(&'db Db, Acc)>
+  for ClosedGoal<A, Sema>
+where
+  Db: ?Sized + crate::Db,
+  Acc: AccessTy<'infer, A>,
+  Row<Sema, A>: PrettyWithCtx<(&'db Db, Acc)>,
+{
+  fn pretty<'a>(
+    &self,
+    ctx: &(&'db Db, Acc),
+    a: &'a pretty::RcAllocator,
+  ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+    Row::Open(self.left.clone())
+      .pretty(ctx, a)
+      .append(a.as_string("⊙").enclose(a.space(), a.space()))
+      .append(Row::Open(self.right.clone()).pretty(ctx, a))
+      .append(a.as_string("~").enclose(a.space(), a.space()))
+      .append(Row::Closed(self.goal.clone()).pretty(ctx, a))
   }
 }
 

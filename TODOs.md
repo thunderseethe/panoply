@@ -8,4 +8,5 @@ Short term:
 
 Long term:
 - [ ] Better diagnostics (especially for parse errors)
-- [ ] Mixin modules 
+- [ ] Mixin' Modules 
+- [ ] Playground

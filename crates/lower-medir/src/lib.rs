@@ -3,7 +3,6 @@ use base::{
   id_converter::IdConverter,
   ident::Ident,
   modules::Module,
-  pretty::{PrettyPrint, PrettyWithCtx},
 };
 use medir::{MedIrItem, MedIrModule};
 use reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
@@ -57,16 +56,6 @@ fn lower_item(db: &dyn crate::Db, term: OptimizedReducIrItem) -> Vec<MedIrItem> 
     .map(|defn| MedIrItem::new(medir_db, defn.name, defn, IdSupply::start_from(&supply)))
     .collect::<Vec<_>>();
   defns.insert(0, MedIrItem::new(medir_db, defn.name, defn, supply));
-  for defn in defns.iter() {
-    println!(
-      "{}",
-      defn
-        .item(medir_db)
-        .pretty_with(medir_db)
-        .pprint()
-        .pretty(80)
-    );
-  }
   defns
 }
 
@@ -140,6 +129,7 @@ effect Reader {
       }
     }
   }
+
   fn lower_snippet(db: &TestDatabase, input: &str) -> Vec<MedIrItem> {
     let main = format!("main = {}", input);
     lower_function(db, &main, "main")
@@ -379,6 +369,28 @@ effect Reader {
               __mon_bind(V116, V121, V114)
             }"#]],
     ];
+
+    assert_eq!(items.len(), expects.len());
+    for (item, expect) in items.into_iter().zip(expects.into_iter()) {
+      let str = item
+        .item(&db)
+        .pretty_with(&db)
+        .pprint()
+        .pretty(80)
+        .to_string();
+      expect.assert_eq(&str)
+    }
+  }
+
+  #[test]
+  fn lower_medir_concat() {
+    let db = TestDatabase::default();
+    let items = lower_snippet(&db, "({ x = 3429 } ,, { y = 12 }).x");
+
+    let expects = vec![expect![[r#"
+            defn main() {
+              3429
+            }"#]]];
 
     assert_eq!(items.len(), expects.len());
     for (item, expect) in items.into_iter().zip(expects.into_iter()) {

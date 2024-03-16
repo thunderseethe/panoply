@@ -14,6 +14,19 @@ pub trait PrettyWithCtx<Ctx: ?Sized> {
     }
   }
 
+  fn pretty_string<'me>(&'me self, ctx: &'me Ctx, width: usize) -> String
+  where
+    Self: Sized + 'me,
+  {
+    PrettyWith {
+      value: BoxRef::R(self),
+      ctx,
+    }
+    .pprint()
+    .pretty(width)
+    .to_string()
+  }
+
   fn into_pretty<'me>(self, ctx: &'me Ctx) -> PrettyWith<'me, Ctx>
   where
     Self: Sized + 'me,

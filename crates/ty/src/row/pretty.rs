@@ -19,6 +19,7 @@ where
     }
   }
 }
+
 impl<'ty, A, Db, Acc> PrettyWithCtx<(&Db, Acc)> for ClosedRow<A>
 where
   A: TypeAlloc + 'ty,
@@ -31,6 +32,9 @@ where
     ctx @ (db, acc): &(&Db, Acc),
     a: &'a pretty::RcAllocator,
   ) -> DocBuilder<'a, RcAllocator> {
+    if acc.row_fields(&self.fields).is_empty() {
+      return a.as_string("∅");
+    }
     let docs = acc
       .row_fields(&self.fields)
       .iter()

@@ -365,13 +365,9 @@ pub(super) trait RowEquationSolver<'ctx, Sema: RowSema>:
   fn equations(&self) -> &BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
   fn equations_mut(&mut self) -> &mut BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
 
-  fn with_equations<F>(&mut self, fun: F)
-  where
-    F: FnOnce(
-      BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>,
-    ) -> BTreeSet<UnsolvedRowEquation<InArena<'ctx>, Sema>>;
-
   fn normalize_row(&mut self, row: Row<Sema, InArena<'ctx>>) -> Row<Sema, InArena<'ctx>>;
+
+  fn find_root_var(&mut self, var: Sema::Open<InArena<'ctx>>) -> Sema::Open<InArena<'ctx>>;
 }
 impl<'infer, I> RowEquationSolver<'infer, Simple> for InferCtx<'_, 'infer, I, Solution>
 where
@@ -385,15 +381,6 @@ where
     &mut self.state.data_eqns
   }
 
-  fn with_equations<F>(&mut self, fun: F)
-  where
-    F: FnOnce(
-      BTreeSet<UnsolvedRowEquation<InArena<'infer>, Simple>>,
-    ) -> BTreeSet<UnsolvedRowEquation<InArena<'infer>, Simple>>,
-  {
-    self.state.data_eqns = fun(std::mem::take(&mut self.state.data_eqns));
-  }
-
   fn normalize_row(&mut self, row: Row<Simple, InArena<'infer>>) -> Row<Simple, InArena<'infer>> {
     row
       .try_fold_with(&mut Normalize {
@@ -403,6 +390,13 @@ where
         effrow_unifiers: &mut self.eff_row_unifiers,
       })
       .unwrap()
+  }
+
+  fn find_root_var(
+    &mut self,
+    var: <Simple as RowSema>::Open<InArena<'infer>>,
+  ) -> <Simple as RowSema>::Open<InArena<'infer>> {
+    self.data_row_unifiers.find(var)
   }
 }
 impl<'infer, I> RowEquationSolver<'infer, Scoped> for InferCtx<'_, 'infer, I, Solution>
@@ -417,15 +411,6 @@ where
     &mut self.state.eff_eqns
   }
 
-  fn with_equations<F>(&mut self, fun: F)
-  where
-    F: FnOnce(
-      BTreeSet<UnsolvedRowEquation<InArena<'infer>, Scoped>>,
-    ) -> BTreeSet<UnsolvedRowEquation<InArena<'infer>, Scoped>>,
-  {
-    self.state.eff_eqns = fun(std::mem::take(&mut self.state.eff_eqns));
-  }
-
   fn normalize_row(&mut self, row: Row<Scoped, InArena<'infer>>) -> Row<Scoped, InArena<'infer>> {
     row
       .try_fold_with(&mut Normalize {
@@ -435,5 +420,12 @@ where
         effrow_unifiers: &mut self.eff_row_unifiers,
       })
       .unwrap()
+  }
+
+  fn find_root_var(
+    &mut self,
+    var: <Scoped as RowSema>::Open<InArena<'infer>>,
+  ) -> <Scoped as RowSema>::Open<InArena<'infer>> {
+    self.eff_row_unifiers.find(var)
   }
 }

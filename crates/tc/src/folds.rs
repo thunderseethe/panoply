@@ -127,9 +127,10 @@ pub(crate) mod normalize {
       &mut self,
       var: TypeVarOf<Self::Alloc>,
     ) -> Result<Ty<Self::Alloc>, Self::Error> {
-      match self.ty_unifiers.probe_value(var) {
+      let root = self.ty_unifiers.find(var);
+      match self.ty_unifiers.probe_value(root) {
         Some(ty) => ty.try_fold_with(self),
-        _ => Ok(self.endo_ctx().mk_ty(TypeKind::VarTy(var))),
+        _ => Ok(self.endo_ctx().mk_ty(TypeKind::VarTy(root))),
       }
     }
 
@@ -137,9 +138,10 @@ pub(crate) mod normalize {
       &mut self,
       var: SimpleRowVarOf<Self::Alloc>,
     ) -> Result<SimpleRow<Self::Alloc>, Self::Error> {
-      match self.datarow_unifiers.probe_value(var) {
+      let root = self.datarow_unifiers.find(var);
+      match self.datarow_unifiers.probe_value(root) {
         Some(row) => row.try_fold_with(self).map(Row::Closed),
-        _ => Ok(Row::Open(var)),
+        _ => Ok(Row::Open(root)),
       }
     }
 
@@ -147,9 +149,10 @@ pub(crate) mod normalize {
       &mut self,
       var: ScopedRowVarOf<Self::Alloc>,
     ) -> Result<ScopedRow<Self::Alloc>, Self::Error> {
-      match self.effrow_unifiers.probe_value(var) {
+      let root = self.effrow_unifiers.find(var);
+      match self.effrow_unifiers.probe_value(root) {
         Some(row) => row.try_fold_with(self).map(Row::Closed),
-        _ => Ok(Row::Open(var)),
+        _ => Ok(Row::Open(root)),
       }
     }
   }
@@ -307,8 +310,8 @@ pub(crate) mod zonker {
   use ty::{InDb, MkTy, Ty, TypeKind};
 
   /// Combine our different unifier variables as one enum during zonking
-  #[derive(PartialEq, Eq)]
-  enum Unifier<'infer> {
+  #[derive(PartialEq, Eq, Debug)]
+  pub(crate) enum Unifier<'infer> {
     Ty(TcUnifierVar<'infer, TypeK>),
     SimpleRow(TcUnifierVar<'infer, SimpleRowK>),
     ScopedRow(TcUnifierVar<'infer, ScopedRowK>),
@@ -348,7 +351,7 @@ pub(crate) mod zonker {
     pub(crate) ty_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
     pub(crate) datarow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
     pub(crate) effrow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
-    free_unifiers: Vec<Unifier<'infer>>,
+    pub(crate) free_unifiers: Vec<Unifier<'infer>>,
   }
 
   impl<'a, 'infer> Zonker<'a, 'infer> {
