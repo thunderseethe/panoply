@@ -2,7 +2,7 @@ use base::{
   id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
   ident::Ident,
   modules::Module,
-  pretty::PrettyWithCtx,
+  pretty::{PrettyErrorWithDb, PrettyWithCtx},
 };
 use rustc_hash::FxHashSet;
 use std::borrow::Cow;
@@ -11,7 +11,7 @@ use std::fmt;
 use std::ops::Deref;
 use ReducIrKind::*;
 
-use crate::ty::ReducIrVarTy;
+use crate::ty::{ReducIrTyKind, ReducIrVarTy};
 
 use self::{
   subst::SubstTy,
@@ -1023,7 +1023,7 @@ impl TypeCheck for DelimCont {
         let FunETy(arg, _, ret_ret_ty) = ret_ty.kind(ir_db) else {
           return Err(ReducIrTyErr::ExpectedFunTy {
             ty: ret_ty,
-            func: ret,
+            func: Cow::Borrowed(ret),
           });
         };
         let body_ty = body.type_check(ctx)?;
@@ -1083,6 +1083,31 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         let ret_ty = body.type_check(ctx)?;
         Ok(ctx.mk_fun_ty(args.iter().map(|arg| arg.ty), ret_ty))
       }
+      App(func, args) if matches!(func.kind(), Item(occ) if occ.name.name(ctx) == ctx.ident_str("__mon_eqm")) =>
+      {
+        if args.len() > 2 {
+          return Err(ReducIrTyErr::ExpectedFunTy {
+            ty: func.type_check(ctx).map_err_pretty_with(ctx).unwrap(),
+            func: Cow::Owned(ReducIr::app(
+              func.deref().clone(),
+              args[..2].iter().cloned(),
+            )),
+          });
+        }
+
+        for arg in args {
+          let ty = arg.type_check(ctx)?;
+          match ty.kind(ctx.as_reducir_db()) {
+            MarkerTy(_) => {}
+            _ => {
+              return Err(ReducIrTyErr::ExpectedMarkerTy(ty));
+            }
+          }
+        }
+        let unit = ctx.mk_prod_ty(vec![]);
+        let bool = ctx.mk_coprod_ty(vec![unit, unit]);
+        Ok(bool)
+      }
       App(func, args) => {
         let func_ty = func.type_check(ctx)?;
         let args_iter = args.iter();
@@ -1127,7 +1152,10 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         let mut fun_arg_tys = vec![];
         let ret_ty = collect_args(ctx.as_reducir_db(), func_ty, &mut fun_arg_tys);
         if fun_arg_tys.is_empty() {
-          return Err(ReducIrTyErr::ExpectedFunTy { ty: func_ty, func });
+          return Err(ReducIrTyErr::ExpectedFunTy {
+            ty: func_ty,
+            func: Cow::Borrowed(func),
+          });
         }
         let mut fun_args = fun_arg_tys.iter().peekable();
         for ((fun_arg_ty, _), (arg_index, arg)) in
@@ -1246,7 +1274,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
             _ => {
               return Err(ReducIrTyErr::ExpectedFunTy {
                 ty: branch_ty,
-                func: branch,
+                func: Cow::Borrowed(branch),
               });
             }
           }
@@ -1285,7 +1313,7 @@ pub enum ReducIrTyErr<'a, Ext: Clone> {
   KindMistmatch(Kind, Kind),
   ExpectedFunTy {
     ty: ReducIrTy,
-    func: &'a ReducIr<Ext>,
+    func: Cow<'a, ReducIr<Ext>>,
   },
   ExpectedForallTy {
     forall: Cow<'a, ReducIr<Ext>>,

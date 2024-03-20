@@ -3,7 +3,7 @@ use std::ops::Deref;
 
 use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
-use base::pretty::PrettyErrorWithDb;
+use base::pretty::{PrettyErrorWithDb, PrettyWithCtx};
 use reducir::mon::MonReducIrRowEv;
 use reducir::ty::{
   IntoPayload, Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
@@ -11,7 +11,7 @@ use reducir::ty::{
 };
 use reducir::{
   default_endotraverse_ir, Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrItemOccurence,
-  ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
+  ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck, P,
 };
 use rustc_hash::FxHashMap;
 
@@ -44,9 +44,12 @@ struct Simplify<'a> {
   builtin_evs: FxHashMap<ReducIrTermName, &'a ReducIr>,
   supply: &'a mut IdSupply<ReducIrVarId>,
   top_level: ReducIrTermName,
+  inlined_term: bool,
+  pause_after_inline: bool,
 }
 impl ReducIrEndoFold for Simplify<'_> {
   type Ext = Infallible;
+
   fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
     use reducir::ReducIrKind::*;
     fn apply_tyabs<'a>(
@@ -74,12 +77,17 @@ impl ReducIrEndoFold for Simplify<'_> {
           body.clone()
         } else {
           // only perform a substitution if we actually applied types
-          body.subst(
+          let ir = body.subst(
             self.db,
             apps.into_iter().fold(Subst::Inc(0), |subst, app| {
               subst.cons(app.into_payload(self.db))
             }),
-          )
+          );
+          #[cfg(test)]
+          {
+            ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
+          }
+          ir
         };
         ReducIr::ty_app(body, ty_app)
       }
@@ -90,6 +98,8 @@ impl ReducIrEndoFold for Simplify<'_> {
       Locals(binds, body) => {
         let occs = occurrence_analysis(&Locals(binds.clone(), body.clone()));
         let mut env = FxHashMap::default();
+        #[cfg(test)]
+        let err_binds = binds.clone();
         let binds = binds
           .into_iter()
           .filter_map(|bind| {
@@ -108,10 +118,16 @@ impl ReducIrEndoFold for Simplify<'_> {
             }
           })
           .collect::<Vec<_>>();
-        ReducIr::locals(
-          binds,
-          body.fold(&mut Inline::new(self.db, &mut env)).fold(self),
-        )
+        let ir = body.fold(&mut Inline::new(self.db, &mut env)).fold(self);
+        #[cfg(test)]
+        ir.type_check(self.db)
+          .map_err_pretty_with(self.db)
+          .map_err(|err| {
+            println!("{}", Locals(err_binds, body).pretty_string(self.db, 80));
+            err
+          })
+          .unwrap();
+        ReducIr::locals(binds, ir)
       }
       App(head, spine) => {
         let mut app_binds = vec![];
@@ -154,10 +170,12 @@ impl ReducIrEndoFold for Simplify<'_> {
             self.traverse_ir(&ReducIr::locals(binds, body))
           }
           // Let floating for app
-          Locals(binds, body) => ReducIr::locals(
-            binds.iter().cloned(),
-            self.traverse_ir(&ReducIr::new(App(body.clone(), spine))),
-          ),
+          Locals(binds, body) => {
+            let ir = ReducIr::new(App(body.clone(), spine));
+            #[cfg(test)]
+            ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
+            ReducIr::locals(binds.iter().cloned(), self.traverse_ir(&ir))
+          }
           Item(occ)
             if occ.name.name(self.db) == self.db.ident_str("__mon_eqm")
               && spine.as_slice().chunks(2).all(|c| c[0] == c[1]) =>
@@ -169,6 +187,57 @@ impl ReducIrEndoFold for Simplify<'_> {
               ReducIr::new(Struct(vec![])),
             )
           }
+          TyApp(new_head, ty_apps) => {
+            if let Item(occ) = new_head.kind() {
+              // Inline saturated prompt calls that have a literal for their evv parameter.
+              // We can be confident they'll make progress
+              if occ.name.name(self.db) == self.db.ident_str("__mon_prompt")
+                && spine.len() == 5
+                && spine
+                  .last()
+                  .map(|final_arg| matches!(final_arg.kind(), Struct(_)))
+                  .unwrap_or(false)
+              {
+                let prompt = self.builtin_evs[&occ.name].fold(&mut RenumberVars {
+                  supply: self.supply,
+                  top_level: self.top_level,
+                  subst: FxHashMap::default(),
+                });
+                if self.pause_after_inline {
+                  self.inlined_term = true;
+                }
+                return ReducIr::new(App(
+                  P::new(ReducIr::ty_app(prompt, ty_apps.iter().cloned())),
+                  spine,
+                ))
+                .fold(self);
+              }
+              // Inline saturated bind calls that have a literal for their evv parameter.
+              // We can be confident they'll make progress.
+              if occ.name.name(self.db) == self.db.ident_str("__mon_bind")
+                && spine.len() == 3
+                && spine
+                  .last()
+                  .map(|final_arg| matches!(final_arg.kind(), Struct(_)))
+                  .unwrap_or(false)
+              {
+                let bind = self.builtin_evs[&occ.name].fold(&mut RenumberVars {
+                  supply: self.supply,
+                  top_level: self.top_level,
+                  subst: FxHashMap::default(),
+                });
+                if self.pause_after_inline {
+                  self.inlined_term = true;
+                }
+                return ReducIr::new(App(
+                  P::new(ReducIr::ty_app(bind, ty_apps.iter().cloned())),
+                  spine,
+                ))
+                .fold(self);
+              }
+            }
+            ReducIr::new(App(head, spine))
+          }
           _ => ReducIr::new(App(head, spine)),
         };
         ReducIr::locals(app_binds, app)
@@ -179,27 +248,35 @@ impl ReducIrEndoFold for Simplify<'_> {
           [val.clone().into_inner()],
         )),
         // Let floating for case
-        Locals(binds, body) => ReducIr::locals(
-          binds.iter().cloned(),
-          self.traverse_ir(&ReducIr::case(
-            ty,
-            body.clone().into_inner(),
-            branches.iter().cloned(),
-          )),
-        ),
+        Locals(binds, body) => {
+          let ir = ReducIr::case(ty, body.clone().into_inner(), branches.iter().cloned());
+          #[cfg(test)]
+          ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
+          ReducIr::locals(binds.iter().cloned(), self.traverse_ir(&ir))
+        }
         _ => ReducIr::new(Case(ty, discr, branches)),
       },
       // Always inline row evidence
       Item(occ) if occ.inline => match self.builtin_evs.get(&occ.name) {
-        Some(builtin) => builtin.fold(&mut RenumberVars {
-          supply: self.supply,
-          top_level: self.top_level,
-          subst: FxHashMap::default(),
-        }),
+        Some(builtin) => {
+          self.inlined_term = true;
+          builtin.fold(&mut RenumberVars {
+            supply: self.supply,
+            top_level: self.top_level,
+            subst: FxHashMap::default(),
+          })
+        }
         None => ReducIr::new(kind),
       },
       kind => ReducIr::new(kind),
     }
+  }
+
+  fn endotraverse_ir(&mut self, ir: &ReducIr<Self::Ext>) -> ReducIr<Self::Ext> {
+    if self.pause_after_inline && self.inlined_term {
+      return ir.clone();
+    }
+    default_endotraverse_ir(self, ir)
   }
 }
 
@@ -382,21 +459,39 @@ pub(crate) fn simplify(
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
+  #[cfg(test)]
+  ir.type_check(db).map_err_pretty_with(db).unwrap();
+
   let mut simple = Simplify {
     db,
     builtin_evs: builtin_evs.clone(),
     supply,
     top_level: ReducIrTermName::Term(name),
+    inlined_term: true,
+    pause_after_inline: true,
   };
-  // TODO: Figure out a way to do this.
-  ir.fold(&mut simple)
-    .fold(&mut simple)
-    .fold(&mut simple)
-    .fold(&mut EtaExpand {
-      db,
-      supply,
-      name: ReducIrTermName::Term(name),
-    })
+
+  let mut ir = ir.clone();
+  let mut i = 0;
+  loop {
+    ir = ir.fold(&mut simple);
+    if !simple.inlined_term {
+      break;
+    }
+    ir.type_check(db).map_err_pretty_with(db).unwrap();
+    println!("{}: {}\n", i, ir.pretty_string(db, 80));
+    i += 1;
+    simple.inlined_term = false;
+  }
+  // TODO: Figure out a better way to do this.
+  /*ir.fold(&mut simple)
+  .fold(&mut simple)
+  .fold(&mut simple)*/
+  ir.fold(&mut EtaExpand {
+    db,
+    supply,
+    name: ReducIrTermName::Term(name),
+  })
 }
 
 fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -> ReducIr {
@@ -495,8 +590,7 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
     Yield m' f k ->
       case m == m' of
         False -> Yield m' f (\x . prompt upd m h (k x))
-        True -> f (\x . prompt upd m h (k x)) w
-  */
+        True -> f (\x . prompt upd m h (k x)) w */
   let y_var = ReducIrVar::new(gen_local(), db.mk_yield_ty(VarTy(2), VarTy(1)));
   let mut tyvar_supply = IdSupply::default();
   let mut tyvars = |n| {

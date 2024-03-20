@@ -1,7 +1,10 @@
 use std::convert::Infallible;
 
+use base::pretty::PrettyErrorWithDb;
 use reducir::ty::Subst;
-use reducir::{default_endotraverse_ir, ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, P};
+use reducir::{
+  default_endotraverse_ir, Bind, ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, TypeCheck, P,
+};
 use rustc_hash::FxHashMap;
 
 pub(crate) struct Inline<'a, DB: ?Sized> {
@@ -25,7 +28,20 @@ impl<DB: ?Sized + crate::Db> ReducIrEndoFold for Inline<'_, DB> {
   fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
     match kind {
       ReducIrKind::Var(v) => match self.env.get(&v.var) {
-        Some(val) => val.subst(self.db, self.subst.clone()),
+        Some(val) => {
+          #[cfg(test)]
+          {
+            println!("inlining for {:?}", v);
+            ReducIr::locals(
+              [Bind::new(v, val.clone())],
+              ReducIr::new(ReducIrKind::Int(23)),
+            )
+            .type_check(self.db)
+            .map_err_pretty_with(self.db)
+            .unwrap();
+          }
+          val.subst(self.db, self.subst.clone())
+        }
         None => ReducIr::new(kind),
       },
       _ => ReducIr::new(kind),

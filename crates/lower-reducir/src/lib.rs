@@ -235,8 +235,8 @@ where
   let order_of_tys = left_values;
   let tyvar_env = order_of_tys
     .iter()
-    .enumerate()
-    .map(|(i, ty)| (*ty, i as i32))
+    .zip((0..(left_fields.len() + right_fields.len())).rev())
+    .map(|(ty, i)| (*ty, i as i32))
     .collect::<FxHashMap<_, _>>();
 
   let mut var_conv = IdConverter::new();
@@ -663,8 +663,7 @@ effect Reader {
 
     let expect = expect![[r#"
         (forall [(1: Type) (0: ScopedRow)] (fun [V0]
-            (let (V1 ((_row_simple_x_y @ [Ty(T1), Ty(T1)]) {}))
-              (fun<{0}> [V2] (V1[0] V2 V2)))))"#]];
+            (let (V1 ((_row_simple_x_y @ [..]) {})) (fun<{0}> [V2] (V1[0] V2 V2)))))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect!["forall Type . forall ScopedRow . {0} -> T1 -> {0} {T1, T1}"];
@@ -725,26 +724,17 @@ main = with {
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
     let expect = expect![[r#"
         (case ((let
-            [ (V1 ((_row_scoped__Reader @ [Ty({ (Marker Int)
-                                              , {} -> (Mon {} (Int -> (Mon {} Int)) ->
-                                              (Mon {} Int))
-                                              })]) {}))
-            , (V2 ((_row_simple__ask @ [Ty({} -> (Mon {} (Int -> (Mon {} Int)) ->
-            (Mon {} Int)))]) {}))
-            , (V3 ((_row_simple_ask_return @ [Ty(Int -> (Mon {} Int)), Ty({} ->
-            (Mon {} (Int -> (Mon {} Int)) -> (Mon {} Int)))]) {}))
-            , (V4 ((_row_simple_return_ask @ [Ty({} -> (Mon {} (Int -> (Mon {} Int)) ->
-            (Mon {} Int))), Ty(Int -> (Mon {} Int))]) {}))
+            [ (V1 ((_row_scoped__Reader @ [..]) {}))
+            , (V2 ((_row_simple__ask @ [..]) {}))
+            , (V3 ((_row_simple_ask_return @ [..]) {}))
+            , (V4 ((_row_simple_return_ask @ [..]) {}))
             , (V5 (V3[0]
               (fun [V6, V15] <0: (fun [V7] (V7 374))>)
               (fun [V8, V16] <0: V8>)))
             ]
-            ((__mon_freshm @ [Ty(Int), Ty( -> (Mon {} Int))])
+            ((__mon_freshm @ [..])
               (fun [V13]
-                ((__mon_prompt @ [Ty({}), Ty({ (Marker Int)
-                                             , {} -> (Mon {} (Int -> (Mon {} Int)) ->
-                                             (Mon {} Int))
-                                             }), Ty(Int), Ty(Int)])
+                ((__mon_prompt @ [..])
                   V13
                   (fun [V14] (V1[0] V14 {V13, (V4[3][0] V5)}))
                   (V4[2][0] V5)
@@ -752,8 +742,7 @@ main = with {
                     ((let [ (V10 {}) , (V11 (V1[3][0] V9)) ]
                       (fun [V17]
                         <1: (forall [(0: Type) (1: Type) (2: Type)] {V11[0], (fun [V12]
-                              ((__mon_bind @ [Ty({}), Ty((Int -> (Mon {} Int)) ->
-                              (Mon {} Int)), Ty(Int)])
+                              ((__mon_bind @ [..])
                                 (V2[3][0] V11[1] V10)
                                 (fun [V19] (V19 V12)))), (fun [V18, V20] <0: V18>)})>))
                       V9)))))) {})
@@ -791,32 +780,11 @@ main = with {
     let expect = expect![[r#"
         (forall [(1: ScopedRow) (0: ScopedRow)] (fun [V1, V0]
             (let
-              [ (V2 ((_row_simple_put_get @ [Ty({} -> {1} Int -> {1} Int -> {1} { Int
-                                                                                , Int
-                                                                                } ->
-              {1} Int -> {1} {Int, Int}), Ty(Int -> {1} {} -> {1} Int -> {1} { Int
-                                                                             , Int
-                                                                             } ->
-              {1} Int -> {1} {Int, Int})]) {}))
-              , (V3 ((_row_simple_get_put @ [Ty(Int -> {1} {} -> {1} Int -> {1} { Int
-                                                                                , Int
-                                                                                } ->
-              {1} Int -> {1} {Int, Int}), Ty({} -> {1} Int -> {1} Int -> {1} { Int
-                                                                             , Int
-                                                                             } ->
-              {1} Int -> {1} {Int, Int})]) {}))
-              , (V4 ((_row_simple_state_value @ [Ty(Int), Ty(Int)]) {}))
-              , (V5 ((_row_simple_putget_return @ [Ty(Int -> {1} Int -> {1} { Int
-                                                                            , Int
-                                                                            }), Ty({} ->
-              {1} Int -> {1} Int -> {1} {Int, Int} -> {1} Int -> {1} { Int
-                                                                     , Int
-                                                                     }), Ty(Int ->
-              {1} {} -> {1} Int -> {1} {Int, Int} -> {1} Int -> {1} {Int, Int})]) {}))
-              , (V6 ((_row_simple_return_putget @ [Ty({} -> {1} Int -> {1} Int ->
-              {1} {Int, Int} -> {1} Int -> {1} {Int, Int}), Ty(Int -> {1} {} ->
-              {1} Int -> {1} {Int, Int} -> {1} Int -> {1} {Int, Int}), Ty(Int ->
-              {1} Int -> {1} {Int, Int})]) {}))
+              [ (V2 ((_row_simple_put_get @ [..]) {}))
+              , (V3 ((_row_simple_get_put @ [..]) {}))
+              , (V4 ((_row_simple_state_value @ [..]) {}))
+              , (V5 ((_row_simple_putget_return @ [..]) {}))
+              , (V6 ((_row_simple_return_putget @ [..]) {}))
               ]
               ((let
                 (V7 (V5[0]
@@ -906,35 +874,17 @@ main = with {
           [(5: Type) (4: ScopedRow) (3: ScopedRow) (2: ScopedRow) (1: ScopedRow) (0: ScopedRow)]
           (fun [V1, V2, V3, V0]
             (let
-              [ (V4 ((_row_simple__ask @ [Ty({} -> {3} Int -> {3} {} -> {3} {})]) {}))
-              , (V5 ((_row_simple_get_put @ [Ty(Int -> {4} {} -> {4} Int -> {4} { Int
-                                                                                , {}
-                                                                                } ->
-              {4} Int -> {4} {Int, {}}), Ty({} -> {4} Int -> {4} Int -> {4} {Int, {}} ->
-              {4} Int -> {4} {Int, {}})]) {}))
-              , (V6 ((_row_simple_get_put @ [Ty(Int -> {1} {} -> {1} T5 ->
-              {1} T5), Ty({} -> {1} Int -> {1} T5 -> {1} T5)]) {}))
-              , (V7 ((_row_simple_value_state @ [Ty(Int), Ty({})]) {}))
-              , (V8 ((_row_simple_state_value @ [Ty({}), Ty(Int)]) {}))
-              , (V9 ((_row_simple_ask_return @ [Ty({} -> {3} {}), Ty({} -> {3} Int ->
-              {3} {} -> {3} {})]) {}))
-              , (V10 ((_row_simple_return_ask @ [Ty({} -> {3} Int -> {3} {} ->
-              {3} {}), Ty({} -> {3} {})]) {}))
-              , (V11 ((_row_simple_putget_return @ [Ty({} -> {4} Int -> {4} { Int
-                                                                            , {}
-                                                                            }), Ty({} ->
-              {4} Int -> {4} Int -> {4} {Int, {}} -> {4} Int -> {4} { Int
-                                                                    , {}
-                                                                    }), Ty(Int ->
-              {4} {} -> {4} Int -> {4} {Int, {}} -> {4} Int -> {4} {Int, {}})]) {}))
-              , (V12 ((_row_simple_return_putget @ [Ty({} -> {4} Int -> {4} Int ->
-              {4} {Int, {}} -> {4} Int -> {4} {Int, {}}), Ty(Int -> {4} {} -> {4} Int ->
-              {4} {Int, {}} -> {4} Int -> {4} {Int, {}}), Ty({} -> {4} Int -> {4} { Int
-                                                                                  , {}
-                                                                                  })])
-                {}))
+              [ (V4 ((_row_simple__ask @ [..]) {}))
+              , (V5 ((_row_simple_get_put @ [..]) {}))
+              , (V6 ((_row_simple_get_put @ [..]) {}))
+              , (V7 ((_row_simple_value_state @ [..]) {}))
+              , (V8 ((_row_simple_state_value @ [..]) {}))
+              , (V9 ((_row_simple_ask_return @ [..]) {}))
+              , (V10 ((_row_simple_return_ask @ [..]) {}))
+              , (V11 ((_row_simple_putget_return @ [..]) {}))
+              , (V12 ((_row_simple_return_putget @ [..]) {}))
               ]
-              (V8[3][0]
+              (V8[2][0]
                 ((let
                   (V13 (V11[0]
                     (V5[0]
@@ -1030,7 +980,7 @@ main = with {
                                     }
                                   } -> <2>
                                 }
-                              } -> {4} -> {}"#]];
+                              } -> {4} -> Int"#]];
     let pretty_ir_ty = {
       let this = ir.type_check(&db).map_err_pretty_with(&db);
       match this {
@@ -1063,59 +1013,32 @@ main = with {
     let expect = expect![[r#"
         (forall [(1: ScopedRow) (0: ScopedRow)] (fun [V1, V0]
             ((let
-              [ (V2 ((_row_simple_put_get @ [Ty({} -> (Mon {1} (Int -> (Mon {1} Int ->
-              (Mon {1} {Int, Int}))) -> (Mon {1} Int -> (Mon {1} {Int, Int})))), Ty(Int
-              -> (Mon {1} ({} -> (Mon {1} Int -> (Mon {1} {Int, Int}))) -> (Mon {1} Int
-              -> (Mon {1} {Int, Int}))))]) {}))
-              , (V3 ((_row_simple_get_put @ [Ty(Int -> (Mon {1} ({} -> (Mon {1} Int ->
-              (Mon {1} {Int, Int}))) -> (Mon {1} Int -> (Mon {1} {Int, Int})))), Ty({}
-              -> (Mon {1} (Int -> (Mon {1} Int -> (Mon {1} {Int, Int}))) -> (Mon {1} Int
-              -> (Mon {1} {Int, Int}))))]) {}))
-              , (V4 ((_row_simple_state_value @ [Ty(Int), Ty(Int)]) {}))
-              , (V5 ((_row_simple_putget_return @ [Ty(Int -> (Mon {1} Int ->
-              (Mon {1} {Int, Int}))), Ty({} -> (Mon {1} (Int -> (Mon {1} Int ->
-              (Mon {1} {Int, Int}))) -> (Mon {1} Int -> (Mon {1} {Int, Int})))), Ty(Int
-              -> (Mon {1} ({} -> (Mon {1} Int -> (Mon {1} {Int, Int}))) -> (Mon {1} Int
-              -> (Mon {1} {Int, Int}))))]) {}))
-              , (V6 ((_row_simple_return_putget @ [Ty({} -> (Mon {1} (Int ->
-              (Mon {1} Int -> (Mon {1} {Int, Int}))) -> (Mon {1} Int -> (Mon {1} { Int
-                                                                                 , Int
-                                                                                 })))), Ty(Int
-              -> (Mon {1} ({} -> (Mon {1} Int -> (Mon {1} {Int, Int}))) -> (Mon {1} Int
-              -> (Mon {1} {Int, Int})))), Ty(Int -> (Mon {1} Int -> (Mon {1} { Int
-                                                                             , Int
-                                                                             })))]) {}))
+              [ (V2 ((_row_simple_put_get @ [..]) {}))
+              , (V3 ((_row_simple_get_put @ [..]) {}))
+              , (V4 ((_row_simple_state_value @ [..]) {}))
+              , (V5 ((_row_simple_putget_return @ [..]) {}))
+              , (V6 ((_row_simple_return_putget @ [..]) {}))
               ]
-              ((__mon_bind @ [Ty({1}), Ty(Int -> (Mon {1} {Int, Int})), Ty({Int, Int})])
+              ((__mon_bind @ [..])
                 (let
                   (V7 (V5[0]
                     (V3[0]
                       (fun [V8, V24]
                         <0: (fun [V9, V23]
                             <0: (fun [V10]
-                                ((__mon_bind @ [Ty({1}), Ty(Int -> (Mon {1} { Int
-                                                                            , Int
-                                                                            })), Ty({ Int
-                                                                                    , Int
-                                                                                    })])
+                                ((__mon_bind @ [..])
                                   (V9 V10)
                                   (fun [V22] (V22 V10))))>)>)
                       (fun [V11, V27]
                         <0: (fun [V12, V26]
                             <0: (fun [V13]
-                                ((__mon_bind @ [Ty({1}), Ty(Int -> (Mon {1} { Int
-                                                                            , Int
-                                                                            })), Ty({ Int
-                                                                                    , Int
-                                                                                    })])
+                                ((__mon_bind @ [..])
                                   (V12 {})
                                   (fun [V25] (V25 V11))))>)>))
                     (fun [V14, V29] <0: (fun [V15, V28] <0: (V4[0] V15 V14)>)>)))
-                  ((__mon_freshm @ [Ty(Int -> {1} {Int, Int}), Ty( -> (Mon {1} Int ->
-                  (Mon {1} {Int, Int})))])
+                  ((__mon_freshm @ [..])
                     (fun [V20]
-                      ((__mon_prompt @ [Ty({1}), Ty({0}), Ty(Int), Ty(Int ->
-                      (Mon {1} {Int, Int}))])
+                      ((__mon_prompt @ [..])
                         V20
                         (fun [V21] (V1[0] V21 {V20, (V6[3][0] V7)}))
                         (V6[2][0] V7)
@@ -1124,11 +1047,7 @@ main = with {
                             (fun [V30]
                               <1: (forall [(0: Type) (1: Type) (2: Type)] {V18[0], (fun
                                     [V19]
-                                    ((__mon_bind @ [Ty({4}), Ty((Int -> (Mon {4} Int ->
-                                    (Mon {4} {Int, Int}))) -> (Mon {4} Int ->
-                                    (Mon {4} {Int, Int}))), Ty(Int -> (Mon {4} { Int
-                                                                               , Int
-                                                                               }))])
+                                    ((__mon_bind @ [..])
                                       (V3[2][0] V18[1] V17)
                                       (fun [V32] (V32 V19)))), (fun [V31, V33] <0: V31>)
                                   })>)) V16))))))
@@ -1206,66 +1125,37 @@ main = with {
           [(5: Type) (4: ScopedRow) (3: ScopedRow) (2: ScopedRow) (1: ScopedRow) (0: ScopedRow)]
           (fun [V1, V2, V3, V0]
             ((let
-              [ (V4 ((_row_simple__ask @ [Ty({} -> (Mon {3} (Int -> (Mon {3} {})) ->
-              (Mon {3} {})))]) {}))
-              , (V5 ((_row_simple_get_put @ [Ty(Int -> (Mon {4} ({} -> (Mon {4} Int ->
-              (Mon {4} {Int, {}}))) -> (Mon {4} Int -> (Mon {4} {Int, {}})))), Ty({} ->
-              (Mon {4} (Int -> (Mon {4} Int -> (Mon {4} {Int, {}}))) -> (Mon {4} Int ->
-              (Mon {4} {Int, {}}))))]) {}))
-              , (V6 ((_row_simple_get_put @ [Ty(Int -> (Mon {1} ({} -> (Mon {1} T5)) ->
-              (Mon {1} T5))), Ty({} -> (Mon {1} (Int -> (Mon {1} T5)) ->
-              (Mon {1} T5)))]) {}))
-              , (V7 ((_row_simple_value_state @ [Ty(Int), Ty({})]) {}))
-              , (V8 ((_row_simple_state_value @ [Ty({}), Ty(Int)]) {}))
-              , (V9 ((_row_simple_ask_return @ [Ty({} -> (Mon {3} {})), Ty({} ->
-              (Mon {3} (Int -> (Mon {3} {})) -> (Mon {3} {})))]) {}))
-              , (V10 ((_row_simple_return_ask @ [Ty({} -> (Mon {3} (Int -> (Mon {3} {}))
-              -> (Mon {3} {}))), Ty({} -> (Mon {3} {}))]) {}))
-              , (V11 ((_row_simple_putget_return @ [Ty({} -> (Mon {4} Int ->
-              (Mon {4} {Int, {}}))), Ty({} -> (Mon {4} (Int -> (Mon {4} Int ->
-              (Mon {4} {Int, {}}))) -> (Mon {4} Int -> (Mon {4} {Int, {}})))), Ty(Int ->
-              (Mon {4} ({} -> (Mon {4} Int -> (Mon {4} {Int, {}}))) -> (Mon {4} Int ->
-              (Mon {4} {Int, {}}))))]) {}))
-              , (V12 ((_row_simple_return_putget @ [Ty({} -> (Mon {4} (Int ->
-              (Mon {4} Int -> (Mon {4} {Int, {}}))) -> (Mon {4} Int -> (Mon {4} { Int
-                                                                                , {}
-                                                                                })))), Ty(Int
-              -> (Mon {4} ({} -> (Mon {4} Int -> (Mon {4} {Int, {}}))) -> (Mon {4} Int
-              -> (Mon {4} {Int, {}})))), Ty({} -> (Mon {4} Int -> (Mon {4} { Int
-                                                                           , {}
-                                                                           })))]) {}))
+              [ (V4 ((_row_simple__ask @ [..]) {}))
+              , (V5 ((_row_simple_get_put @ [..]) {}))
+              , (V6 ((_row_simple_get_put @ [..]) {}))
+              , (V7 ((_row_simple_value_state @ [..]) {}))
+              , (V8 ((_row_simple_state_value @ [..]) {}))
+              , (V9 ((_row_simple_ask_return @ [..]) {}))
+              , (V10 ((_row_simple_return_ask @ [..]) {}))
+              , (V11 ((_row_simple_putget_return @ [..]) {}))
+              , (V12 ((_row_simple_return_putget @ [..]) {}))
               ]
-              ((__mon_bind @ [Ty({4}), Ty({Int, {}}), Ty({})])
-                ((__mon_bind @ [Ty({4}), Ty(Int -> (Mon {4} {Int, {}})), Ty({Int, {}})])
+              ((__mon_bind @ [..])
+                ((__mon_bind @ [..])
                   (let
                     (V13 (V11[0]
                       (V5[0]
                         (fun [V14, V41]
                           <0: (fun [V15, V40]
                               <0: (fun [V16]
-                                  ((__mon_bind @ [Ty({4}), Ty(Int -> (Mon {4} { Int
-                                                                              , {}
-                                                                              })), Ty({ Int
-                                                                                      , {}
-                                                                                      })])
+                                  ((__mon_bind @ [..])
                                     (V15 V16)
                                     (fun [V39] (V39 V16))))>)>)
                         (fun [V17, V44]
                           <0: (fun [V18, V43]
                               <0: (fun [V19]
-                                  ((__mon_bind @ [Ty({4}), Ty(Int -> (Mon {4} { Int
-                                                                              , {}
-                                                                              })), Ty({ Int
-                                                                                      , {}
-                                                                                      })])
+                                  ((__mon_bind @ [..])
                                     (V18 {})
                                     (fun [V42] (V42 V17))))>)>))
                       (fun [V20, V46] <0: (fun [V21, V45] <0: (V8[0] V21 V20)>)>)))
-                    ((__mon_freshm @ [Ty(Int -> {4} {Int, {}}), Ty( -> (Mon {4} Int ->
-                    (Mon {4} {Int, {}})))])
+                    ((__mon_freshm @ [..])
                       (fun [V37]
-                        ((__mon_prompt @ [Ty({4}), Ty({3}), Ty({}), Ty(Int ->
-                        (Mon {4} {Int, {}}))])
+                        ((__mon_prompt @ [..])
                           V37
                           (fun [V38] (V1[0] V38 {V37, (V12[3][0] V13)}))
                           (V12[2][0] V13)
@@ -1274,21 +1164,19 @@ main = with {
                               (V23 (V9[0]
                                 (fun [V24, V47] <0: (fun [V25] (V25 16777215))>)
                                 (fun [V26, V48] <0: V26>)))
-                              ((__mon_freshm @ [Ty({}), Ty( -> (Mon {3} {}))])
+                              ((__mon_freshm @ [..])
                                 (fun [V35]
-                                  ((__mon_prompt @ [Ty({3}), Ty({2}), Ty({}), Ty({})])
+                                  ((__mon_prompt @ [..])
                                     V35
                                     (fun [V36] (V2[0] V36 {V35, (V10[3][0] V23)}))
                                     (V10[2][0] V23)
                                     (fun [V27]
-                                      ((__mon_bind @ [Ty({2}), Ty(Int), Ty({})])
+                                      ((__mon_bind @ [..])
                                         (let [ (V28 {}) , (V29 (V2[3][0] V27)) ]
                                           (fun [V53]
                                             <1: (forall [(0: Type) (1: Type) (2: Type)]
                                                 {V29[0], (fun [V30]
-                                                  ((__mon_bind @ [Ty({6}), Ty((Int ->
-                                                  (Mon {6} {})) ->
-                                                  (Mon {6} {})), Ty({})])
+                                                  ((__mon_bind @ [..])
                                                     (V4[3][0] V29[1] V28)
                                                     (fun [V55] (V55 V30)))), (fun
                                                   [V54
@@ -1303,16 +1191,14 @@ main = with {
                                               <1: (forall
                                                   [(0: Type) (1: Type) (2: Type)] {
                                                   V33[0], (fun [V34]
-                                                    ((__mon_bind @ [Ty({4}), Ty(({} ->
-                                                    (Mon {4} T8)) ->
-                                                    (Mon {4} T8)), Ty(T8)])
+                                                    ((__mon_bind @ [..])
                                                       (V6[3][0] V33[1] V32)
                                                       (fun [V51] (V51 V34)))), (fun
                                                     [V50
                                                     ,V52] <0: V50>)})>)))
                                         V27)))))) V22))))))
                   (fun [V58] (V58 14)))
-                (fun [V59, V60] <0: (V8[3][0] V59)>))) V0)))"#]];
+                (fun [V59, V60] <0: (V8[2][0] V59)>))) V0)))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"
@@ -1412,7 +1298,7 @@ main = with {
                                     }
                                   } -> <2>
                                 }
-                              } -> (Mon {4} {})"#]];
+                              } -> (Mon {4} Int)"#]];
     let pretty_ir_ty = {
       let this = ir.type_check(&db).map_err_pretty_with(&db);
       match this {
@@ -1447,17 +1333,12 @@ main = with {
       // main
       expect![[r#"
           (case ((let
-              [ (V1 ((_row_simple_x_y @ [Ty({}), Ty(Int)]) {}))
-              , (V2 ((_row_simple_y_x @ [Ty(Int), Ty({})]) {}))
+              [ (V1 ((_row_simple_x_y @ [..]) {}))
+              , (V2 ((_row_simple_y_x @ [..]) {}))
               ]
-              ((__mon_bind @ [Ty({}), Ty(Int), Ty(Int)])
-                ((__mon_bind @ [Ty({}), Ty({} -> (Mon {} Int)), Ty(Int)])
-                  ((__mon_bind @ [Ty({}), Ty(Int -> (Mon {} {} -> (Mon {} Int))), Ty({} ->
-                  (Mon {} Int))])
-                    ((wand @ [Ty(Int), Eff([]), Data([Int]), Data([{}]), Data([Int,{}]), Data([{}])])
-                      V1
-                      V2)
-                    (fun [V5] (V5 5)))
+              ((__mon_bind @ [..])
+                ((__mon_bind @ [..])
+                  ((__mon_bind @ [..]) ((wand @ [..]) V1 V2) (fun [V5] (V5 5)))
                   (fun [V6] (V6 {})))
                 (fun [V7] (let (V3 V7) (fun [V4] <0: V3>))))) {})
             (fun [V0] V0)
@@ -1516,80 +1397,34 @@ main = (with {
       // main
       expect![[r#"
           (case ((let
-              [ (V1 ((_row_scoped__State @ [Ty({ (Marker Int -> (Mon {} {Int, Int}))
-                                               , { Int -> (Mon {} ({} -> (Mon {} Int ->
-                                                 (Mon {} {Int, Int}))) -> (Mon {} Int ->
-                                                 (Mon {} {Int, Int})))
-                                                 , {} -> (Mon {} (Int -> (Mon {} Int ->
-                                                 (Mon {} {Int, Int}))) -> (Mon {} Int ->
-                                                 (Mon {} {Int, Int})))
-                                                 }
-                                               })]) {}))
-              , (V2 ((_row_simple_put_get @ [Ty({} -> (Mon {} (Int -> (Mon {} Int ->
-              (Mon {} {Int, Int}))) -> (Mon {} Int -> (Mon {} {Int, Int})))), Ty(Int ->
-              (Mon {} ({} -> (Mon {} Int -> (Mon {} {Int, Int}))) -> (Mon {} Int ->
-              (Mon {} {Int, Int}))))]) {}))
-              , (V3 ((_row_simple_get_put @ [Ty(Int -> (Mon {} ({} -> (Mon {} Int ->
-              (Mon {} {Int, Int}))) -> (Mon {} Int -> (Mon {} {Int, Int})))), Ty({} ->
-              (Mon {} (Int -> (Mon {} Int -> (Mon {} {Int, Int}))) -> (Mon {} Int ->
-              (Mon {} {Int, Int}))))]) {}))
-              , (V4 ((_row_simple_state_value @ [Ty(Int), Ty(Int)]) {}))
-              , (V5 ((_row_simple_putget_return @ [Ty(Int -> (Mon {} Int -> (Mon {} { Int
-                                                                                    , Int
-                                                                                    }))), Ty({}
-              -> (Mon {} (Int -> (Mon {} Int -> (Mon {} {Int, Int}))) -> (Mon {} Int ->
-              (Mon {} {Int, Int})))), Ty(Int -> (Mon {} ({} -> (Mon {} Int ->
-              (Mon {} {Int, Int}))) -> (Mon {} Int -> (Mon {} {Int, Int}))))]) {}))
-              , (V6 ((_row_simple_return_putget @ [Ty({} -> (Mon {} (Int -> (Mon {} Int ->
-              (Mon {} {Int, Int}))) -> (Mon {} Int -> (Mon {} {Int, Int})))), Ty(Int ->
-              (Mon {} ({} -> (Mon {} Int -> (Mon {} {Int, Int}))) -> (Mon {} Int ->
-              (Mon {} {Int, Int})))), Ty(Int -> (Mon {} Int -> (Mon {} {Int, Int})))])
-                {}))
+              [ (V1 ((_row_scoped__State @ [..]) {}))
+              , (V2 ((_row_simple_put_get @ [..]) {}))
+              , (V3 ((_row_simple_get_put @ [..]) {}))
+              , (V4 ((_row_simple_state_value @ [..]) {}))
+              , (V5 ((_row_simple_putget_return @ [..]) {}))
+              , (V6 ((_row_simple_return_putget @ [..]) {}))
               ]
-              ((__mon_bind @ [Ty({}), Ty({Int, Int}), Ty(Int)])
-                ((__mon_bind @ [Ty({}), Ty(Int -> (Mon {} {Int, Int})), Ty({Int, Int})])
+              ((__mon_bind @ [..])
+                ((__mon_bind @ [..])
                   (let
                     (V7 (V5[0]
                       (V3[0]
                         (fun [V8, V24]
                           <0: (fun [V9, V23]
                               <0: (fun [V10]
-                                  ((__mon_bind @ [Ty({}), Ty(Int -> (Mon {} { Int
-                                                                            , Int
-                                                                            })), Ty({ Int
-                                                                                    , Int
-                                                                                    })])
+                                  ((__mon_bind @ [..])
                                     (V9 V10)
                                     (fun [V22] (V22 V10))))>)>)
                         (fun [V11, V27]
                           <0: (fun [V12, V26]
                               <0: (fun [V13]
-                                  ((__mon_bind @ [Ty({}), Ty(Int -> (Mon {} { Int
-                                                                            , Int
-                                                                            })), Ty({ Int
-                                                                                    , Int
-                                                                                    })])
+                                  ((__mon_bind @ [..])
                                     (V12 {})
                                     (fun [V25] (V25 V11))))>)>))
                       (fun [V14, V29] <0: (fun [V15, V28] <0: (V4[0] V15 V14)>)>)))
-                    ((__mon_freshm @ [Ty(Int -> {} {Int, Int}), Ty( -> (Mon {} Int ->
-                    (Mon {} {Int, Int})))])
+                    ((__mon_freshm @ [..])
                       (fun [V20]
-                        ((__mon_prompt @ [Ty({}), Ty({ (Marker Int -> (Mon {} {Int, Int}))
-                                                     , { Int -> (Mon {} ({} -> (Mon {} Int
-                                                       -> (Mon {} {Int, Int}))) ->
-                                                       (Mon {} Int -> (Mon {} { Int
-                                                                              , Int
-                                                                              })))
-                                                       , {} -> (Mon {} (Int -> (Mon {} Int
-                                                       -> (Mon {} {Int, Int}))) ->
-                                                       (Mon {} Int -> (Mon {} { Int
-                                                                              , Int
-                                                                              })))
-                                                       }
-                                                     }), Ty(Int), Ty(Int -> (Mon {} { Int
-                                                                                    , Int
-                                                                                    }))])
+                        ((__mon_prompt @ [..])
                           V20
                           (fun [V21] (V1[0] V21 {V20, (V6[3][0] V7)}))
                           (V6[2][0] V7)
@@ -1598,11 +1433,7 @@ main = (with {
                               (fun [V30]
                                 <1: (forall [(0: Type) (1: Type) (2: Type)] {V18[0], (fun
                                       [V19]
-                                      ((__mon_bind @ [Ty({}), Ty((Int -> (Mon {} Int ->
-                                      (Mon {} {Int, Int}))) -> (Mon {} Int ->
-                                      (Mon {} {Int, Int}))), Ty(Int -> (Mon {} { Int
-                                                                               , Int
-                                                                               }))])
+                                      ((__mon_bind @ [..])
                                         (V3[2][0] V18[1] V17)
                                         (fun [V32] (V32 V19)))), (fun [V31, V33] <0: V31>)
                                     })>)) V16))))))

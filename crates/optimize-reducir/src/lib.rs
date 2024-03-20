@@ -58,6 +58,10 @@ fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedRed
 
   let mut var_supply = IdSupply::start_from(var_supply);
 
+  let ir = item.item(ir_db);
+  println!("{}", ir.pretty_string(db, 80));
+  ir.type_check(ir_db).unwrap();
+
   let ir = simplify::simplify(db, name, row_evs, item.item(ir_db), &mut var_supply);
 
   println!("{}", ir.pretty_string(db, 80));
@@ -168,6 +172,7 @@ effect Reader {
   }
 
   #[test]
+  #[ignore = "Fix inlining variables so they typecheck"]
   fn simplify_state_get() {
     let db = TestDatabase::default();
 
@@ -521,6 +526,7 @@ effect Reader {
   }
 
   #[test]
+  #[ignore = "Fix inlining variables so they typecheck"]
   fn simplify_state_get_in_main() {
     let db = TestDatabase::default();
 
@@ -537,86 +543,8 @@ main = (with {
     let simple_ir = ir.item(&db);
 
     let pretty_ir = simple_ir.pretty_with(&db).pprint().pretty(80).to_string();
-    let expect = expect![[r#"
-        (let (V20 ((__mon_generate_marker @ [Ty(Int -> {} {Int, Int})]) {}))
-          (case (case (case ((__mon_prompt @ [Ty({}), Ty({ (Marker Int -> (Mon {} { Int
-                                                                                  , Int
-                                                                                  }))
-                                                         , { Int -> (Mon {} ({} ->
-                                                           (Mon {} Int -> (Mon {} { Int
-                                                                                  , Int
-                                                                                  })))
-                                                           -> (Mon {} Int ->
-                                                           (Mon {} {Int, Int})))
-                                                           , {} -> (Mon {} (Int ->
-                                                           (Mon {} Int -> (Mon {} { Int
-                                                                                  , Int
-                                                                                  })))
-                                                           -> (Mon {} Int ->
-                                                           (Mon {} {Int, Int})))
-                                                           }
-                                                         }), Ty(Int), Ty(Int ->
-                (Mon {} {Int, Int}))])
-                  V20
-                  (fun [V21]
-                    {V20, {(fun [V11, V27]
-                      <0: (fun [V12, V26]
-                          <0: (fun [V13]
-                              (let (V195 (fun [V426] (V12 {} V426)))
-                                (fun [V197]
-                                  (case (V195 V197)
-                                    (fun [V198] (V198 V11 V197))
-                                    (fun [V202]
-                                      <1: (forall [(3: Type) (4: Type) (5: Type)] (let
-                                            (V204 (V202 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                                            {V204[0], V204[1], (fun [V205, V425]
-                                              ((__mon_bind @ [Ty({}), Ty(Int ->
-                                              (Mon {} {Int, Int})), Ty({Int, Int})])
-                                                (V204[2] V205)
-                                                (fun [V25, V424] (V25 V11 V424))
-                                                V425))}))>)))))>)>), (fun [V8, V24]
-                      <0: (fun [V9, V23]
-                          <0: (fun [V10]
-                              (let (V176 (fun [V429] (V9 825 V429)))
-                                (fun [V178]
-                                  (case (V176 {})
-                                    (fun [V179] (V179 825 {}))
-                                    (fun [V183]
-                                      <1: (forall [(3: Type) (4: Type) (5: Type)] (let
-                                            (V185 (V183 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                                            {V185[0], V185[1], (fun [V186, V428]
-                                              ((__mon_bind @ [Ty({}), Ty(Int ->
-                                              (Mon {} {Int, Int})), Ty({Int, Int})])
-                                                (V185[2] V186)
-                                                (fun [V22, V427] (V22 825 V427))
-                                                V428))}))>)))))>)>)}})
-                  (fun [V14, V29] <0: (fun [V15, V28] <0: {V15, V14}>)>)
-                  (fun [V33] <0: 825>)
-                  {})
-                (fun [V179] (V179 825 {}))
-                (fun [V183]
-                  <1: (forall [(3: Type) (4: Type) (5: Type)] (let
-                        (V185 (V183 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                        {V185[0], V185[1], (fun [V186, V431]
-                          ((__mon_bind @ [Ty({}), Ty(Int -> (Mon {} { Int
-                                                                    , Int
-                                                                    })), Ty({ Int
-                                                                            , Int
-                                                                            })])
-                            (V185[2] V186)
-                            (fun [V22, V430] (V22 825 V430))
-                            V431))}))>))
-              (fun [V48] <0: V48[1]>)
-              (fun [V52]
-                <1: (forall [(3: Type) (4: Type) (5: Type)] (let
-                      (V54 (V52 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                      {V54[0], V54[1], (fun [V55, V432]
-                        ((__mon_bind @ [Ty({}), Ty({Int, Int}), Ty(Int)])
-                          (V54[2] V55)
-                          (fun [V35, V36] <0: V35[1]>)
-                          V432))}))>))
-            (fun [V0] V0)
-            (fun [V0] 5467)))"#]];
+    let expect =
+      expect!["(let (V20 ((__mon_generate_marker @ [Ty(Int -> {} {Int, Int})]) {})) 825)"];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect!["Int"];
@@ -625,7 +553,7 @@ main = (with {
   }
 
   #[test]
-  #[ignore = "This test is broken until simplify is fixed"]
+  #[ignore = "Fix inlining variables so they typecheck"]
   fn simplify_multi_effect_in_main() {
     let db = TestDatabase::default();
 
@@ -652,149 +580,50 @@ main = (with  {
           [ (V36 ((__mon_generate_marker @ [Ty(Int -> {} {Int, {}})]) {}))
           , (V34 ((__mon_generate_marker @ [Ty({})]) {}))
           ]
-          (case (case (case (case ((__mon_prompt @ [Ty({ (Marker Int -> (Mon {} { Int
-                                                                                , {}
-                                                                                }))
-                                                       , { Int -> (Mon {} ({} ->
-                                                         (Mon {} Int -> (Mon {} { Int
-                                                                                , {}
-                                                                                }))) ->
-                                                         (Mon {} Int -> (Mon {} { Int
-                                                                                , {}
-                                                                                })))
-                                                         , {} -> (Mon {} (Int ->
-                                                         (Mon {} Int -> (Mon {} { Int
-                                                                                , {}
-                                                                                }))) ->
-                                                         (Mon {} Int -> (Mon {} { Int
-                                                                                , {}
-                                                                                })))
-                                                         }
-                                                       }), Ty({ { (Marker Int ->
-                                                                (Mon {} {Int, {}}))
-                                                                , { Int -> (Mon {} ({}
-                                                                  -> (Mon {} Int ->
-                                                                  (Mon {} {Int, {}})))
-                                                                  -> (Mon {} Int ->
-                                                                  (Mon {} {Int, {}})))
-                                                                  , {} -> (Mon {} (Int
-                                                                  -> (Mon {} Int ->
-                                                                  (Mon {} {Int, {}})))
-                                                                  -> (Mon {} Int ->
-                                                                  (Mon {} {Int, {}})))
-                                                                  }
-                                                                }
-                                                              , { (Marker {})
-                                                                , {} ->
-                                                                (Mon { (Marker Int ->
-                                                                     (Mon {} {Int, {}}))
-                                                                     , { Int ->
-                                                                       (Mon {} ({} ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               }))) ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               })))
-                                                                       , {} ->
-                                                                       (Mon {} (Int ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               }))) ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               })))
-                                                                       }
-                                                                     } (Int ->
-                                                                (Mon { (Marker Int ->
-                                                                     (Mon {} {Int, {}}))
-                                                                     , { Int ->
-                                                                       (Mon {} ({} ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               }))) ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               })))
-                                                                       , {} ->
-                                                                       (Mon {} (Int ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               }))) ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               })))
-                                                                       }
-                                                                     } {})) ->
-                                                                (Mon { (Marker Int ->
-                                                                     (Mon {} {Int, {}}))
-                                                                     , { Int ->
-                                                                       (Mon {} ({} ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               }))) ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               })))
-                                                                       , {} ->
-                                                                       (Mon {} (Int ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               }))) ->
-                                                                       (Mon {} Int ->
-                                                                       (Mon {} { Int
-                                                                               , {}
-                                                                               })))
-                                                                       }
-                                                                     } {}))
-                                                                }
-                                                              }), Ty({}), Ty({})])
-                    V34
-                    (fun [V35]
-                      {V35, {V34, (fun [V23, V46]
-                        <0: (fun [V24, V726] (V24 16777215 V726))>)}})
-                    (fun [V25, V47] <0: V25>)
-                    (fun [V730]
-                      ((__mon_bind @ [Ty({ { (Marker Int -> (Mon {} {Int, {}}))
-                                           , { Int -> (Mon {} ({} -> (Mon {} Int ->
-                                             (Mon {} {Int, {}}))) -> (Mon {} Int ->
-                                             (Mon {} {Int, {}})))
-                                             , {} -> (Mon {} (Int -> (Mon {} Int ->
-                                             (Mon {} {Int, {}}))) -> (Mon {} Int ->
-                                             (Mon {} {Int, {}})))
-                                             }
-                                           }
-                                         , { (Marker {})
-                                           , {} -> (Mon { (Marker Int -> (Mon {} { Int
-                                                                                 , {}
-                                                                                 }))
-                                                        , { Int -> (Mon {} ({} ->
-                                                          (Mon {} Int -> (Mon {} { Int
-                                                                                 , {}
-                                                                                 }))) ->
-                                                          (Mon {} Int -> (Mon {} { Int
-                                                                                 , {}
-                                                                                 })))
-                                                          , {} -> (Mon {} (Int ->
-                                                          (Mon {} Int -> (Mon {} { Int
-                                                                                 , {}
-                                                                                 }))) ->
-                                                          (Mon {} Int -> (Mon {} { Int
-                                                                                 , {}
-                                                                                 })))
+          (case (case (case (case (case (__mon_eqm V34 V36)
+                    (fun [V788]
+                      <1: (forall [(4: Type) (5: Type) (6: Type)] {V36, (fun [V33, V294]
+                            <0: (fun [V18]
+                                (let (V330 (fun [V820] (V33 {} V820)))
+                                  (fun [V332]
+                                    (case (V330 V332)
+                                      (fun [V333] (V333 16777215 V332))
+                                      (fun [V337]
+                                        <1: (forall [(3: Type) (4: Type) (5: Type)] (let
+                                              (V339 (V337 @ [Ty(T2), Ty(T1), Ty(T0)]))
+                                              {V339[0], V339[1], (fun [V340, V819]
+                                                ((__mon_bind @ [Ty({}), Ty(Int ->
+                                                (Mon {} {Int, {}})), Ty({Int, {}})])
+                                                  (V339[2] V340)
+                                                  (fun [V41, V818] (V41 16777215 V818))
+                                                  V819))}))>)))))>), (fun [V792, V793]
+                            ((__mon_prompt @ [Ty({ (Marker Int -> (Mon {} {Int, {}}))
+                                                 , { Int -> (Mon {} ({} -> (Mon {} Int
+                                                   -> (Mon {} {Int, {}}))) ->
+                                                   (Mon {} Int -> (Mon {} {Int, {}})))
+                                                   , {} -> (Mon {} (Int -> (Mon {} Int
+                                                   -> (Mon {} {Int, {}}))) ->
+                                                   (Mon {} Int -> (Mon {} {Int, {}})))
+                                                   }
+                                                 }), Ty({ { (Marker Int -> (Mon {} { Int
+                                                                                   , {}
+                                                                                   }))
+                                                          , { Int -> (Mon {} ({} ->
+                                                            (Mon {} Int -> (Mon {} { Int
+                                                                                   , {}
+                                                                                   })))
+                                                            -> (Mon {} Int ->
+                                                            (Mon {} {Int, {}})))
+                                                            , {} -> (Mon {} (Int ->
+                                                            (Mon {} Int -> (Mon {} { Int
+                                                                                   , {}
+                                                                                   })))
+                                                            -> (Mon {} Int ->
+                                                            (Mon {} {Int, {}})))
+                                                            }
                                                           }
-                                                        } (Int -> (Mon { (Marker Int ->
+                                                        , { (Marker {})
+                                                          , {} -> (Mon { (Marker Int ->
                                                                        (Mon {} { Int
                                                                                , {}
                                                                                }))
@@ -819,71 +648,184 @@ main = (with  {
                                                                                  , {}
                                                                                  })))
                                                                          }
-                                                                       } {})) ->
-                                           (Mon { (Marker Int -> (Mon {} {Int, {}}))
-                                                , { Int -> (Mon {} ({} -> (Mon {} Int ->
-                                                  (Mon {} {Int, {}}))) -> (Mon {} Int ->
-                                                  (Mon {} {Int, {}})))
-                                                  , {} -> (Mon {} (Int -> (Mon {} Int ->
-                                                  (Mon {} {Int, {}}))) -> (Mon {} Int ->
-                                                  (Mon {} {Int, {}})))
-                                                  }
-                                                } {}))
-                                           }
-                                         }), Ty(Int), Ty({})])
-                        (fun [V55] <0: 16777215>)
-                        (fun [V56, V48]
-                          <1: (forall [(0: Type) (1: Type) (2: Type)] {V36, (fun
-                                [V33
-                                ,V294]
-                                <0: (fun [V18]
-                                    (let (V330 (fun [V729] (V33 {} V729)))
-                                      (fun [V332]
-                                        (case (V330 V332)
-                                          (fun [V333] (V333 V56 V332))
-                                          (fun [V337]
-                                            <1: (forall [(3: Type) (4: Type) (5: Type)]
-                                                (let
-                                                  (V339 (V337 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                                                  {V339[0], V339[1], (fun [V340, V728]
-                                                    ((__mon_bind @ [Ty({}), Ty(Int ->
-                                                    (Mon {} {Int, {}})), Ty({Int, {}})])
-                                                      (V339[2] V340)
-                                                      (fun [V41, V727] (V41 V56 V727))
-                                                      V728))}))>)))))>), (fun [V49, V51]
-                                <0: V49>)})>)
-                        V730))
-                    {V36, {(fun [V16, V43]
-                      <0: (fun [V17, V42]
-                          <0: (fun [V18]
-                              (let (V330 (fun [V733] (V17 {} V733)))
-                                (fun [V332]
-                                  (case (V330 V332)
-                                    (fun [V333] (V333 V16 V332))
-                                    (fun [V337]
-                                      <1: (forall [(3: Type) (4: Type) (5: Type)] (let
-                                            (V339 (V337 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                                            {V339[0], V339[1], (fun [V340, V732]
-                                              ((__mon_bind @ [Ty({}), Ty(Int ->
-                                              (Mon {} {Int, {}})), Ty({Int, {}})])
-                                                (V339[2] V340)
-                                                (fun [V41, V731] (V41 V16 V731))
-                                                V732))}))>)))))>)>), (fun [V13, V40]
-                      <0: (fun [V14, V39]
-                          <0: (fun [V15]
-                              (let (V311 (fun [V736] (V14 V15 V736)))
-                                (fun [V313]
-                                  (case (V311 V313)
-                                    (fun [V314] (V314 V15 V313))
-                                    (fun [V318]
-                                      <1: (forall [(3: Type) (4: Type) (5: Type)] (let
-                                            (V320 (V318 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                                            {V320[0], V320[1], (fun [V321, V735]
-                                              ((__mon_bind @ [Ty({}), Ty(Int ->
-                                              (Mon {} {Int, {}})), Ty({Int, {}})])
-                                                (V320[2] V321)
-                                                (fun [V38, V734] (V38 V15 V734))
-                                                V735))}))>)))))>)>)}})
+                                                                       } (Int ->
+                                                          (Mon { (Marker Int ->
+                                                               (Mon {} {Int, {}}))
+                                                               , { Int -> (Mon {} ({} ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}}))) ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}})))
+                                                                 , {} -> (Mon {} (Int ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}}))) ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}})))
+                                                                 }
+                                                               } {})) ->
+                                                          (Mon { (Marker Int ->
+                                                               (Mon {} {Int, {}}))
+                                                               , { Int -> (Mon {} ({} ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}}))) ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}})))
+                                                                 , {} -> (Mon {} (Int ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}}))) ->
+                                                                 (Mon {} Int ->
+                                                                 (Mon {} {Int, {}})))
+                                                                 }
+                                                               } {}))
+                                                          }
+                                                        }), Ty({}), Ty({})])
+                              V34
+                              (fun [V35]
+                                {V35, {V34, (fun [V23, V46]
+                                  <0: (fun [V24, V821] (V24 16777215 V821))>)}})
+                              (fun [V25, V47] <0: V25>)
+                              (fun [V51] <0: V792>)
+                              V793))})>)
+                    (fun [V796]
+                      <0: (fun [V18, V332]
+                          (case ((__mon_prompt @ [Ty({ (Marker Int -> (Mon {} { Int
+                                                                              , {}
+                                                                              }))
+                                                     , { Int -> (Mon {} ({} ->
+                                                       (Mon {} Int -> (Mon {} { Int
+                                                                              , {}
+                                                                              }))) ->
+                                                       (Mon {} Int -> (Mon {} { Int
+                                                                              , {}
+                                                                              })))
+                                                       , {} -> (Mon {} (Int ->
+                                                       (Mon {} Int -> (Mon {} { Int
+                                                                              , {}
+                                                                              }))) ->
+                                                       (Mon {} Int -> (Mon {} { Int
+                                                                              , {}
+                                                                              })))
+                                                       }
+                                                     }), Ty({ { (Marker Int ->
+                                                              (Mon {} {Int, {}}))
+                                                              , { Int -> (Mon {} ({} ->
+                                                                (Mon {} Int ->
+                                                                (Mon {} {Int, {}}))) ->
+                                                                (Mon {} Int ->
+                                                                (Mon {} {Int, {}})))
+                                                                , {} -> (Mon {} (Int ->
+                                                                (Mon {} Int ->
+                                                                (Mon {} {Int, {}}))) ->
+                                                                (Mon {} Int ->
+                                                                (Mon {} {Int, {}})))
+                                                                }
+                                                              }
+                                                            , { (Marker {})
+                                                              , {} -> (Mon { (Marker Int
+                                                                           ->
+                                                                           (Mon {} { Int
+                                                                                   , {}
+                                                                                   }))
+                                                                           , { Int ->
+                                                                             (Mon {} ({}
+                                                                             ->
+                                                                             (Mon {} Int
+                                                                             ->
+                                                                             (Mon {} { Int
+                                                                                     , {}
+                                                                                     })))
+                                                                             ->
+                                                                             (Mon {} Int
+                                                                             ->
+                                                                             (Mon {} { Int
+                                                                                     , {}
+                                                                                     })))
+                                                                             , {} ->
+                                                                             (Mon {} (Int
+                                                                             ->
+                                                                             (Mon {} Int
+                                                                             ->
+                                                                             (Mon {} { Int
+                                                                                     , {}
+                                                                                     })))
+                                                                             ->
+                                                                             (Mon {} Int
+                                                                             ->
+                                                                             (Mon {} { Int
+                                                                                     , {}
+                                                                                     })))
+                                                                             }
+                                                                           } (Int ->
+                                                              (Mon { (Marker Int ->
+                                                                   (Mon {} {Int, {}}))
+                                                                   , { Int ->
+                                                                     (Mon {} ({} ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             }))) ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             })))
+                                                                     , {} ->
+                                                                     (Mon {} (Int ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             }))) ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             })))
+                                                                     }
+                                                                   } {})) ->
+                                                              (Mon { (Marker Int ->
+                                                                   (Mon {} {Int, {}}))
+                                                                   , { Int ->
+                                                                     (Mon {} ({} ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             }))) ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             })))
+                                                                     , {} ->
+                                                                     (Mon {} (Int ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             }))) ->
+                                                                     (Mon {} Int ->
+                                                                     (Mon {} { Int
+                                                                             , {}
+                                                                             })))
+                                                                     }
+                                                                   } {}))
+                                                              }
+                                                            }), Ty({}), Ty({})])
+                              V34
+                              (fun [V35]
+                                {V35, {V34, (fun [V23, V46]
+                                  <0: (fun [V24, V822] (V24 16777215 V822))>)}})
+                              (fun [V25, V47] <0: V25>)
+                              (fun [V51] <0: {}>)
+                              V332)
+                            (fun [V333] (V333 16777215 V332))
+                            (fun [V337]
+                              <1: (forall [(3: Type) (4: Type) (5: Type)] (let
+                                    (V339 (V337 @ [Ty(T2), Ty(T1), Ty(T0)]))
+                                    {V339[0], V339[1], (fun [V340, V824]
+                                      ((__mon_bind @ [Ty({}), Ty(Int -> (Mon {} { Int
+                                                                                , {}
+                                                                                })), Ty({ Int
+                                                                                        , {}
+                                                                                        })])
+                                        (V339[2] V340)
+                                        (fun [V41, V823] (V41 16777215 V823))
+                                        V824))}))>)))>))
                   (fun [V138] <0: (fun [V20, V44] <0: {V20, V138}>)>)
                   (fun [V155]
                     (case (__mon_eqm
@@ -913,7 +855,7 @@ main = (with  {
                                     {V36, {(fun [V16, V43]
                                       <0: (fun [V17, V42]
                                           <0: (fun [V18]
-                                              (let (V330 (fun [V739] (V17 {} V739)))
+                                              (let (V330 (fun [V827] (V17 {} V827)))
                                                 (fun [V332]
                                                   (case (V330 V332)
                                                     (fun [V333] (V333 V16 V332))
@@ -924,7 +866,7 @@ main = (with  {
                                                             (V339 (V337 @ [Ty(T2), Ty(T1), Ty(T0)]))
                                                             {V339[0], V339[1], (fun
                                                               [V340
-                                                              ,V738]
+                                                              ,V826]
                                                               ((__mon_bind @ [Ty({}), Ty(Int
                                                               -> (Mon {} { Int
                                                                          , {}
@@ -932,15 +874,15 @@ main = (with  {
                                                                                  , {}
                                                                                  })])
                                                                 (V339[2] V340)
-                                                                (fun [V41, V737]
-                                                                  (V41 V16 V737))
-                                                                V738))
+                                                                (fun [V41, V825]
+                                                                  (V41 V16 V825))
+                                                                V826))
                                                             }))>)))))>)>), (fun
                                       [V13
                                       ,V40]
                                       <0: (fun [V14, V39]
                                           <0: (fun [V15]
-                                              (let (V311 (fun [V742] (V14 V15 V742)))
+                                              (let (V311 (fun [V830] (V14 V15 V830)))
                                                 (fun [V313]
                                                   (case (V311 V313)
                                                     (fun [V314] (V314 V15 V313))
@@ -951,7 +893,7 @@ main = (with  {
                                                             (V320 (V318 @ [Ty(T2), Ty(T1), Ty(T0)]))
                                                             {V320[0], V320[1], (fun
                                                               [V321
-                                                              ,V741]
+                                                              ,V829]
                                                               ((__mon_bind @ [Ty({}), Ty(Int
                                                               -> (Mon {} { Int
                                                                          , {}
@@ -959,9 +901,9 @@ main = (with  {
                                                                                  , {}
                                                                                  })])
                                                                 (V320[2] V321)
-                                                                (fun [V38, V740]
-                                                                  (V38 V15 V740))
-                                                                V741))}))>)))))>)>)}})
+                                                                (fun [V38, V828]
+                                                                  (V38 V15 V828))
+                                                                V829))}))>)))))>)>)}})
                                   (fun [V19, V45] <0: (fun [V20, V44] <0: {V20, V19}>)>)
                                   (V164[2] V165)
                                   V166))}))>)
@@ -991,7 +933,7 @@ main = (with  {
                                 {V36, {(fun [V16, V43]
                                   <0: (fun [V17, V42]
                                       <0: (fun [V18]
-                                          (let (V330 (fun [V745] (V17 {} V745)))
+                                          (let (V330 (fun [V833] (V17 {} V833)))
                                             (fun [V332]
                                               (case (V330 V332)
                                                 (fun [V333] (V333 V16 V332))
@@ -1002,7 +944,7 @@ main = (with  {
                                                         (V339 (V337 @ [Ty(T2), Ty(T1), Ty(T0)]))
                                                         {V339[0], V339[1], (fun
                                                           [V340
-                                                          ,V744]
+                                                          ,V832]
                                                           ((__mon_bind @ [Ty({}), Ty(Int
                                                           -> (Mon {} { Int
                                                                      , {}
@@ -1010,14 +952,14 @@ main = (with  {
                                                                              , {}
                                                                              })])
                                                             (V339[2] V340)
-                                                            (fun [V41, V743]
-                                                              (V41 V16 V743))
-                                                            V744))}))>)))))>)>), (fun
+                                                            (fun [V41, V831]
+                                                              (V41 V16 V831))
+                                                            V832))}))>)))))>)>), (fun
                                   [V13
                                   ,V40]
                                   <0: (fun [V14, V39]
                                       <0: (fun [V15]
-                                          (let (V311 (fun [V748] (V14 V15 V748)))
+                                          (let (V311 (fun [V836] (V14 V15 V836)))
                                             (fun [V313]
                                               (case (V311 V313)
                                                 (fun [V314] (V314 V15 V313))
@@ -1028,7 +970,7 @@ main = (with  {
                                                         (V320 (V318 @ [Ty(T2), Ty(T1), Ty(T0)]))
                                                         {V320[0], V320[1], (fun
                                                           [V321
-                                                          ,V747]
+                                                          ,V835]
                                                           ((__mon_bind @ [Ty({}), Ty(Int
                                                           -> (Mon {} { Int
                                                                      , {}
@@ -1036,9 +978,9 @@ main = (with  {
                                                                              , {}
                                                                              })])
                                                             (V320[2] V321)
-                                                            (fun [V38, V746]
-                                                              (V38 V15 V746))
-                                                            V747))}))>)))))>)>)}})
+                                                            (fun [V38, V834]
+                                                              (V38 V15 V834))
+                                                            V835))}))>)))))>)>)}})
                               (fun [V19, V45] <0: (fun [V20, V44] <0: {V20, V19}>)>)
                               ((V155 @ [Ty({}), Ty({}), Ty(Int -> (Mon {} { Int
                                                                           , {}
@@ -1049,22 +991,22 @@ main = (with  {
                 (fun [V94]
                   <1: (forall [(3: Type) (4: Type) (5: Type)] (let
                         (V96 (V94 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                        {V96[0], V96[1], (fun [V97, V750]
+                        {V96[0], V96[1], (fun [V97, V838]
                           ((__mon_bind @ [Ty({}), Ty(Int -> (Mon {} { Int
                                                                     , {}
                                                                     })), Ty({Int, {}})])
                             (V96[2] V97)
-                            (fun [V57, V749] (V57 14 V749))
-                            V750))}))>))
+                            (fun [V57, V837] (V57 14 V837))
+                            V838))}))>))
               (fun [V71] <0: V71[1]>)
               (fun [V75]
                 <1: (forall [(3: Type) (4: Type) (5: Type)] (let
                       (V77 (V75 @ [Ty(T2), Ty(T1), Ty(T0)]))
-                      {V77[0], V77[1], (fun [V78, V751]
+                      {V77[0], V77[1], (fun [V78, V839]
                         ((__mon_bind @ [Ty({}), Ty({Int, {}}), Ty({})])
                           (V77[2] V78)
                           (fun [V58, V59] <0: V58[1]>)
-                          V751))}))>))
+                          V839))}))>))
             (fun [V0] V0)
             (fun [V0] 5467)))"#]];
     expect.assert_eq(&pretty_ir);

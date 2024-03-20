@@ -891,7 +891,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
       ));
 
       let ir = ReducIr::app(
-        ReducIr::ty_app(ir, ty_vals_iter.into_iter().rev().map(ReducIrTyApp::Ty)),
+        ReducIr::ty_app(ir, ty_vals_iter.into_iter().map(ReducIrTyApp::Ty)),
         [ReducIr::new(Struct(vec![]))],
       );
       solved.push((param, ir));
@@ -1080,10 +1080,16 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         let goal = expect_prod_ty(&self.db, self.lookup_term(*subterm).ty);
         let other = expect_prod_ty(&self.db, self.lookup_term(term).ty);
 
-        let (param, _) = self.ev_map[&PartialEv::Data { goal, other }];
-        let idx = match direction {
-          Direction::Left => 2,
-          Direction::Right => 3,
+        let (param, full_ev) = self.ev_map[&PartialEv::Data { goal, other }];
+        let idx = match full_ev {
+          Evidence::DataRow { left, .. } => {
+            if other == left {
+              2
+            } else {
+              3
+            }
+          }
+          _ => unreachable!(),
         };
 
         let prj = ReducIr::field_proj(0, ReducIr::field_proj(idx, ReducIr::var(param)));

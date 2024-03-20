@@ -297,14 +297,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
         .append(arena.space())
         .append(arena.as_string("@"))
         .append(arena.space())
-        .append(
-          arena
-            .intersperse(
-              tys.iter().map(|ty| ty.pretty(db, arena)),
-              arena.text(",").append(arena.space()),
-            )
-            .brackets(),
-        )
+        .append(arena.text("..").brackets())
         .parens(),
       Coerce(ty, body) => docs![
         arena,
@@ -351,7 +344,18 @@ impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> 
             .append(a.text(":"))
             .append(a.softline())
             .append(right_ty.pretty(db, a)),
-        ),
+        )
+        .append(a.line())
+        .append({
+          let mut actual = String::new();
+          left_ty.pretty(db, a).render_fmt(80, &mut actual).unwrap();
+          let mut expected = String::new();
+          right_ty
+            .pretty(db, a)
+            .render_fmt(80, &mut expected)
+            .unwrap();
+          a.text(difference::Changeset::new(&actual, &expected, "").to_string())
+        }),
       ReducIrTyErr::ArgMismatch {
         fun_ir,
         arg_ir,
