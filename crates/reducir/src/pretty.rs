@@ -292,7 +292,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
           .nest(2)
       ]
       .parens(),
-      TyApp(body, tys) => body
+      TyApp(body, _) => body
         .pretty(db, arena)
         .append(arena.space())
         .append(arena.as_string("@"))

@@ -70,9 +70,7 @@ impl EffectNames {
   }
 
   /// All effect operations, in definition order.
-  pub fn iter(
-    &self,
-  ) -> impl '_ + Iterator<Item = EffectOpName> + ExactSizeIterator + FusedIterator {
+  pub fn iter(&self) -> impl '_ + ExactSizeIterator<Item = EffectOpName> + FusedIterator {
     self.ops.keys().copied()
   }
 }

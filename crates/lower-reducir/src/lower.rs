@@ -3,7 +3,7 @@ use base::{
   id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
   id_converter::IdConverter,
   modules::Module,
-  pretty::{PrettyErrorWithDb, PrettyWithCtx},
+  pretty::PrettyErrorWithDb,
 };
 use la_arena::Idx;
 use reducir::{
@@ -1073,10 +1073,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           ],
         )
       }
-      Project {
-        direction,
-        term: subterm,
-      } => {
+      Project { term: subterm, .. } => {
         let goal = expect_prod_ty(&self.db, self.lookup_term(*subterm).ty);
         let other = expect_prod_ty(&self.db, self.lookup_term(term).ty);
 

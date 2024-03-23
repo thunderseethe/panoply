@@ -11,7 +11,7 @@ use std::fmt;
 use std::ops::Deref;
 use ReducIrKind::*;
 
-use crate::ty::{ReducIrTyKind, ReducIrVarTy};
+use crate::ty::ReducIrVarTy;
 
 use self::{
   subst::SubstTy,

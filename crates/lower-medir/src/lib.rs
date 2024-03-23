@@ -81,11 +81,9 @@ mod tests {
   use base::{
     file::{FileId, SourceFile, SourceFileSet},
     pretty::PrettyWithCtx,
-    Db as BaseDb,
   };
   use expect_test::expect;
-  use medir::{MedIr, MedIrModule};
-  use parser::Db as ParseDb;
+  use medir::MedIrModule;
 
   use crate::Db;
 

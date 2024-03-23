@@ -3,7 +3,7 @@ use std::ops::Deref;
 
 use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
-use base::pretty::{PrettyErrorWithDb, PrettyWithCtx};
+use base::pretty::PrettyErrorWithDb;
 use reducir::mon::MonReducIrRowEv;
 use reducir::ty::{
   IntoPayload, Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
@@ -11,7 +11,7 @@ use reducir::ty::{
 };
 use reducir::{
   default_endotraverse_ir, Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrItemOccurence,
-  ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck, P,
+  ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
 };
 use rustc_hash::FxHashMap;
 
@@ -80,13 +80,7 @@ impl ReducIrEndoFold for Simplify<'_> {
           let subst = apps.into_iter().fold(Subst::Inc(0), |subst, app| {
             subst.cons(app.into_payload(self.db))
           });
-          //println!("{}", subst.pretty_string(self.db, 81));
-          let ir = body.subst(self.db, subst);
-          /*#[cfg(test)]
-          {
-            ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
-          }*/
-          ir
+          body.subst(self.db, subst)
         };
         ReducIr::ty_app(body, ty_app)
       }
@@ -97,8 +91,6 @@ impl ReducIrEndoFold for Simplify<'_> {
       Locals(binds, body) => {
         let occs = occurrence_analysis(&Locals(binds.clone(), body.clone()));
         let mut env = FxHashMap::default();
-        //#[cfg(test)]
-        //let err_binds = binds.clone();
         let binds = binds
           .into_iter()
           .filter_map(|bind| {
@@ -118,14 +110,6 @@ impl ReducIrEndoFold for Simplify<'_> {
           })
           .collect::<Vec<_>>();
         let ir = body.fold(&mut Inline::new(self.db, &mut env)).fold(self);
-        /*#[cfg(test)]
-        ir.type_check(self.db)
-          .map_err_pretty_with(self.db)
-          .map_err(|err| {
-            println!("{}", Locals(err_binds, body).pretty_string(self.db, 80));
-            err
-          })
-          .unwrap();*/
         ReducIr::locals(binds, ir)
       }
       App(head, spine) => {
@@ -180,8 +164,6 @@ impl ReducIrEndoFold for Simplify<'_> {
           // Let floating for app
           Locals(binds, body) => {
             let ir = ReducIr::new(App(body.clone(), spine));
-            //#[cfg(test)]
-            //ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
             ReducIr::locals(binds.iter().cloned(), self.traverse_ir(&ir))
           }
           Item(occ)
@@ -195,7 +177,7 @@ impl ReducIrEndoFold for Simplify<'_> {
               ReducIr::new(Struct(vec![])),
             )
           }
-          TyApp(new_head, ty_apps) => {
+          /*TyApp(new_head, ty_apps) => {
             /*if let Item(occ) = new_head.kind() {
               // Inline saturated prompt calls that have a literal for their evv parameter.
               // We can be confident they'll make progress
@@ -245,7 +227,7 @@ impl ReducIrEndoFold for Simplify<'_> {
               }
             }*/
             ReducIr::new(App(head, spine))
-          }
+          }*/
           _ => ReducIr::new(App(head, spine)),
         };
         ReducIr::locals(app_binds, app)
@@ -258,8 +240,6 @@ impl ReducIrEndoFold for Simplify<'_> {
         // Let floating for case
         Locals(binds, body) => {
           let ir = ReducIr::case(ty, body.clone().into_inner(), branches.iter().cloned());
-          //#[cfg(test)]
-          //ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
           ReducIr::locals(binds.iter().cloned(), self.traverse_ir(&ir))
         }
         _ => ReducIr::new(Case(ty, discr, branches)),
@@ -525,9 +505,6 @@ pub(crate) fn simplify(
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
-  //#[cfg(test)]
-  //ir.type_check(db).map_err_pretty_with(db).unwrap();
-
   let mut simple = Simplify {
     db,
     builtin_evs: builtin_evs.clone(),
@@ -538,21 +515,14 @@ pub(crate) fn simplify(
   };
 
   let mut ir = ir.clone();
-  let mut i = 0;
   loop {
     ir = ir.fold(&mut simple);
     if !simple.inlined_term {
       break;
     }
-    //ir.type_check(db).map_err_pretty_with(db).unwrap();
-    println!("{}: {}\n", i, ir.pretty_string(db, 80));
-    i += 1;
     simple.inlined_term = false;
   }
   // TODO: Figure out a better way to do this.
-  /*ir.fold(&mut simple)
-  .fold(&mut simple)
-  .fold(&mut simple)*/
   ir.fold(&mut EtaExpand {
     db,
     supply,

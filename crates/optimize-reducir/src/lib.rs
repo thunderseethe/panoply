@@ -1,10 +1,8 @@
-use std::default;
-
 use base::{
   id::{IdSupply, TermName},
   ident::Ident,
   modules::Module,
-  pretty::{PrettyErrorWithDb, PrettyWithCtx},
+  pretty::PrettyErrorWithDb,
 };
 use reducir::{
   mon::{MonReducIrItem, MonReducIrModule},
@@ -61,8 +59,6 @@ fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedRed
   let var_supply = item.var_supply(ir_db);
 
   let mut var_supply = IdSupply::start_from(var_supply);
-
-  let ir = item.item(ir_db);
 
   let ir = simplify::simplify(db, name, row_evs, item.item(ir_db), &mut var_supply);
 
