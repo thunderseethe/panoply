@@ -12,7 +12,6 @@ tc.workspace = true
 ty.workspace = true
 test-utils.workspace = true
 nameres.workspace = true
-backtrace-on-stack-overflow = "0.3.0"
 expect-test.workspace = true
 pretty.workspace = true
 

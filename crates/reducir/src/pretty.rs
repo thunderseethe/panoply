@@ -298,6 +298,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
         .append(arena.as_string("@"))
         .append(arena.space())
         .append(arena.text("..").brackets())
+        //.append(arena.intersperse(tys.iter().map(|ty| ty.pretty(db, arena)), arena.softline().append(", ")).brackets())
         .parens(),
       Coerce(ty, body) => docs![
         arena,

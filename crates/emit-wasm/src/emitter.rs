@@ -285,6 +285,7 @@ pub(crate) fn emit_wasm_module(
 
   for item in medir_module.items(medir_db).iter() {
     let defn = item.item(medir_db);
+    println!("{}", defn.pretty_string(medir_db, 80));
     let ty_indx = type_sect.emit_fun_ty(db, defn.type_of(db));
     let indx = funcs.len();
     funcs.function(ty_indx);

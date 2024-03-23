@@ -67,9 +67,13 @@ pub struct Args {
 pub fn canonicalize_path_set<P: AsRef<Path>>(
   paths: impl IntoIterator<Item = P>,
 ) -> eyre::Result<Vec<PathBuf>> {
+  let cwd = std::env::current_dir()?;
+  //println!("{:?}", std::env::current_dir());
   let mut uniq_files = paths
     .into_iter()
-    .map(|path| path.as_ref().canonicalize().map_err(Into::into))
+    .map(|path| path.as_ref().canonicalize()
+      .map(|path| if path.is_relative() { cwd.join(path) } else { path })
+      .map_err(Into::into))
     .collect::<eyre::Result<Vec<_>>>()?;
 
   uniq_files.dedup();
@@ -84,6 +88,7 @@ pub fn create_source_file_set(
   let files = paths
     .into_iter()
     .map(|path| {
+      println!("{}", path.display());
       let contents = std::fs::read_to_string(&path)?;
       let file = SourceFile::new(db, FileId::new(db, path), contents);
       Ok(file)

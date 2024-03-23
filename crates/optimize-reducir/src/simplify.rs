@@ -77,16 +77,15 @@ impl ReducIrEndoFold for Simplify<'_> {
           body.clone()
         } else {
           // only perform a substitution if we actually applied types
-          let ir = body.subst(
-            self.db,
-            apps.into_iter().fold(Subst::Inc(0), |subst, app| {
-              subst.cons(app.into_payload(self.db))
-            }),
-          );
-          #[cfg(test)]
+          let subst = apps.into_iter().fold(Subst::Inc(0), |subst, app| {
+            subst.cons(app.into_payload(self.db))
+          });
+          //println!("{}", subst.pretty_string(self.db, 81));
+          let ir = body.subst(self.db, subst);
+          /*#[cfg(test)]
           {
             ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
-          }
+          }*/
           ir
         };
         ReducIr::ty_app(body, ty_app)
@@ -98,8 +97,8 @@ impl ReducIrEndoFold for Simplify<'_> {
       Locals(binds, body) => {
         let occs = occurrence_analysis(&Locals(binds.clone(), body.clone()));
         let mut env = FxHashMap::default();
-        #[cfg(test)]
-        let err_binds = binds.clone();
+        //#[cfg(test)]
+        //let err_binds = binds.clone();
         let binds = binds
           .into_iter()
           .filter_map(|bind| {
@@ -119,14 +118,14 @@ impl ReducIrEndoFold for Simplify<'_> {
           })
           .collect::<Vec<_>>();
         let ir = body.fold(&mut Inline::new(self.db, &mut env)).fold(self);
-        #[cfg(test)]
+        /*#[cfg(test)]
         ir.type_check(self.db)
           .map_err_pretty_with(self.db)
           .map_err(|err| {
             println!("{}", Locals(err_binds, body).pretty_string(self.db, 80));
             err
           })
-          .unwrap();
+          .unwrap();*/
         ReducIr::locals(binds, ir)
       }
       App(head, spine) => {
@@ -151,7 +150,16 @@ impl ReducIrEndoFold for Simplify<'_> {
             let body = loop {
               match (args_iter.next(), spine_iter.next()) {
                 (Some(var), Some(arg)) => {
-                  binds.push(Bind::new(var, arg));
+                  binds.push(Bind::new(
+                    // Clobber the old type of the variable with the new type.
+                    var.map_type(|_| {
+                      arg
+                        .type_check(self.db)
+                        .map_err_pretty_with(self.db)
+                        .unwrap()
+                    }),
+                    arg,
+                  ));
                 }
                 (None, Some(arg)) => {
                   let mut apps = vec![arg];
@@ -172,8 +180,8 @@ impl ReducIrEndoFold for Simplify<'_> {
           // Let floating for app
           Locals(binds, body) => {
             let ir = ReducIr::new(App(body.clone(), spine));
-            #[cfg(test)]
-            ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
+            //#[cfg(test)]
+            //ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
             ReducIr::locals(binds.iter().cloned(), self.traverse_ir(&ir))
           }
           Item(occ)
@@ -188,7 +196,7 @@ impl ReducIrEndoFold for Simplify<'_> {
             )
           }
           TyApp(new_head, ty_apps) => {
-            if let Item(occ) = new_head.kind() {
+            /*if let Item(occ) = new_head.kind() {
               // Inline saturated prompt calls that have a literal for their evv parameter.
               // We can be confident they'll make progress
               if occ.name.name(self.db) == self.db.ident_str("__mon_prompt")
@@ -235,7 +243,7 @@ impl ReducIrEndoFold for Simplify<'_> {
                 ))
                 .fold(self);
               }
-            }
+            }*/
             ReducIr::new(App(head, spine))
           }
           _ => ReducIr::new(App(head, spine)),
@@ -250,8 +258,8 @@ impl ReducIrEndoFold for Simplify<'_> {
         // Let floating for case
         Locals(binds, body) => {
           let ir = ReducIr::case(ty, body.clone().into_inner(), branches.iter().cloned());
-          #[cfg(test)]
-          ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
+          //#[cfg(test)]
+          //ir.type_check(self.db).map_err_pretty_with(self.db).unwrap();
           ReducIr::locals(binds.iter().cloned(), self.traverse_ir(&ir))
         }
         _ => ReducIr::new(Case(ty, discr, branches)),
@@ -277,6 +285,63 @@ impl ReducIrEndoFold for Simplify<'_> {
       return ir.clone();
     }
     default_endotraverse_ir(self, ir)
+    /*let ir: ReducIr = self.fold_ir(ir.kind.clone());
+    use ReducIrKind::*;
+    match ir.kind() {
+        Abs(vars, body) => {
+          let body = body.fold(self);
+          // We do it this way to reuse smart constructor logic
+          ReducIr::abss(vars.iter().copied(), body)
+        }
+        App(head, spine) => {
+          let head = head.fold(self);
+          let spine = spine.iter().map(|ir| ir.fold(self));
+          // We do it this way to reuse smart constructor logic
+          ReducIr::app(head, spine)
+        }
+        Locals(binds, body) => {
+          let body = body.fold(self);
+          let binds = binds.iter().map(|local| local.fold(self));
+          ReducIr::locals(binds, body)
+        }
+        TyAbs(ty_var, body) => {
+          let body = body.fold(self);
+          ReducIr::ty_abs([*ty_var], body)
+        }
+        TyApp(body, ty_app) => {
+          let body = body.fold(self);
+          ReducIr::ty_app(body, ty_app.iter().cloned())
+        }
+        Struct(elems) => {
+          let elems = elems.iter().map(|e| e.fold(self)).collect();
+          ReducIr::new(Struct(elems))
+        }
+        FieldProj(indx, body) => {
+          let body = body.fold(self);
+          ReducIr::field_proj(*indx, body)
+        }
+        Tag(ty, tag, body) => {
+          let body = body.fold(self);
+          ReducIr::tag(*ty, *tag, body)
+        }
+        Case(ty, discr, branches) => {
+          let discr = discr.fold(self);
+          let branches = branches.iter().map(|branch| branch.fold(self));
+          ReducIr::case(*ty, discr, branches)
+        }
+        Coerce(ty, ir) => {
+          let ir = ir.fold(self);
+          ReducIr::new(Coerce(*ty, P::new(ir)))
+        }
+        Int(i) => ReducIr::new(Int(*i)),
+        Var(v) => ReducIr::var(*v),
+        Item(occ) => ReducIr::new(Item(*occ)),
+
+        X(in_ext) => {
+          let out_ext = self.fold_ext(in_ext);
+          ReducIr::new(X(out_ext))
+        }
+      }*/
   }
 }
 
@@ -354,10 +419,10 @@ impl<'a> ReducIrEndoFold for RenumberVars<'a> {
   }
 }
 
-struct EtaExpand<'db, DB: ?Sized> {
-  db: &'db DB,
-  supply: &'db mut IdSupply<ReducIrVarId>,
-  name: ReducIrTermName,
+pub(crate) struct EtaExpand<'db, DB: ?Sized> {
+  pub(crate) db: &'db DB,
+  pub(crate) supply: &'db mut IdSupply<ReducIrVarId>,
+  pub(crate) name: ReducIrTermName,
 }
 impl<DB: ?Sized> EtaExpand<'_, DB> {
   fn gen_var(&mut self, ty: ReducIrTy) -> ReducIrVar {
@@ -374,16 +439,17 @@ impl<DB: ?Sized + crate::Db> ReducIrEndoFold for EtaExpand<'_, DB> {
   type Ext = Infallible;
 
   fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
-    fn try_as_callable(ir: &ReducIr) -> Option<ReducIrTy> {
+    /*fn try_as_callable(ir: &ReducIr) -> bool {
       match ir.kind() {
         ReducIrKind::TyApp(ir, _) => try_as_callable(ir),
-        ReducIrKind::Item(occ) => Some(occ.ty),
-        ReducIrKind::Var(v) => Some(v.ty),
-        _ => None,
+        ReducIrKind::Item(occ) => true,
+        ReducIrKind::Var(v) => true,
+        ReducIrKind::FieldProj(i, v) => true,
+        _ => false,
       }
-    }
+    }*/
     match kind {
-      ReducIrKind::App(head, mut spine) if try_as_callable(&head).is_some() => {
+      ReducIrKind::App(head, mut spine) => {
         if let ReducIrTyKind::FunTy(params, ret) = head
           .type_check(self.db)
           .unwrap()
@@ -439,7 +505,7 @@ pub(crate) fn simplify(
     .collect::<FxHashMap<_, _>>();
 
   let module = name.module(db.as_core_db());
-  let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
+  /*let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
   let bind = bind_term(db, bind_name);
   bind
     .type_check(db)
@@ -453,14 +519,14 @@ pub(crate) fn simplify(
     .type_check(db)
     .map_err_pretty_with(db)
     .expect("Prompt should type check");
-  builtin_evs.insert(prompt_name, &prompt);
+  builtin_evs.insert(prompt_name, &prompt);*/
 
   let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
-  #[cfg(test)]
-  ir.type_check(db).map_err_pretty_with(db).unwrap();
+  //#[cfg(test)]
+  //ir.type_check(db).map_err_pretty_with(db).unwrap();
 
   let mut simple = Simplify {
     db,
@@ -478,7 +544,7 @@ pub(crate) fn simplify(
     if !simple.inlined_term {
       break;
     }
-    ir.type_check(db).map_err_pretty_with(db).unwrap();
+    //ir.type_check(db).map_err_pretty_with(db).unwrap();
     println!("{}: {}\n", i, ir.pretty_string(db, 80));
     i += 1;
     simple.inlined_term = false;
@@ -546,7 +612,7 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
 
 /// Prompt handles "installing" our prompt into the stack and running an action under an
 /// updated effect row
-pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> ReducIr {
+pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermName) -> (ReducIr, IdSupply<ReducIrVarId>) {
   use ReducIrTyKind::*;
   let m_ty = db.mk_reducir_ty(VarTy(3));
   let upd_m = db.mk_reducir_ty(VarTy(2));
@@ -604,7 +670,7 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
     .collect::<Vec<_>>()
   };
   let tag_ty = db.mk_reducir_ty(ControlTy(m_ty, b));
-  ReducIr::ty_abs(
+  (ReducIr::ty_abs(
     tyvars(4),
     ReducIr::abss(
       [mark, upd, ret, body, evv],
@@ -754,12 +820,12 @@ pub(super) fn prompt_term(db: &dyn crate::Db, module: Module, name: ReducIrTermN
         ],
       ),
     ),
-  )
+  ), var_gen)
 }
 
 /// TODO: Return an item representing the bind implementation of our delimited continuation
 /// monad
-pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> ReducIr {
+pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) -> (ReducIr, IdSupply<ReducIrVarId>) {
   use ReducIrTyKind::*;
   /*
   (e: Mon m a) |> (g : a -> Mon m b) : Mon m b =
@@ -812,7 +878,7 @@ pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) 
     gen_tyvar(),
   ];
 
-  ReducIr::ty_abs(
+  (ReducIr::ty_abs(
     [tv0, tv1, tv2],
     ReducIr::abss(
       [e, g, w],
@@ -878,5 +944,5 @@ pub(super) fn bind_term<DB: ?Sized + crate::Db>(db: &DB, name: ReducIrTermName) 
         ],
       ),
     ),
-  )
+  ), supply)
 }
