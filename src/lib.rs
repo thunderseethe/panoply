@@ -71,9 +71,19 @@ pub fn canonicalize_path_set<P: AsRef<Path>>(
   //println!("{:?}", std::env::current_dir());
   let mut uniq_files = paths
     .into_iter()
-    .map(|path| path.as_ref().canonicalize()
-      .map(|path| if path.is_relative() { cwd.join(path) } else { path })
-      .map_err(Into::into))
+    .map(|path| {
+      path
+        .as_ref()
+        .canonicalize()
+        .map(|path| {
+          if path.is_relative() {
+            cwd.join(path)
+          } else {
+            path
+          }
+        })
+        .map_err(Into::into)
+    })
     .collect::<eyre::Result<Vec<_>>>()?;
 
   uniq_files.dedup();

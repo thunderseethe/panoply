@@ -67,7 +67,11 @@ fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedRed
   let ir = simplify::simplify(db, name, row_evs, item.item(ir_db), &mut var_supply);
 
   let term_name = item.name(db.as_reducir_db());
-  OptimizedReducIrItem::new(db.as_reducir_db(), ReducIrTermName::Term(term_name), ir.clone())
+  OptimizedReducIrItem::new(
+    db.as_reducir_db(),
+    ReducIrTermName::Term(term_name),
+    ir.clone(),
+  )
 }
 
 #[salsa::tracked]
@@ -87,7 +91,7 @@ fn simple_reducir_module(
   let bind = bind.fold(&mut EtaExpand {
     db,
     supply: &mut bind_supply,
-    name: bind_name, 
+    name: bind_name,
   });
   debug_assert!(bind.type_check(db).map_err_pretty_with(db).is_ok());
 
@@ -98,10 +102,7 @@ fn simple_reducir_module(
     supply: &mut prompt_supply,
     name: prompt_name,
   });
-  debug_assert!(prompt
-    .type_check(db)
-    .map_err_pretty_with(db)
-    .is_ok());
+  debug_assert!(prompt.type_check(db).map_err_pretty_with(db).is_ok());
 
   OptimizedReducIrModule::new(
     db.as_reducir_db(),

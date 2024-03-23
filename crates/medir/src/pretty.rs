@@ -2,7 +2,8 @@ use base::{id::Id, pretty::PrettyWithCtx};
 use pretty::{DocAllocator, Pretty};
 
 use crate::{
-  Atom, Call, Defn, Locals, MedIr, MedIrItemName, MedIrKind, MedIrModule, MedIrTy, MedIrTyKind, MedIrVar
+  Atom, Call, Defn, Locals, MedIr, MedIrItemName, MedIrKind, MedIrModule, MedIrTy, MedIrTyKind,
+  MedIrVar,
 };
 
 impl<DB: ?Sized + reducir::Db> PrettyWithCtx<DB> for MedIrItemName {
@@ -193,10 +194,18 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Defn {
 }
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrModule {
-  fn pretty<'a>(&self, ctx: &DB, a: &'a pretty::RcAllocator) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
+  fn pretty<'a>(
+    &self,
+    ctx: &DB,
+    a: &'a pretty::RcAllocator,
+  ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     a.intersperse(
-      self.items(ctx.as_medir_db()).iter().map(|item| item.item(ctx.as_medir_db()).pretty(ctx, a)),
-      a.line())
+      self
+        .items(ctx.as_medir_db())
+        .iter()
+        .map(|item| item.item(ctx.as_medir_db()).pretty(ctx, a)),
+      a.line(),
+    )
   }
 }
 

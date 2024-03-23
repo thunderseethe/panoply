@@ -13,7 +13,11 @@ fn main() -> eyre::Result<()> {
 
   let uniq_paths =
     canonicalize_path_set(args.files.iter().chain(std::iter::once(&args.main_file)))?;
-  let main_file = uniq_paths.iter().find(|path| path.ends_with(&args.main_file)).unwrap().clone();
+  let main_file = uniq_paths
+    .iter()
+    .find(|path| path.ends_with(&args.main_file))
+    .unwrap()
+    .clone();
   let _ = create_source_file_set(&db, uniq_paths)?;
 
   let wasm_module = db.emit_module_for_path(main_file);

@@ -28,10 +28,7 @@ pub trait Db: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {
     Some(self.lower_medir_item_of(term_name))
   }
 
-  fn lower_medir_module_for_file_name(
-    &self,
-    path: std::path::PathBuf,
-  ) -> MedIrModule {
+  fn lower_medir_module_for_file_name(&self, path: std::path::PathBuf) -> MedIrModule {
     let module = self.root_module_for_path(path);
     self.lower_medir_module_of(module)
   }
@@ -83,14 +80,14 @@ fn lower_module(db: &dyn crate::Db, module: OptimizedReducIrModule) -> MedIrModu
 mod tests {
   use base::{
     file::{FileId, SourceFile, SourceFileSet},
-    pretty::{PrettyPrint, PrettyWithCtx},
+    pretty::PrettyWithCtx,
     Db as BaseDb,
   };
   use expect_test::expect;
   use medir::{MedIr, MedIrModule};
-use parser::Db as ParseDb;
+  use parser::Db as ParseDb;
 
-  use crate::{Db, MedIrItem};
+  use crate::Db;
 
   #[derive(Default)]
   #[salsa::db(
@@ -112,7 +109,7 @@ use parser::Db as ParseDb;
   }
   impl salsa::Database for TestDatabase {}
 
-  fn lower_function(db: &TestDatabase, input: &str, fn_name: &str) -> MedIrModule {
+  fn lower_function(db: &TestDatabase, input: &str) -> MedIrModule {
     let path = std::path::PathBuf::from("test");
     let mut contents = r#"
 effect State {
@@ -135,7 +132,7 @@ effect Reader {
 
   fn lower_snippet(db: &TestDatabase, input: &str) -> MedIrModule {
     let main = format!("main = {}", input);
-    lower_function(db, &main, "main")
+    lower_function(db, &main)
   }
 
   #[test]
