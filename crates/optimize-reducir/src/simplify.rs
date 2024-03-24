@@ -4,7 +4,7 @@ use std::ops::Deref;
 use base::id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName};
 use base::modules::Module;
 use base::pretty::PrettyErrorWithDb;
-use reducir::mon::MonReducIrRowEv;
+use reducir::mon::MonReducIrGenItem;
 use reducir::ty::{
   IntoPayload, Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy, Subst,
   UnwrapMonTy,
@@ -463,7 +463,7 @@ impl<DB: ?Sized + crate::Db> ReducIrEndoFold for EtaExpand<'_, DB> {
 pub(crate) fn simplify(
   db: &dyn crate::Db,
   name: TermName,
-  row_evs: &[MonReducIrRowEv],
+  row_evs: &[MonReducIrGenItem],
   ir: &ReducIr,
   supply: &mut IdSupply<ReducIrVarId>,
 ) -> ReducIr {
@@ -471,8 +471,8 @@ pub(crate) fn simplify(
 
   let mut builtin_evs = row_evs
     .iter()
-    .flat_map(|row_ev| {
-      let simple_item = row_ev.simple(reducir_db);
+    .map(|row_ev| {
+      /*let simple_item = row_ev.simple(reducir_db);
       let scoped_item = row_ev.scoped(reducir_db);
 
       let simple_name = ReducIrTermName::Gen(simple_item.name(reducir_db));
@@ -480,7 +480,11 @@ pub(crate) fn simplify(
 
       let simple = (simple_name, simple_item.item(reducir_db));
       let scoped = (scoped_name, scoped_item.item(reducir_db));
-      [simple, scoped]
+      [simple, scoped]*/
+      (
+        ReducIrTermName::Gen(row_ev.name(reducir_db)),
+        row_ev.item(reducir_db),
+      )
     })
     .collect::<FxHashMap<_, _>>();
 

@@ -8,11 +8,12 @@ use base::{
 use la_arena::Idx;
 use reducir::{
   ty::{
-    Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrTyKind::*,
+    Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp,
+    ReducIrTyKind::{self, *},
     ReducIrVarTy, RowReducIrKind,
   },
-  DelimCont, DelimReducIr, ReducIr, ReducIrKind,
-  ReducIrKind::*,
+  DelimCont, DelimReducIr, ReducIr, ReducIrGenItem,
+  ReducIrKind::{self, *},
   ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck, P,
 };
 use rustc_hash::FxHashMap;
@@ -24,7 +25,7 @@ use ty::{
 
 use crate::{
   evidence::{EvidenceMap, PartialEv},
-  lower_row_ev, ReducIrEffectInfo, ReducIrRowEv,
+  lower_row_ev_scoped, lower_row_ev_simple, ReducIrEffectInfo,
 };
 
 /// Unwrap a type into it a product and return the product's row.
@@ -780,7 +781,7 @@ type LowerOutput<'a, 'b> = (
   LowerCtx<'a, 'b, Evidentfull>,
   Vec<(ReducIrVar, DelimReducIr)>,
   Vec<ReducIrVar>,
-  Vec<ReducIrRowEv>,
+  Vec<ReducIrGenItem>,
 );
 
 impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
@@ -822,7 +823,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
           right: Row::Closed(right),
           goal: Row::Closed(goal),
         } => {
-          let ir_row_ev = lower_row_ev(
+          let ir_row_ev = lower_row_ev_simple(
             self.db,
             self.current.module(self.db),
             left.raw_fields(),
@@ -831,7 +832,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
           );
           ev_items.push(ir_row_ev);
           (
-            ir_row_ev.simple(self.db.as_reducir_db()),
+            ir_row_ev,
             left
               .values(ty_db)
               .iter()
@@ -845,7 +846,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
           right: Row::Closed(right),
           goal: Row::Closed(goal),
         } => {
-          let ir_row_ev = lower_row_ev(
+          let ir_row_ev = lower_row_ev_scoped(
             self.db,
             self.current.module(self.db),
             left.raw_fields(),
@@ -872,7 +873,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
                 .reduce_forall(self.db, ReducIrTyApp::Ty(self.ty_ctx.lower_ty(ret_ty)))
             })
             .collect::<Vec<_>>();
-          (ir_row_ev.scoped(self.db.as_reducir_db()), ty_vals)
+          (ir_row_ev, ty_vals)
         }
         _ => {
           params.push(param);

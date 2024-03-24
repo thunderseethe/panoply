@@ -132,11 +132,9 @@ pub struct Jar(
   ReducIrModule,
   ReducIrItem,
   ReducIrGenItem,
-  ReducIrRowEv,
   mon::MonReducIrModule,
   mon::MonReducIrItem,
   mon::MonReducIrGenItem,
-  mon::MonReducIrRowEv,
   optimized::OptimizedReducIrItem,
   optimized::OptimizedReducIrModule,
 );
@@ -169,11 +167,20 @@ pub struct ReducIrGenItem {
   pub item: DelimReducIr,
 }
 
-#[salsa::tracked]
-pub struct ReducIrRowEv {
+/*#[salsa::tracked]
+pub struct ReducIrSimpleRowEv {
   pub simple: ReducIrGenItem,
-  pub scoped: ReducIrGenItem,
 }
+#[salsa::tracked]
+pub struct ReducIrScopedRowEv {
+  pub scoped: ReducIrGenItem,
+}*/
+
+/*#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
+pub enum ReducIrRowEv {
+  Simple(ReducIrSimpleRowEv),
+  Scoped(ReducIrScopedRowEv),
+}*/
 
 #[salsa::tracked]
 pub struct ReducIrItem {
@@ -183,7 +190,7 @@ pub struct ReducIrItem {
   pub item: DelimReducIr,
   // List of row evidence items that this item references
   #[return_ref]
-  pub row_evs: Vec<ReducIrRowEv>,
+  pub row_evs: Vec<ReducIrGenItem>,
   #[return_ref]
   pub var_supply: IdSupply<ReducIrVarId>,
   #[return_ref]

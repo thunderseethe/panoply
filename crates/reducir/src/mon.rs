@@ -20,7 +20,7 @@ pub struct MonReducIrItem {
   #[return_ref]
   pub item: ReducIr,
   #[return_ref]
-  pub row_evs: Vec<MonReducIrRowEv>,
+  pub row_evs: Vec<MonReducIrGenItem>,
   #[return_ref]
   pub var_supply: IdSupply<ReducIrVarId>,
 }
@@ -33,10 +33,4 @@ pub struct MonReducIrGenItem {
   pub item: ReducIr,
   #[return_ref]
   pub var_supply: IdSupply<ReducIrVarId>,
-}
-
-#[salsa::tracked]
-pub struct MonReducIrRowEv {
-  pub simple: MonReducIrGenItem,
-  pub scoped: MonReducIrGenItem,
 }

@@ -8,11 +8,11 @@ use base::{
 use la_arena::Idx;
 use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
 use reducir::{
-  mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule, MonReducIrRowEv},
+  mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule},
   ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
   Bind, GeneratedReducIrName, ReducIr, ReducIrGenItem, ReducIrItem,
   ReducIrKind::*,
-  ReducIrLocal, ReducIrModule, ReducIrRowEv, ReducIrTermName, ReducIrVar, P,
+  ReducIrLocal, ReducIrModule, ReducIrTermName, ReducIrVar, P,
 };
 use tc::EffectInfo;
 use ty::{
@@ -44,7 +44,8 @@ pub trait ReducIrEffectInfo: EffectInfo {
 pub struct Jar(
   lower_module,
   lower_item,
-  lower_row_ev,
+  lower_row_ev_simple,
+  lower_row_ev_scoped,
   lower_mon_item,
   lower_mon_module,
   effect_handler_ir_ty,
@@ -144,18 +145,25 @@ fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
 }
 
 #[salsa::tracked]
-fn lower_row_ev(
+fn lower_row_ev_simple(
   db: &dyn crate::Db,
   module: Module,
   left: RowFields,
   right: RowFields,
   goal: RowFields,
-) -> ReducIrRowEv {
-  ReducIrRowEv::new(
-    db.as_reducir_db(),
-    lower_row_ev_item::<Simple>(db, module, "simple", left, right, goal),
-    lower_row_ev_item::<Scoped>(db, module, "scoped", left, right, goal),
-  )
+) -> ReducIrGenItem {
+  lower_row_ev_item::<Simple>(db, module, "simple", left, right, goal)
+}
+
+#[salsa::tracked]
+fn lower_row_ev_scoped(
+  db: &dyn crate::Db,
+  module: Module,
+  left: RowFields,
+  right: RowFields,
+  goal: RowFields,
+) -> ReducIrGenItem {
+  lower_row_ev_item::<Scoped>(db, module, "scoped", left, right, goal)
 }
 
 fn lower_row_ev_item<Sema: RowReducrIrEvidence>(
@@ -397,21 +405,12 @@ fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
     .row_evs(reducir_db)
     .iter()
     .map(|row| {
-      let simple = row.simple(reducir_db);
-      let mon_simple = MonReducIrGenItem::new(
+      MonReducIrGenItem::new(
         reducir_db,
-        simple.name(reducir_db),
-        simple.item(reducir_db).assume_no_ext(),
+        row.name(reducir_db),
+        row.item(reducir_db).assume_no_ext(),
         IdSupply::start_from(item.var_supply(reducir_db)),
-      );
-      let scoped = row.scoped(reducir_db);
-      let mon_scoped = MonReducIrGenItem::new(
-        reducir_db,
-        scoped.name(reducir_db),
-        scoped.item(reducir_db).assume_no_ext(),
-        IdSupply::start_from(item.var_supply(reducir_db)),
-      );
-      MonReducIrRowEv::new(reducir_db, mon_simple, mon_scoped)
+      )
     })
     .collect();
 
