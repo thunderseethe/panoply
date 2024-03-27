@@ -1150,7 +1150,7 @@ where
     Self: RowEquationSolver<'infer, Sema>,
     Sema: Ord + Clone,
     Sema::Open<InArena<'infer>>: Copy,
-    Sema::Closed<InArena<'infer>>: Copy,
+    Sema::Closed<InArena<'infer>>: Copy + PrettyWithCtx<(&'a dyn crate::Db, ())>,
   {
     let mut combos: Vec<RowCombination<Row<Sema, InArena<'infer>>>> = vec![];
     let eqns = std::mem::take(self.equations_mut());
@@ -1263,10 +1263,17 @@ where
   where
     Self: RowEquationSolver<'infer, Sema>,
     Sema: RowTheory + Ord + Clone,
+    Sema::Closed<InArena<'infer>>: PrettyWithCtx<(&'a dyn crate::Db, ())>,
   {
     let left = self.normalize_row(unnorm_left.clone());
     let right = self.normalize_row(unnorm_right.clone());
     let goal = self.normalize_row(unnorm_goal.clone());
+    log::info!(
+      "RowCombine(\nleft: {},\nright: {},\ngoal: {}\n)",
+      left.pretty_string(&(self.db, ()), 80),
+      right.pretty_string(&(self.db, ()), 80),
+      goal.pretty_string(&(self.db, ()), 80)
+    );
 
     match (left, right, goal) {
       (Row::Closed(left), Row::Closed(right), goal) => {
@@ -1358,6 +1365,13 @@ where
     let normal_eff = self.normalize_row(eff);
     let normal_out_eff = self.normalize_row(outer_eff);
     let normal_ret = self.normalize_ty(ret);
+    log::info!(
+      "Handles(\nnormal_handler: {},\nnormal_eff: {},\nnormal_out_eff: {},\nnormal_ret: {}\n)",
+      normal_handler.pretty_string(&(self.db, ()), 80),
+      normal_eff.pretty_string(&(self.db, ()), 80),
+      normal_out_eff.pretty_string(&(self.db, ()), 80),
+      normal_ret.pretty_string(&(self.db, ()), 80)
+    );
 
     let int = self.mk_ty(IntTy);
     let normal_eff_val = self.mk_ty(ProdTy(Row::Closed(self.mk_row(

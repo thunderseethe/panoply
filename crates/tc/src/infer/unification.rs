@@ -25,6 +25,7 @@ where
     let ty_ = ty
       .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
       .map_err(|var| TypeCheckError::TypeOccursCheckFailed(var, ty))?;
+    log::info!("{:?} ~~ {}", var, ty.pretty_string(&(self.db, ()), 80));
     self
       .ty_unifiers
       .unify_var_value(var, Some(ty_))
@@ -41,6 +42,7 @@ where
     left: TcUnifierVar<'infer, TypeK>,
     right: TcUnifierVar<'infer, TypeK>,
   ) -> Result<(), TypeCheckError<'infer>> {
+    log::info!("{:?} ~~ {:?}", left, right,);
     self
       .ty_unifiers
       .unify_var_var(left, right)
@@ -56,6 +58,7 @@ impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, SimpleRowK>, TcUnifierVar<'in
     left: TcUnifierVar<'infer, SimpleRowK>,
     right: TcUnifierVar<'infer, SimpleRowK>,
   ) -> Result<(), TypeCheckError<'infer>> {
+    log::info!("{:?} ~~ {:?}", left, right,);
     self
       .data_row_unifiers
       .unify_var_var(left, right)
@@ -76,6 +79,7 @@ where
       .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
       .map_err(|var| TypeCheckError::DataRowOccursCheckFailed(var, row))?;
     self.dispatch_solved::<Simple>(var, row)?;
+    log::info!("{:?} ~~ {}", var, row.pretty_string(&(self.db, ()), 80));
     self
       .data_row_unifiers
       .unify_var_value(var, Some(row_))
@@ -163,6 +167,7 @@ impl<'infer, I> Unify<'infer, TcUnifierVar<'infer, ScopedRowK>, TcUnifierVar<'in
     left: TcUnifierVar<'infer, ScopedRowK>,
     right: TcUnifierVar<'infer, ScopedRowK>,
   ) -> Result<(), TypeCheckError<'infer>> {
+    log::info!("{:?} ~~ {:?}", left, right);
     self
       .eff_row_unifiers
       .unify_var_var(left, right)
@@ -183,6 +188,7 @@ where
       .try_fold_with(&mut OccursCheck { ctx: self.ctx, var })
       .map_err(|var| TypeCheckError::EffectRowOccursCheckFailed(var, row))?;
     self.dispatch_solved::<Scoped>(var, row)?;
+    log::info!("{:?} ~~ {}", var, row.pretty_string(&(self.db, ()), 80));
     self
       .eff_row_unifiers
       .unify_var_value(var, Some(row_))
@@ -277,6 +283,12 @@ where
   ) -> Result<(), TypeCheckError<'infer>> {
     let left = self.normalize_ty(left);
     let right = self.normalize_ty(right);
+
+    log::info!(
+      "{} ~~ {}",
+      left.pretty_string(&(self.db, ()), 80),
+      right.pretty_string(&(self.db, ()), 80)
+    );
 
     match (*left, *right) {
       // If an error appears anywhere fail unification

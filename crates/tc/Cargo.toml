@@ -17,6 +17,7 @@ base.workspace = true
 desugar.workspace = true
 ena.workspace = true
 la-arena.workspace = true
+log.workspace = true
 nameres.workspace = true
 pretty.workspace = true
 rustc-hash.workspace = true
