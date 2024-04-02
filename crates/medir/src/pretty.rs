@@ -90,7 +90,9 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrKind {
         .text("switch")
         .append(scrutinee.pretty(a).enclose(a.space(), a.space()))
         .append("<")
-        .append(
+        .append(if branches.is_empty() {
+          a.nil()
+        } else {
           a.line()
             .append(a.intersperse(
               branches.iter().enumerate().map(|(i, branch)| {
@@ -102,9 +104,9 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrKind {
               }),
               a.line(),
             ))
-            .nest(2),
-        )
-        .append(a.line())
+            .nest(2)
+            .append(a.line())
+        })
         .append(">"),
       MedIrKind::Call(fun, args) => fun.pretty(ctx, a).append(
         a.intersperse(

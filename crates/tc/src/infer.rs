@@ -5,7 +5,7 @@ use base::{
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use salsa::DebugWithDb;
 use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
 use ty::{
@@ -159,7 +159,7 @@ pub(crate) struct GenerationStorage<'infer> {
   /// individual use site of an item, and we may have multiple call sites for one item name.
   pub(crate) item_wrappers: FxHashMap<Idx<Term<VarId>>, Wrapper<InArena<'infer>>>,
   pub(crate) op_selectors: FxHashMap<Idx<Term<VarId>>, OpSelector<InArena<'infer>>>,
-  pub(crate) required_ev: FxHashSet<Evidence<InArena<'infer>>>,
+  pub(crate) required_ev: BTreeSet<Evidence<InArena<'infer>>>,
 }
 impl InferState for Generation {
   type Storage<'infer> = GenerationStorage<'infer>;
@@ -437,6 +437,7 @@ where
         // Check an abstraction against a function type by checking the body checks against
         // the function return type with the function argument type in scope.
         self.local_env.insert(*arg, arg_ty);
+        self.state.var_tys.insert(*arg, arg_ty);
 
         self
           .constraints

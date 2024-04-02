@@ -483,17 +483,17 @@ mod tests {
     }
 
   macro_rules! assert_vec_matches {
-        ($vec: expr, [$($elem:pat),*]) => {{
-            let mut tmp = $vec;
-            tmp.sort();
-            assert_matches!(tmp.as_slice(), [$($elem),*]);
-        }};
-        ($vec: expr, [$($elem:pat),*] => $body:expr) => {{
-            let mut tmp = $vec;
-            tmp.sort();
-            assert_matches!(tmp.as_slice(), [$($elem),*] => $body)
-        }};
-    }
+      ($vec: expr, [$($elem:pat),*]) => {{
+          let mut tmp = $vec;
+          tmp.sort();
+          assert_matches!(tmp.as_slice(), [$($elem),*]);
+      }};
+      ($vec: expr, [$($elem:pat),*] => $body:expr) => {{
+          let mut tmp = $vec;
+          tmp.sort();
+          assert_matches!(tmp.as_slice(), [$($elem),*] => $body)
+      }};
+  }
 
   #[derive(Default)]
   #[salsa::db(
@@ -778,7 +778,7 @@ foo = (with {
   }
 
   #[test]
-  fn test_stacked_effects() {
+  fn test_effect_in_return_clause() {
     let db = TestDatabase::default();
     let scheme = type_check_file(
       &db,
@@ -811,7 +811,39 @@ foo = (with {
         ⊙ Reader |> { eff |> Int -> TyVarId(1) Int, ret |> { ∅ } } ~eff~ TyVarId(2))
         => Int | TyVarId(0)"#]];
     expect.assert_eq(scheme.pretty_string(&(&db, &db), 80).as_str());
-    //panic!();
+  }
+
+  #[test]
+  fn test_effect_in_item() {
+    let db = TestDatabase::default();
+    let scheme = type_check_file(
+      &db,
+      "main",
+      r#"
+effect State {
+  get : {} -> Int,
+  put : Int -> {}
+}
+
+effect Reader {
+  ask : {} -> Int
+}
+
+foo = |env| with {
+  get = |x| |k| |s| k(s)(s),
+  put = |x| |k| |s| k({})(x),
+  return = |x| |s| { value = x, state = s },
+} do (with {
+  ask = |x| |k| k(env),
+  return = |x| State.put(x),
+} do Reader.ask({}))
+
+main = foo(16777215)(14).state
+"#,
+    );
+
+    let expect = expect_test::expect!["Int | ∅"];
+    expect.assert_eq(scheme.pretty_string(&(&db, &db), 80).as_str());
   }
 
   #[test]

@@ -493,7 +493,14 @@ where
 {
   fn lookup_var(&self, term: TermName, var_id: VarId) -> Ty {
     let typed_item = self.type_scheme_of(term);
-    typed_item.var_to_tys(self.as_tc_db())[&var_id]
+    println!(
+      "{} {:?}",
+      term.name(self.as_core_db()).text(self.as_core_db()),
+      var_id
+    );
+    let var_to_tys = typed_item.var_to_tys(self.as_tc_db());
+    println!("{:?}", var_to_tys);
+    var_to_tys[&var_id]
   }
 }
 impl<DB> TermTys for DB
@@ -1443,6 +1450,255 @@ main = (with {
     ];
     let tys = vec![
       // main
+      expect!["Int"],
+    ];
+    for ((item, expect), expect_ty) in module
+      .items(&db)
+      .iter()
+      .zip(items.into_iter())
+      .zip(tys.into_iter())
+    {
+      let ir = item.item(&db);
+      let item_str = ir.pretty_with(&db).pprint().pretty(80).to_string();
+      expect.assert_eq(&item_str);
+
+      let item_ty_str = ir.type_check(&db).to_pretty(&db);
+      expect_ty.assert_eq(&item_ty_str)
+    }
+  }
+
+  #[test]
+  fn monadic_lower_effects_item_in_main() {
+    let db = TestDatabase::default();
+    let module = lower_mon_module(
+      &db,
+      r#"
+foo = |env| with {
+  get = |x| |k| |s| k(s)(s),
+  put = |x| |k| |s| k({})(x),
+  return = |x| |s| { value = x, state = s },
+} do (with {
+  ask = |x| |k| k(env),
+  return = |x| x,
+} do w = State.put(Reader.ask({})); State.get({}))
+
+main = foo(16777215)(14).state"#,
+    );
+
+    let items = vec![
+      // foo
+      expect![[r#"
+          (forall
+            [(5: Type) (4: ScopedRow) (3: ScopedRow) (2: ScopedRow) (1: ScopedRow) (0: ScopedRow)]
+            (fun [V1, V2, V3, V0]
+              ((let
+                [ (V4 ((_row_simple__ask @ [..]) {}))
+                , (V5 ((_row_simple_get_put @ [..]) {}))
+                , (V6 ((_row_simple_put_get @ [..]) {}))
+                , (V7 ((_row_simple_get_put @ [..]) {}))
+                , (V8 ((_row_simple_value_state @ [..]) {}))
+                , (V9 ((_row_simple_ask_return @ [..]) {}))
+                , (V10 ((_row_simple_return_ask @ [..]) {}))
+                , (V11 ((_row_simple_putget_return @ [..]) {}))
+                , (V12 ((_row_simple_return_putget @ [..]) {}))
+                ]
+                (fun [V67]
+                  <0: (fun [V13]
+                      (let
+                        (V14 (V11[0]
+                          (V5[0]
+                            (fun [V15, V45]
+                              <0: (fun [V16, V44]
+                                  <0: (fun [V17]
+                                      ((__mon_bind @ [..])
+                                        (V16 V17)
+                                        (fun [V43] (V43 V17))))>)>)
+                            (fun [V18, V48]
+                              <0: (fun [V19, V47]
+                                  <0: (fun [V20]
+                                      ((__mon_bind @ [..])
+                                        (V19 {})
+                                        (fun [V46] (V46 V18))))>)>))
+                          (fun [V21, V50] <0: (fun [V22, V49] <0: (V8[0] V21 V22)>)>)))
+                        ((__mon_freshm @ [..])
+                          (fun [V41]
+                            ((__mon_prompt @ [..])
+                              V41
+                              (fun [V42] (V1[0] V42 {V41, (V12[3][0] V14)}))
+                              (V12[2][0] V14)
+                              (fun [V23]
+                                ((let
+                                  (V24 (V9[0]
+                                    (fun [V25, V51] <0: (fun [V26] (V26 V13))>)
+                                    (fun [V27, V52] <0: V27>)))
+                                  ((__mon_freshm @ [..])
+                                    (fun [V39]
+                                      ((__mon_prompt @ [..])
+                                        V39
+                                        (fun [V40] (V2[0] V40 {V39, (V10[3][0] V24)}))
+                                        (V10[2][0] V24)
+                                        (fun [V28]
+                                          ((__mon_bind @ [..])
+                                            (let (V33 (V3[3][0] V28))
+                                              ((__mon_bind @ [..])
+                                                (let [ (V29 {}) , (V30 (V2[3][0] V28)) ]
+                                                  (fun [V57]
+                                                    <1: (forall
+                                                        [(0: Type) (1: Type) (2: Type)] {
+                                                        V30[0], (fun [V31]
+                                                          ((__mon_bind @ [..])
+                                                            (V4[3][0] V30[1] V29)
+                                                            (fun [V59] (V59 V31)))), (fun
+                                                          [V58
+                                                          ,V60] <0: V58>)})>))
+                                                (fun [V65, V61]
+                                                  <1: (forall
+                                                      [(0: Type) (1: Type) (2: Type)] {
+                                                      V33[0], (fun [V34]
+                                                        ((__mon_bind @ [..])
+                                                          (V7[3][0] V33[1] V32)
+                                                          (fun [V63] (V63 V34)))), (fun
+                                                        [V62
+                                                        ,V64] <0: V62>)})>)))
+                                            (fun [V66]
+                                              (let
+                                                [ (V35 V66)
+                                                , (V36 {})
+                                                , (V37 (V3[3][0] V28))
+                                                ]
+                                                (fun [V53]
+                                                  <1: (forall
+                                                      [(0: Type) (1: Type) (2: Type)] {
+                                                      V37[0], (fun [V38]
+                                                        ((__mon_bind @ [..])
+                                                          (V7[2][0] V37[1] V36)
+                                                          (fun [V55] (V55 V38)))), (fun
+                                                        [V54
+                                                        ,V56] <0: V54>)})>)))
+                                            V28)))))) V23)))))))>)) V0)))"#]],
+      // main
+      expect![[r#"
+            (case ((let
+                [ (V1 ((_row_scoped__State @ [..]) {}))
+                , (V2 ((_row_scoped_Reader_State @ [..]) {}))
+                , (V3 ((_row_scoped_State_Reader @ [..]) {}))
+                , (V4 ((_row_simple_value_state @ [..]) {}))
+                ]
+                ((__mon_bind @ [..])
+                  ((__mon_bind @ [..])
+                    ((__mon_bind @ [..]) ((foo @ [..]) V1 V3 V2) (fun [V5] (V5 16777215)))
+                    (fun [V6] (V6 14)))
+                  (fun [V7, V8] <0: (V4[3][0] V7)>))) {})
+              (fun [V0] V0)
+              (fun [V0] 5467))"#]],
+    ];
+    let tys = vec![
+      // foo
+      expect![[r#"
+          forall Type .
+            forall ScopedRow .
+              forall ScopedRow .
+                forall ScopedRow .
+                  forall ScopedRow .
+                    forall ScopedRow .
+                      { {4} -> { (Marker Int -> (Mon {4} {Int, Int}))
+                               , { Int -> (Mon {4} ({} -> (Mon {4} Int -> (Mon {4} { Int
+                                                                                   , Int
+                                                                                   }))) ->
+                                 (Mon {4} Int -> (Mon {4} {Int, Int})))
+                                 , {} -> (Mon {4} (Int -> (Mon {4} Int -> (Mon {4} { Int
+                                                                                   , Int
+                                                                                   }))) ->
+                                 (Mon {4} Int -> (Mon {4} {Int, Int})))
+                                 }
+                               } -> {3}
+                      , forall Type .
+                        (<5> -> T0) -> ({ (Marker Int -> (Mon {5} {Int, Int}))
+                                        , { Int -> (Mon {5} ({} -> (Mon {5} Int ->
+                                          (Mon {5} {Int, Int}))) -> (Mon {5} Int ->
+                                          (Mon {5} {Int, Int})))
+                                          , {} -> (Mon {5} (Int -> (Mon {5} Int ->
+                                          (Mon {5} {Int, Int}))) -> (Mon {5} Int ->
+                                          (Mon {5} {Int, Int})))
+                                          }
+                                        } -> T0) -> <4> -> T0
+                      , {{3} -> {4}, <4> -> <3>}
+                      , { {3} -> { (Marker Int -> (Mon {4} {Int, Int}))
+                                 , { Int -> (Mon {4} ({} -> (Mon {4} Int -> (Mon {4} { Int
+                                                                                     , Int
+                                                                                     })))
+                                   -> (Mon {4} Int -> (Mon {4} {Int, Int})))
+                                   , {} -> (Mon {4} (Int -> (Mon {4} Int -> (Mon {4} { Int
+                                                                                     , Int
+                                                                                     })))
+                                   -> (Mon {4} Int -> (Mon {4} {Int, Int})))
+                                   }
+                                 }
+                        , { (Marker Int -> (Mon {4} {Int, Int}))
+                          , { Int -> (Mon {4} ({} -> (Mon {4} Int -> (Mon {4} { Int
+                                                                              , Int
+                                                                              }))) ->
+                            (Mon {4} Int -> (Mon {4} {Int, Int})))
+                            , {} -> (Mon {4} (Int -> (Mon {4} Int -> (Mon {4} { Int
+                                                                              , Int
+                                                                              }))) ->
+                            (Mon {4} Int -> (Mon {4} {Int, Int})))
+                            }
+                          } -> <3>
+                        }
+                      } -> { {3} -> { (Marker Int)
+                                    , {} -> (Mon {3} (Int -> (Mon {3} Int)) ->
+                                    (Mon {3} Int))
+                                    } -> {2}
+                           , forall Type .
+                             (<4> -> T0) -> ({ (Marker Int)
+                                             , {} -> (Mon {4} (Int -> (Mon {4} Int)) ->
+                                             (Mon {4} Int))
+                                             } -> T0) -> <3> -> T0
+                           , {{2} -> {3}, <3> -> <2>}
+                           , { {2} -> { (Marker Int)
+                                      , {} -> (Mon {3} (Int -> (Mon {3} Int)) ->
+                                      (Mon {3} Int))
+                                      }
+                             , { (Marker Int)
+                               , {} -> (Mon {3} (Int -> (Mon {3} Int)) -> (Mon {3} Int))
+                               } -> <2>
+                             }
+                           } -> { {0} -> { (Marker T5)
+                                         , { Int -> (Mon {1} ({} -> (Mon {1} T5)) ->
+                                           (Mon {1} T5))
+                                           , {} -> (Mon {1} (Int -> (Mon {1} T5)) ->
+                                           (Mon {1} T5))
+                                           }
+                                         } -> {2}
+                                , forall Type .
+                                  (<1> -> T0) -> ({ (Marker T6)
+                                                  , { Int -> (Mon {2} ({} -> (Mon {2} T6))
+                                                    -> (Mon {2} T6))
+                                                    , {} -> (Mon {2} (Int -> (Mon {2} T6))
+                                                    -> (Mon {2} T6))
+                                                    }
+                                                  } -> T0) -> <3> -> T0
+                                , {{2} -> {0}, <0> -> <2>}
+                                , { {2} -> { (Marker T5)
+                                           , { Int -> (Mon {1} ({} -> (Mon {1} T5)) ->
+                                             (Mon {1} T5))
+                                             , {} -> (Mon {1} (Int -> (Mon {1} T5)) ->
+                                             (Mon {1} T5))
+                                             }
+                                           }
+                                  , { (Marker T5)
+                                    , { Int -> (Mon {1} ({} -> (Mon {1} T5)) ->
+                                      (Mon {1} T5))
+                                      , {} -> (Mon {1} (Int -> (Mon {1} T5)) ->
+                                      (Mon {1} T5))
+                                      }
+                                    } -> <2>
+                                  }
+                                } -> (Mon {4} Int -> (Mon {4} Int -> (Mon {4} { Int
+                                                                              , Int
+                                                                              })))"#]],
+      //main
       expect!["Int"],
     ];
     for ((item, expect), expect_ty) in module

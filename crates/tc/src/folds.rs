@@ -300,7 +300,7 @@ pub(crate) mod instantiate {
 
 pub(crate) mod zonker {
   use base::id::{Id, TyVarId};
-  use ena::unify::InPlaceUnificationTable;
+  use ena::unify::{InPlaceUnificationTable, UnifyKey};
   use ty::{
     infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK, UnifierToTcVarError},
     row::{Row, ScopedRow, SimpleRow},
