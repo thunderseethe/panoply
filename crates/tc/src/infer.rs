@@ -1020,6 +1020,14 @@ where
   }
 }
 
+pub(crate) struct SolveOutput<'infer, State> {
+  pub(crate) ty_unifiers: InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
+  pub(crate) data_row_unifiers: InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
+  pub(crate) eff_row_unifiers: InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
+  pub(crate) errors: Vec<TypeCheckDiagnostic>,
+  pub(crate) state: State,
+}
+
 impl<'a, 'infer, I> InferCtx<'a, 'infer, I, Solution>
 where
   I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
@@ -1049,15 +1057,7 @@ where
 
   /// Solve a list of constraints to a mapping from unifiers to types.
   /// If there is no solution to the list of constraints we return a relevant error.
-  pub(crate) fn solve(
-    mut self,
-  ) -> (
-    InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
-    InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
-    InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
-    <Solution as InferState>::Storage<'infer>,
-    Vec<TypeCheckDiagnostic>,
-  ) {
+  pub(crate) fn solve(mut self) -> SolveOutput<'infer, <Solution as InferState>::Storage<'infer>> {
     let constraints = std::mem::take(&mut self.constraints);
     for (left, right, span) in constraints.tys {
       self
@@ -1104,13 +1104,13 @@ where
         .unwrap_or_default();
     }
 
-    (
-      self.ty_unifiers,
-      self.data_row_unifiers,
-      self.eff_row_unifiers,
-      self.state,
-      self.errors,
-    )
+    SolveOutput {
+      ty_unifiers: self.ty_unifiers,
+      data_row_unifiers: self.data_row_unifiers,
+      eff_row_unifiers: self.eff_row_unifiers,
+      state: self.state,
+      errors: self.errors,
+    }
   }
 
   /// Apply the current partial substitution to a type, removing as many unifiers as possible
@@ -1142,14 +1142,14 @@ where
     }
   }
 
-  fn dispatch_solved<Sema: RowTheory>(
+  fn dispatch_solved<Sema>(
     &mut self,
     var: Sema::Open<InArena<'infer>>,
     row: Sema::Closed<InArena<'infer>>,
   ) -> Result<(), TypeCheckError<'infer>>
   where
     Self: RowEquationSolver<'infer, Sema>,
-    Sema: Ord + Clone,
+    Sema: Ord + Clone + RowTheory,
     Sema::Open<InArena<'infer>>: Copy,
     Sema::Closed<InArena<'infer>>: Copy + PrettyWithCtx<(&'a dyn crate::Db, ())>,
   {

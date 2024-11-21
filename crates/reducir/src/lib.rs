@@ -346,7 +346,7 @@ impl<Ext> Bind<Ext> {
     Self { var, defn }
   }
 
-  pub fn fold<F: ?Sized + ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> Bind<F::OutExt> {
+  pub fn fold<F: ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> Bind<F::OutExt> {
     Bind {
       var: self.var,
       defn: self.defn.fold(fold),
@@ -859,7 +859,7 @@ pub trait ReducIrFold: Sized {
 }
 
 impl<Ext> ReducIr<Ext> {
-  pub fn fold<F: ?Sized + ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
+  pub fn fold<F: ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
     fold.traverse_ir(self)
   }
 

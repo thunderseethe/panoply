@@ -74,7 +74,8 @@ impl RowSema for Scoped {
 /// Their semantics of simple rows differ from scoped rows in two key areas:
 ///   * Row combination is done with disjoint union, not union, and can fail
 ///   * Row combination is commutative, and row difference can ignore which sub row (left or right)
-///   is being removed.
+///
+/// is being removed.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug)]
 pub struct Simple;
 impl SealRowSema for Simple {}

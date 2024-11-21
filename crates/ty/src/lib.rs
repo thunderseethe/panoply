@@ -192,7 +192,7 @@ where
   type Item = Ty<InDb>;
 
   fn next(&mut self) -> Option<Self::Item> {
-    self.stack.pop().map(|ty| {
+    self.stack.pop().inspect(|ty| {
       match ty.0.kind(self.db.as_ty_db()) {
         TypeKind::ErrorTy => {}
         TypeKind::IntTy => {}
@@ -216,7 +216,6 @@ where
           }
         },
       };
-      ty
     })
   }
 }

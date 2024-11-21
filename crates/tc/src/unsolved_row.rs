@@ -23,8 +23,9 @@ use ty::{
 ///  * Left row open right row open
 ///  * Left row open, right row closed
 ///  * Right row open, left row closed
-///  Importantly, we cannot have two closed rows with an open goal. Because then we could combine
-///  our left and right row to infer the goal row.
+///
+/// Importantly, we cannot have two closed rows with an open goal. Because then we could combine
+/// our left and right row to infer the goal row.
 pub(crate) enum UnsolvedRowEquation<A: TypeAlloc, Sema: RowSema> {
   ClosedGoal(ClosedGoal<A, Sema>),
   OpenGoal(OpenGoal<A, Sema>),

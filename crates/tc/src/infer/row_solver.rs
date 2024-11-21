@@ -34,6 +34,7 @@ impl<'ctx> IntoTypeCheckerError<'ctx> for Infallible {
 ///  * Combine left and right to infer goal (`combine`)
 ///  * Difference goal and left to infer right (`diff_left`)
 ///  * Difference goal and right to infer left (`diff_right`)
+///
 /// If we know how to do these 3 things we can solve row predicates for a given row semantics.
 ///
 /// Our final helper method is `match_eqn` this determines if a row combination could unify against

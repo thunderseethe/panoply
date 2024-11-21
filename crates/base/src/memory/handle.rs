@@ -52,7 +52,7 @@ impl<P: Deref> Hash for Handle<P> {
 
 impl<P: Deref> Ord for Handle<P> {
   fn cmp(&self, other: &Self) -> Ordering {
-    self.0.ptr().cmp(&other.0.ptr())
+    self.0.ptr().cast::<()>().cmp(&other.0.ptr().cast::<()>())
   }
 }
 

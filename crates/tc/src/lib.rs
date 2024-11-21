@@ -290,15 +290,14 @@ pub(crate) fn type_check(
   };
 
   // Solve constraints into the unifiers mapping.
-  let (mut ty_unifiers, mut data_row_unifiers, mut eff_row_unifiers, unsolved_eqs, errors) =
-    infer.solve();
+  let mut solution = infer.solve();
 
   // Zonk the variable -> type mapping and the root term type.
   let mut zonker = Zonker::new(
     db,
-    &mut ty_unifiers,
-    &mut data_row_unifiers,
-    &mut eff_row_unifiers,
+    &mut solution.ty_unifiers,
+    &mut solution.data_row_unifiers,
+    &mut solution.eff_row_unifiers,
   );
   let zonked_infer = result.try_fold_with(&mut zonker).unwrap();
 
@@ -319,11 +318,12 @@ pub(crate) fn type_check(
 
   let zonked_op_sels = gen_storage.op_selectors.try_fold_with(&mut zonker).unwrap();
 
-  let mut constrs = unsolved_eqs
+  let mut constrs = solution
+    .state
     .data_eqns
     .into_iter()
     .map(Evidence::from)
-    .chain(unsolved_eqs.eff_eqns.into_iter().map(Evidence::from))
+    .chain(solution.state.eff_eqns.into_iter().map(Evidence::from))
     .map(|ev| ev.try_fold_with(&mut zonker).unwrap())
     .collect::<Vec<_>>();
 
@@ -351,7 +351,7 @@ pub(crate) fn type_check(
     item_wrappers: zonked_item_wrappers,
     op_selectors: zonked_op_sels,
     scheme,
-    diags: errors,
+    diags: solution.errors,
   }
 }
 
@@ -379,79 +379,6 @@ fn print_root_unifiers<'ctx, K: UnifierKind>(
     }
   }
   println!("]");
-}
-
-pub mod test_utils {
-  use base::{
-    id::{EffectName, EffectOpName},
-    ident::Ident,
-    modules::Module,
-  };
-
-  use crate::{EffectInfo, TyScheme};
-
-  pub(crate) struct DummyEff<'a>(pub &'a dyn crate::Db);
-  impl EffectInfo for DummyEff<'_> {
-    fn effect_name(&self, eff: EffectName) -> Ident {
-      self.0.effect_name(eff)
-    }
-
-    fn effect_members(&self, eff: EffectName) -> &[EffectOpName] {
-      self.0.effect_members(eff)
-    }
-
-    fn lookup_effect_by_member_names<'a>(
-      &self,
-      module: Module,
-      members: &[Ident],
-    ) -> Option<EffectName> {
-      members
-        .first()
-        .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-          "ask" => Some(EffectName::new(
-            self.0.as_core_db(),
-            self.0.ident_str("Reader"),
-            module,
-          )),
-          "get" => members
-            .get(1)
-            .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-              "put" => Some(EffectName::new(
-                self.0.as_core_db(),
-                self.0.ident_str("State"),
-                module,
-              )),
-              _ => None,
-            }),
-          "put" => members
-            .get(1)
-            .and_then(|id| match id.text(self.0.as_core_db()).as_str() {
-              "get" => Some(EffectName::new(
-                self.0.as_core_db(),
-                self.0.ident_str("State"),
-                module,
-              )),
-              _ => None,
-            }),
-          _ => None,
-        })
-    }
-
-    fn lookup_effect_by_name(&self, module: Module, name: Ident) -> Option<EffectName> {
-      match name.text(self.0.as_core_db()).as_str() {
-        "State" | "Reader" => Some(EffectName::new(self.0.as_core_db(), name, module)),
-        _ => None,
-      }
-    }
-
-    fn effect_member_sig(&self, eff_op: EffectOpName) -> TyScheme {
-      self.0.effect_member_sig(eff_op)
-    }
-
-    fn effect_member_name(&self, eff_op: EffectOpName) -> Ident {
-      eff_op.name(self.0.as_core_db())
-    }
-  }
 }
 
 #[cfg(test)]

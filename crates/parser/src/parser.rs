@@ -67,7 +67,7 @@ where
 
 pub(crate) trait ParserMapState<State, Input: 'static, T> {
   #[allow(clippy::type_complexity)]
-  fn map_state<F: 'static>(self, f: F) -> Map<Self, Box<dyn Fn(Input) -> StateM<State, T>>, Input>
+  fn map_state<F>(self, f: F) -> Map<Self, Box<dyn Fn(Input) -> StateM<State, T>>, Input>
   where
     Self: Sized,
     F: Copy + FnMut(Input, &mut State) -> T + 'static;
@@ -76,7 +76,7 @@ impl<P, State, Input: 'static, T> ParserMapState<State, Input, T> for P
 where
   P: Parser<Token, Input, Error = ParseErrors>,
 {
-  fn map_state<F: 'static>(
+  fn map_state<F>(
     self,
     mut f: F,
   ) -> chumsky::combinator::Map<Self, Box<dyn Fn(Input) -> StateM<State, T>>, Input>

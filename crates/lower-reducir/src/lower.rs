@@ -19,7 +19,7 @@ use reducir::{
 use rustc_hash::FxHashMap;
 use tc::{EffectInfo, OpSelector, TyChkRes};
 use ty::{
-  row::{Row, RowOps, RowSema, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
+  row::{Row, RowOps, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
   AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
 };
 
@@ -60,9 +60,6 @@ pub trait ItemWrappers {
   fn lookup_wrapper(&self, term_name: TermName, term: Idx<Term<VarId>>) -> &Wrapper;
 }
 
-pub trait ItemSchemes {
-  fn lookup_scheme(&self, term: TermName) -> TyScheme;
-}
 pub trait VarTys {
   fn lookup_var(&self, term: TermName, var_id: VarId) -> Ty;
 }
@@ -365,23 +362,14 @@ impl<'a, 'b> LowerTyCtx<'a, 'b> {
   }
 }
 pub(crate) trait RowVarConvert<Sema: RowReducIrKind> {
-  fn convert_row_var(&mut self, row_var: Sema::Open<InDb>) -> ReducIrTyVarId;
   fn lookup_row_var(&mut self, row_var: &Sema::Open<InDb>) -> i32;
 }
 impl RowVarConvert<Simple> for LowerTyCtx<'_, '_> {
-  fn convert_row_var(&mut self, row_var: <Simple as RowSema>::Open<InDb>) -> ReducIrTyVarId {
-    self.tyvar_conv.convert(row_var)
-  }
-
   fn lookup_row_var(&mut self, row_var: &TyVarId) -> i32 {
     self.tyvar_env[row_var]
   }
 }
 impl RowVarConvert<Scoped> for LowerTyCtx<'_, '_> {
-  fn convert_row_var(&mut self, row_var: <Scoped as RowSema>::Open<InDb>) -> ReducIrTyVarId {
-    self.tyvar_conv.convert(row_var)
-  }
-
   fn lookup_row_var(&mut self, row_var: &TyVarId) -> i32 {
     self.tyvar_env[row_var]
   }

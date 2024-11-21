@@ -6,7 +6,7 @@ use base::{
   modules::Module,
 };
 use la_arena::Idx;
-use lower::{ItemSchemes, LowerCtx, TermTys, VarTys};
+use lower::{LowerCtx, TermTys, VarTys};
 use reducir::{
   mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule},
   ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
@@ -17,7 +17,7 @@ use reducir::{
 use tc::EffectInfo;
 use ty::{
   row::{Scoped, Simple},
-  InDb, MkTy, RowFields, Ty, TyScheme, Wrapper,
+  InDb, MkTy, RowFields, Ty, Wrapper,
 };
 
 use rustc_hash::FxHashMap;
@@ -478,15 +478,6 @@ where
   }
 }
 
-impl<DB> ItemSchemes for DB
-where
-  DB: ?Sized + crate::Db,
-{
-  fn lookup_scheme(&self, term: TermName) -> TyScheme {
-    let typed_item = self.type_scheme_of(term);
-    typed_item.ty_scheme(self.as_tc_db())
-  }
-}
 impl<DB> VarTys for DB
 where
   DB: ?Sized + crate::Db,

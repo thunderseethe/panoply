@@ -47,7 +47,7 @@ impl<I, T> Ids<I, T> {
 
   fn from_boxed_raw(raw: Box<[T]>) -> Box<Ids<I, T>> {
     // Safe because of #[repr(transparent)].
-    unsafe { Box::from_raw(transmute(Box::into_raw(raw))) }
+    unsafe { Box::from_raw(transmute::<*mut [T], *mut Ids<I, T>>(Box::into_raw(raw))) }
   }
 
   /// As `[T]::is_empty()`.
@@ -71,7 +71,10 @@ impl<I, T> Ids<I, T> {
   /// Consumes a boxed slice and converts it to an [`IdGen`].
   pub fn into_gen(self: Box<Ids<I, T>>) -> IdGen<I, T> {
     // Safe because of #[repr(transparent)].
-    IdGen::from_raw(unsafe { Box::<[T]>::from_raw(transmute(Box::into_raw(self))) }.into_vec())
+    IdGen::from_raw(
+      unsafe { Box::<[T]>::from_raw(transmute::<*mut Ids<I, T>, *mut [T]>(Box::into_raw(self))) }
+        .into_vec(),
+    )
   }
 }
 
