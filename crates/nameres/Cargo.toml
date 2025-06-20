@@ -16,5 +16,5 @@ salsa.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true
-chumsky.workspace = true
+#chumsky.workspace = true
 test-utils.workspace = true

@@ -273,7 +273,7 @@ pub(crate) struct InferCtx<'a, 'infer, I, State: InferState = Generation> {
   _marker: std::marker::PhantomData<State>,
 }
 
-impl<'infer, A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx<'_, 'infer, I, S> {
+impl<A: TypeAlloc, I: MkTy<A>, S: InferState> MkTy<A> for InferCtx<'_, '_, I, S> {
   fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A> {
     self.ctx.mk_ty(kind)
   }

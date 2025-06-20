@@ -45,7 +45,7 @@ impl<'b, E> NameResCtx<'_, 'b, '_, E> {
   }
 }
 
-impl<'a, E> NameResCtx<'a, '_, '_, E> {
+impl<E> NameResCtx<'_, '_, '_, E> {
   // Tries to map the given function over the elements of `separated`, returning all errors.
   fn resolve_separated<A, B, F>(
     &mut self,
@@ -966,7 +966,7 @@ mod tests {
     Vec<NameResolutionError>,
   ) {
     // Wrap our term in an item def
-    let mut content = "item = ".to_string();
+    let mut content = "defn item = ".to_string();
     content.push_str(input);
 
     let (items, _, errors) = parse_resolve_module(db, arena, content);
@@ -989,7 +989,7 @@ mod tests {
   fn test_local_binding() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; y = {}; x");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let x = {}; let y = {}; x");
     assert_matches!(errs[..], []);
     assert_matches!(
         term,
@@ -1009,7 +1009,7 @@ mod tests {
   fn test_local_binding_types() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "x: a = {}; y: {} = {}; x");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let x: a = {}; let y: {} = {}; x");
     assert_matches!(errs[..], []);
     assert_matches!(
         term,
@@ -1031,7 +1031,7 @@ mod tests {
   fn test_local_binding_shadowing() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; x = x; x");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let x = {}; let x = x; x");
     assert_matches!(errs[..], []);
     assert_matches!(term,
         Some((nterm_local!(
@@ -1051,7 +1051,7 @@ mod tests {
   fn test_local_binding_errors() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "x = y; z");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let x = y; z");
     assert_matches!(term, None);
     assert_matches!(
         errs[..],
@@ -1077,7 +1077,7 @@ mod tests {
   fn test_handler() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; with x do x");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let x = {}; with x do x");
     assert_matches!(errs[..], []);
     assert_matches!(term,
         Some((nterm_local!(
@@ -1236,7 +1236,7 @@ mod tests {
   fn test_product_row() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; {a = x, b = {x = x}}");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let x = {}; {a = x, b = {x = x}}");
     assert_matches!(errs[..], []);
     assert_matches!(term,
         Some((nterm_local!(x_var, nterm_prod!(),
@@ -1318,7 +1318,7 @@ mod tests {
   fn test_dot_access() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "id = |x| x; {x = id}.x");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let id = |x| x; {x = id}.x");
     assert_matches!(errs[..], []);
     assert_matches!(term,
         Some((nterm_local!(
@@ -1442,7 +1442,7 @@ mod tests {
   fn test_mixed_shadowing() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (term, errs) = parse_resolve_term(&db, &arena, "x = {}; |x| match <x => x>");
+    let (term, errs) = parse_resolve_term(&db, &arena, "let x = {}; |x| match <x => x>");
     assert_matches!(errs[..], []);
     assert_matches!(
         term,
@@ -1459,7 +1459,7 @@ mod tests {
   fn test_schemes() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (res, ids, errs) = parse_resolve_module(&db, &arena, "foo : forall a. a -> a = |x| x");
+    let (res, ids, errs) = parse_resolve_module(&db, &arena, "defn foo : forall a. a -> a = |x| x");
     assert_matches!(errs[..], []);
     assert_matches!(
         res[..],
@@ -1480,7 +1480,7 @@ mod tests {
   fn test_int_ty() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (res, ids, errs) = parse_resolve_module(&db, &arena, "foobar : Int = 5");
+    let (res, ids, errs) = parse_resolve_module(&db, &arena, "defn foobar : Int = 5");
 
     assert_matches!(errs[..], []);
     assert_matches!(
@@ -1497,7 +1497,7 @@ mod tests {
   fn test_top_level_letrec() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (res, _, errs) = parse_resolve_module(&db, &arena, "foo = bar\nbar = foo");
+    let (res, _, errs) = parse_resolve_module(&db, &arena, "defn foo = bar\ndefn bar = foo");
     assert_matches!(errs[..], []);
     assert_matches!(
         res[..],
@@ -1518,7 +1518,7 @@ mod tests {
   fn test_top_level_errors() {
     let arena = Bump::new();
     let db = TestDatabase::default();
-    let (res, _, errs) = parse_resolve_module(&db, &arena, "foo = x\nbar = y");
+    let (res, _, errs) = parse_resolve_module(&db, &arena, "defn foo = x\ndefn bar = y");
     assert_matches!(res[..], [None, None]);
     assert_matches!(
         errs[..],

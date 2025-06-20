@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, fmt::Debug, ops::Range};
+use std::{cmp::Ordering, fmt::Debug};
 
 use crate::loc::Loc;
 
@@ -61,7 +61,7 @@ impl Span {
   }
 }
 
-impl chumsky::Span for Span {
+/*impl chumsky::Span for Span {
   type Context = ();
   type Offset = Loc;
 
@@ -81,7 +81,7 @@ impl chumsky::Span for Span {
   fn end(&self) -> Self::Offset {
     self.end
   }
-}
+}*/
 
 /// Compares spans by inclusion.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

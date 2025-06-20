@@ -375,7 +375,7 @@ impl RowVarConvert<Scoped> for LowerTyCtx<'_, '_> {
   }
 }
 
-impl<'a, 'b, S> MkReducIrTy for LowerCtx<'a, 'b, S> {
+impl<S> MkReducIrTy for LowerCtx<'_, '_, S> {
   fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
     self.db.mk_reducir_ty(kind)
   }

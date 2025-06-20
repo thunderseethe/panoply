@@ -62,7 +62,7 @@ impl<'me, T> From<&'me T> for BoxRef<'me, T> {
   }
 }
 
-impl<'me, T: ?Sized> AsRef<T> for BoxRef<'me, T> {
+impl<T: ?Sized> AsRef<T> for BoxRef<'_, T> {
   fn as_ref(&self) -> &T {
     match self {
       BoxRef::B(me) => me,

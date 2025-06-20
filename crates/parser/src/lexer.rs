@@ -11,9 +11,11 @@ use std::fmt::Debug;
 pub enum Token {
   KwForall,
   KwEffect,
+  KwDefn,
   KwMatch,
   KwWith,
   KwDo,
+  KwLet,
   Int(usize),
   Identifier(Ident),
   Plus,
@@ -32,7 +34,9 @@ pub enum Token {
   Colon,
   Semicolon,
   Comma,
+  Concat,
   Dot,
+  Eof,
 }
 
 impl Token {
@@ -43,8 +47,10 @@ impl Token {
       Token::KwForall => "forall",
       Token::KwMatch => "match",
       Token::KwEffect => "effect",
+      Token::KwDefn => "defn",
       Token::KwWith => "with",
       Token::KwDo => "do",
+      Token::KwLet => "let",
       Token::Int(_) => "<integer>",
       Token::Identifier(..) => "<identifier>",
       Token::Plus => "+",
@@ -63,7 +69,9 @@ impl Token {
       Token::Colon => ":",
       Token::Semicolon => ";",
       Token::Comma => ",",
+      Token::Concat => ",,",
       Token::Dot => ".",
+      Token::Eof => "<end of file>",
     }
   }
 }
@@ -159,8 +167,10 @@ pub fn lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
       literal("forall", Token::KwForall),
       literal("match", Token::KwMatch),
       literal("effect", Token::KwEffect),
+      literal("defn", Token::KwDefn),
       literal("with", Token::KwWith),
       literal("do", Token::KwDo),
+      literal("let", Token::KwLet),
       // Identifier
       (
         r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),
@@ -186,6 +196,7 @@ pub fn lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
       literal(">", Token::RAngle),
       literal(":", Token::Colon),
       literal(";", Token::Semicolon),
+      literal(",,", Token::Concat),
       literal(",", Token::Comma),
       literal(".", Token::Dot),
       // Comments

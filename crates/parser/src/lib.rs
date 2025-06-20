@@ -6,18 +6,14 @@ use base::{
   modules::Module,
   span::{SpanOf, Spanned},
 };
-use chumsky::Parser;
 use cst::{CstIndxAlloc, CstModule, IdField, Pattern, Row, Term, Type};
 use la_arena::Idx;
 
-use crate::{
-  lexer::lexer,
-  parser::{parser, to_stream},
-};
+use crate::lexer::lexer;
 
 use self::locator::Locator;
 
-mod expr;
+//mod expr;
 pub mod lexer;
 pub mod parser;
 
@@ -25,55 +21,11 @@ pub(crate) mod locator;
 
 pub mod error {
   use std::collections::LinkedList;
-  use std::fmt::Display;
 
-  use crate::lexer::Token;
-  use base::{diagnostic::parser::ParseError, span::Span};
+  use base::diagnostic::parser::ParseError;
 
   #[derive(Debug)]
   pub struct ParseErrors(pub LinkedList<ParseError>);
-
-  struct TokenOrEOFByName(Option<Token>);
-
-  impl Display for TokenOrEOFByName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-      if let Some(t) = self.0 {
-        write!(f, "'{}'", t.name())
-      } else {
-        write!(f, "EOF")
-      }
-    }
-  }
-
-  impl chumsky::Error<Token> for ParseErrors {
-    type Span = Span;
-    type Label = ();
-
-    fn expected_input_found<Iter: IntoIterator<Item = Option<Token>>>(
-      span: Self::Span,
-      expected: Iter,
-      found: Option<Token>,
-    ) -> Self {
-      ParseErrors(LinkedList::from([ParseError::WrongToken {
-        span,
-        got: TokenOrEOFByName(found).to_string(),
-        want_any: expected
-          .into_iter()
-          .map(|token| TokenOrEOFByName(token).to_string())
-          .collect(),
-      }]))
-    }
-
-    fn with_label(self, _: Self::Label) -> Self {
-      self
-    }
-
-    fn merge(mut self, other: Self) -> Self {
-      let mut other = other;
-      self.0.append(&mut other.0);
-      self
-    }
-  }
 }
 
 #[salsa::jar(db = Db)]
@@ -196,19 +148,17 @@ fn parse_module(db: &dyn crate::Db, file: SourceFile) -> ParseFile {
     }
   };
 
-  let cst_module = parser()
-    .parse(to_stream(tokens, eoi))
-    .map_err(|errs| {
-      for err in errs.into_iter().flat_map(|list| list.0.into_iter()) {
-        PanoplyErrors::push(db, PanoplyError::from(err))
-      }
-    })
-    .map(|items| {
-      let mut indices = CstIndxAlloc::default();
-      let items = items.apply(&mut indices);
-      CstModule { items, indices }
-    })
-    .unwrap_or_default();
+  let mut parser = parser::Parser::new(tokens, eoi);
+  let cst_module = match parser.items() {
+    Ok(items) => CstModule {
+      items,
+      indices: parser.alloc,
+    },
+    Err(err) => {
+      PanoplyErrors::push(db, PanoplyError::from(err));
+      return ParseFile::new(db, file_id, module, CstModule::default());
+    }
+  };
 
   ParseFile::new(db, file_id, module, cst_module)
 }
@@ -267,7 +217,7 @@ fn ident_starting_at(db: &dyn crate::Db, file_id: FileId, line: u32, col: u32) -
         // We use it as an early return to signal check the next item.
         Ok(())
       }
-      impl<'a> DfsFindSpan<'a> {
+      impl DfsFindSpan<'_> {
         fn search_ident(&self, ident: &SpanOf<Ident>) -> ShortCircuit<Option<Ident>> {
           if ident.span().contains(self.needle) {
             Err(Some(ident.value))

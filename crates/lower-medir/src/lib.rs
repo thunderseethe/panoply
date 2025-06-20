@@ -84,8 +84,9 @@ mod tests {
   };
   use expect_test::expect;
   use medir::MedIrModule;
+  use parser::Db as ParserDb;
 
-  use crate::Db;
+  use crate::Db as LowerMedirDb;
 
   #[derive(Default)]
   #[salsa::db(
@@ -125,11 +126,14 @@ effect Reader {
     let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
     SourceFileSet::new(db, vec![file]);
 
-    db.lower_medir_module_for_file_name(path)
+    let module = db.lower_medir_module_for_file_name(path);
+    let errors = db.all_parse_errors();
+    dbg!(errors);
+    module
   }
 
   fn lower_snippet(db: &TestDatabase, input: &str) -> MedIrModule {
-    let main = format!("main = {}", input);
+    let main = format!("defn main = {}", input);
     lower_function(db, &main)
   }
 
@@ -486,16 +490,16 @@ effect Reader {
     let medir_module = lower_function(
       &db,
       r#"
-foo = |env| with {
+defn foo = |env| with {
   get = |x| |k| |s| k(s)(s),
   put = |x| |k| |s| k({})(x),
   return = |x| |s| { value = x, state = s },
 } do (with {
   ask = |x| |k| k(env),
   return = |x| x,
-} do w = State.put(Reader.ask({})); State.get({}))
+} do let w = State.put(Reader.ask({})); State.get({}))
 
-main = foo(16777215)(14).state"#,
+defn main = foo(16777215)(14).state"#,
     );
 
     let expect = expect![[r#"

@@ -330,7 +330,7 @@ struct RenumberVars<'a> {
   top_level: ReducIrTermName,
   subst: FxHashMap<ReducIrLocal, ReducIrLocal>,
 }
-impl<'a> RenumberVars<'a> {
+impl RenumberVars<'_> {
   fn gen_local(&mut self) -> ReducIrLocal {
     ReducIrLocal {
       id: self.supply.supply_id(),
@@ -338,7 +338,7 @@ impl<'a> RenumberVars<'a> {
     }
   }
 }
-impl<'a> ReducIrEndoFold for RenumberVars<'a> {
+impl ReducIrEndoFold for RenumberVars<'_> {
   type Ext = Infallible;
 
   fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {

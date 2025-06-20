@@ -67,7 +67,7 @@ pub struct TcUnifierVar<'ctx, Kind: UnifierKind = TypeK> {
   id: u32,
   _marker: std::marker::PhantomData<&'ctx Kind>,
 }
-impl<'ctx, Kind: UnifierKind> fmt::Debug for TcUnifierVar<'ctx, Kind> {
+impl<Kind: UnifierKind> fmt::Debug for TcUnifierVar<'_, Kind> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let kind = std::any::type_name::<Kind>();
     f.debug_tuple(&format!("TcUnifierVar<{kind}>"))
@@ -75,13 +75,13 @@ impl<'ctx, Kind: UnifierKind> fmt::Debug for TcUnifierVar<'ctx, Kind> {
       .finish()
   }
 }
-impl<'ctx, Kind: UnifierKind> From<Infallible> for TcUnifierVar<'ctx, Kind> {
+impl<Kind: UnifierKind> From<Infallible> for TcUnifierVar<'_, Kind> {
   fn from(_: Infallible) -> Self {
     unreachable!()
   }
 }
 
-impl<'a, 'ctx, A, D, Kind> pretty::Pretty<'a, D, A> for TcUnifierVar<'ctx, Kind>
+impl<'a, A, D, Kind> pretty::Pretty<'a, D, A> for TcUnifierVar<'_, Kind>
 where
   Kind: UnifierKind,
   A: 'a,
@@ -115,7 +115,7 @@ impl<'ctx, Kind: UnifierKind + Debug> UnifyKey for TcUnifierVar<'ctx, Kind> {
 /// This is an alias to make inference types easy to talk about.
 pub type InferTy<'ctx> = Ty<InArena<'ctx>>;
 
-impl<'ctx> EqUnifyValue for Ty<InArena<'ctx>> {}
+impl EqUnifyValue for Ty<InArena<'_>> {}
 
 pub(crate) mod arena {
   use crate::{
@@ -252,7 +252,7 @@ pub(crate) mod arena {
 }
 pub use arena::{InArena, TyCtx};
 
-impl<'ctx, DB> DebugWithDb<DB> for SimpleClosedRow<InArena<'ctx>>
+impl<DB> DebugWithDb<DB> for SimpleClosedRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
 {
@@ -268,7 +268,7 @@ where
   }
 }
 
-impl<'ctx, DB> DebugWithDb<DB> for SimpleRow<InArena<'ctx>>
+impl<DB> DebugWithDb<DB> for SimpleRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
 {
@@ -280,7 +280,7 @@ where
   }
 }
 
-impl<'ctx, DB> DebugWithDb<DB> for ScopedClosedRow<InArena<'ctx>>
+impl<DB> DebugWithDb<DB> for ScopedClosedRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
 {
@@ -295,7 +295,7 @@ where
       .finish()
   }
 }
-impl<'ctx, DB> DebugWithDb<DB> for ScopedRow<InArena<'ctx>>
+impl<DB> DebugWithDb<DB> for ScopedRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
 {
@@ -307,7 +307,7 @@ where
   }
 }
 
-impl<'ctx, DB> DebugWithDb<DB> for Evidence<InArena<'ctx>>
+impl<DB> DebugWithDb<DB> for Evidence<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
 {
@@ -329,7 +329,7 @@ where
   }
 }
 
-impl<'ctx, DB> DebugWithDb<DB> for TypeKind<InArena<'ctx>>
+impl<DB> DebugWithDb<DB> for TypeKind<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
 {
@@ -360,7 +360,7 @@ where
   }
 }
 
-impl<'ctx> fmt::Debug for TypeKind<InArena<'ctx>> {
+impl fmt::Debug for TypeKind<InArena<'_>> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
       TypeKind::ErrorTy => f.debug_tuple("ErrorTy").finish(),
@@ -388,13 +388,13 @@ impl<'ctx> Ty<InArena<'ctx>> {
   }
 }
 
-impl<'ctx> EqUnifyValue for SimpleClosedRow<InArena<'ctx>> {}
-impl<'ctx> EqUnifyValue for ScopedClosedRow<InArena<'ctx>> {}
+impl EqUnifyValue for SimpleClosedRow<InArena<'_>> {}
+impl EqUnifyValue for ScopedClosedRow<InArena<'_>> {}
 
 pub type SimpleInferRow<'ctx> = SimpleRow<InArena<'ctx>>;
 pub type ScopedInferRow<'ctx> = ScopedRow<InArena<'ctx>>;
 
-impl<'ctx> UnifyValue for SimpleInferRow<'ctx> {
+impl UnifyValue for SimpleInferRow<'_> {
   type Error = (Self, Self);
 
   fn unify_values(left: &Self, right: &Self) -> Result<Self, Self::Error> {

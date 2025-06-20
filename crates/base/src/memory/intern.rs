@@ -72,7 +72,7 @@ where
   }
 }
 
-impl<'a, T, A> Debug for SyncInterner<'a, T, A>
+impl<T, A> Debug for SyncInterner<'_, T, A>
 where
   T: Debug + Eq + Hash + ?Sized,
   A: Debug,
@@ -121,7 +121,7 @@ where
   }
 }
 
-unsafe impl<'a, T, A> Sync for SyncInterner<'a, T, A>
+unsafe impl<T, A> Sync for SyncInterner<'_, T, A>
 where
   T: Send + ?Sized,
   A: Sync,

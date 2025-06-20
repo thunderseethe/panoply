@@ -8,7 +8,7 @@ where
   a_iter: &'a mut std::iter::Peekable<A>,
   b_iter: &'a mut std::iter::Peekable<B>,
 }
-impl<'a, A, B> Iterator for LentZip<'a, A, B>
+impl<A, B> Iterator for LentZip<'_, A, B>
 where
   A: Iterator,
   B: Iterator,

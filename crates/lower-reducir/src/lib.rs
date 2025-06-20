@@ -574,7 +574,7 @@ effect Reader {
 
   /// Lower a snippet and return the produced IR
   fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db DelimReducIr {
-    let main = format!("f = {}", input);
+    let main = format!("defn f = {}", input);
     lower_function(db, &main, "f", |db, path, fn_name| {
       db.lower_reducir_item_for_file_name(path, db.ident_str(fn_name))
     })
@@ -603,7 +603,7 @@ effect Reader {
   }
 
   fn lower_mon_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
-    let main = format!("f = {}", input);
+    let main = format!("defn f = {}", input);
     lower_function(db, &main, "f", |db, path, fn_name| {
       db.lower_reducir_mon_item_for_file_name(path, db.ident_str(fn_name))
     })
@@ -613,8 +613,8 @@ effect Reader {
   trait PrettyTyErr {
     fn to_pretty(self, db: &TestDatabase) -> String;
   }
-  impl<'a, Ext: PrettyWithCtx<TestDatabase> + TypeCheck<Ext = Ext> + Clone> PrettyTyErr
-    for Result<ReducIrTy, ReducIrTyErr<'a, Ext>>
+  impl<Ext: PrettyWithCtx<TestDatabase> + TypeCheck<Ext = Ext> + Clone> PrettyTyErr
+    for Result<ReducIrTy, ReducIrTyErr<'_, Ext>>
   {
     fn to_pretty(self, db: &TestDatabase) -> String {
       match self {
@@ -707,7 +707,7 @@ effect Reader {
     let ir = lower_mon_module(
       &db,
       r#"
-main = with {
+defn main = with {
     ask = |x| |k| k(374),
     return = |x| x
 } do Reader.ask({})"#,
@@ -860,7 +860,7 @@ main = with {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do w = Reader.ask({}); State.put(w)))(14).state
+} do let w = Reader.ask({}); State.put(w)))(14).state
 "#,
     );
 
@@ -1111,7 +1111,7 @@ main = with {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do w = Reader.ask({}); State.put(w)))(14).state
+} do let w = Reader.ask({}); State.put(w)))(14).state
 "#,
     );
 

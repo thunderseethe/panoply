@@ -2,13 +2,13 @@
 pkgs.mkShell {
   buildInputs = with pkgs; [ 
     cargo
-    cargo-tarpaulin
     clippy
     clang
     gdb
     mold
     rust-analyzer
     rustc
+    rustfmt
     jq
     wabt
     wasmtime

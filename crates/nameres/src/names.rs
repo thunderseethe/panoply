@@ -213,7 +213,7 @@ impl<'b> Names<'b> {
   }
 }
 
-impl<'b, I> IdOps<I> for Names<'b>
+impl<I> IdOps<I> for Names<'_>
 where
   Name: From<I>,
 {

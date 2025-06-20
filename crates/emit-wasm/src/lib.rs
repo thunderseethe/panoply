@@ -77,7 +77,7 @@ effect Reader {
   fn test_prj() {
     let db = TestDatabase::default();
 
-    let wasm_module = emit_module(&db, "f = { x = 5678, y = 1234 }.x");
+    let wasm_module = emit_module(&db, "defn f = { x = 5678, y = 1234 }.x");
 
     let bytes = wasm_module.finish();
     let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
@@ -643,9 +643,9 @@ effect Reader {
 
     let wasm_module = emit_module(
       &db,
-      r#"f = |m||n| (m ,, n).x
+      r#"defn f = |m||n| (m ,, n).x
 
-g = f({ x = {} })({ y = {} })
+defn g = f({ x = {} })({ y = {} })
 "#,
     );
 
@@ -1843,7 +1843,7 @@ g = f({ x = {} })({ y = {} })
     let wasm_module = emit_module(
       &db,
       r#"
-f = (with {
+defn f = (with {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},

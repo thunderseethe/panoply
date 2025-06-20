@@ -152,7 +152,7 @@ impl<'a, T> IntoIterator for &'a Separated<T> {
   }
 }
 
-impl<'a, T> Clone for Elements<'a, T> {
+impl<T> Clone for Elements<'_, T> {
   fn clone(&self) -> Self {
     Elements {
       head: self.head,
@@ -160,8 +160,8 @@ impl<'a, T> Clone for Elements<'a, T> {
     }
   }
 }
-impl<'a, T> ExactSizeIterator for Elements<'a, T> {}
-impl<'a, T> FusedIterator for Elements<'a, T> {}
+impl<T> ExactSizeIterator for Elements<'_, T> {}
+impl<T> FusedIterator for Elements<'_, T> {}
 impl<'a, T> Iterator for Elements<'a, T> {
   type Item = &'a T;
 

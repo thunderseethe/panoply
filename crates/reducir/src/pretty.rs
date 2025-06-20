@@ -316,8 +316,8 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
     }
   }
 }
-impl<'ir, DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
-  PrettyWithCtx<DB> for ReducIrTyErr<'ir, Ext>
+impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
+  PrettyWithCtx<DB> for ReducIrTyErr<'_, Ext>
 {
   fn pretty<'a>(&self, db: &DB, a: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
     match self {

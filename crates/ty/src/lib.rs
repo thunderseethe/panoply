@@ -185,7 +185,7 @@ impl<'a, Db: ?Sized> TyInDbDfs<'a, Db> {
     }
   }
 }
-impl<'a, DB> Iterator for TyInDbDfs<'a, DB>
+impl<DB> Iterator for TyInDbDfs<'_, DB>
 where
   DB: ?Sized + crate::Db,
 {

@@ -833,7 +833,7 @@ mod tests {
     db: &'db TestDatabase,
     input: &str,
   ) -> (nameres::NameResTerm, &'db ast::AstTerm) {
-    let mut content = "item = ".to_string();
+    let mut content = "defn item = ".to_string();
     content.push_str(input);
     let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test")), content);
     SourceFileSet::new(db, vec![file]);
@@ -901,7 +901,7 @@ mod tests {
   fn test_desugar_binding() {
     let db = TestDatabase::default();
 
-    let (nst_item, ast_item) = ds_snippet(&db, "|a||b| x = a; x(b)");
+    let (nst_item, ast_item) = ds_snippet(&db, "|a||b| let x = a; x(b)");
     let ast = ast_item.data(&db);
 
     assert_eq!(ast.span_of(ast.tree), Some(&nst_item.span_of(&db)));

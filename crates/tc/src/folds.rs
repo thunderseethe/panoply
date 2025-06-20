@@ -13,7 +13,7 @@ pub(crate) mod occurs_check {
     pub(crate) ctx: &'a I,
     pub(crate) var: TcUnifierVar<'inf, K>,
   }
-  impl<'a, 'inf, I> FallibleEndoTypeFold<'inf> for OccursCheck<'a, 'inf, I, TypeK>
+  impl<'inf, I> FallibleEndoTypeFold<'inf> for OccursCheck<'_, 'inf, I, TypeK>
   where
     I: MkTy<InArena<'inf>> + AccessTy<'inf, InArena<'inf>>,
   {
@@ -37,7 +37,7 @@ pub(crate) mod occurs_check {
       }
     }
   }
-  impl<'a, 'inf, I> FallibleEndoTypeFold<'inf> for OccursCheck<'a, 'inf, I, SimpleRowK>
+  impl<'inf, I> FallibleEndoTypeFold<'inf> for OccursCheck<'_, 'inf, I, SimpleRowK>
   where
     I: MkTy<InArena<'inf>> + AccessTy<'inf, InArena<'inf>>,
   {
@@ -62,7 +62,7 @@ pub(crate) mod occurs_check {
     }
   }
 
-  impl<'a, 'inf, I> FallibleEndoTypeFold<'inf> for OccursCheck<'a, 'inf, I, ScopedRowK>
+  impl<'inf, I> FallibleEndoTypeFold<'inf> for OccursCheck<'_, 'inf, I, ScopedRowK>
   where
     I: MkTy<InArena<'inf>> + AccessTy<'inf, InArena<'inf>>,
   {
@@ -233,7 +233,7 @@ pub(crate) mod instantiate {
     pub(crate) effrow_unifiers: Vec<(TyVarId, TcUnifierVar<'infer, ScopedRowK>)>,
   }
 
-  impl<'a, 'infer, I> Instantiate<'a, 'infer, I> {
+  impl<'a, I> Instantiate<'a, '_, I> {
     pub(crate) fn new(db: &'a dyn crate::Db, ctx: &'a I) -> Self {
       Self {
         db,

@@ -82,7 +82,7 @@ impl<'ctx>
   }
 }
 
-impl<'ty> From<UnifierToTcVarError> for TypeCheckError<'ty> {
+impl From<UnifierToTcVarError> for TypeCheckError<'_> {
   fn from(err: UnifierToTcVarError) -> Self {
     Self::UnifierToTcVar(err)
   }

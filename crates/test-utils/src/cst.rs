@@ -19,7 +19,7 @@ pub struct Separated<'a, T> {
   pub comma: Option<Span>,
 }
 
-impl<'a, T> Separated<'a, T> {
+impl<T> Separated<'_, T> {
   /// An iterator over the non-separator elements.
   pub fn elements(&self) -> Elements<'_, T> {
     self.into_iter()
@@ -39,7 +39,7 @@ impl<'a, T> IntoIterator for &'a Separated<'a, T> {
   }
 }
 
-impl<'a, T: Spanned> Spanned for Separated<'a, T> {
+impl<T: Spanned> Spanned for Separated<'_, T> {
   fn span(&self) -> Span {
     Span {
       start: self.first.start(),
@@ -61,7 +61,7 @@ pub struct Elements<'a, T> {
   tail: ElementTail<'a, T>,
 }
 
-impl<'a, T> Clone for Elements<'a, T> {
+impl<T> Clone for Elements<'_, T> {
   fn clone(&self) -> Self {
     Elements {
       head: self.head,
@@ -69,8 +69,8 @@ impl<'a, T> Clone for Elements<'a, T> {
     }
   }
 }
-impl<'a, T> ExactSizeIterator for Elements<'a, T> {}
-impl<'a, T> FusedIterator for Elements<'a, T> {}
+impl<T> ExactSizeIterator for Elements<'_, T> {}
+impl<T> FusedIterator for Elements<'_, T> {}
 impl<'a, T> Iterator for Elements<'a, T> {
   type Item = &'a T;
 
@@ -92,7 +92,7 @@ pub struct ProductRow<'a, T> {
   pub rbrace: Span,
 }
 
-impl<'a, T> Spanned for ProductRow<'a, T> {
+impl<T> Spanned for ProductRow<'_, T> {
   fn span(&self) -> Span {
     Span::join(&self.lbrace, &self.rbrace)
   }
@@ -138,7 +138,7 @@ pub enum Row<'a, V, C> {
   },
 }
 
-impl<'a, V, C: Spanned> Spanned for Row<'a, V, C> {
+impl<V, C: Spanned> Spanned for Row<'_, V, C> {
   fn span(&self) -> Span {
     match self {
       Row::Concrete(c) => c.span(),
@@ -182,7 +182,7 @@ pub enum Type<'a, V> {
   },
 }
 
-impl<'a, V> Spanned for Type<'a, V> {
+impl<V> Spanned for Type<'_, V> {
   fn span(&self) -> Span {
     match self {
       Type::Int(span) => *span,
@@ -208,7 +208,7 @@ pub enum RowAtom<'a, V> {
   Variable(SpanOf<V>),
 }
 
-impl<'a, V> Spanned for RowAtom<'a, V> {
+impl<V> Spanned for RowAtom<'_, V> {
   fn span(&self) -> Span {
     match self {
       RowAtom::Concrete { lpar, rpar, .. } => Span::join(lpar, rpar),
@@ -229,7 +229,7 @@ pub enum Constraint<'a, V> {
   },
 }
 
-impl<'a, V> Spanned for Constraint<'a, V> {
+impl<V> Spanned for Constraint<'_, V> {
   fn span(&self) -> Span {
     match self {
       Constraint::RowSum { lhs, goal, .. } => Span::join(lhs, goal),
@@ -244,7 +244,7 @@ pub struct Qualifiers<'a, V> {
   pub arrow: Span,
 }
 
-impl<'a, V> Spanned for Qualifiers<'a, V> {
+impl<V> Spanned for Qualifiers<'_, V> {
   fn span(&self) -> Span {
     Span::join(&self.constraints, &self.arrow)
   }
@@ -258,7 +258,7 @@ pub struct Scheme<'a, V> {
   pub type_: &'a Type<'a, V>,
 }
 
-impl<'a, V> Spanned for Scheme<'a, V> {
+impl<V> Spanned for Scheme<'_, V> {
   fn span(&self) -> Span {
     Span {
       start: self
@@ -286,7 +286,7 @@ pub struct EffectOp<'a, O, V> {
   pub type_: &'a Type<'a, V>,
 }
 
-impl<'a, O, V> Spanned for EffectOp<'a, O, V> {
+impl<O, V> Spanned for EffectOp<'_, O, V> {
   fn span(&self) -> Span {
     Span::join(&self.name, self.type_)
   }
@@ -300,7 +300,7 @@ pub enum Pattern<'a> {
   Whole(SpanOf<Ident>),
 }
 
-impl<'a> Spanned for Pattern<'a> {
+impl Spanned for Pattern<'_> {
   fn span(&self) -> Span {
     match self {
       Pattern::ProductRow(p) => p.span(),
@@ -373,7 +373,7 @@ pub enum Term<'a> {
   Int(SpanOf<usize>),
 }
 
-impl<'a> Spanned for Term<'a> {
+impl Spanned for Term<'_> {
   fn span(&self) -> Span {
     match self {
       Term::Binding { var, expr, .. } => Span::join(var, *expr),
@@ -410,7 +410,7 @@ pub enum Item<'a> {
   },
 }
 
-impl<'a> Item<'a> {
+impl Item<'_> {
   /// Returns the name of the item.
   pub fn name(&self) -> SpanOf<Ident> {
     match self {
@@ -419,7 +419,7 @@ impl<'a> Item<'a> {
   }
 }
 
-impl<'a> Spanned for Item<'a> {
+impl Spanned for Item<'_> {
   fn span(&self) -> Span {
     match self {
       Item::Effect { effect, rbrace, .. } => Span::join(effect, rbrace),

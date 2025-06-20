@@ -21,7 +21,7 @@ pub enum Pattern<'a> {
   Whole(SpanOf<VarId>),
 }
 
-impl<'a> Spanned for Pattern<'a> {
+impl Spanned for Pattern<'_> {
   fn span(&self) -> Span {
     match self {
       Pattern::ProductRow(p) => p.span(),
@@ -90,7 +90,7 @@ pub enum Term<'a> {
   Int(SpanOf<usize>),
 }
 
-impl<'a> Spanned for Term<'a> {
+impl Spanned for Term<'_> {
   fn span(&self) -> Span {
     match self {
       Term::Binding { var, expr, .. } => Span::join(var, *expr),
@@ -119,7 +119,7 @@ pub struct EffectDefn<'a> {
   pub ops: &'a [Option<EffectOp<'a, EffectOpName, TyVarId>>],
   pub rbrace: Span,
 }
-impl<'a> Spanned for EffectDefn<'a> {
+impl Spanned for EffectDefn<'_> {
   fn span(&self) -> Span {
     Span::join(&self.effect, &self.rbrace)
   }
@@ -132,7 +132,7 @@ pub struct TermDefn<'a> {
   pub eq: Span,
   pub value: &'a Term<'a>,
 }
-impl<'a> Spanned for TermDefn<'a> {
+impl Spanned for TermDefn<'_> {
   fn span(&self) -> Span {
     Span::join(&self.name, self.value)
   }
@@ -145,7 +145,7 @@ pub enum Item<'a> {
   Term(TermDefn<'a>),
 }
 
-impl<'a> Spanned for Item<'a> {
+impl Spanned for Item<'_> {
   fn span(&self) -> Span {
     match self {
       Item::Effect(eff) => eff.span(),

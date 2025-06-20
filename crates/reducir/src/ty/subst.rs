@@ -170,7 +170,7 @@ pub struct SubstFold<'db> {
   pub subst: Subst,
 }
 
-impl<'db> SubstFold<'db> {
+impl SubstFold<'_> {
   fn fold_row(&mut self, row: ReducIrRow) -> ReducIrRow {
     match row {
       ReducIrRow::Open(var) => self.subst.apply_row(self.db, var),

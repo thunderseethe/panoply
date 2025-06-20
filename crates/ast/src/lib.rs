@@ -89,7 +89,7 @@ struct PrettyTerm<'a, Var> {
   db: &'a dyn crate::Db,
 }
 
-impl<'a, Var> PrettyTerm<'a, Var> {
+impl<Var> PrettyTerm<'_, Var> {
   fn with_root(&self, root: Idx<Term<Var>>) -> Self {
     PrettyTerm {
       root,

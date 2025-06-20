@@ -102,7 +102,7 @@ where
   }
 }
 
-impl<'a, A> ReferenceAllocate<'a, A> for Ident {
+impl<A> ReferenceAllocate<'_, A> for Ident {
   type Out = Ident;
 
   fn ref_alloc(&self, _: &mut A) -> Self::Out {

@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use chumsky::{Error, Parser};
+//use chumsky::{Error, Parser};
 
 // Folds the op-expression pairs `oprights` into the base expression `left` using `f`.
 fn inlfold<L, O, R, C, F>(left: L, oprights: C, f: F) -> L

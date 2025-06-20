@@ -413,7 +413,7 @@ impl LowerMonCtx<'_> {
           .map_err_pretty_with(reducir_db)
           .unwrap();
 
-        return args
+        args
           .iter()
           .fold((func_mon, func_ty), |(func, func_ty), arg| {
             let mon_arg = self.lower_monadic(evv_ty, arg);
@@ -493,7 +493,7 @@ impl LowerMonCtx<'_> {
               .unwrap();
             (new_func, new_func_ty)
           })
-          .0;
+          .0
       }
       Locals(binds, body) => {
         let mut needs_mon_bind = vec![];

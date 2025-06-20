@@ -84,7 +84,7 @@ impl<'b> BaseNames<'b> {
   }
 }
 
-impl<'b, I> IdOps<I> for BaseNames<'b>
+impl<I> IdOps<I> for BaseNames<'_>
 where
   BaseName: From<I>,
 {

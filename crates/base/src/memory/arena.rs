@@ -50,7 +50,7 @@ impl ArenaByRef<str> for Bump {
   }
 }
 
-impl<'h, T: Copy> Arena<T> for Member<'h> {
+impl<T: Copy> Arena<T> for Member<'_> {
   fn alloc(&self, value: T) -> &T {
     self.alloc(value)
   }
@@ -64,7 +64,7 @@ impl<'h, T: Copy> Arena<T> for Member<'h> {
   }
 }
 
-impl<'h> ArenaByRef<str> for Member<'h> {
+impl ArenaByRef<str> for Member<'_> {
   fn alloc_by_ref<'a>(&'a self, value: &str) -> &'a str {
     self.alloc_str(value)
   }
