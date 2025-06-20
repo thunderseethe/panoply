@@ -13,7 +13,6 @@ use crate::lexer::lexer;
 
 use self::locator::Locator;
 
-//mod expr;
 pub mod lexer;
 pub mod parser;
 

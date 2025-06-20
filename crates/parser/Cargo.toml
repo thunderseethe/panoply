@@ -9,7 +9,6 @@ edition.workspace = true
 base.workspace = true
 cst.workspace = true
 bumpalo.workspace = true
-#chumsky.workspace = true
 expect-test.workspace = true
 la-arena.workspace = true
 regex.workspace = true

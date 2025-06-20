@@ -174,7 +174,7 @@ effect Reader {
   }
 
   fn simple_snippet(db: &TestDatabase, input: &str) -> OptimizedReducIrItem {
-    let main = format!("f = {}", input);
+    let main = format!("defn f = {}", input);
     simple_function(db, "f", &main)
   }
 
@@ -284,7 +284,7 @@ effect Reader {
       &db,
       "main",
       r#"
-main = (with {
+defn main = (with {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
@@ -311,7 +311,7 @@ main = (with {
       &db,
       "main",
       r#"
-main = (with {
+defn main = (with {
   get = |x| |k| |s| k(s)(s),
   put = |x| |k| |s| k({})(x),
   return = |x| |s| { state = s, value = x },

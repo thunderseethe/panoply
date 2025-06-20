@@ -461,7 +461,7 @@ mod tests {
   }
 
   fn type_check_snippet(db: &TestDatabase, snippet: &str) -> TyScheme {
-    let mut contents = "f = ".to_string();
+    let mut contents = "defn f = ".to_string();
     contents.push_str(snippet);
     type_check_file(db, "f", contents)
   }
@@ -682,14 +682,14 @@ effect Reader {
     ask : {} -> Int
 }
 
-foo = (with {
+defn foo = (with {
   get = |x| |k| |s| k(s)(s),
   put = |x| |k| |s| k({})(x),
   return = |x| |s| { state = s, value = x },
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do w = Reader.ask({}); State.put(w)))(14).state
+} do let w = Reader.ask({}); State.put(w)))(14).state
 "#,
     );
 
@@ -720,7 +720,7 @@ effect Reader {
   ask : {} -> Int
 }
 
-foo = (with {
+defn foo = (with {
   get = |x| |k| |s| k(s)(s),
   put = |x| |k| |s| k({})(x),
   return = |x| |s| { value = x, state = s },
@@ -756,7 +756,7 @@ effect Reader {
   ask : {} -> Int
 }
 
-foo = |env| with {
+defn foo = |env| with {
   get = |x| |k| |s| k(s)(s),
   put = |x| |k| |s| k({})(x),
   return = |x| |s| { value = x, state = s },
@@ -765,7 +765,7 @@ foo = |env| with {
   return = |x| State.put(x),
 } do Reader.ask({}))
 
-main = foo(16777215)(14).state
+defn main = foo(16777215)(14).state
 "#,
     );
 
@@ -784,7 +784,7 @@ effect Reader {
     ask : {} -> Int
 }
 
-foo = with {
+defn foo = with {
   ask = |x| |k| k(1234),
   return = |x| x,
 } do (with {
@@ -811,7 +811,7 @@ effect State {
     get : {} -> {}
 }
 
-f = State.get({})
+defn f = State.get({})
 "#;
 
     let db = &db;
@@ -843,7 +843,7 @@ effect Reader {
     ask : {} -> {}
 }
 
-f = with {
+defn f = with {
     put = |x| |k| {},
     get = |x| |k| {},
     return = |x| x
@@ -880,7 +880,7 @@ f = with {
       &db,
       "main",
       r#"
-main = (|x| x)({})
+defn main = (|x| x)({})
 "#,
     );
 
@@ -903,7 +903,7 @@ effect Reader {
   ask : {} -> Int
 }
 
-foo = with {
+defn foo = with {
   ask = |x| |k| k(374),
   return = |x| { value = x, random = 5 }
 } do Reader.ask({})
@@ -940,14 +940,14 @@ effect Reader {
     ask : {} -> Int
 }
 
-main = (with  {
+defn main = (with  {
   get = |x| |k| |s| k(s)(s),
   put = |x| |k| |s| k({})(x),
   return = |x| |s| { state = s, value = x },
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do w = Reader.ask({}); State.put(w)))(14).state
+} do let w = Reader.ask({}); State.put(w)))(14).state
 "#,
     );
 
