@@ -1,7 +1,6 @@
 use self::file::{file_for_id, FileId, SourceFile};
 
 pub mod diagnostic;
-mod display_iter;
 pub mod displayer;
 pub mod file;
 pub mod graph;

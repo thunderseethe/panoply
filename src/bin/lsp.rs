@@ -2,9 +2,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use base::{
-  diagnostic::Diagnostic as PanoplyDiagnostic, file::FileId, loc::Loc, span::Span, Db as CoreDb,
-};
+use base::{file::FileId, loc::Loc, span::Span, Db as CoreDb};
 use nameres::Db as NameResDb;
 use panoply::{canonicalize_path_set, create_source_file_set, PanoplyDatabase};
 use parser::Db;
@@ -12,7 +10,7 @@ use salsa::{Durability, ParallelDatabase};
 use tc::Db as TcDb;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
-  Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,
+  DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,
   GotoDefinitionResponse, InitializeParams, InitializeResult, Location, OneOf, Position,
   PositionEncodingKind, Range, ServerCapabilities, TextDocumentSyncCapability,
   TextDocumentSyncKind, Url,
@@ -145,7 +143,7 @@ impl LanguageServer for Backend {
       .into_iter()
       .chain(db.nameres_errors(file_id))
       .chain(db.type_check_errors(file_id))
-      .map(|err| {
+      .map(|_err| {
         //let citation = err.principal(db.deref());
         //Diagnostic::new_simple(from_span(citation.span), citation.message)
         todo!()

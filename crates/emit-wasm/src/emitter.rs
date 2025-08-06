@@ -235,8 +235,7 @@ pub(crate) fn emit_wasm_module(
       .instruction(&Instruction::I32Const(12))
       .instruction(&Instruction::I32Add)
       .instruction(&Instruction::LocalSet(env_ptr_local));
-    for ins in std::iter::repeat(Instruction::Block(wasm_encoder::BlockType::Empty)).take(call + 1)
-    {
+    for ins in std::iter::repeat_n(Instruction::Block(wasm_encoder::BlockType::Empty), call + 1) {
       f.instruction(&ins);
     }
     f.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty))
@@ -368,7 +367,7 @@ pub(crate) fn emit_wasm_module(
 }
 
 fn fun_n_i32s(n: usize) -> FuncType {
-  FuncType::new(std::iter::repeat(ValType::I32).take(n), [ValType::I32])
+  FuncType::new(std::iter::repeat_n(ValType::I32, n), [ValType::I32])
 }
 
 fn default_memarg(offset_in_i32s: u64) -> MemArg {

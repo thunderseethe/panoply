@@ -7,9 +7,7 @@ use crate::modules::Module;
 */
 
 use super::tc::TypeCheckDiagnostic;
-use super::{
-  lexer::LexError, nameres::NameResolutionError, parser::ParseError, Citation, Diagnostic,
-};
+use super::{lexer::LexError, nameres::NameResolutionError, parser::ParseError};
 
 /// Any Panoply compilation error.
 #[derive(Clone, Debug)]

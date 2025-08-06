@@ -1,9 +1,5 @@
 use core::panic;
-use std::{
-  collections::hash_map::Entry,
-  hash::Hash,
-  ops::{ControlFlow, Range},
-};
+use std::{hash::Hash, ops::Range};
 
 use ::base::{
   diagnostic::{
@@ -12,7 +8,7 @@ use ::base::{
   },
   file::{FileId, SourceFile},
   id::{EffectName, EffectOpName, IdGen, TermName, TyVarId, VarId},
-  ident::{self, Ident},
+  ident::Ident,
   loc::Loc,
   modules::Module,
   span::Span,
@@ -30,22 +26,10 @@ use rowan::{
 use rustc_hash::FxHashMap;
 use salsa::{tracked, AsId};
 
-use crate::name::ModuleName;
-
-use self::{/*effect::EffectNames,*/ module::ModuleNames, ops::IdOps};
-
-//pub mod base;
-//pub mod effect;
-pub mod module;
 pub mod name;
-//pub mod names;
-pub mod ops;
-//pub mod resolve;
-//pub mod top_level;
 
 #[salsa::jar(db = Db)]
 pub struct Jar(
-  NameResModule,
   NameResTerm,
   NameResEffect,
   ModuleNamespace,
@@ -201,7 +185,7 @@ pub struct NameResEffect {
   pub ty_vars: Box<Ids<TyVarId, Handle<Name>>>,
 }
 
-#[salsa::tracked]
+/*#[salsa::tracked]
 pub struct NameResModule {
   #[id]
   pub module: Module,
@@ -212,7 +196,7 @@ pub struct NameResModule {
   pub terms: Vec<Option<NameResTerm>>,
   #[return_ref]
   pub effects: Vec<Option<NameResEffect>>,
-}
+}*/
 
 #[derive(Clone)]
 struct OpaqueHandle {
