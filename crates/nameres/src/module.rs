@@ -6,20 +6,22 @@ use ::base::{
   modules::Module,
   span::{SpanOf, Spanned},
 };
+use rowan::TextRange;
 use rustc_hash::FxHashMap;
 
 use crate::{
-  effect::EffectNames,
+  //effect::EffectNames,
   name::ModuleName,
   ops::{IdOps, InsertResult, MatchesOps},
 };
 
 #[derive(Debug, Default)]
 struct Gens {
-  effects: FxHashMap<EffectName, (SpanOf<Ident>, EffectNames)>,
-  terms: FxHashMap<TermName, SpanOf<Ident>>,
+  effects: FxHashMap<EffectName, (Ident, TextRange /*, EffectNames*/)>,
+  terms: FxHashMap<TermName, (Ident, TextRange)>,
 }
 
+/*
 impl IdOps<EffectName> for Gens {
   fn get(&self, id: EffectName) -> SpanOf<Ident> {
     self.effects[&id].0
@@ -31,6 +33,7 @@ impl IdOps<TermName> for Gens {
     self.terms[&id]
   }
 }
+*/
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Matches {
@@ -92,34 +95,39 @@ impl<'a> ModuleNamesBuilder<'a> {
     }
   }
 
+  /*
   /// Inserts an effect into the top-level scope.
   pub fn insert_effect(
     &mut self,
-    span_eff_name: SpanOf<EffectName>,
+    eff_name: EffectName,
+    range: TextRange,
     ops: EffectNames,
-  ) -> InsertResult<EffectName> {
-    let eff_name = span_eff_name.value;
-    let span_id = span_eff_name.map(|eff_name| eff_name.name(self.db.as_core_db()));
-    self.gens.effects.insert(eff_name, (span_id, ops));
+  ) -> Result<EffectName, (EffectName, TextRange)> {
+    let id = eff_name.name(self.db.as_core_db());
+
+    self.gens.effects.insert(eff_name, (id, range, ops));
     self.id_order.push(ModuleName::Effect(eff_name));
+
     match self.names.entry(eff_name.name(self.db.as_core_db())) {
       Entry::Occupied(mut occ) => {
         let old = occ.get_mut().get_mut().get_or_insert(eff_name);
         if *old == eff_name {
-          InsertResult::ok(eff_name)
+          Ok(eff_name)
         } else {
-          InsertResult::err(eff_name, self.gens.effects[old].0.span().of(*old))
+          Err((eff_name, self.gens.effects[old].1))
         }
       }
       Entry::Vacant(vac) => {
         vac.insert(Matches::new(eff_name));
-        InsertResult::ok(eff_name)
+        Ok(eff_name)
       }
     }
   }
+  */
 
+  /*
   /// Inserts an item into the top-level scope.
-  pub fn insert_term(&mut self, module: Module, name: SpanOf<Ident>) -> InsertResult<TermName> {
+  pub fn insert_term(&mut self, module: Module, name: Ident, range: TextRange) -> InsertResult<TermName> {
     let id = TermName::new(self.db.as_core_db(), name.value, module);
     self.gens.terms.insert(id, name);
     self.id_order.push(ModuleName::from(id));
@@ -138,7 +146,9 @@ impl<'a> ModuleNamesBuilder<'a> {
       }
     }
   }
+  */
 
+  /*
   /// Finalizes the names.
   pub fn build(self) -> ModuleNames {
     ModuleNames {
@@ -148,12 +158,13 @@ impl<'a> ModuleNamesBuilder<'a> {
       id_order: self.id_order.into_boxed_slice(),
     }
   }
+  */
 }
 
 /// A leaf module in the module tree. Holds top-level names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModuleNames {
-  pub(crate) effects: FxHashMap<EffectName, (SpanOf<Ident>, EffectNames)>,
+  pub(crate) effects: FxHashMap<EffectName, (SpanOf<Ident>)>,
   items: FxHashMap<TermName, SpanOf<Ident>>,
   names: FxHashMap<Ident, Matches>,
   id_order: Box<[ModuleName]>,
@@ -161,10 +172,11 @@ pub struct ModuleNames {
 
 impl ModuleNames {
   /// Gets the operations associated with an effect.
-  pub fn get_effect(&self, id: &EffectName) -> &EffectNames {
+  /*pub fn get_effect(&self, id: &EffectName) -> &EffectNames {
     &self.effects[id].1
-  }
+  }*/
 
+  /*
   /// Finds the correct ID associated with the given string.
   pub fn find(&self, name: Ident) -> impl '_ + Iterator<Item = SpanOf<ModuleName>> {
     self
@@ -173,7 +185,7 @@ impl ModuleNames {
       .into_iter()
       .flat_map(|ms| ms.iter())
       .map(|n| self.get(n).span().of(n))
-  }
+  }*/
 
   /// Iterates over all IDs in the order that they were generated.
   pub fn iter(&self) -> Iter<'_, ModuleName> {
@@ -181,6 +193,7 @@ impl ModuleNames {
   }
 }
 
+/*
 impl<I> IdOps<I> for ModuleNames
 where
   ModuleName: From<I>,
@@ -192,3 +205,4 @@ where
     }
   }
 }
+*/

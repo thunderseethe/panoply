@@ -6,9 +6,10 @@ use base::{
   span::{Span, SpanOf, Spanned},
 };
 use bumpalo::Bump;
-use cst::{self, CstIndxAlloc, Field, IdField};
+//use cst::{self, CstIndxAlloc, Field, IdField};
 use la_arena::{Arena, Idx};
 
+/*
 /// A non-empty list of elements, separated by some fixed separator. To allow an empty list, wrap in
 /// `Option`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1170,3 +1171,4 @@ macro_rules! item_term {
     }
   };
 }
+*/

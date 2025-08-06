@@ -11,7 +11,7 @@ use ::base::{
 use rustc_hash::FxHashMap;
 
 use crate::{
-  effect::EffectNames,
+  //effect::EffectNames,
   module::ModuleNames,
   name::{BaseName, ModuleName},
   ops::IdOps,
@@ -58,9 +58,9 @@ impl<'b> BaseNames<'b> {
   }
 
   /// Gets the effect corresponding to the given ID.
-  pub fn get_effect(&self, effect: &EffectName) -> &EffectNames {
+  /*pub fn get_effect(&self, effect: &EffectName) -> &EffectNames {
     self.module_names[&effect.module(self.db.as_core_db())].get_effect(effect)
-  }
+  }*/
 
   /// Finds the correct ID associated with the given string.
   pub fn find(&self, name: Ident) -> impl '_ + Iterator<Item = SpanOf<BaseName>> {

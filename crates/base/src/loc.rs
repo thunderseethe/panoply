@@ -31,8 +31,7 @@ pub struct Loc {
 impl std::fmt::Debug for Loc {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("Loc")
-      .field("line", &self.line)
-      .field("col", &self.col)
+      .field("byte", &self.byte)
       .finish_non_exhaustive()
   }
 }

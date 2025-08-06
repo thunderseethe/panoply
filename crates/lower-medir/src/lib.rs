@@ -147,7 +147,7 @@ effect Reader {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
-} do State.get({}))(3429).value"#,
+} do get({}))(3429).value"#,
     );
 
     let expect = expect![[r#"
@@ -497,7 +497,7 @@ defn foo = |env| with {
 } do (with {
   ask = |x| |k| k(env),
   return = |x| x,
-} do let w = State.put(Reader.ask({})); State.get({}))
+} do let w = put(ask({})); get({}))
 
 defn main = foo(16777215)(14).state"#,
     );

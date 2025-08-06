@@ -13,13 +13,16 @@ use base::{
   modules::Module,
   span::Spanned,
 };
-use cst::Item;
+use parser::{HasName, Item};
+use rowan::ast::AstChildren;
 use rustc_hash::FxHashMap;
+use stack_graphs::graph::StackGraph;
 
 /// Accumulates and publishes top-level names.
 pub struct BaseBuilder<'a> {
   db: &'a dyn crate::Db,
   builder: ModuleNamesBuilder<'a>,
+  graph: StackGraph
 }
 
 impl<'a> BaseBuilder<'a> {
@@ -28,48 +31,52 @@ impl<'a> BaseBuilder<'a> {
     Self {
       db,
       builder: ModuleNamesBuilder::new(db),
+      graph: StackGraph::default(),
     }
   }
 
   /// Accumulates names from the given top-level items.
-  pub fn add_slice<E>(mut self, module: Module, items: &[Item], errors: &mut E) -> Self
+  pub fn add_slice<E>(mut self, module: Module, items: AstChildren<Item>, errors: &mut E) -> Self
   where
     E: DiagnosticSink<NameResolutionError>,
   {
-    for item in items.iter() {
+    for item in items {
       match item {
         Item::Effect(ref eff) => {
           let mut effect = EffectBuilder::new(self.db);
           let effect_name = eff
-            .name
-            .map(|name| EffectName::new(self.db.as_core_db(), name, module));
-          for op in eff.ops.iter() {
-            if let InsertResult {
-              existing: Some(old),
-              ..
-            } = effect.insert_op(effect_name.value, op.name)
+            .name()
+            .map(|name| {
+                let ident = self.db.ident(name.text());
+                EffectName::new(self.db.as_core_db(), ident, module)
+            })
+            .expect("Effect missing a name");
+          for op in eff.ops().into_iter().flat_map(|ops| ops) {
+            let op_name = op.name().expect("Effect operation missing name");
+            if let Err((_, old, old_span)) = effect.insert_op(effect_name, op_name)
             {
               errors.add(NameResolutionError::Duplicate {
-                name: op.name.value,
+                name: effect_name.name(self.db.as_core_db()),
                 kind: NameKind::EffectOp,
-                original: old.span(),
-                duplicate: op.name.span(),
+                original: old_span.into(),
+                duplicate: op_name.span().into(),
               })
             }
           }
 
-          if let InsertResult {
+          /*if let InsertResult {
             existing: Some(old),
             ..
           } = self.builder.insert_effect(effect_name, effect.build())
           {
+            let eff_name = eff.name();
             errors.add(NameResolutionError::Duplicate {
-              name: eff.name.value,
+              name: eff_name,
               kind: NameKind::Effect,
-              original: old.span(),
-              duplicate: eff.name.span(),
+              original: 
+              duplicate: eff.name().map(|id| id.span().into()).expect("Effect missing a name"),
             })
-          }
+          }*/
         }
         Item::Term(term) => {
           if let InsertResult {
@@ -89,6 +96,7 @@ impl<'a> BaseBuilder<'a> {
     }
     self
   }
+
 
   /// Builds a [`BaseNames`] for the given module.
   pub fn build<'b>(

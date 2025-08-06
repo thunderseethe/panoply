@@ -1,11 +1,14 @@
 //! This module defines errors from the name resolution pass.
 
 use bitflags::bitflags;
-use std::{array, iter::Flatten, option};
+use salsa::AsId;
+use std::{array, iter::Flatten, ops::Range, option};
 
 use crate::{
   displayer::Displayer,
+  file::FileId,
   ident::Ident,
+  loc::Loc,
   modules::Module,
   span::{Span, SpanOf, Spanned},
 };
@@ -22,6 +25,7 @@ pub enum NameKind {
   Item = 0b1000,
   TyVar = 0b10000,
   Var = 0b100000,
+  Type = 0b1000000,
 }
 
 impl NameKind {
@@ -33,7 +37,8 @@ impl NameKind {
       NameKind::EffectOp => "an effect operation",
       NameKind::Item => "a top-level item",
       NameKind::TyVar => "a type variable",
-      NameKind::Var => "a variable",
+      NameKind::Var => "a local variable",
+      NameKind::Type => "a top-level type",
     }
   }
 }
@@ -47,6 +52,7 @@ bitflags! {
         const ITEM = NameKind::Item as u8;
         const TY_VAR = NameKind::TyVar as u8;
         const VAR = NameKind::Var as u8;
+        const TYPE = NameKind::Type as u8;
     }
 }
 
@@ -76,6 +82,7 @@ impl From<NameKind> for NameKinds {
       NameKind::Item => NameKinds::ITEM,
       NameKind::TyVar => NameKinds::TY_VAR,
       NameKind::Var => NameKinds::VAR,
+      NameKind::Type => NameKinds::TYPE,
     }
   }
 }
@@ -129,14 +136,16 @@ pub enum NameResolutionError {
     /// The kind of both names.
     kind: NameKind,
     /// The original definition site.
-    original: Span,
+    original: Range<u32>,
     /// The duplicate definition site.
-    duplicate: Span,
+    duplicate: Range<u32>,
   },
   /// A reference to a name that isn't defined.
   NotFound {
     /// The name that isn't defined.
-    name: SpanOf<Ident>,
+    name: Ident,
+    /// The span of the occureence of the name.
+    span: Range<u32>,
     /// The module that was expected to contain the given name as a member.
     context_module: Option<Module>,
     /// Possible names that the user could have intended.
@@ -145,12 +154,30 @@ pub enum NameResolutionError {
   /// A compound name has the wrong kind for the context in which it is used.
   WrongKind {
     /// The location of the compound name.
-    expr: Span,
+    expr: Range<u32>,
     /// The kind of the compound name.
     actual: NameKind,
     /// The kinds that would be valid at the usage site.
     expected: NameKinds,
   },
+}
+
+fn fix_up(range: &Range<u32>) -> Span {
+  let file = FileId::from_id(salsa::Id::from_u32(0));
+  Span {
+    start: Loc {
+      file,
+      byte: range.start as usize,
+      line: 0,
+      col: 0,
+    },
+    end: Loc {
+      file,
+      byte: range.end as usize,
+      line: 0,
+      col: 0,
+    },
+  }
 }
 
 impl Diagnostic for NameResolutionError {
@@ -167,22 +194,23 @@ impl Diagnostic for NameResolutionError {
       NameResolutionError::Duplicate {
         name, duplicate, ..
       } => Citation {
-        span: *duplicate,
+        span: fix_up(duplicate),
         message: format!("Duplicate definition of symbol '{}'", modules.show(name)),
       },
       NameResolutionError::NotFound {
         name,
+        span,
         context_module,
         ..
       } => Citation {
-        span: name.span(),
+        span: fix_up(span),
         message: match context_module {
           Some(m) => format!(
             "Symbol '{}' not found in module {}",
-            modules.show(&name.value),
+            modules.show(name),
             modules.show(m)
           ),
-          None => format!("Symbol '{}' not found", modules.show(&name.value)),
+          None => format!("Symbol '{}' not found", modules.show(name)),
         },
       },
       NameResolutionError::WrongKind {
@@ -190,7 +218,7 @@ impl Diagnostic for NameResolutionError {
         actual,
         expected,
       } => Citation {
-        span: *expr,
+        span: fix_up(expr),
         message: format!(
           "Expression refers to {}, while it is used as if it was {}",
           actual.indefinite_noun(),
@@ -206,7 +234,7 @@ impl Diagnostic for NameResolutionError {
   fn additional<M: Displayer<Module> + Displayer<Ident>>(&self, modules: &M) -> Vec<Citation> {
     match self {
       NameResolutionError::Duplicate { original, .. } => vec![Citation {
-        span: *original,
+        span: fix_up(original),
         message: "Original definition here".to_owned(),
       }],
       NameResolutionError::NotFound { suggestions, .. } => suggestions

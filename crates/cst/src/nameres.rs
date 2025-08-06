@@ -221,8 +221,8 @@ impl TermDefn {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalIds {
-  pub ty_vars: Box<Ids<TyVarId, SpanOf<Ident>>>,
-  pub vars: Box<Ids<VarId, SpanOf<Ident>>>,
+  pub ty_vars: Box<Ids<TyVarId, Ident>>,
+  pub vars: Box<Ids<VarId, Ident>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

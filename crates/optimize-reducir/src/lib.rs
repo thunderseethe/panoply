@@ -189,7 +189,7 @@ effect Reader {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
-} do State.get({}))(825)"#,
+} do get({}))(825)"#,
     );
     let simple_ir = ir.item(&db);
 
@@ -318,7 +318,7 @@ defn main = (with {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do State.get({})))(14).value
+} do get({})))(14).value
       "#,
     );
 

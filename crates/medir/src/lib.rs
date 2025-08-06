@@ -218,13 +218,17 @@ impl MedIr {
         .iter()
         .map(|branch| branch.type_of(db))
         .reduce(|a, b| {
-          (a == b).then_some(a).unwrap_or_else(|| {
-            panic!(
-              "All types of switch must be the same:\na: {}\nb: {}",
-              a.pretty_with(db).pprint().pretty(80),
-              b.pretty_with(db).pprint().pretty(80)
-            )
-          })
+          if a == b {
+            a
+          } else {
+            {
+              panic!(
+                "All types of switch must be the same:\na: {}\nb: {}",
+                a.pretty_with(db).pprint().pretty(80),
+                b.pretty_with(db).pprint().pretty(80)
+              )
+            }
+          }
         })
         .unwrap_or_else(|| db.mk_medir_ty(MedIrTyKind::BlockTy(vec![]))),
       MedIrKind::Call(fun, _) => match fun {

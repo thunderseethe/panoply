@@ -146,8 +146,9 @@ impl LanguageServer for Backend {
       .chain(db.nameres_errors(file_id))
       .chain(db.type_check_errors(file_id))
       .map(|err| {
-        let citation = err.principal(db.deref());
-        Diagnostic::new_simple(from_span(citation.span), citation.message)
+        //let citation = err.principal(db.deref());
+        //Diagnostic::new_simple(from_span(citation.span), citation.message)
+        todo!()
       })
       .collect();
 

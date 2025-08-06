@@ -1,5 +1,7 @@
 //! This module defines errors from the parsing pass.
 
+use std::ops::Range;
+
 use crate::modules::Module;
 use crate::{display_iter::DisplayIterSeparated, displayer::Displayer, span::Span};
 
@@ -11,7 +13,7 @@ pub enum ParseError {
   /// An unexpected token. `None` tokens indicate EOF.
   WrongToken {
     /// Where the wrong token was found.
-    span: Span,
+    span: Range<usize>,
     /// The token that was found.
     got: String,
     /// The tokens that were expected instead.
@@ -19,7 +21,15 @@ pub enum ParseError {
   },
 }
 
-impl Diagnostic for ParseError {
+impl ParseError {
+  fn name(&self) -> &'static str {
+    match self {
+      ParseError::WrongToken { .. } => "parser-wrong-token",
+    }
+  }
+}
+
+/*impl Diagnostic for ParseError {
   fn name(&self) -> &'static str {
     match self {
       ParseError::WrongToken { .. } => "parser-wrong-token",
@@ -46,4 +56,4 @@ impl Diagnostic for ParseError {
   fn additional<M: Displayer<Module>>(&self, _: &M) -> Vec<Citation> {
     Vec::new()
   }
-}
+}*/

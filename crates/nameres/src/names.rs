@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
   base::BaseNames,
-  effect::EffectNames,
+  //effect::EffectNames,
   name::{BaseName, Name},
   ops::{GensOps, IdOps, InsertResult, MatchesOps},
 };
@@ -139,10 +139,11 @@ impl<'b> Names<'b> {
     ret
   }
 
+  /*
   /// Gets the effect corresponding to the given ID.
   pub fn get_effect(&self, effect: &EffectName) -> &EffectNames {
     self.base.get_effect(effect)
-  }
+  }*/
 
   fn insert<I>(&mut self, name: SpanOf<Ident>) -> InsertResult<I>
   where

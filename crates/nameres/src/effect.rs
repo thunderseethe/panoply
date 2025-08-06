@@ -5,6 +5,8 @@ use base::{
   ident::Ident,
   span::{SpanOf, Spanned},
 };
+use parser::Name;
+use rowan::TextRange;
 use rustc_hash::FxHashMap;
 
 use crate::ops::{IdOps, InsertResult};
@@ -12,10 +14,11 @@ use crate::ops::{IdOps, InsertResult};
 /// Accumulates operations of an effect definition.
 pub struct EffectBuilder<'a> {
   db: &'a dyn crate::Db,
-  ops: FxHashMap<EffectOpName, SpanOf<Ident>>,
+  ops: FxHashMap<EffectOpName, Name>,
   names: FxHashMap<Ident, EffectOpName>,
 }
 
+/*
 impl<'a> EffectBuilder<'a> {
   pub fn new(db: &'a dyn crate::Db) -> Self {
     Self {
@@ -29,16 +32,16 @@ impl<'a> EffectBuilder<'a> {
   pub fn insert_op(
     &mut self,
     effect: EffectName,
-    name: SpanOf<Ident>,
-  ) -> InsertResult<EffectOpName> {
-    let span_id = name.map(|ident| EffectOpName::new(self.db.as_core_db(), ident, effect));
-    let id = span_id.value;
+    name: Name,
+  ) -> Result<EffectOpName, (EffectOpName, EffectOpName, TextRange)> {
+    let ident = self.db.ident(name.text());
+    let id = EffectOpName::new(self.db.as_core_db(), ident, effect);
     self.ops.insert(id, name);
-    match self.names.entry(name.value) {
-      Entry::Occupied(occ) => InsertResult::err(id, self.ops[occ.get()].span().of(*occ.get())),
+    match self.names.entry(ident) {
+      Entry::Occupied(occ) => Err((id, *occ.get(), self.ops[occ.get()].span())),
       Entry::Vacant(vac) => {
         vac.insert(id);
-        InsertResult::ok(id)
+        Ok(id)
       }
     }
   }
@@ -55,7 +58,7 @@ impl<'a> EffectBuilder<'a> {
 /// The operation names of an effect.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EffectNames {
-  pub(crate) ops: FxHashMap<EffectOpName, SpanOf<Ident>>,
+  pub(crate) ops: FxHashMap<EffectOpName, Identifier>,
   names: FxHashMap<Ident, EffectOpName>,
 }
 
@@ -79,4 +82,4 @@ impl IdOps<EffectOpName> for EffectNames {
   fn get(&self, id: EffectOpName) -> SpanOf<Ident> {
     self.ops[&id]
   }
-}
+}*/

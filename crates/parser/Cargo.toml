@@ -11,8 +11,11 @@ cst.workspace = true
 bumpalo.workspace = true
 expect-test.workspace = true
 la-arena.workspace = true
+logos.workspace = true
 regex.workspace = true
+rowan.workspace = true
 salsa.workspace = true
+bit-set = "0.8.0"
 
 [dev-dependencies]
 assert_matches.workspace = true

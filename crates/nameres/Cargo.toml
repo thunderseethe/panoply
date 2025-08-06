@@ -12,9 +12,12 @@ parser.workspace = true
 bumpalo.workspace = true
 la-arena.workspace = true
 rustc-hash.workspace = true
+rowan.workspace = true
 salsa.workspace = true
+stack-graphs = "0.14"
 
 [dev-dependencies]
 assert_matches.workspace = true
-#chumsky.workspace = true
+pretty.workspace = true
+expect-test.workspace = true
 test-utils.workspace = true

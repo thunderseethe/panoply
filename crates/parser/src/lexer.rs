@@ -1,82 +1,15 @@
 use std::cmp::Reverse;
+use std::ops::Range;
 
 use crate::locator::Locator;
-use base::{diagnostic::lexer::LexError, ident::Ident, loc::Loc, span::SpanOf};
+use base::{diagnostic::lexer::LexError, loc::Loc, span::SpanOf};
 use regex::{Captures, Regex, RegexSet};
+use logos::Logos;
 
 use std::fmt::Debug;
 
-/// A token
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Token {
-  KwForall,
-  KwEffect,
-  KwDefn,
-  KwMatch,
-  KwWith,
-  KwDo,
-  KwLet,
-  Int(usize),
-  Identifier(Ident),
-  Plus,
-  Equal,
-  VerticalBar,
-  SmallArrow,
-  BigArrow,
-  LParen,
-  RParen,
-  LBracket,
-  RBracket,
-  LBrace,
-  RBrace,
-  LAngle,
-  RAngle,
-  Colon,
-  Semicolon,
-  Comma,
-  Concat,
-  Dot,
-  Eof,
-}
-
-impl Token {
-  /// Returns a human-friendly name for this kind of token. If the token corresponds to a specific
-  /// literal string, then that string is its name.
-  pub fn name(&self) -> &'static str {
-    match self {
-      Token::KwForall => "forall",
-      Token::KwMatch => "match",
-      Token::KwEffect => "effect",
-      Token::KwDefn => "defn",
-      Token::KwWith => "with",
-      Token::KwDo => "do",
-      Token::KwLet => "let",
-      Token::Int(_) => "<integer>",
-      Token::Identifier(..) => "<identifier>",
-      Token::Plus => "+",
-      Token::Equal => "=",
-      Token::VerticalBar => "|",
-      Token::SmallArrow => "->",
-      Token::BigArrow => "=>",
-      Token::LParen => "(",
-      Token::RParen => ")",
-      Token::LBracket => "[",
-      Token::RBracket => "]",
-      Token::LBrace => "{",
-      Token::RBrace => "}",
-      Token::LAngle => "<",
-      Token::RAngle => ">",
-      Token::Colon => ":",
-      Token::Semicolon => ";",
-      Token::Comma => ",",
-      Token::Concat => ",,",
-      Token::Dot => ".",
-      Token::Eof => "<end of file>",
-    }
-  }
-}
 /// A function that produces a token from a regex match using a string interner.
-type TokenFactory = Box<dyn Fn(Captures, &(dyn crate::Db + '_)) -> Token>;
+type TokenFactory = Box<dyn Fn(Captures, &(dyn crate::Db + '_)) -> SyntaxKind>;
 
 /// A `Lexer` turns input text into a sequence of `Token`s based on input regexes.
 ///
@@ -113,99 +46,76 @@ impl<'s> Lexer<'s> {
   }
 
   /// Splits `text` into a sequence of tokens.
-  pub fn lex(&self, locator: &Locator, text: &str) -> Result<(Vec<SpanOf<Token>>, Loc), LexError> {
-    let mut idx = 0;
-    let mut tokens = Vec::new();
-
-    while idx < text.len() {
-      let curr = &text[idx..];
-
-      // Use `min_by_key()` with `Reverse` to select the first element from a tie.
-      if let Some((caps, f)) = self
-        .union
-        .matches(curr)
-        .into_iter()
-        .map(|i| (self.tokens[i].0.captures(curr).unwrap(), &self.tokens[i].1))
-        .min_by_key(|(caps, ..)| Reverse(caps[0].len()))
-      {
-        let len = caps[0].len();
-        if let Some(f) = f {
-          tokens.push(SpanOf {
-            start: locator.locate(idx).unwrap(),
-            value: f(caps, self.db),
-            end: locator.locate(idx + len).unwrap(),
-          });
-        }
-        idx += len;
-      } else {
-        return Err(LexError::NotAToken(locator.locate(idx).unwrap()));
-      }
-    }
-    Ok((tokens, locator.eoi()))
+  pub fn lex(&self, locator: &Locator, text: &str) -> Result<(Vec<(SyntaxKind, Range<usize>)>, Loc), LexError> {   
+    let tokens = SyntaxKind::lexer(text)
+        .spanned()
+        .map(|(tok, span)| (tok.unwrap_or(SyntaxKind::Error), span))
+        .collect();
+    return Ok((tokens, todo!()));
   }
 }
 
 // Maps the literal text to the given token.
-fn literal(text: &'static str, t: Token) -> (String, Option<TokenFactory>) {
+fn literal(text: &'static str, t: SyntaxKind) -> (String, Option<TokenFactory>) {
   (regex::escape(text), Some(Box::new(move |_, _| t)))
 }
 
 // Calls `f` on the entire match. Use this if you don't care about capture groups.
 fn whole<F>(f: F) -> Option<TokenFactory>
 where
-  F: Fn(&dyn crate::Db, &str) -> Token + 'static,
+  F: Fn(&dyn crate::Db, &str) -> SyntaxKind + 'static,
 {
   Some(Box::new(move |c, db| f(db, c.get(0).unwrap().as_str())))
 }
 
-/// Returns a lexer for the language that uses the given interner.
-pub fn lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
-  // TODO: Do something with comments, or at least doc comments.
-  Lexer::new(
-    vec![
-      // Keywords
-      literal("forall", Token::KwForall),
-      literal("match", Token::KwMatch),
-      literal("effect", Token::KwEffect),
-      literal("defn", Token::KwDefn),
-      literal("with", Token::KwWith),
-      literal("do", Token::KwDo),
-      literal("let", Token::KwLet),
-      // Identifier
-      (
-        r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),
-        whole(|db, s| Token::Identifier(db.ident_str(s))),
-      ),
-      (
-        r"\d+".to_string(),
-        whole(|_, s| Token::Int(s.parse().unwrap())),
-      ),
-      // Punctuation
-      literal("+", Token::Plus),
-      literal("=", Token::Equal),
-      literal("|", Token::VerticalBar),
-      literal("->", Token::SmallArrow),
-      literal("=>", Token::BigArrow),
-      literal("(", Token::LParen),
-      literal(")", Token::RParen),
-      literal("[", Token::LBracket),
-      literal("]", Token::RBracket),
-      literal("{", Token::LBrace),
-      literal("}", Token::RBrace),
-      literal("<", Token::LAngle),
-      literal(">", Token::RAngle),
-      literal(":", Token::Colon),
-      literal(";", Token::Semicolon),
-      literal(",,", Token::Concat),
-      literal(",", Token::Comma),
-      literal(".", Token::Dot),
-      // Comments
-      (r"//.*".to_string(), None),
-      (r"(?s)/\*.*\*/".to_string(), None),
-      // Whitespace
-      (r"\s+".to_string(), None),
-    ],
-    db,
-  )
-  .unwrap()
-}
+//// Returns a lexer for the language that uses the given interner.
+//pub fn lexer<'s>(db: &'s (dyn crate::Db + '_)) -> Lexer<'s> {
+//  // TODO: Do something with comments, or at least doc comments.
+//  Lexer::new(
+//    vec![
+//      // Keywords
+//      literal("forall", SyntaxKind::KwForall),
+//      literal("match", SyntaxKind::KwMatch),
+//      literal("effect", SyntaxKind::KwEffect),
+//      literal("defn", SyntaxKind::KwDefn),
+//      literal("with", SyntaxKind::KwWith),
+//      literal("do", SyntaxKind::KwDo),
+//      literal("let", SyntaxKind::KwLet),
+//      // Identifier
+//      (
+//        r"[a-zA-Z][a-zA-Z0-9_]*".to_string(),
+//        whole(|db, s| SyntaxKind::Identifier),
+//      ),
+//      (
+//        r"\d+".to_string(),
+//        whole(|_, s| SyntaxKind::Int),
+//      ),
+//      // Punctuation
+//      literal("+", SyntaxKind::Plus),
+//      literal("=", SyntaxKind::Equal),
+//      literal("|", SyntaxKind::VerticalBar),
+//      literal("->", SyntaxKind::SmallArrow),
+//      literal("=>", SyntaxKind::BigArrow),
+//      literal("(", SyntaxKind::LParen),
+//      literal(")", SyntaxKind::RParen),
+//      literal("[", SyntaxKind::LBracket),
+//      literal("]", SyntaxKind::RBracket),
+//      literal("{", SyntaxKind::LBrace),
+//      literal("}", SyntaxKind::RBrace),
+//      literal("<", SyntaxKind::LAngle),
+//      literal(">", SyntaxKind::RAngle),
+//      literal(":", SyntaxKind::Colon),
+//      literal(";", SyntaxKind::Semicolon),
+//      literal(",,", SyntaxKind::Concat),
+//      literal(",", SyntaxKind::Comma),
+//      literal(".", SyntaxKind::Dot),
+//      // Comments
+//      (r"//.*".to_string(), None),
+//      (r"(?s)/\*.*\*/".to_string(), None),
+//      // Whitespace
+//      (r"\s+".to_string(), None),
+//    ],
+//    db,
+//  )
+//  .unwrap()
+//}

@@ -315,6 +315,12 @@ pub struct EffectName {
   pub module: Module,
 }
 
+#[salsa::interned]
+pub struct TypeName {
+  pub name: Ident,
+  pub module: Module,
+}
+
 /// An identifier for a name resolved effect operator definition
 #[salsa::interned]
 pub struct EffectOpName {

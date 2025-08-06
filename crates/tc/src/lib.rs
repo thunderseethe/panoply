@@ -81,8 +81,7 @@ pub trait Db: salsa::DbWithJar<Jar> + desugar::Db {
     nameres_module
       .terms(self.as_nameres_db())
       .iter()
-      .filter_map(|term| term.as_ref())
-      .flat_map(|term| {
+      .flat_map(|(_, term)| {
         type_scheme_of::accumulated::<PanoplyErrors>(
           self.as_tc_db(),
           term.name(self.as_nameres_db()),
@@ -557,7 +556,7 @@ match <
         let ty_var = assert_matches!(
             db.kind(arg),
             SumTy(Row::Closed(closed)) => {
-                assert_matches!(closed.fields(db), [true_, false_] => {
+                assert_matches!(closed.fields(db), [false_, true_] => {
                     assert_eq!(false_.text(db), "false");
                     assert_eq!(true_.text(db), "true");
                 });
@@ -689,7 +688,7 @@ defn foo = (with {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do let w = Reader.ask({}); State.put(w)))(14).state
+} do let w = ask({}); put(w)))(14).state
 "#,
     );
 
@@ -726,8 +725,8 @@ defn foo = (with {
   return = |x| |s| { value = x, state = s },
 } do (with {
   ask = |x| |k| k(16777215),
-  return = |x| State.put(x),
-} do Reader.ask({})))(14).state
+  return = |x| put(x),
+} do ask({})))(14).state
 "#,
     );
 
@@ -762,8 +761,8 @@ defn foo = |env| with {
   return = |x| |s| { value = x, state = s },
 } do (with {
   ask = |x| |k| k(env),
-  return = |x| State.put(x),
-} do Reader.ask({}))
+  return = |x| put(x),
+} do ask({}))
 
 defn main = foo(16777215)(14).state
 "#,
@@ -789,8 +788,8 @@ defn foo = with {
   return = |x| x,
 } do (with {
   ask = |x| |k| k(16777215),
-  return = |x| Reader.ask({}),
-} do Reader.ask({}))
+  return = |x| ask({}),
+} do ask({}))
 "#,
     );
 
@@ -811,7 +810,7 @@ effect State {
     get : {} -> {}
 }
 
-defn f = State.get({})
+defn f = get({})
 "#;
 
     let db = &db;
@@ -847,7 +846,7 @@ defn f = with {
     put = |x| |k| {},
     get = |x| |k| {},
     return = |x| x
-} do State.put(Reader.ask({}))
+} do put(ask({}))
 "#;
 
     let db = &db;
@@ -906,7 +905,7 @@ effect Reader {
 defn foo = with {
   ask = |x| |k| k(374),
   return = |x| { value = x, random = 5 }
-} do Reader.ask({})
+} do ask({})
 "#,
     );
 
@@ -947,7 +946,7 @@ defn main = (with  {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do let w = Reader.ask({}); State.put(w)))(14).state
+} do let w = ask({}); put(w)))(14).state
 "#,
     );
 

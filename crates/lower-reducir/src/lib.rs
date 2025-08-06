@@ -710,7 +710,7 @@ effect Reader {
 defn main = with {
     ask = |x| |k| k(374),
     return = |x| x
-} do Reader.ask({})"#,
+} do ask({})"#,
     )
     .items(&db)
     .iter()
@@ -770,7 +770,7 @@ defn main = with {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
-} do State.get({}))(5)"#,
+} do get({}))(5)"#,
     );
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
 
@@ -860,7 +860,7 @@ defn main = with {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do let w = Reader.ask({}); State.put(w)))(14).state
+} do let w = ask({}); put(w)))(14).state
 "#,
     );
 
@@ -874,28 +874,28 @@ defn main = with {
               [ (V4 ((_row_simple__ask @ [..]) {}))
               , (V5 ((_row_simple_get_put @ [..]) {}))
               , (V6 ((_row_simple_get_put @ [..]) {}))
-              , (V7 ((_row_simple_value_state @ [..]) {}))
-              , (V8 ((_row_simple_state_value @ [..]) {}))
-              , (V9 ((_row_simple_ask_return @ [..]) {}))
-              , (V10 ((_row_simple_return_ask @ [..]) {}))
-              , (V11 ((_row_simple_putget_return @ [..]) {}))
-              , (V12 ((_row_simple_return_putget @ [..]) {}))
+              , (V7 ((_row_simple_state_value @ [..]) {}))
+              , (V8 ((_row_simple_value_state @ [..]) {}))
+              , (V9 ((_row_simple_putget_return @ [..]) {}))
+              , (V10 ((_row_simple_return_putget @ [..]) {}))
+              , (V11 ((_row_simple_ask_return @ [..]) {}))
+              , (V12 ((_row_simple_return_ask @ [..]) {}))
               ]
-              (V8[2][0]
+              (V8[3][0]
                 ((let
-                  (V13 (V11[0]
+                  (V13 (V9[0]
                     (V5[0]
                       (fun<{4}> [V14] (fun<{4}> [V15] (fun<{4}> [V16] (V15 V16 V16))))
                       (fun<{4}> [V17] (fun<{4}> [V18] (fun<{4}> [V19] (V18 {} V17)))))
-                    (fun<{4}> [V20] (fun<{4}> [V21] (V8[0] V21 V20)))))
+                    (fun<{4}> [V20] (fun<{4}> [V21] (V7[0] V21 V20)))))
                   (new_prompt [V37] (prompt V37 (fun [V38]
-                      (V1[0] V38 {V37, (V12[3][0] V13)})) (V12[2][0] V13) (fun [V22]
+                      (V1[0] V38 {V37, (V10[3][0] V13)})) (V10[2][0] V13) (fun [V22]
                       (let
-                        (V23 (V9[0]
+                        (V23 (V11[0]
                           (fun<{3}> [V24] (fun<{3}> [V25] (V25 16777215)))
                           (fun<{3}> [V26] V26)))
                         (new_prompt [V35] (prompt V35 (fun [V36]
-                            (V2[0] V36 {V35, (V10[3][0] V23)})) (V10[2][0] V23) (fun
+                            (V2[0] V36 {V35, (V12[3][0] V23)})) (V12[2][0] V23) (fun
                             [V27]
                             ((fun<{2}> [V31]
                               (let [ (V32 V31) , (V33 (V3[3][0] V27)) ]
@@ -1002,7 +1002,7 @@ defn main = with {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
-} do State.get({}))(5)"#,
+} do get({}))(5)"#,
     );
 
     let pretty_ir = ir.pretty_with(&db).pprint().pretty(80).to_string();
@@ -1111,7 +1111,7 @@ defn main = with {
 } do (with {
   ask = |x| |k| k(16777215),
   return = |x| x,
-} do let w = Reader.ask({}); State.put(w)))(14).state
+} do let w = ask({}); put(w)))(14).state
 "#,
     );
 
@@ -1125,17 +1125,17 @@ defn main = with {
               [ (V4 ((_row_simple__ask @ [..]) {}))
               , (V5 ((_row_simple_get_put @ [..]) {}))
               , (V6 ((_row_simple_get_put @ [..]) {}))
-              , (V7 ((_row_simple_value_state @ [..]) {}))
-              , (V8 ((_row_simple_state_value @ [..]) {}))
-              , (V9 ((_row_simple_ask_return @ [..]) {}))
-              , (V10 ((_row_simple_return_ask @ [..]) {}))
-              , (V11 ((_row_simple_putget_return @ [..]) {}))
-              , (V12 ((_row_simple_return_putget @ [..]) {}))
+              , (V7 ((_row_simple_state_value @ [..]) {}))
+              , (V8 ((_row_simple_value_state @ [..]) {}))
+              , (V9 ((_row_simple_putget_return @ [..]) {}))
+              , (V10 ((_row_simple_return_putget @ [..]) {}))
+              , (V11 ((_row_simple_ask_return @ [..]) {}))
+              , (V12 ((_row_simple_return_ask @ [..]) {}))
               ]
               ((__mon_bind @ [..])
                 ((__mon_bind @ [..])
                   (let
-                    (V13 (V11[0]
+                    (V13 (V9[0]
                       (V5[0]
                         (fun [V14, V41]
                           <0: (fun [V15, V40]
@@ -1149,24 +1149,24 @@ defn main = with {
                                   ((__mon_bind @ [..])
                                     (V18 {})
                                     (fun [V42] (V42 V17))))>)>))
-                      (fun [V20, V46] <0: (fun [V21, V45] <0: (V8[0] V21 V20)>)>)))
+                      (fun [V20, V46] <0: (fun [V21, V45] <0: (V7[0] V21 V20)>)>)))
                     ((__mon_freshm @ [..])
                       (fun [V37]
                         ((__mon_prompt @ [..])
                           V37
-                          (fun [V38] (V1[0] V38 {V37, (V12[3][0] V13)}))
-                          (V12[2][0] V13)
+                          (fun [V38] (V1[0] V38 {V37, (V10[3][0] V13)}))
+                          (V10[2][0] V13)
                           (fun [V22]
                             ((let
-                              (V23 (V9[0]
+                              (V23 (V11[0]
                                 (fun [V24, V47] <0: (fun [V25] (V25 16777215))>)
                                 (fun [V26, V48] <0: V26>)))
                               ((__mon_freshm @ [..])
                                 (fun [V35]
                                   ((__mon_prompt @ [..])
                                     V35
-                                    (fun [V36] (V2[0] V36 {V35, (V10[3][0] V23)}))
-                                    (V10[2][0] V23)
+                                    (fun [V36] (V2[0] V36 {V35, (V12[3][0] V23)}))
+                                    (V12[2][0] V23)
                                     (fun [V27]
                                       ((__mon_bind @ [..])
                                         (let [ (V28 {}) , (V29 (V2[3][0] V27)) ]
@@ -1195,7 +1195,7 @@ defn main = with {
                                                     ,V52] <0: V50>)})>)))
                                         V27)))))) V22))))))
                   (fun [V58] (V58 14)))
-                (fun [V59, V60] <0: (V8[2][0] V59)>))) V0)))"#]];
+                (fun [V59, V60] <0: (V8[3][0] V59)>))) V0)))"#]];
     expect.assert_eq(&pretty_ir);
 
     let expect_ty = expect![[r#"

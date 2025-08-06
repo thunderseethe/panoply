@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::{
   base::BaseNames,
   name::{BaseName, ModuleName, Name, NameKinded},
@@ -171,6 +173,10 @@ where
   Err(suggestions)
 }
 
+fn fix_up(span: Span) -> Range<u32> {
+  span.start.byte.try_into().unwrap()..span.end.byte.try_into().unwrap()
+}
+
 impl<'a, E> NameResCtx<'a, '_, '_, E>
 where
   E: DiagnosticSink<NameResolutionError>,
@@ -185,7 +191,8 @@ where
       Ok(x) => Some(x),
       Err(suggestions) => {
         self.errors.add(NameResolutionError::NotFound {
-          name: var,
+          name: var.value,
+          span: fix_up(var.span()),
           context_module: None,
           suggestions,
         });
@@ -204,7 +211,8 @@ where
       Ok(x) => Some(x),
       Err(suggestions) => {
         self.errors.add(NameResolutionError::NotFound {
-          name: var,
+          name: var.value,
+          span: fix_up(var.span()),
           context_module: None,
           suggestions,
         });
@@ -222,8 +230,8 @@ where
       self.errors.add(NameResolutionError::Duplicate {
         name: var.value,
         kind,
-        original: orig.span(),
-        duplicate: var.span(),
+        original: fix_up(orig.span()),
+        duplicate: fix_up(var.span()),
       });
     }
     var.span().of(id)
@@ -256,7 +264,8 @@ where
       Ok(x) => Some(x),
       Err(suggestions) => {
         self.errors.add(NameResolutionError::NotFound {
-          name: var,
+          name: var.value,
+          span: fix_up(var.span()),
           context_module: None,
           suggestions,
         });
@@ -539,7 +548,7 @@ where
         }
         DotResolution::EffectOp(_) => {
           self.errors.add(NameResolutionError::WrongKind {
-            expr: self.span_of(base),
+            expr: fix_up(self.span_of(base)),
             actual: NameKind::EffectOp,
             expected: !NameKinds::EFFECT_OP,
           });
@@ -702,7 +711,7 @@ where
         match self.resolve_nested_dots(*base, *dot, *field)? {
           DotResolution::Module(_) => {
             self.errors.add(NameResolutionError::WrongKind {
-              expr: self.span_of(term),
+              expr: fix_up(self.span_of(term)),
               actual: NameKind::Module,
               expected: TERM_KINDS,
             });
@@ -710,7 +719,7 @@ where
           }
           DotResolution::Effect(_) => {
             self.errors.add(NameResolutionError::WrongKind {
-              expr: self.span_of(term),
+              expr: fix_up(self.span_of(term)),
               actual: NameKind::Effect,
               expected: TERM_KINDS,
             });
@@ -877,7 +886,7 @@ where
 
 #[cfg(test)]
 mod tests {
-  use std::path::PathBuf;
+  use std::{ops::Range, path::PathBuf};
 
   use assert_matches::assert_matches;
   use base::{
@@ -945,7 +954,7 @@ mod tests {
       .all_nameres_errors()
       .into_iter()
       .map(|err| match err {
-        base::diagnostic::error::PanoplyError::NameResolutionError(name_res) => name_res,
+        base::diagnostic::error::PanoplyError::NameResError(name_res) => name_res,
         _ => unreachable!(),
       })
       .collect();
@@ -1057,12 +1066,12 @@ mod tests {
         errs[..],
         [
             NameResolutionError::NotFound {
-                name: span_of!(y),
+                name: y,
                 context_module: None,
                 ..
             },
             NameResolutionError::NotFound {
-                name: span_of!(z),
+                name: z,
                 context_module: None,
                 ..
             }
@@ -1102,12 +1111,12 @@ mod tests {
         errs[..],
         [
             NameResolutionError::NotFound {
-                name: span_of!(h),
+                name: h,
                 context_module: None,
                 ..
             },
             NameResolutionError::NotFound {
-                name: span_of!(x),
+                name: x,
                 context_module: None,
                 ..
             }
@@ -1216,12 +1225,12 @@ mod tests {
         errs[..],
         [
             NameResolutionError::NotFound {
-                name: span_of!(f),
+                name: f,
                 context_module: None,
                 ..
             },
             NameResolutionError::NotFound {
-                name: span_of!(x),
+                name: x,
                 context_module: None,
                 ..
             }
@@ -1265,12 +1274,12 @@ mod tests {
         errs[..],
         [
             NameResolutionError::NotFound {
-                name: span_of!(y),
+                name: y,
                 context_module: None,
                 ..
             },
             NameResolutionError::NotFound {
-                name: span_of!(x),
+                name: x,
                 context_module: None,
                 ..
             }
@@ -1305,7 +1314,7 @@ mod tests {
     assert_matches!(
         errs[..],
         [NameResolutionError::NotFound {
-            name: span_of!(x),
+            name: x,
             context_module: None,
             ..
         }] => {
@@ -1348,7 +1357,7 @@ mod tests {
     assert_matches!(
         errs[..],
         [NameResolutionError::NotFound {
-            name: span_of!(x),
+            name: x,
             context_module: None,
             ..
         }] => {
@@ -1387,12 +1396,12 @@ mod tests {
         errs[..],
         [
             NameResolutionError::NotFound {
-                name: span_of!(f),
+                name: f,
                 context_module: None,
                 ..
             },
             NameResolutionError::NotFound {
-                name: span_of!(z),
+                name: z,
                 context_module: None,
                 ..
             }
@@ -1413,10 +1422,10 @@ mod tests {
         [NameResolutionError::Duplicate {
             name: x,
             kind: NameKind::Var,
-            original: Span { end, ..},
-            duplicate: Span { start, ..},
+            original: Range { end, .. },
+            duplicate: Range { start, ..},
         }] => {
-            assert!(end.byte < start.byte, "{} < {}", end.byte, start.byte);
+            assert!(end < start, "{} < {}", end, start);
             assert_eq!(x.text(&db), "x");
         }
     );
@@ -1524,12 +1533,12 @@ mod tests {
         errs[..],
         [
             NameResolutionError::NotFound {
-                name: span_of!(x),
+                name: x,
                 context_module: None,
                 ..
             },
             NameResolutionError::NotFound {
-                name: span_of!(y),
+                name: y,
                 context_module: None,
                 ..
             }

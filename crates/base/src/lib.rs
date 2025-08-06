@@ -50,6 +50,7 @@ pub struct Jar(
   id::TermName,
   id::EffectName,
   id::EffectOpName,
+  id::TypeName,
   ident::Ident,
   modules::Module,
 );

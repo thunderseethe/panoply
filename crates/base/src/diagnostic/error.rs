@@ -1,8 +1,10 @@
 //! This module defines a unified error type for errors from all stages.
 
+/*
 use crate::displayer::Displayer;
 use crate::ident::Ident;
 use crate::modules::Module;
+*/
 
 use super::tc::TypeCheckDiagnostic;
 use super::{
@@ -13,7 +15,7 @@ use super::{
 #[derive(Clone, Debug)]
 pub enum PanoplyError {
   LexError(LexError),
-  NameResolutionError(NameResolutionError),
+  NameResError(NameResolutionError),
   ParseError(ParseError),
   TypeCheckError(TypeCheckDiagnostic),
 }
@@ -26,7 +28,7 @@ impl From<LexError> for PanoplyError {
 
 impl From<NameResolutionError> for PanoplyError {
   fn from(err: NameResolutionError) -> Self {
-    PanoplyError::NameResolutionError(err)
+    PanoplyError::NameResError(err)
   }
 }
 
@@ -42,7 +44,7 @@ impl From<TypeCheckDiagnostic> for PanoplyError {
   }
 }
 
-impl Diagnostic for PanoplyError {
+/*impl Diagnostic for PanoplyError {
   fn name(&self) -> &'static str {
     match self {
       PanoplyError::LexError(err) => err.name(),
@@ -75,7 +77,7 @@ impl Diagnostic for PanoplyError {
       PanoplyError::TypeCheckError(err) => err.additional(modules),
     }
   }
-}
+}*/
 
 #[salsa::accumulator]
 pub struct PanoplyErrors(PanoplyError);
