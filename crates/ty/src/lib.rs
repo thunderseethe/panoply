@@ -6,8 +6,8 @@ use std::ops::Deref;
 
 mod alloc;
 pub use alloc::{
-  db::{InDb, RowFields, RowValues, TyData},
   AccessTy, MkTy, ScopedRowVarOf, SimpleRowVarOf, TypeAlloc, TypeVarOf,
+  db::{InDb, RowFields, RowValues, TyData},
 };
 
 mod evidence;
@@ -300,10 +300,10 @@ where
     fold: &mut F,
   ) -> Result<Ty<F::Out>, F::Error> {
     Ok(match &self {
-      TypeKind::VarTy(ref var) => fold.try_fold_var(var.clone())?,
+      TypeKind::VarTy(var) => fold.try_fold_var(var.clone())?,
       TypeKind::IntTy => fold.ctx().mk_ty(TypeKind::IntTy),
       TypeKind::ErrorTy => fold.ctx().mk_ty(TypeKind::ErrorTy),
-      TypeKind::FunTy(ref arg, ref eff, ref ret) => {
+      TypeKind::FunTy(arg, eff, ret) => {
         let arg_ = arg.clone().try_fold_with(fold)?;
         let eff_ = eff.clone().try_fold_with(fold)?;
         let ret_ = ret.clone().try_fold_with(fold)?;
@@ -311,15 +311,15 @@ where
           .ctx()
           .mk_ty(TypeKind::<F::Out>::FunTy(arg_, eff_, ret_))
       }
-      TypeKind::RowTy(ref row) => {
+      TypeKind::RowTy(row) => {
         let row_ = row.clone().try_fold_with(fold)?;
         fold.ctx().mk_ty(TypeKind::<F::Out>::RowTy(row_))
       }
-      TypeKind::ProdTy(ref row) => {
+      TypeKind::ProdTy(row) => {
         let row_ = row.clone().try_fold_with(fold)?;
         fold.ctx().mk_ty(TypeKind::ProdTy(row_))
       }
-      TypeKind::SumTy(ref row) => {
+      TypeKind::SumTy(row) => {
         let row_ = row.clone().try_fold_with(fold)?;
         fold.ctx().mk_ty(TypeKind::SumTy(row_))
       }

@@ -2,9 +2,9 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use base::{file::FileId, loc::Loc, span::Span, Db as CoreDb};
+use base::{Db as CoreDb, file::FileId, loc::Loc, span::Span};
 use nameres::Db as NameResDb;
-use panoply::{canonicalize_path_set, create_source_file_set, PanoplyDatabase};
+use panoply::{PanoplyDatabase, canonicalize_path_set, create_source_file_set};
 use parser::Db;
 use salsa::{Durability, ParallelDatabase};
 use tc::Db as TcDb;

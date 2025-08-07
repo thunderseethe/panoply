@@ -1,11 +1,11 @@
 use logos::Logos;
-pub use rowan::{ast::AstNode, GreenNode, SyntaxNode};
+pub use rowan::{GreenNode, SyntaxNode, ast::AstNode};
 use rowan::{
-  ast::{
-    support::{child, children},
-    AstChildren, AstPtr,
-  },
   Language,
+  ast::{
+    AstChildren, AstPtr,
+    support::{child, children},
+  },
 };
 use std::fmt::Debug;
 

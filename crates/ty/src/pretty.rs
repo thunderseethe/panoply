@@ -1,5 +1,5 @@
 use base::pretty::PrettyWithCtx;
-use pretty::{docs, DocAllocator, Pretty, RcAllocator};
+use pretty::{DocAllocator, Pretty, RcAllocator, docs};
 
 use crate::{AccessTy, Evidence, Ty, TyScheme, TypeAlloc, TypeKind};
 

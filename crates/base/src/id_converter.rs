@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 
 pub struct IdConverter<VarIn, VarOut> {
   cache: FxHashMap<VarIn, VarOut>,
-  gen: IdSupply<VarOut>,
+  supply: IdSupply<VarOut>,
 }
 impl<VarIn, VarOut> IdConverter<VarIn, VarOut>
 where
@@ -18,11 +18,11 @@ where
     *self
       .cache
       .entry(var_id)
-      .or_insert_with(|| self.gen.supply_id())
+      .or_insert_with(|| self.supply.supply_id())
   }
 
   pub fn generate(&mut self) -> VarOut {
-    self.gen.supply_id()
+    self.supply.supply_id()
   }
 }
 
@@ -34,13 +34,13 @@ where
   fn default() -> Self {
     Self {
       cache: FxHashMap::default(),
-      gen: IdSupply::default(),
+      supply: IdSupply::default(),
     }
   }
 }
 
 impl<In, Out> From<IdConverter<In, Out>> for IdSupply<Out> {
   fn from(value: IdConverter<In, Out>) -> Self {
-    value.gen
+    value.supply
   }
 }

@@ -21,8 +21,8 @@ use nameres::{Handle, InScopeName, NameResEffect, NameResTerm};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::AsId;
 use ty::{
-  row::{Row, ScopedRow, Simple},
   Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
+  row::{Row, ScopedRow, Simple},
 };
 
 #[salsa::jar(db = Db)]
@@ -734,7 +734,7 @@ impl<'a> DesugarCtx<'a> {
             Some(InScopeName::Type(type_name))
               if type_name.name(self.db) == self.db.ident_str("Int") =>
             {
-              return self.db.as_ty_db().mk_ty(TypeKind::IntTy)
+              return self.db.as_ty_db().mk_ty(TypeKind::IntTy);
             }
             _ => unreachable!(),
           }))
@@ -795,7 +795,7 @@ impl<'a> DesugarCtx<'a> {
           Some(InScopeName::EffectTyVar(_, id)) => id,
           Some(InScopeName::TermTyVar(_, id)) => id,
           Some(InScopeName::Type(ty)) if ty.name(self.db) == self.db.ident_str("Int") => {
-            return self.db.as_ty_db().mk_ty(TypeKind::IntTy)
+            return self.db.as_ty_db().mk_ty(TypeKind::IntTy);
           }
           _ => unreachable!(),
         };
@@ -1252,10 +1252,9 @@ impl Constructor {
       (Constructor::WildCard, Pattern::Whole(_)) => Some(vec![]),
       // A wild card always matches and produces sub wild card patterns for each pattern our
       // match would have
-      (Constructor::WildCard, Pattern::Sum(row)) => Some(vec![row
-        .field()
-        .and_then(|row| row.pattern())
-        .expect("Failure")]),
+      (Constructor::WildCard, Pattern::Sum(row)) => Some(vec![
+        row.field().and_then(|row| row.pattern()).expect("Failure"),
+      ]),
       (Constructor::WildCard, Pattern::Prod(rows)) => Some(
         rows
           .fields()
@@ -1295,8 +1294,8 @@ mod tests {
   use crate::Db as DesugarDb;
 
   use super::*;
-  use base::file::{FileId, SourceFile, SourceFileSet};
   use base::Db as BaseDb;
+  use base::file::{FileId, SourceFile, SourceFileSet};
   use expect_test::expect;
   use nameres::Db as NameResDb;
   use parser::Db as ParseDb;

@@ -1,4 +1,4 @@
-use self::file::{file_for_id, FileId, SourceFile};
+use self::file::{FileId, SourceFile, file_for_id};
 
 pub mod diagnostic;
 pub mod displayer;

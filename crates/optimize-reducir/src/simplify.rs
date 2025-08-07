@@ -10,12 +10,12 @@ use reducir::ty::{
   UnwrapMonTy,
 };
 use reducir::{
-  default_endotraverse_ir, Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrItemOccurence,
-  ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
+  Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrItemOccurence, ReducIrKind, ReducIrLocal,
+  ReducIrTermName, ReducIrVar, TypeCheck, default_endotraverse_ir,
 };
 use rustc_hash::FxHashMap;
 
-use crate::occurrence::{occurrence_analysis, Occurrence};
+use crate::occurrence::{Occurrence, occurrence_analysis};
 use crate::subst::Inline;
 
 /// True if an ir term is a value (contains no computations), false if the term does require
@@ -125,7 +125,7 @@ impl ReducIrEndoFold for Simplify<'_> {
           })
           .collect::<Vec<_>>();
         let app = match head.kind() {
-          Abs(ref args, body) => {
+          Abs(args, body) => {
             let mut binds = vec![];
 
             let mut args_iter = args.iter().copied();
@@ -505,7 +505,7 @@ pub(crate) fn simplify(
     .expect("Prompt should type check");
   builtin_evs.insert(prompt_name, &prompt);*/
 
-  let freshm_name = ReducIrTermName::gen(db, "__mon_freshm", module);
+  let freshm_name = ReducIrTermName::generated(db, "__mon_freshm", module);
   let freshm = freshm_term(db, module, freshm_name);
   builtin_evs.insert(freshm_name, &freshm);
 
@@ -557,7 +557,7 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
   );
 
   let marker = ReducIr::new(ReducIrKind::item(
-    ReducIrTermName::gen(db, "__mon_generate_marker", module),
+    ReducIrTermName::generated(db, "__mon_generate_marker", module),
     db.mk_forall_ty(
       [Kind::Type],
       db.mk_fun_ty(
@@ -620,7 +620,7 @@ pub(super) fn prompt_term(
   let unused = ReducIrVar::new(gen_local(), unit_ty);
 
   let meq = ReducIr::new(ReducIrKind::item(
-    ReducIrTermName::gen(db, "__mon_eqm", module),
+    ReducIrTermName::generated(db, "__mon_eqm", module),
     db.mk_fun_ty(
       [mark_ty, mark_ty],
       db.mk_reducir_ty(CoproductTy(vec![unit_ty, unit_ty])),

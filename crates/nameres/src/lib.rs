@@ -20,11 +20,11 @@ use cst::{
 };
 use parser::ParseFile;
 use rowan::{
-  ast::{AstNode, AstPtr, SyntaxNodePtr},
   GreenNode, SyntaxNode, TextRange,
+  ast::{AstNode, AstPtr, SyntaxNodePtr},
 };
 use rustc_hash::FxHashMap;
-use salsa::{tracked, AsId};
+use salsa::{AsId, tracked};
 
 pub mod name;
 
@@ -578,7 +578,7 @@ impl NameResolution<'_> {
           other.kind(),
           NameKinds::TY_VAR,
           handle.opaque(),
-        ))
+        ));
       }
       None => return self.bind_ty_var(name, ctx),
     };

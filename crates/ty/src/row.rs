@@ -9,7 +9,7 @@ use std::iter::Peekable;
 use std::ops::ControlFlow;
 use std::slice::Iter;
 
-use super::{alloc::MkTy, AccessTy, FallibleTypeFold, InDb, Ty, TypeAlloc, TypeFoldable};
+use super::{AccessTy, FallibleTypeFold, InDb, Ty, TypeAlloc, TypeFoldable, alloc::MkTy};
 
 mod pretty;
 

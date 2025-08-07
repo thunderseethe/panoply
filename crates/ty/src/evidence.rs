@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use crate::row::{Scoped, Simple};
 
-use super::{row::Row, FallibleTypeFold, InDb, TypeAlloc, TypeFoldable};
+use super::{FallibleTypeFold, InDb, TypeAlloc, TypeFoldable, row::Row};
 use salsa::DebugWithDb;
 
 /// Evidence proving a piece of type level information.

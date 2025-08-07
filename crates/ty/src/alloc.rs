@@ -1,8 +1,8 @@
 use base::ident::Ident;
 
 use crate::{
-  row::{NewRow, RowLabel, SimpleClosedRow},
   Ty, TypeKind,
+  row::{NewRow, RowLabel, SimpleClosedRow},
 };
 use std::cmp::Ordering;
 use std::fmt::Debug;
@@ -123,7 +123,7 @@ impl<I: Iterator> IteratorSorted for I {
 }
 
 pub mod db {
-  use crate::{alloc::IteratorSorted, row::RowLabel, MkTy, Ty, TypeKind};
+  use crate::{MkTy, Ty, TypeKind, alloc::IteratorSorted, row::RowLabel};
   use base::{id::TyVarId, ident::Ident};
 
   use super::{AccessTy, TypeAlloc};

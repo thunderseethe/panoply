@@ -1,19 +1,19 @@
 use std::convert::Infallible;
 
 use base::{
-  diagnostic::{tc::TypeCheckDiagnostic, Citation},
+  diagnostic::{Citation, tc::TypeCheckDiagnostic},
   id::VarId,
   ident::Ident,
   pretty::{PrettyPrint, PrettyWithCtx},
   span::Span,
 };
 use ty::{
+  ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
   infer::{InArena, InferTy, ScopedInferRow, SimpleInferRow, UnifierToTcVarError},
   row::{Row, RowLabel, ScopedClosedRow, SimpleClosedRow},
-  ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
 };
 
-use pretty::{docs, DocAllocator, RcAllocator};
+use pretty::{DocAllocator, RcAllocator, docs};
 
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]

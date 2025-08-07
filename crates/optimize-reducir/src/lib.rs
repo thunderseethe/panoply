@@ -5,9 +5,9 @@ use base::{
   pretty::PrettyErrorWithDb,
 };
 use reducir::{
+  ReducIrTermName, TypeCheck,
   mon::{MonReducIrItem, MonReducIrModule},
   optimized::{OptimizedReducIrItem, OptimizedReducIrModule},
-  ReducIrTermName, TypeCheck,
 };
 
 mod occurrence;
@@ -82,7 +82,7 @@ fn simple_reducir_module(
   // that produces a module with just these functions inside it.
   // Then lower that module down to wasm and link it in automatically (instead of hardcoding the
   // wasm version of these functions.)
-  let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
+  let bind_name = ReducIrTermName::generated(db, "__mon_bind", module);
   let (bind, mut bind_supply) = bind_term(db, bind_name);
   let bind = bind.fold(&mut EtaExpand {
     db,
@@ -91,7 +91,7 @@ fn simple_reducir_module(
   });
   debug_assert!(bind.type_check(db).map_err_pretty_with(db).is_ok());
 
-  let prompt_name = ReducIrTermName::gen(db, "__mon_prompt", module);
+  let prompt_name = ReducIrTermName::generated(db, "__mon_prompt", module);
   let (prompt, mut prompt_supply) = prompt_term(db, module, prompt_name);
   let prompt = prompt.fold(&mut EtaExpand {
     db,
@@ -118,13 +118,13 @@ fn simple_reducir_module(
 #[cfg(test)]
 mod tests {
   use base::{
+    Db as BaseDb,
     file::{FileId, SourceFile, SourceFileSet},
     pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
-    Db as BaseDb,
   };
   use expect_test::expect;
   use parser::Db as ParseDb;
-  use reducir::{optimized::OptimizedReducIrItem, TypeCheck};
+  use reducir::{TypeCheck, optimized::OptimizedReducIrItem};
 
   use crate::Db;
 

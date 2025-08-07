@@ -9,20 +9,20 @@ use rustc_hash::FxHashMap;
 use salsa::DebugWithDb;
 use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
 use ty::{
+  TypeKind::*,
   infer::{
     InArena, InferTy, ScopedInferRow, ScopedRowK, SimpleInferRow, SimpleRowK, TcUnifierVar, TypeK,
   },
   row::*,
-  TypeKind::*,
   *,
 };
 
 use crate::{
-  diagnostic::{into_diag, TypeCheckError},
+  Db, EffectInfo, Evidence, TyScheme,
+  diagnostic::{TypeCheckError, into_diag},
   folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
   type_scheme_of,
   unsolved_row::{ClosedGoal, OpenGoal, Operatives, UnsolvedRowEquation},
-  Db, EffectInfo, Evidence, TyScheme,
 };
 
 mod unification;
@@ -1429,7 +1429,7 @@ where
         return Err(TypeCheckError::UnsolvedHandle {
           handler: handler_var,
           eff: eff_var,
-        })
+        });
       }
     };
 

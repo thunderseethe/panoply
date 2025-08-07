@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use la_arena::{Arena, Idx};
-use pretty::{docs, DocAllocator, Pretty};
+use pretty::{DocAllocator, Pretty, docs};
 use rustc_hash::FxHashMap;
 
 use base::{

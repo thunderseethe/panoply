@@ -89,15 +89,6 @@ where
     self.slice.get(index.raw())
   }
 
-  /// As `[T]::get__unchecked(usize)`, but requires an `I`.
-  /// # Safety
-  ///
-  /// Calling this method with an out-of-bounds index is *[undefined behavior]*
-  /// even if the resulting reference is not used.
-  pub unsafe fn get_unchecked(&self, index: I) -> &T {
-    self.slice.get_unchecked(index.raw())
-  }
-
   /// As `[T]::iter().enumerate()`, but the indices are in `I`.
   pub fn iter_enumerate(&self) -> IdIter<'_, I, T> {
     self

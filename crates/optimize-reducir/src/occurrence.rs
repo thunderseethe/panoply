@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use reducir::{ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, P};
+use reducir::{P, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar};
 use rustc_hash::FxHashMap;
 
 /// Occurrence information about a binder

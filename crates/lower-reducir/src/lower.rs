@@ -7,25 +7,26 @@ use base::{
 };
 use la_arena::Idx;
 use reducir::{
+  DelimCont, DelimReducIr, P, ReducIr, ReducIrGenItem,
+  ReducIrKind::{self, *},
+  ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck,
   ty::{
     Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp,
     ReducIrTyKind::{self, *},
     ReducIrVarTy, RowReducIrKind,
   },
-  DelimCont, DelimReducIr, ReducIr, ReducIrGenItem,
-  ReducIrKind::{self, *},
-  ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck, P,
 };
 use rustc_hash::FxHashMap;
 use tc::{EffectInfo, OpSelector, TyChkRes};
 use ty::{
-  row::{Row, RowOps, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
   AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
+  row::{Row, RowOps, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
 };
 
 use crate::{
+  ReducIrEffectInfo,
   evidence::{EvidenceMap, PartialEv},
-  lower_row_ev_scoped, lower_row_ev_simple, ReducIrEffectInfo,
+  lower_row_ev_scoped, lower_row_ev_simple,
 };
 
 /// Unwrap a type into it a product and return the product's row.

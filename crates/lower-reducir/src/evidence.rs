@@ -2,8 +2,8 @@ use std::ops::Index;
 
 use reducir::ReducIrVar;
 use ty::{
-  row::{Row, Scoped, ScopedRow, Simple, SimpleClosedRow},
   Evidence, InDb, RowFields, RowValues,
+  row::{Row, Scoped, ScopedRow, Simple, SimpleClosedRow},
 };
 
 use rustc_hash::FxHashMap;

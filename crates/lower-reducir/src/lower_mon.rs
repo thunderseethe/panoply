@@ -5,15 +5,15 @@ use base::{
   pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
 };
 use reducir::{
-  ty::{
-    default_fold_tykind, FoldReducIrTy, Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp,
-    ReducIrTyKind, ReducIrVarTy, Subst, UnwrapMonTy,
-  },
   Bind, ReducIrFold,
+  ty::{
+    FoldReducIrTy, Kind, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind,
+    ReducIrVarTy, Subst, UnwrapMonTy, default_fold_tykind,
+  },
 };
 use reducir::{
-  DelimCont, DelimReducIr, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar,
-  TypeCheck, P,
+  DelimCont, DelimReducIr, P, ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar,
+  TypeCheck,
 };
 
 use ReducIrKind::*;
@@ -187,7 +187,7 @@ impl LowerMonCtx<'_> {
   fn fresh_marker_item(&mut self) -> ReducIr {
     let ret_ty = self.mk_reducir_ty(VarTy(0));
     ReducIr::new(ReducIrKind::item(
-      ReducIrTermName::gen(self.db, "__mon_freshm", self.current.module(self.db)),
+      ReducIrTermName::generated(self.db, "__mon_freshm", self.current.module(self.db)),
       self.mk_forall_ty(
         [Kind::Type, Kind::Type],
         self.mk_fun_ty(
@@ -234,7 +234,7 @@ impl LowerMonCtx<'_> {
     );
 
     ReducIr::new(ReducIrKind::item(
-      ReducIrTermName::gen(self.db, "__mon_prompt", self.current.module(self.db)),
+      ReducIrTermName::generated(self.db, "__mon_prompt", self.current.module(self.db)),
       prompt_type,
     ))
   }
@@ -259,7 +259,7 @@ impl LowerMonCtx<'_> {
       ),
     );
     ReducIr::new(ReducIrKind::item(
-      ReducIrTermName::gen(self.db, "__mon_bind", self.current.module(self.db)),
+      ReducIrTermName::generated(self.db, "__mon_bind", self.current.module(self.db)),
       bind_type,
     ))
   }
@@ -460,11 +460,7 @@ impl LowerMonCtx<'_> {
                   |_| ret_ty,
                   |this, arg_var| {
                     let app = ReducIr::app(func, [ReducIr::var(arg_var)]);
-                    if needs_pure {
-                      pure(this, app)
-                    } else {
-                      app
-                    }
+                    if needs_pure { pure(this, app) } else { app }
                   },
                 )
               }

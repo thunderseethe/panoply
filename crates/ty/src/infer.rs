@@ -11,10 +11,10 @@ use pretty::DocAllocator;
 use salsa::DebugWithDb;
 
 use crate::{
+  Evidence, FallibleTypeFold, Ty, TypeAlloc, TypeFoldable, TypeKind, Wrapper,
   row::{
     Row, RowInternals, RowLabel, RowOps, ScopedClosedRow, ScopedRow, SimpleClosedRow, SimpleRow,
   },
-  Evidence, FallibleTypeFold, Ty, TypeAlloc, TypeFoldable, TypeKind, Wrapper,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -119,9 +119,9 @@ impl EqUnifyValue for Ty<InArena<'_>> {}
 
 pub(crate) mod arena {
   use crate::{
+    AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
     alloc::IteratorSorted,
     row::{NewRow, RowLabel},
-    AccessTy, MkTy, Ty, TypeAlloc, TypeKind,
   };
   use base::memory::{
     handle::RefHandle,
@@ -462,7 +462,7 @@ impl<'ctx, A: 'ctx + Clone + TypeAlloc> TypeFoldable<'ctx> for Wrapper<A> {
 
 #[cfg(test)]
 mod tests {
-  use crate::{row::Row, MkTy, TypeKind::*};
+  use crate::{MkTy, TypeKind::*, row::Row};
   use base::{
     id::TyVarId,
     pretty::{PrettyPrint, PrettyWithCtx},

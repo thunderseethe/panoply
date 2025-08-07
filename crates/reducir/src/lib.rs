@@ -1,3 +1,4 @@
+use ReducIrKind::*;
 use base::{
   id::{IdSupply, ReducIrTyVarId, ReducIrVarId, TermName},
   ident::Ident,
@@ -9,7 +10,6 @@ use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fmt;
 use std::ops::Deref;
-use ReducIrKind::*;
 
 use crate::ty::ReducIrVarTy;
 
@@ -32,8 +32,8 @@ mod subst {
 
   use crate::ty::{ReducIrRow, ReducIrTy, ReducIrTyApp, Subst};
   use crate::{
-    default_endotraverse_ir, Bind, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrVar,
-    P,
+    Bind, P, ReducIr, ReducIrEndoFold, ReducIrFold, ReducIrKind, ReducIrVar,
+    default_endotraverse_ir,
   };
 
   pub(crate) struct SubstTy<'a> {
@@ -167,21 +167,6 @@ pub struct ReducIrGenItem {
   pub item: DelimReducIr,
 }
 
-/*#[salsa::tracked]
-pub struct ReducIrSimpleRowEv {
-  pub simple: ReducIrGenItem,
-}
-#[salsa::tracked]
-pub struct ReducIrScopedRowEv {
-  pub scoped: ReducIrGenItem,
-}*/
-
-/*#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
-pub enum ReducIrRowEv {
-  Simple(ReducIrSimpleRowEv),
-  Scoped(ReducIrScopedRowEv),
-}*/
-
 #[salsa::tracked]
 pub struct ReducIrItem {
   #[id]
@@ -213,7 +198,7 @@ impl ReducIrTermName {
     ))
   }
 
-  pub fn gen<DB: ?Sized + crate::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
+  pub fn generated<DB: ?Sized + crate::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
     ReducIrTermName::Gen(GeneratedReducIrName::new(
       db.as_reducir_db(),
       db.ident(name.to_string()),
@@ -224,14 +209,14 @@ impl ReducIrTermName {
   pub fn name<DB: ?Sized + crate::Db>(&self, db: &DB) -> Ident {
     match self {
       ReducIrTermName::Term(term) => term.name(db.as_core_db()),
-      ReducIrTermName::Gen(gen) => gen.name(db.as_reducir_db()),
+      ReducIrTermName::Gen(generator) => generator.name(db.as_reducir_db()),
     }
   }
 
   pub fn module<DB: ?Sized + crate::Db>(&self, db: &DB) -> Module {
     match self {
       ReducIrTermName::Term(term) => term.module(db.as_core_db()),
-      ReducIrTermName::Gen(gen) => gen.module(db.as_reducir_db()),
+      ReducIrTermName::Gen(generator) => generator.module(db.as_reducir_db()),
     }
   }
 }
@@ -494,7 +479,7 @@ impl<Ext> ReducIr<Ext> {
       mut head: ReducIr<Ext>,
       spine: impl IntoIterator<Item = ReducIr<Ext>>,
     ) -> ReducIr<Ext> {
-      if let App(_, ref mut in_place_spine) = &mut head.kind {
+      if let App(_, in_place_spine) = &mut head.kind {
         in_place_spine.extend(spine);
         head
       } else {
@@ -536,7 +521,7 @@ impl<Ext> ReducIr<Ext> {
     if vars.peek().is_none() && innermost_vars.peek().is_none() {
       body
     } else {
-      if let Abs(ref mut ivars, _) = body.kind {
+      if let Abs(ivars, _) = &mut body.kind {
         *ivars = vars
           .chain(ivars.iter().copied())
           .chain(innermost_vars)
@@ -596,7 +581,7 @@ impl<Ext> ReducIr<Ext> {
   }
 
   pub fn locals(binds: impl IntoIterator<Item = Bind<Ext>>, mut body: Self) -> Self {
-    if let Locals(ref mut body_binds, _) = &mut body.kind {
+    if let Locals(body_binds, _) = &mut body.kind {
       let mut binds = binds.into_iter().collect::<Vec<_>>();
       binds.append(body_binds);
       *body_binds = binds;

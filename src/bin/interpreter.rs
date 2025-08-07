@@ -1,7 +1,7 @@
 use clap::Parser;
 use emit_wasm::Db as EmitWasmDb;
 use nameres::Db;
-use panoply::{canonicalize_path_set, create_source_file_set, Args, PanoplyDatabase};
+use panoply::{Args, PanoplyDatabase, canonicalize_path_set, create_source_file_set};
 use parser::Db as NameResDb;
 use wasmparser::WasmFeatures;
 use wasmtime::{Config, Engine, Linker, Module, Store};

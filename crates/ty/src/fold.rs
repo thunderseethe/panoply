@@ -8,9 +8,9 @@ use crate::{
 };
 
 use super::{
+  Ty, TypeKind,
   alloc::{AccessTy, MkTy, TypeAlloc, TypeVarOf},
   row::Row,
-  Ty, TypeKind,
 };
 
 /// A trait for things that contain types.

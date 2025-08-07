@@ -4,9 +4,9 @@ use std::cmp::Ordering;
 use base::pretty::PrettyWithCtx;
 use pretty::DocAllocator;
 use ty::{
+  AccessTy, Evidence, TypeAlloc,
   infer::InArena,
   row::{Row, RowSema, Scoped, Simple},
-  AccessTy, Evidence, TypeAlloc,
 };
 
 /// An unsolved row equation.

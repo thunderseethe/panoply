@@ -1,5 +1,5 @@
 use base::pretty::PrettyWithCtx;
-use pretty::{docs, DocAllocator, DocBuilder, Pretty};
+use pretty::{DocAllocator, DocBuilder, Pretty, docs};
 
 use super::{Kind, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind, ReducIrVarTy};
 

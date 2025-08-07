@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use base::pretty::PrettyWithCtx;
-use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
+use pretty::{DocAllocator, DocBuilder, Pretty, RcAllocator, docs};
 
 use crate::ty::{Kind, ReducIrVarTy};
 use crate::{
@@ -196,7 +196,7 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
                   break pretty_binds(
                     binds,
                     &ReducIr::abss(vars_iter.copied(), body.deref().clone()),
-                  )
+                  );
                 }
                 (None, None) => break pretty_binds(binds, body),
               }

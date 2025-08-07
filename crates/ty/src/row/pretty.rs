@@ -1,5 +1,5 @@
 use base::pretty::PrettyWithCtx;
-use pretty::{docs, DocAllocator, DocBuilder, Pretty, RcAllocator};
+use pretty::{DocAllocator, DocBuilder, Pretty, RcAllocator, docs};
 use std::fmt::Debug;
 
 use crate::{AccessTy, TypeAlloc};

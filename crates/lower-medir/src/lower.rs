@@ -338,7 +338,8 @@ impl<'a> LowerCtx<'a> {
     let num = self.lifts.len();
     let current_name = self.current.name(self.db).text(self.db.as_core_db());
     let module = self.current.module(self.db);
-    let lift_name = ReducIrTermName::gen(self.db, format!("{}_lam_{}", current_name, num), module);
+    let lift_name =
+      ReducIrTermName::generated(self.db, format!("{}_lam_{}", current_name, num), module);
     let name = MedIrItemName::new(lift_name);
     self.lifts.push(medir::Defn {
       name,

@@ -1,6 +1,6 @@
 use base::{
   diagnostic::error::{PanoplyError, PanoplyErrors},
-  file::{file_for_id, FileId, SourceFile, SourceFileSet},
+  file::{FileId, SourceFile, SourceFileSet, file_for_id},
   ident::Ident,
   loc::Loc,
   modules::Module,

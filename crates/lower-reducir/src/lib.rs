@@ -8,16 +8,16 @@ use base::{
 use la_arena::Idx;
 use lower::{LowerCtx, TermTys, VarTys};
 use reducir::{
+  Bind, GeneratedReducIrName, P, ReducIr, ReducIrGenItem, ReducIrItem,
+  ReducIrKind::*,
+  ReducIrLocal, ReducIrModule, ReducIrTermName, ReducIrVar,
   mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule},
   ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
-  Bind, GeneratedReducIrName, ReducIr, ReducIrGenItem, ReducIrItem,
-  ReducIrKind::*,
-  ReducIrLocal, ReducIrModule, ReducIrTermName, ReducIrVar, P,
 };
 use tc::EffectInfo;
 use ty::{
-  row::{Scoped, Simple},
   InDb, MkTy, RowFields, Ty, Wrapper,
+  row::{Scoped, Simple},
 };
 
 use rustc_hash::FxHashMap;
@@ -512,15 +512,15 @@ mod tests {
   use crate::Db as LowerIrDb;
 
   use base::{
+    Db,
     file::{FileId, SourceFile, SourceFileSet},
     pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
-    Db,
   };
   use expect_test::expect;
   use parser::Db as ParserDb;
   use pretty::RcAllocator;
   use reducir::{
-    mon::MonReducIrModule, ty::ReducIrTy, DelimReducIr, ReducIr, ReducIrTyErr, TypeCheck,
+    DelimReducIr, ReducIr, ReducIrTyErr, TypeCheck, mon::MonReducIrModule, ty::ReducIrTy,
   };
 
   #[derive(Default)]

@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use reducir::ty::Subst;
-use reducir::{default_endotraverse_ir, ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, P};
+use reducir::{P, ReducIr, ReducIrEndoFold, ReducIrKind, ReducIrLocal, default_endotraverse_ir};
 use rustc_hash::FxHashMap;
 
 pub(crate) struct Inline<'a, DB: ?Sized> {

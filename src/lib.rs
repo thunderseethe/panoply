@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use base::{
+  Db,
   displayer::Displayer,
   file::{FileId, SourceFile, SourceFileSet},
   ident::Ident,
   modules::Module,
-  Db,
 };
 use clap::Parser;
 

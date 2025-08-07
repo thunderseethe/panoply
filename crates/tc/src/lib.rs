@@ -384,17 +384,17 @@ fn print_root_unifiers<'ctx, K: UnifierKind>(
 mod tests {
   use assert_matches::assert_matches;
   use base::{
+    Db,
     diagnostic::{error::PanoplyError, tc::TypeCheckDiagnostic},
     file::{FileId, SourceFile, SourceFileSet},
     id::{TermName, TyVarId},
     pretty::{PrettyPrint, PrettyWithCtx},
-    Db,
   };
   use parser::Db as ParserDb;
   use ty::{
-    row::{Row, RowOps},
     AccessTy, TyScheme, TypeKind,
     TypeKind::*,
+    row::{Row, RowOps},
   };
 
   use crate::Db as TcDb;

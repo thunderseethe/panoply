@@ -2,8 +2,8 @@ use base::pretty::{PrettyPrint, PrettyWithCtx};
 use pretty::DocAllocator;
 
 use super::{
-  default_fold_tykind, FoldReducIrTy, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp,
-  ReducIrTyKind,
+  FoldReducIrTy, MkReducIrTy, ReducIrRow, ReducIrTy, ReducIrTyApp, ReducIrTyKind,
+  default_fold_tykind,
 };
 
 #[derive(Debug, Clone)]

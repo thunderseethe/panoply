@@ -116,7 +116,7 @@ pub(crate) fn emit_wasm_module(
     let ty_indx = type_sect.insert_fun_ty(fun_n_i32s(0));
     funcs.function(ty_indx);
     let name_str = "__mon_generate_marker";
-    let name = MedIrItemName::new(ReducIrTermName::gen(
+    let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str,
       medir_module.module(db.as_medir_db()),
@@ -146,7 +146,7 @@ pub(crate) fn emit_wasm_module(
     let ty_indx = type_sect.insert_fun_ty(fun_n_i32s(1));
     funcs.function(ty_indx);
     let name_str = "alloc";
-    let name = MedIrItemName::new(ReducIrTermName::gen(
+    let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str,
       medir_module.module(db.as_medir_db()),
@@ -176,7 +176,7 @@ pub(crate) fn emit_wasm_module(
     let ty_indx = type_sect.insert_fun_ty(fun_n_i32s(2));
     funcs.function(ty_indx);
     let name_str = "__mon_eqm";
-    let name = MedIrItemName::new(ReducIrTermName::gen(
+    let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str,
       medir_module.module(db.as_medir_db()),
@@ -184,7 +184,7 @@ pub(crate) fn emit_wasm_module(
     name_map.append(indx + num_imports, name_str);
     item_indices.insert(name, indx + num_imports);
 
-    let alloc = MedIrItemName::new(ReducIrTermName::gen(
+    let alloc = MedIrItemName::new(ReducIrTermName::generated(
       db,
       "alloc",
       medir_module.module(db.as_medir_db()),
@@ -219,7 +219,7 @@ pub(crate) fn emit_wasm_module(
     let call_ty_indx = type_sect.insert_fun_ty(fun_n_i32s(call + 1));
     funcs.function(call_ty_indx);
     let name_str = format!("__call_{}", call);
-    let name = MedIrItemName::new(ReducIrTermName::gen(
+    let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str.as_str(),
       medir_module.module(db.as_medir_db()),
@@ -573,7 +573,7 @@ impl<'i> InstrEmitter<'_, 'i> {
             self.ins(self.emit_atom(arg));
           }
           let name_str = format!("__call_{}", args.len());
-          let name = MedIrItemName::new(ReducIrTermName::gen(
+          let name = MedIrItemName::new(ReducIrTermName::generated(
             self.db,
             name_str.as_str(),
             self.module,

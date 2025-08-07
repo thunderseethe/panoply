@@ -13,7 +13,7 @@ use crate::{
   span::{Span, SpanOf, Spanned},
 };
 
-use super::{english::EnglishIterExt, Citation, Diagnostic};
+use super::{Citation, Diagnostic, english::EnglishIterExt};
 
 /// A kind of name.
 #[derive(Clone, Copy, Debug)]

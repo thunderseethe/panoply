@@ -67,11 +67,7 @@ impl Parser<'_> {
   }
 
   fn eat(&mut self, token: Syntax) -> Option<Range<usize>> {
-    if self.at(token) {
-      self.advance()
-    } else {
-      None
-    }
+    if self.at(token) { self.advance() } else { None }
   }
 
   fn at_any(&mut self, recovery_set: &BitSet) -> bool {
@@ -751,44 +747,46 @@ impl Parser<'_> {
 
   pub fn items(&mut self) {
     let bitset = bitset([Syntax::KwEffect, Syntax::KwDefn, Syntax::Eof]);
-    self.with(Syntax::Items, |this| loop {
-      this.whitespace();
-      match this.peek() {
-        Syntax::KwEffect => {
-          this.with(Syntax::EffectDefn, |this| {
-            this.expect(Syntax::KwEffect, &bitset);
-            this.whitespace();
+    self.with(Syntax::Items, |this| {
+      loop {
+        this.whitespace();
+        match this.peek() {
+          Syntax::KwEffect => {
+            this.with(Syntax::EffectDefn, |this| {
+              this.expect(Syntax::KwEffect, &bitset);
+              this.whitespace();
 
-            this.ident(&bitset);
+              this.ident(&bitset);
 
-            this.expect(Syntax::LBracket, &bitset);
-            this.whitespace();
+              this.expect(Syntax::LBracket, &bitset);
+              this.whitespace();
 
-            this.effect_ops(&bitset);
+              this.effect_ops(&bitset);
 
-            this.expect(Syntax::RBracket, &bitset);
-            this.whitespace();
-          });
+              this.expect(Syntax::RBracket, &bitset);
+              this.whitespace();
+            });
+          }
+          Syntax::KwDefn => {
+            this.with(Syntax::TermDefn, |this| {
+              this.expect(Syntax::KwDefn, &bitset);
+              this.whitespace();
+
+              this.ident(&bitset);
+              let _ = this.annotation_scheme(&bitset);
+
+              this.expect(Syntax::Equal, &bitset);
+              this.whitespace();
+
+              this.term(&bitset);
+            });
+          }
+          Syntax::Eof => {
+            //this.expect(Syntax::Eof, &bitset);
+            break;
+          }
+          _ => this.recover_until(&bitset, vec![Syntax::KwDefn, Syntax::KwEffect, Syntax::Eof]),
         }
-        Syntax::KwDefn => {
-          this.with(Syntax::TermDefn, |this| {
-            this.expect(Syntax::KwDefn, &bitset);
-            this.whitespace();
-
-            this.ident(&bitset);
-            let _ = this.annotation_scheme(&bitset);
-
-            this.expect(Syntax::Equal, &bitset);
-            this.whitespace();
-
-            this.term(&bitset);
-          });
-        }
-        Syntax::Eof => {
-          //this.expect(Syntax::Eof, &bitset);
-          break;
-        }
-        _ => this.recover_until(&bitset, vec![Syntax::KwDefn, Syntax::KwEffect, Syntax::Eof]),
       }
     })
   }

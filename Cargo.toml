@@ -45,7 +45,7 @@ members = [
 ]
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 
 # Add all new dependencies here so that we keep the versions consistent across crates.
 #

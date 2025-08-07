@@ -1,8 +1,8 @@
 pub(crate) mod occurs_check {
   use ty::{
+    FallibleEndoTypeFold, MkTy, TypeVarOf,
     infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK, UnifierKind},
     row::{Row, ScopedRow},
-    FallibleEndoTypeFold, MkTy, TypeVarOf,
   };
 
   use ty::{AccessTy, Ty, TypeKind};
@@ -93,9 +93,9 @@ pub(crate) mod normalize {
 
   use ena::unify::InPlaceUnificationTable;
   use ty::{
+    FallibleEndoTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
     infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK},
     row::{Row, ScopedRow, SimpleRow},
-    FallibleEndoTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
   };
 
   use ty::{AccessTy, MkTy, Ty, TypeKind};
@@ -215,9 +215,9 @@ pub(crate) mod tyvar_subst {
 pub(crate) mod instantiate {
   use base::id::TyVarId;
   use ty::{
+    FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
     infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TcVarToUnifierError, TypeK},
     row::{Row, ScopedRow, SimpleRow},
-    FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeVarOf,
   };
 
   use ty::{InDb, MkTy, Ty, TypeKind};
@@ -302,9 +302,9 @@ pub(crate) mod zonker {
   use base::id::{Id, TyVarId};
   use ena::unify::InPlaceUnificationTable;
   use ty::{
+    FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
     infer::{InArena, ScopedRowK, SimpleRowK, TcUnifierVar, TypeK, UnifierToTcVarError},
     row::{Row, ScopedRow, SimpleRow},
-    FallibleTypeFold, ScopedRowVarOf, SimpleRowVarOf, TypeFoldable, TypeVarOf,
   };
 
   use ty::{InDb, MkTy, Ty, TypeKind};
