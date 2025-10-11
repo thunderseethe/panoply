@@ -1,7 +1,4 @@
-use std::{
-  any::type_name,
-  collections::{BTreeMap, BTreeSet},
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use ast::{self, Ast, Term};
 use base::{
@@ -10,21 +7,14 @@ use base::{
   id::{EffectName, EffectOpName, IdSupply, TermName, TyVarId, VarId},
   ident::Ident,
   modules::Module,
-  pretty::{PrettyPrint, PrettyWithCtx},
 };
 use bumpalo::Bump;
 use desugar::desugar_module;
-use ena::unify::{InPlaceUnificationTable, UnifyKey};
 use la_arena::Idx;
-use nameres::{HashHashMap, nameres_module_for_file_id};
-use pretty::RcAllocator;
+use nameres::nameres_module_for_file_id;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use ty::{
-  infer::{TcUnifierVar, TyCtx, UnifierKind},
-  row::Row,
-  *,
-};
+use ty::{infer::TyCtx, row::Row, *};
 
 mod unsolved_row;
 

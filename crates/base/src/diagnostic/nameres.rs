@@ -5,10 +5,7 @@ use std::{array, iter::Flatten, ops::Range, option};
 
 use crate::{
   displayer::Displayer,
-  file::FileId,
-  ident::Ident,
   loc::Loc,
-  modules::Module,
   span::{Span, SpanOf, Spanned},
 };
 

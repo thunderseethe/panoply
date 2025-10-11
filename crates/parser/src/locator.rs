@@ -1,6 +1,6 @@
 use std::str::CharIndices;
 
-use base::{file::FileId, loc::Loc};
+use base::loc::Loc;
 
 // A line of source text.
 #[derive(Debug, PartialEq, Eq, Clone)]

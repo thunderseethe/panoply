@@ -20,7 +20,7 @@ use cst::{
 };
 use parser::{ParseFile, all_modules, locate, parse_module, parse_module_of};
 use rowan::{
-  GreenNode, Language, SyntaxNode, TextRange,
+  GreenNode, SyntaxNode, TextRange,
   ast::{AstNode, AstPtr, SyntaxNodePtr},
 };
 use rustc_hash::FxHashMap;
@@ -257,7 +257,7 @@ pub struct Handle<N: AstNode + 'static> {
 }
 impl<N: AstNode + PartialOrd> PartialOrd for Handle<N> {
   fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-    if (self.root == other.root) {
+    if self.root == other.root {
       let self_ptr = self.ptr.to_node(&SyntaxNode::new_root(self.root.clone()));
       let other_ptr = other.ptr.to_node(&SyntaxNode::new_root(other.root.clone()));
       self_ptr.partial_cmp(&other_ptr)

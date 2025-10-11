@@ -1,5 +1,5 @@
 use base::id::TyVarId;
-use salsa::{Database as Db, Update};
+use salsa::Database as Db;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::ops::Deref;

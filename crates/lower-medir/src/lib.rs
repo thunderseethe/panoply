@@ -1,11 +1,6 @@
-use base::{
-  id::{IdSupply, TermName},
-  id_converter::IdConverter,
-  ident::Ident,
-  modules::Module,
-};
+use base::{id::IdSupply, id_converter::IdConverter, modules::Module};
 use medir::{MedIrItem, MedIrModule};
-use optimize_reducir::{simple_reducir_module, simple_reducir_module_of};
+use optimize_reducir::simple_reducir_module_of;
 use parser::root_module_for_path;
 use reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 

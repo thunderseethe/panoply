@@ -19,7 +19,7 @@ use reducir::{
 use ReducIrKind::*;
 use ReducIrTyKind::*;
 
-use crate::{lower_mon_item, lower_mon_item_of};
+use crate::lower_mon_item_of;
 
 pub(crate) struct LowerMonCtx<'a> {
   db: &'a dyn crate::Db,

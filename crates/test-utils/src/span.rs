@@ -1,5 +1,4 @@
 use base::{
-  file::FileId,
   loc::Loc,
   span::{Span, SpanOf},
 };

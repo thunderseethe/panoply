@@ -1,9 +1,4 @@
-use std::{
-  cmp::Ordering,
-  hash::{Hash, Hasher},
-};
-
-use crate::file::FileId;
+use std::hash::Hash;
 
 /// A location in a source text. Contains redundant data to avoid extra computation.
 ///

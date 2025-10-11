@@ -1,8 +1,5 @@
 //! This module defines errors from the lexing pass.
 
-use crate::displayer::Displayer;
-use crate::ident::Ident;
-use crate::modules::Module;
 use crate::{loc::Loc, span::Span};
 
 use super::{Citation, Diagnostic};
