@@ -13,14 +13,15 @@ use base::{
 };
 use ty::{Ty, TyScheme};
 
-#[salsa::jar(db = Db)]
-pub struct Jar(AstModule, AstTerm, AstEffect);
-pub trait Db: salsa::DbWithJar<Jar> + base::Db {
+//#[salsa::jar(db = Db)]
+//pub struct Jar(AstModule, AstTerm, AstEffect);
+/*pub trait Db: salsa::DbWithJar<Jar> + base::Db {
   fn as_ast_db(&self) -> &dyn crate::Db {
     <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db {}*/
+
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Term<Var> {
@@ -79,17 +80,17 @@ pub enum Term<Var> {
   },
   Annotated {
     ty: Ty,
-    term: Idx<Term<Var>>,
+    term: Idx<Self>,
   },
 }
 
 struct PrettyTerm<'a, Var> {
   root: Idx<Term<Var>>,
   arena: &'a Arena<Term<Var>>,
-  db: &'a dyn crate::Db,
+  db: &'a dyn salsa::Database,
 }
 
-impl<Var> PrettyTerm<'_, Var> {
+impl<'db, Var> PrettyTerm<'db, Var> {
   fn with_root(&self, root: Idx<Term<Var>>) -> Self {
     PrettyTerm {
       root,
@@ -107,12 +108,10 @@ where
   fn pretty(self, alloc: &'a D) -> pretty::DocBuilder<'a, D, A> {
     match &self.arena[self.root] {
       Term::Variable(var) => var.clone().pretty(alloc),
-      Term::Item(t) => docs![alloc, "fun", alloc.text(format!("{:?}", t)).angles()],
-      Term::Operation(op_name) => docs![
-        alloc,
-        "eff_op",
-        alloc.text(format!("{:?}", op_name)).angles()
-      ],
+      Term::Item(t) => docs![alloc, "fun", alloc.text(format!("{t:?}")).angles()],
+      Term::Operation(op_name) => {
+        docs![alloc, "eff_op", alloc.text(format!("{op_name:?}")).angles()]
+      }
       Term::Int(i) => alloc.as_string(i),
       Term::Unit => alloc.text("{}"),
       Term::Abstraction { arg, body } => docs![
@@ -131,7 +130,7 @@ where
         .append(self.with_root(*arg).pretty(alloc).parens()),
       Term::Label { label, term } => docs![
         alloc,
-        label.text(self.db.as_core_db()).clone(),
+        label.text(self.db).clone(),
         alloc.softline(),
         "=",
         alloc.softline(),
@@ -141,7 +140,7 @@ where
         alloc,
         self.with_root(*term),
         ".",
-        label.text(self.db.as_core_db()).clone()
+        label.text(self.db).clone()
       ],
       Term::Concat { left, right } => docs![
         alloc,
@@ -356,7 +355,7 @@ impl<Var> Ast<Var> {
 impl<Var> Ast<Var> {
   pub fn pretty<'a, 'b, D>(
     &'a self,
-    db: &'a dyn crate::Db,
+    db: &'a dyn salsa::Database,
     alloc: &'b D,
   ) -> pretty::DocBuilder<'b, D>
   where
@@ -391,31 +390,28 @@ impl<Var: Hash> std::hash::Hash for Ast<Var> {
 }
 
 /// A top-level effect in a module
-#[salsa::tracked]
-pub struct AstEffect {
-  #[id]
+#[salsa::tracked(debug)]
+pub struct AstEffect<'db> {
   pub name: EffectName,
-  #[return_ref]
+  #[returns(ref)]
   pub data: EffectDefn,
 }
 
 /// A top-level term in a module
-#[salsa::tracked]
-pub struct AstTerm {
-  #[id]
+#[salsa::tracked(debug)]
+pub struct AstTerm<'db> {
   pub name: TermName,
-  #[return_ref]
+  #[returns(ref)]
   pub data: Ast<VarId>,
 }
 
 #[salsa::tracked]
-pub struct AstModule {
-  #[id]
+pub struct AstModule<'db> {
   pub module: Module,
-  #[return_ref]
-  pub terms: Vec<AstTerm>,
-  #[return_ref]
-  pub effects: Vec<AstEffect>,
+  #[returns(ref)]
+  pub terms: Vec<AstTerm<'db>>,
+  #[returns(ref)]
+  pub effects: Vec<AstEffect<'db>>,
 }
 
 /// An ast definition of an effect

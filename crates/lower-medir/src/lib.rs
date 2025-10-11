@@ -5,11 +5,13 @@ use base::{
   modules::Module,
 };
 use medir::{MedIrItem, MedIrModule};
+use optimize_reducir::{simple_reducir_module, simple_reducir_module_of};
+use parser::root_module_for_path;
 use reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 
 mod lower;
 
-#[salsa::jar(db = Db)]
+/*#[salsa::jar(db = Db)]
 pub struct Jar(lower_item, lower_module);
 pub trait Db: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {
   fn as_lower_medir_db(&self) -> &dyn crate::Db {
@@ -43,12 +45,27 @@ pub trait Db: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {
     lower_module(self.as_lower_medir_db(), opt_module)
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {}*/
+
+use salsa::Database as Db;
+
+fn lower_medir_module_for_file_name<'db>(
+  db: &'db dyn crate::Db,
+  path: std::path::PathBuf,
+) -> MedIrModule<'db> {
+  let module = root_module_for_path(db, path);
+  lower_medir_module_of(db, module)
+}
+
+pub fn lower_medir_module_of<'db>(db: &'db dyn crate::Db, module: Module) -> MedIrModule<'db> {
+  let opt_module = simple_reducir_module_of(db, module);
+  lower_module(db, opt_module)
+}
 
 #[salsa::tracked]
-fn lower_item(db: &dyn crate::Db, term: OptimizedReducIrItem) -> Vec<MedIrItem> {
-  let reducir_db = db.as_reducir_db();
-  let medir_db = db.as_medir_db();
+fn lower_item<'db>(db: &'db dyn crate::Db, term: OptimizedReducIrItem<'db>) -> Vec<MedIrItem<'db>> {
+  let reducir_db = db;
+  let medir_db = db;
   let mut converter = IdConverter::new();
   let mut ctx = lower::LowerCtx::new(db, term.name(reducir_db), &mut converter);
   let defn = ctx.lower_item(term.item(reducir_db));
@@ -65,15 +82,18 @@ fn lower_item(db: &dyn crate::Db, term: OptimizedReducIrItem) -> Vec<MedIrItem> 
 }
 
 #[salsa::tracked]
-fn lower_module(db: &dyn crate::Db, module: OptimizedReducIrModule) -> MedIrModule {
-  let reducir_db = db.as_reducir_db();
+fn lower_module<'db>(
+  db: &'db dyn crate::Db,
+  module: OptimizedReducIrModule<'db>,
+) -> MedIrModule<'db> {
+  let reducir_db = db;
   let items = module
     .items(reducir_db)
     .iter()
     .flat_map(|opt_item| lower_item(db, *opt_item))
     .collect();
   let module = module.module(reducir_db);
-  MedIrModule::new(db.as_medir_db(), module, items)
+  MedIrModule::new(db, module, items)
 }
 
 #[cfg(test)]
@@ -84,31 +104,18 @@ mod tests {
   };
   use expect_test::expect;
   use medir::MedIrModule;
-  use parser::Db as ParserDb;
 
-  use crate::Db as LowerMedirDb;
+  use crate::lower_medir_module_for_file_name;
 
-  #[derive(Default)]
-  #[salsa::db(
-    crate::Jar,
-    ast::Jar,
-    base::Jar,
-    desugar::Jar,
-    lower_reducir::Jar,
-    medir::Jar,
-    nameres::Jar,
-    optimize_reducir::Jar,
-    parser::Jar,
-    reducir::Jar,
-    tc::Jar,
-    ty::Jar
-  )]
+  #[derive(Default, Clone)]
+  #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,
   }
+  #[salsa::db]
   impl salsa::Database for TestDatabase {}
 
-  fn lower_function(db: &TestDatabase, input: &str) -> MedIrModule {
+  fn lower_function<'db>(db: &'db TestDatabase, input: &str) -> MedIrModule<'db> {
     let path = std::path::PathBuf::from("test");
     let mut contents = r#"
 effect State {
@@ -125,14 +132,10 @@ effect Reader {
     contents.push_str(input);
     let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
     SourceFileSet::new(db, vec![file]);
-
-    let module = db.lower_medir_module_for_file_name(path);
-    let errors = db.all_parse_errors();
-    dbg!(errors);
-    module
+    lower_medir_module_for_file_name(db, path)
   }
 
-  fn lower_snippet(db: &TestDatabase, input: &str) -> MedIrModule {
+  fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> MedIrModule<'db> {
     let main = format!("defn main = {}", input);
     lower_function(db, &main)
   }

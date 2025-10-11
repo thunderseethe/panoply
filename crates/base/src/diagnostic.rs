@@ -7,9 +7,7 @@ pub mod nameres;
 pub mod parser;
 pub mod tc;
 
-use crate::ident::Ident;
-use crate::modules::Module;
-use crate::{displayer::Displayer, span::Span};
+use crate::span::Span;
 
 /// Kinds of diagnostic messages.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -36,10 +34,10 @@ pub trait Diagnostic {
   fn name(&self) -> &'static str;
 
   /// The principal source of the diagnostic.
-  fn principal<M: Displayer<Module> + Displayer<Ident>>(&self, modules: &M) -> Citation;
+  fn principal(&self) -> Citation;
 
   /// Additional citations contributing to the diagnostic.
-  fn additional<M: Displayer<Module> + Displayer<Ident>>(&self, modules: &M) -> Vec<Citation>;
+  fn additional(&self) -> Vec<Citation>;
 }
 
 /// A sink for diagnostic messages of a given type.

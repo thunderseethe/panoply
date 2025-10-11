@@ -48,14 +48,13 @@ impl TypeSect {
     *indx
   }
 
-  fn emit_fun_ty<DB: ?Sized + crate::Db>(&mut self, db: &DB, ty: MedIrTy) -> u32 {
+  fn emit_fun_ty(&mut self, db: &dyn salsa::Database, ty: MedIrTy) -> u32 {
     let ty = try_wasm_fun_ty(db, ty).expect("Expected function type");
     self.insert_fun_ty(ty)
   }
 }
 
-fn try_wasm_fun_ty<DB: ?Sized + crate::Db>(db: &DB, ty: MedIrTy) -> Result<FuncType, MedIrTy> {
-  let db = db.as_medir_db();
+fn try_wasm_fun_ty(db: &dyn salsa::Database, ty: MedIrTy) -> Result<FuncType, MedIrTy> {
   match ty.kind(db) {
     MedIrTyKind::FunTy(args, _) => Ok(FuncType::new(
       args.iter().map(|_| ValType::I32),
@@ -66,10 +65,10 @@ fn try_wasm_fun_ty<DB: ?Sized + crate::Db>(db: &DB, ty: MedIrTy) -> Result<FuncT
 }
 
 pub(crate) fn emit_wasm_module(
-  db: &dyn crate::Db,
+  db: &dyn salsa::Database,
   medir_module: MedIrModule,
 ) -> wasm_encoder::Module {
-  let medir_db = db.as_medir_db();
+  let medir_db = db;
   let mut funcs = wasm_encoder::FunctionSection::new();
   let mut types = wasm_encoder::TypeSection::new();
 
@@ -103,9 +102,9 @@ pub(crate) fn emit_wasm_module(
 
   let mut closure_arities = CallAritys::new();
   medir_module
-    .items(db.as_medir_db())
+    .items(db)
     .iter()
-    .for_each(|item| item.item(db.as_medir_db()).body.visit(&mut closure_arities));
+    .for_each(|item| item.item(db).body.visit(&mut closure_arities));
 
   let mut type_sect = TypeSect::new(types);
   let mut codes = CodeSection::new();
@@ -119,7 +118,7 @@ pub(crate) fn emit_wasm_module(
     let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str,
-      medir_module.module(db.as_medir_db()),
+      medir_module.module(db),
     ));
     name_map.append(indx + num_imports, name_str);
     item_indices.insert(name, indx + num_imports);
@@ -149,7 +148,7 @@ pub(crate) fn emit_wasm_module(
     let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str,
-      medir_module.module(db.as_medir_db()),
+      medir_module.module(db),
     ));
     name_map.append(indx + num_imports, name_str);
     item_indices.insert(name, indx + num_imports);
@@ -179,7 +178,7 @@ pub(crate) fn emit_wasm_module(
     let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str,
-      medir_module.module(db.as_medir_db()),
+      medir_module.module(db),
     ));
     name_map.append(indx + num_imports, name_str);
     item_indices.insert(name, indx + num_imports);
@@ -187,7 +186,7 @@ pub(crate) fn emit_wasm_module(
     let alloc = MedIrItemName::new(ReducIrTermName::generated(
       db,
       "alloc",
-      medir_module.module(db.as_medir_db()),
+      medir_module.module(db),
     ));
     let ins = [
       Instruction::I32Const(4),
@@ -222,7 +221,7 @@ pub(crate) fn emit_wasm_module(
     let name = MedIrItemName::new(ReducIrTermName::generated(
       db,
       name_str.as_str(),
-      medir_module.module(db.as_medir_db()),
+      medir_module.module(db),
     ));
     name_map.append(indx + num_imports, &name_str);
     item_indices.insert(name, indx + num_imports);
@@ -289,7 +288,7 @@ pub(crate) fn emit_wasm_module(
     let indx = funcs.len();
     funcs.function(ty_indx);
     let name = item.name(medir_db);
-    let text = name.0.name(db).text(db.as_core_db());
+    let text = name.0.name(db).text(db);
     // TODO: Entry point detection. Fix this hack
     if text == "main" {
       exports.export(text, wasm_encoder::ExportKind::Func, indx + num_imports);
@@ -304,7 +303,7 @@ pub(crate) fn emit_wasm_module(
   }
 
   let mut names = NameSection::new();
-  let core_db = db.as_core_db();
+  let core_db = db;
   names.module(module.name(core_db).text(core_db));
   names.functions(&name_map);
   names.types(&type_sect.names);
@@ -379,12 +378,12 @@ fn default_memarg(offset_in_i32s: u64) -> MemArg {
 }
 
 fn emit_wasm_item(
-  db: &dyn crate::Db,
+  db: &dyn salsa::Database,
   opt_item: &MedIrItem,
   item_indices: &FxHashMap<MedIrItemName, u32>,
   alloc_fn: u32,
 ) -> wasm_encoder::Function {
-  let defn = opt_item.item(db.as_medir_db());
+  let defn = opt_item.item(db);
   let locals = defn
     .params
     .iter()
@@ -393,7 +392,7 @@ fn emit_wasm_item(
     .collect();
   let mut emitter = InstrEmitter {
     db,
-    module: opt_item.name(db.as_medir_db()).0.module(db),
+    module: opt_item.name(db).0.module(db),
     ins: vec![],
     locals,
     item_indices,
@@ -414,7 +413,7 @@ fn emit_wasm_item(
 }
 
 struct InstrEmitter<'a, 'i> {
-  db: &'a dyn crate::Db,
+  db: &'a dyn salsa::Database,
   module: Module,
   ins: Vec<Instruction<'i>>,
   locals: FxHashMap<MedIrVarId, u32>,
@@ -501,7 +500,7 @@ impl<'i> InstrEmitter<'_, 'i> {
         let fn_indx = self.item_indices.get(&item.name).unwrap_or_else(|| {
           panic!(
             "Item indices not found for {}",
-            item.name.0.name(self.db).text(self.db.as_core_db())
+            item.name.0.name(self.db).text(self.db)
           )
         });
 
@@ -560,7 +559,7 @@ impl<'i> InstrEmitter<'_, 'i> {
           let indx = self.item_indices.get(&item.name).unwrap_or_else(|| {
             panic!(
               "Item indice not found for {} {:?}",
-              item.name.0.name(self.db).text(self.db.as_core_db()),
+              item.name.0.name(self.db).text(self.db),
               item.name
             )
           });

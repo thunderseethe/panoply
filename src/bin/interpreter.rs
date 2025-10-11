@@ -1,8 +1,6 @@
 use clap::Parser;
-use emit_wasm::Db as EmitWasmDb;
-use nameres::Db;
+use emit_wasm::emit_module_for_path;
 use panoply::{Args, PanoplyDatabase, canonicalize_path_set, create_source_file_set};
-use parser::Db as NameResDb;
 use wasmparser::WasmFeatures;
 use wasmtime::{Config, Engine, Linker, Module, Store};
 
@@ -20,13 +18,13 @@ fn main() -> eyre::Result<()> {
     .clone();
   let _ = create_source_file_set(&db, uniq_paths)?;
 
-  let wasm_module = db.emit_module_for_path(main_file);
-  for err in db.all_parse_errors() {
+  let wasm_module = emit_module_for_path(&db, main_file);
+  /*for err in db.all_parse_errors() {
     println!("{:?}", err);
   }
   for err in db.all_nameres_errors() {
     println!("{:?}", err);
-  }
+  }*/
 
   let bytes = wasm_module.finish();
 

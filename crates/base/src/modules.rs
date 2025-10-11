@@ -4,8 +4,7 @@ use crate::{file::FileId, ident::Ident};
 ///
 /// This stores input for a module and ties together the metadata produced by each pass for a given
 /// module.
-#[salsa::tracked]
-#[derive(DebugWithDb, Debug)]
+#[salsa::interned(debug, no_lifetime)]
 pub struct Module {
   pub name: Ident,
   pub uri: FileId,

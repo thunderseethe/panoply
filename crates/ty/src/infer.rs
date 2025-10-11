@@ -8,10 +8,10 @@ use std::{
 
 use ena::unify::{EqUnifyValue, UnifyKey, UnifyValue};
 use pretty::DocAllocator;
-use salsa::DebugWithDb;
+//use salsa::DebugWithDb;
 
 use crate::{
-  Evidence, FallibleTypeFold, Ty, TypeAlloc, TypeFoldable, TypeKind, Wrapper,
+  FallibleTypeFold, Ty, TypeAlloc, TypeFoldable, TypeKind, Wrapper,
   row::{
     Row, RowInternals, RowLabel, RowOps, ScopedClosedRow, ScopedRow, SimpleClosedRow, SimpleRow,
   },
@@ -123,9 +123,12 @@ pub(crate) mod arena {
     alloc::IteratorSorted,
     row::{NewRow, RowLabel},
   };
-  use base::memory::{
-    handle::RefHandle,
-    intern::{Interner, InternerByRef, SyncInterner},
+  use base::{
+    ident::Ident,
+    memory::{
+      handle::RefHandle,
+      intern::{Interner, InternerByRef, SyncInterner},
+    },
   };
   use bumpalo::Bump;
 
@@ -143,14 +146,14 @@ pub(crate) mod arena {
   pub struct InArena<'ctx>(std::marker::PhantomData<&'ctx ()>);
   impl Copy for InArena<'_>
   where
-    <Self as TypeAlloc>::TypeData: Copy,
+    for<'db> <Self as TypeAlloc>::TypeData: Copy,
+    for<'db> <Self as TypeAlloc>::RowFields: Copy,
+    for<'db> <Self as TypeAlloc>::RowValues: Copy,
     <Self as TypeAlloc>::TypeVar: Copy,
-    <Self as TypeAlloc>::RowFields: Copy,
-    <Self as TypeAlloc>::RowValues: Copy,
   {
   }
 
-  impl<'ctx> TypeAlloc<TypeKind<Self>> for InArena<'ctx> {
+  impl<'ctx> TypeAlloc for InArena<'ctx> {
     type TypeData = RefHandle<'ctx, TypeKind<Self>>;
 
     type RowFields = RefHandle<'ctx, [RowLabel]>;
@@ -184,7 +187,7 @@ pub(crate) mod arena {
     }
 
     fn mk_label(&self, label: &str) -> RowLabel {
-      self.db.ident_str(label)
+      Ident::new(self.db, label)
     }
 
     fn mk_row<R: NewRow<InArena<'ctx>>>(
@@ -252,6 +255,7 @@ pub(crate) mod arena {
 }
 pub use arena::{InArena, TyCtx};
 
+/*
 impl<DB> DebugWithDb<DB> for SimpleClosedRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
@@ -266,8 +270,9 @@ where
       }))
       .finish()
   }
-}
+}*/
 
+/*
 impl<DB> DebugWithDb<DB> for SimpleRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
@@ -278,8 +283,9 @@ where
       Row::Closed(row) => row.debug_with(db, include_all_fields).fmt(f),
     }
   }
-}
+}*/
 
+/*
 impl<DB> DebugWithDb<DB> for ScopedClosedRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
@@ -294,7 +300,8 @@ where
       }))
       .finish()
   }
-}
+}*/
+/*
 impl<DB> DebugWithDb<DB> for ScopedRow<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
@@ -305,8 +312,9 @@ where
       Row::Closed(row) => row.debug_with(db, include_all_fields).fmt(f),
     }
   }
-}
+}*/
 
+/*
 impl<DB> DebugWithDb<DB> for Evidence<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
@@ -328,7 +336,9 @@ where
     }
   }
 }
+*/
 
+/*
 impl<DB> DebugWithDb<DB> for TypeKind<InArena<'_>>
 where
   DB: ?Sized + crate::Db,
@@ -359,6 +369,7 @@ where
     }
   }
 }
+*/
 
 impl fmt::Debug for TypeKind<InArena<'_>> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -468,11 +479,12 @@ mod tests {
     pretty::{PrettyPrint, PrettyWithCtx},
   };
 
-  #[derive(Default)]
-  #[salsa::db(crate::Jar, base::Jar)]
+  #[derive(Default, Clone)]
+  #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,
   }
+  #[salsa::db]
   impl salsa::Database for TestDatabase {}
 
   #[test]

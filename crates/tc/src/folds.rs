@@ -170,16 +170,16 @@ pub(crate) mod tyvar_subst {
     pub(crate) db: &'a DB,
     pub(crate) subst: FxHashMap<TyVarId, TyVarId>,
   }
-  impl<'a, DB: ?Sized + crate::Db> FallibleTypeFold<'a> for TyVarIdSubst<'a, DB> {
+  impl<'a> FallibleTypeFold<'a> for TyVarIdSubst<'a, dyn salsa::Database> {
     type In = InDb;
 
     type Out = InDb;
 
     type Error = Infallible;
 
-    type AccessTy = &'a DB;
+    type AccessTy = &'a dyn salsa::Database;
 
-    type MkTy = DB;
+    type MkTy = dyn salsa::Database;
 
     fn access(&self) -> &Self::AccessTy {
       &self.db
@@ -226,7 +226,7 @@ pub(crate) mod instantiate {
   /// This means replacing all it's TcVars with fresh unifiers and adding any constraints (post
   /// substitution) to the list of constraints that must be true.
   pub(crate) struct Instantiate<'a, 'infer, I> {
-    pub(crate) db: &'a dyn crate::Db,
+    pub(crate) db: &'a dyn salsa::Database,
     pub(crate) ctx: &'a I,
     pub(crate) ty_unifiers: Vec<(TyVarId, TcUnifierVar<'infer, TypeK>)>,
     pub(crate) datarow_unifiers: Vec<(TyVarId, TcUnifierVar<'infer, SimpleRowK>)>,
@@ -234,7 +234,7 @@ pub(crate) mod instantiate {
   }
 
   impl<'a, I> Instantiate<'a, '_, I> {
-    pub(crate) fn new(db: &'a dyn crate::Db, ctx: &'a I) -> Self {
+    pub(crate) fn new(db: &'a dyn salsa::Database, ctx: &'a I) -> Self {
       Self {
         db,
         ctx,
@@ -252,7 +252,7 @@ pub(crate) mod instantiate {
     type Out = InArena<'infer>;
     type Error = TcVarToUnifierError;
 
-    type AccessTy = &'a (dyn crate::Db + 'a);
+    type AccessTy = &'a dyn salsa::Database;
     type MkTy = I;
 
     fn access(&self) -> &Self::AccessTy {
@@ -347,7 +347,7 @@ pub(crate) mod zonker {
   /// If a unification variable has no solution, we replace it by a fresh type variable and record it
   /// as free.
   pub(crate) struct Zonker<'a, 'infer> {
-    pub(crate) ctx: &'a dyn crate::Db,
+    pub(crate) ctx: &'a dyn salsa::Database,
     pub(crate) ty_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
     pub(crate) datarow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
     pub(crate) effrow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
@@ -356,7 +356,7 @@ pub(crate) mod zonker {
 
   impl<'a, 'infer> Zonker<'a, 'infer> {
     pub(crate) fn new(
-      ctx: &'a dyn crate::Db,
+      ctx: &'a dyn salsa::Database,
       ty_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, TypeK>>,
       datarow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, SimpleRowK>>,
       effrow_unifiers: &'a mut InPlaceUnificationTable<TcUnifierVar<'infer, ScopedRowK>>,
@@ -422,14 +422,14 @@ pub(crate) mod zonker {
     type Error = UnifierToTcVarError;
 
     type AccessTy = ();
-    type MkTy = dyn ty::Db + 'a;
+    type MkTy = dyn salsa::Database;
 
     fn access(&self) -> &Self::AccessTy {
       &()
     }
 
     fn ctx(&self) -> &Self::MkTy {
-      self.ctx.as_ty_db()
+      self.ctx
     }
 
     fn try_fold_var(&mut self, var: TypeVarOf<InArena<'infer>>) -> Result<Ty<InDb>, Self::Error> {

@@ -204,7 +204,7 @@ mod tests {
   use base::id::{IdSupply, TermName};
   use reducir::ty::ReducIrTy;
   use reducir::{ReducIr, ReducIrLocal, ReducIrVar};
-  use salsa::AsId;
+  use salsa::plumbing::{AsId, FromId};
 
   use crate::occurrence::Occurrence;
 
@@ -215,10 +215,12 @@ mod tests {
     move || {
       ReducIrVar::new(
         ReducIrLocal {
-          top_level: reducir::ReducIrTermName::Term(TermName::from_id(salsa::Id::from_u32(0))),
+          top_level: reducir::ReducIrTermName::Term(TermName::from_id(unsafe {
+            salsa::Id::from_index(0)
+          })),
           id: var_supply.supply_id(),
         },
-        ReducIrTy::from_id(salsa::Id::from_u32(0)),
+        ReducIrTy::from_id(unsafe { salsa::Id::from_index(0) }),
       )
     }
   }
@@ -276,7 +278,7 @@ mod tests {
     let var = gen_var();
     let discr = gen_var();
     let occs = occurrence_analysis(&ReducIr::case(
-      ReducIrTy::from_id(salsa::Id::from_u32(0)),
+      ReducIrTy::from_id(unsafe { salsa::Id::from_index(0) }),
       ReducIr::var(discr),
       [ReducIr::var(var), ReducIr::var(var)],
     ));
@@ -289,7 +291,7 @@ mod tests {
 
     let var = gen_var();
     let occs = occurrence_analysis(&ReducIr::case(
-      ReducIrTy::from_id(salsa::Id::from_u32(0)),
+      ReducIrTy::from_id(unsafe { salsa::Id::from_index(0) }),
       ReducIr::var(var),
       [ReducIr::var(var), ReducIr::var(var)],
     ));
@@ -303,7 +305,7 @@ mod tests {
     let var = gen_var();
     let discr = gen_var();
     let occs = occurrence_analysis(&ReducIr::case(
-      ReducIrTy::from_id(salsa::Id::from_u32(0)),
+      ReducIrTy::from_id(unsafe { salsa::Id::from_index(0) }),
       ReducIr::var(discr),
       [
         ReducIr::app(ReducIr::var(var), [ReducIr::var(var)]),
@@ -322,7 +324,7 @@ mod tests {
     let occs = occurrence_analysis(&ReducIr::abss(
       [discr],
       ReducIr::case(
-        ReducIrTy::from_id(salsa::Id::from_u32(0)),
+        ReducIrTy::from_id(unsafe { salsa::Id::from_index(0) }),
         ReducIr::var(discr),
         [ReducIr::var(var), ReducIr::var(var)],
       ),

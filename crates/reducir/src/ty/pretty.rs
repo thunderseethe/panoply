@@ -48,7 +48,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyKind {
       ReducIrTyKind::FunTy(args, ret) => {
         let mut arg_slice = &args[..];
         let mut ret_doc = ret.pretty(db, a);
-        if let ReducIrTyKind::ControlTy(evv_ty, a_ty) = ret.kind(db.as_reducir_db()) {
+        if let ReducIrTyKind::ControlTy(evv_ty, a_ty) = ret.kind(db) {
           if args.last() == Some(&evv_ty) {
             ret_doc = a
               .text("Mon")
@@ -62,7 +62,7 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyKind {
         }
         let docs = arg_slice.iter().map(|arg| {
           let mut arg_doc = arg.pretty_with(db).pretty(a);
-          if let ReducIrTyKind::FunTy(_, _) = arg.kind(db.as_reducir_db()) {
+          if let ReducIrTyKind::FunTy(_, _) = arg.kind(db) {
             arg_doc = arg_doc.parens();
           }
           arg_doc
@@ -155,6 +155,6 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyApp {
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTy {
   fn pretty<'a>(&self, db: &DB, a: &'a pretty::RcAllocator) -> DocBuilder<'a, pretty::RcAllocator> {
-    self.kind(db.as_reducir_db()).pretty(db, a)
+    self.kind(db).pretty(db, a)
   }
 }

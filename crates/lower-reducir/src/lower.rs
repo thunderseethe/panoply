@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
+
 use ast::{Ast, Direction, Term};
 use base::{
   id::{ReducIrTyVarId, ReducIrVarId, TermName, TyVarId, VarId},
   id_converter::IdConverter,
+  ident::Ident,
   modules::Module,
   pretty::PrettyErrorWithDb,
 };
@@ -17,7 +20,7 @@ use reducir::{
   },
 };
 use rustc_hash::FxHashMap;
-use tc::{EffectInfo, OpSelector, TyChkRes};
+use tc::{EffectInfo, OpSelector, TyChkRes, type_scheme_of};
 use ty::{
   AccessTy, Evidence, InDb, MkTy, RowFields, Ty, TyScheme, TypeKind, Wrapper,
   row::{Row, RowOps, Scoped, ScopedClosedRow, Simple, SimpleClosedRow},
@@ -57,8 +60,8 @@ fn expect_branch_ty<'a>(db: &(impl ?Sized + AccessTy<'a, InDb>), ty: Ty) -> Row<
     .unwrap_or_else(|_| unreachable!())
 }
 
-pub trait ItemWrappers {
-  fn lookup_wrapper(&self, term_name: TermName, term: Idx<Term<VarId>>) -> &Wrapper;
+pub trait ItemWrappers<'a> {
+  fn lookup_wrapper(&'a self, term_name: TermName, term: Idx<Term<VarId>>) -> &'a Wrapper;
 }
 
 pub trait VarTys {
@@ -76,7 +79,7 @@ pub(crate) struct LowerCtx<'a, 'b, State = Evidenceless> {
   db: &'a dyn crate::Db,
   current: ReducIrTermName,
   var_conv: &'b mut IdConverter<VarId, ReducIrVarId>,
-  op_sel: &'a FxHashMap<Idx<Term<VarId>>, OpSelector>,
+  op_sel: &'a BTreeMap<Idx<Term<VarId>>, OpSelector>,
   ty_ctx: LowerTyCtx<'a, 'b>,
   ev_map: EvidenceMap,
   _marker: std::marker::PhantomData<State>,
@@ -413,9 +416,9 @@ impl<'a, S> LowerCtx<'a, '_, S> {
     }
   }
 
-  fn lookup_wrapper(&self, term: Idx<Term<VarId>>) -> &'a Wrapper {
+  fn lookup_wrapper(&self, term: Idx<Term<VarId>>) -> Wrapper {
     match self.current {
-      ReducIrTermName::Term(name) => self.db.lookup_wrapper(name, term),
+      ReducIrTermName::Term(name) => self.db.lookup_wrapper(name, term).clone(),
       ReducIrTermName::Gen(_) => panic!("ICE: Called lookup wrapper on a generated term"),
     }
   }
@@ -658,7 +661,7 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
         kind: Kind::Type,
       };
       let branch_var_ty = self.mk_reducir_ty(VarTy(0));
-      let ir_db = self.db.as_reducir_db();
+      let ir_db = self.db;
       let left_coprod = left_ir.coprod.shift(self.db, 1);
       let right_coprod = right_ir.coprod.shift(self.db, 1);
       let left_branch_var =
@@ -766,11 +769,11 @@ impl<'a, 'b, S> LowerCtx<'a, 'b, S> {
   }
 }
 
-type LowerOutput<'a, 'b> = (
-  LowerCtx<'a, 'b, Evidentfull>,
+type LowerOutput<'db, 'b> = (
+  LowerCtx<'db, 'b, Evidentfull>,
   Vec<(ReducIrVar, DelimReducIr)>,
   Vec<ReducIrVar>,
-  Vec<ReducIrGenItem>,
+  Vec<ReducIrGenItem<'db>>,
 );
 
 impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
@@ -778,7 +781,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
     db: &'a dyn crate::Db,
     var_conv: &'b mut IdConverter<VarId, ReducIrVarId>,
     ty_ctx: LowerTyCtx<'a, 'b>,
-    op_sel: &'a FxHashMap<Idx<Term<VarId>>, OpSelector>,
+    op_sel: &'a BTreeMap<Idx<Term<VarId>>, OpSelector>,
     current: ReducIrTermName,
   ) -> Self {
     Self {
@@ -796,7 +799,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
     mut self,
     ev_iter: impl Iterator<Item = &'ev Evidence>,
   ) -> LowerOutput<'a, 'b> {
-    let ty_db = self.db.as_ty_db();
+    let ty_db = self.db;
     let mut evs = ev_iter.collect::<Vec<_>>();
 
     evs.sort();
@@ -870,13 +873,13 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidenceless> {
           continue;
         }
       };
-      let item = ir_item.item(self.db.as_reducir_db());
+      let item = ir_item.item(self.db);
       let ir_ty = item
-        .type_check(self.db.as_reducir_db())
+        .type_check(self.db)
         .map_err_pretty_with(self.db)
         .expect("ICE: Generated effect row evidence didn't type check");
       let ir = ReducIr::new(ReducIrKind::item(
-        ReducIrTermName::Gen(ir_item.name(self.db.as_reducir_db())),
+        ReducIrTermName::Gen(ir_item.name(self.db)),
         ir_ty,
       ));
 
@@ -910,7 +913,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
     }
   }
 
-  fn apply_wrapper(&mut self, wrapper: &Wrapper, ir: DelimReducIr) -> DelimReducIr {
+  fn apply_wrapper(&mut self, wrapper: Wrapper, ir: DelimReducIr) -> DelimReducIr {
     // This needs to be done in the reverse order that we add our Abs and TyAbs when we lower
     let ir = ReducIr::ty_app(
       ir,
@@ -924,12 +927,12 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       wrapper.eff_rows.iter().map(|row| {
         ReducIrTyApp::EffRow({
           let ty = self.ty_ctx.eff_row_into_evv_ty(*row).prod;
-          match ty.kind(self.db.as_reducir_db()) {
+          match ty.kind(self.db) {
             ProdVarTy(var) => ReducIrRow::Open(var),
             ProductTy(row) if row.is_empty() => ReducIrRow::Closed(vec![]),
             // If the first item of the row is a marker then the row is a handler,
             // not an evv and we should wrap it treat it as a type when passing to effect row.
-            ProductTy(row) => match row[0].kind(self.db.as_reducir_db()) {
+            ProductTy(row) => match row[0].kind(self.db) {
               MarkerTy(_) => ReducIrRow::Closed(vec![ty]),
               _ => ReducIrRow::Closed(row),
             },
@@ -1006,10 +1009,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
       Term::Int(i) => ReducIr::new(ReducIrKind::Int(*i)),
       Item(term_name) => {
         let wrapper = self.lookup_wrapper(term);
-        let scheme = self
-          .db
-          .type_scheme_of(*term_name)
-          .ty_scheme(self.db.as_tc_db());
+        let scheme = type_scheme_of(self.db, *term_name).ty_scheme(self.db);
         // Construct an ad hoc LowerTySchemeCtx to lower our scheme
         let ty_scheme_ctx = LowerTySchemeCtx::new(self.db, self.ty_ctx.tyvar_conv);
         let (ir_scheme, _) = ty_scheme_ctx.lower_scheme(self.current.module(self.db), &scheme);
@@ -1106,20 +1106,17 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
           .try_as_fn_ty(&self.db)
           .unwrap_or_else(|_| unreachable!());
         let value_var = ReducIrVar::new(self.generate_local(), self.ty_ctx.lower_ty(value_ty));
-        let eff = op.effect(self.db.as_core_db());
+        let eff = op.effect(self.db);
 
-        let eff_name = eff.name(self.db.as_core_db());
+        let eff_name = eff.name(self.db);
         let (eff_vals, eff_ev_param, _) = self
           .ev_map
-          .match_right_eff_ev(
-            RowFields::new(self.db.as_ty_db(), vec![eff_name]),
-            term_infer.eff,
-          )
+          .match_right_eff_ev(RowFields::new(self.db, vec![eff_name]), term_infer.eff)
           .expect("Evidence for operation to exist");
 
         // We know this is safe because we looked up a RowFields with one field
         let (outer_eff, kont_ret_ty) = eff_vals
-          .values(self.db.as_ty_db())
+          .values(self.db)
           .first()
           .unwrap()
           .try_as_eff_row_val(self.db)
@@ -1201,7 +1198,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
             panic!("ICE: Handler should be solved to closed row during type checking")
           }
         };
-        let ret_label = self.db.ident_str("return");
+        let ret_label = Ident::new(self.db, "return");
         let ret_idx = handler_row
           .fields(self.db)
           .binary_search(&ret_label)
@@ -1265,7 +1262,7 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         let handler_ret_ty = self
           .ty_ctx
           .lower_ty(handler_ret_ty)
-          .drop_args(self.db.as_reducir_db(), 1)
+          .drop_args(self.db, 1)
           .expect("Handler return type must be a function");
         let prompt_var = ReducIrVar::new(
           self.generate_local(),

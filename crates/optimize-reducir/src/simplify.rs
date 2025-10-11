@@ -167,7 +167,7 @@ impl ReducIrEndoFold for Simplify<'_> {
             ReducIr::locals(binds.iter().cloned(), self.traverse_ir(&ir))
           }
           Item(occ)
-            if occ.name.name(self.db) == self.db.ident_str("__mon_eqm")
+            if occ.name.name(self.db).text(self.db) == "__mon_eqm"
               && spine.as_slice().chunks(2).all(|c| c[0] == c[1]) =>
           {
             let unit = self.db.mk_reducir_ty(ReducIrTyKind::ProductTy(vec![]));
@@ -415,7 +415,7 @@ impl<DB: ?Sized> EtaExpand<'_, DB> {
     )
   }
 }
-impl<DB: ?Sized + crate::Db> ReducIrEndoFold for EtaExpand<'_, DB> {
+impl ReducIrEndoFold for EtaExpand<'_, dyn salsa::Database> {
   type Ext = Infallible;
 
   fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {
@@ -430,11 +430,7 @@ impl<DB: ?Sized + crate::Db> ReducIrEndoFold for EtaExpand<'_, DB> {
     }*/
     match kind {
       ReducIrKind::App(head, mut spine) => {
-        if let ReducIrTyKind::FunTy(params, ret) = head
-          .type_check(self.db)
-          .unwrap()
-          .kind(self.db.as_reducir_db())
-        {
+        if let ReducIrTyKind::FunTy(params, ret) = head.type_check(self.db).unwrap().kind(self.db) {
           let mut params = params.into_vec();
           //  TODO: Clean this up as some kind of combinator
           if let Ok(UnwrapMonTy { evv_ty, .. }) = ret.try_unwrap_monadic(self.db) {
@@ -467,7 +463,7 @@ pub(crate) fn simplify(
   ir: &ReducIr,
   supply: &mut IdSupply<ReducIrVarId>,
 ) -> ReducIr {
-  let reducir_db = db.as_reducir_db();
+  let reducir_db = db;
 
   let mut builtin_evs = row_evs
     .iter()
@@ -488,7 +484,7 @@ pub(crate) fn simplify(
     })
     .collect::<FxHashMap<_, _>>();
 
-  let module = name.module(db.as_core_db());
+  let module = name.module(db);
   /*let bind_name = ReducIrTermName::gen(db, "__mon_bind", module);
   let bind = bind_term(db, bind_name);
   bind
@@ -562,9 +558,7 @@ fn freshm_term(db: &dyn crate::Db, module: Module, top_level: ReducIrTermName) -
       [Kind::Type],
       db.mk_fun_ty(
         [db.mk_prod_ty(vec![])],
-        db.mk_reducir_ty(ReducIrTyKind::MarkerTy(
-          var_ty1.shift(db.as_reducir_db(), 1),
-        )),
+        db.mk_reducir_ty(ReducIrTyKind::MarkerTy(var_ty1.shift(db, 1))),
       ),
     ),
   ));
@@ -812,8 +806,8 @@ pub(super) fn prompt_term(
 
 /// TODO: Return an item representing the bind implementation of our delimited continuation
 /// monad
-pub(super) fn bind_term<DB: ?Sized + crate::Db>(
-  db: &DB,
+pub(super) fn bind_term(
+  db: &dyn salsa::Database,
   name: ReducIrTermName,
 ) -> (ReducIr, IdSupply<ReducIrVarId>) {
   use ReducIrTyKind::*;

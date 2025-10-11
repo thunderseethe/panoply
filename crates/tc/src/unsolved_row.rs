@@ -114,16 +114,15 @@ where
   }
 }
 
-impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Db, Acc> PrettyWithCtx<(&'db Db, Acc)>
+impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Acc> PrettyWithCtx<(&'db dyn salsa::Database, Acc)>
   for UnsolvedRowEquation<A, Sema>
 where
-  Db: ?Sized + crate::Db,
   Acc: AccessTy<'infer, A>,
-  Row<Sema, A>: PrettyWithCtx<(&'db Db, Acc)>,
+  Row<Sema, A>: PrettyWithCtx<(&'db dyn salsa::Database, Acc)>,
 {
   fn pretty<'a>(
     &self,
-    ctx: &(&'db Db, Acc),
+    ctx: &(&'db dyn salsa::Database, Acc),
     alloc: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     match self {
@@ -133,16 +132,15 @@ where
   }
 }
 
-impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Db, Acc> PrettyWithCtx<(&'db Db, Acc)>
+impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Acc> PrettyWithCtx<(&'db dyn salsa::Database, Acc)>
   for OpenGoal<A, Sema>
 where
-  Db: ?Sized + crate::Db,
   Acc: AccessTy<'infer, A>,
-  Row<Sema, A>: PrettyWithCtx<(&'db Db, Acc)>,
+  Row<Sema, A>: PrettyWithCtx<(&'db dyn salsa::Database, Acc)>,
 {
   fn pretty<'a>(
     &self,
-    ctx: &(&'db Db, Acc),
+    ctx: &(&'db dyn salsa::Database, Acc),
     a: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     let (left, right) = match &self.ops {
@@ -163,16 +161,15 @@ where
   }
 }
 
-impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Db, Acc> PrettyWithCtx<(&'db Db, Acc)>
+impl<'db, 'infer, A: TypeAlloc, Sema: RowSema, Acc> PrettyWithCtx<(&'db dyn salsa::Database, Acc)>
   for ClosedGoal<A, Sema>
 where
-  Db: ?Sized + crate::Db,
   Acc: AccessTy<'infer, A>,
-  Row<Sema, A>: PrettyWithCtx<(&'db Db, Acc)>,
+  Row<Sema, A>: PrettyWithCtx<(&'db dyn salsa::Database, Acc)>,
 {
   fn pretty<'a>(
     &self,
-    ctx: &(&'db Db, Acc),
+    ctx: &(&'db dyn salsa::Database, Acc),
     a: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     Row::Open(self.left.clone())

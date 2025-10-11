@@ -1,5 +1,4 @@
 use base::ident::Ident;
-use salsa::DebugWithDb;
 
 use std::cmp::Ordering;
 use std::convert::Infallible;
@@ -106,6 +105,7 @@ where
   Sema::Closed<A>: Copy,
 {
 }
+/*
 impl<Db, Sema: RowSema> DebugWithDb<Db> for Row<Sema, InDb>
 where
   Db: ?Sized + crate::Db,
@@ -122,6 +122,7 @@ where
     }
   }
 }
+*/
 
 impl<'ctx, A> TypeFoldable<'ctx> for Row<Simple, A>
 where

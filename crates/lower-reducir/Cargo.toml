@@ -4,8 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 
 [dev-dependencies]
-parser.workspace = true
-desugar.workspace = true
 test-utils.workspace = true
 assert_matches.workspace = true
 expect-test.workspace = true
@@ -15,8 +13,10 @@ pretty.workspace = true
 ast.workspace = true
 bumpalo.workspace = true
 base.workspace = true
+desugar.workspace = true
 la-arena.workspace = true
 nameres.workspace = true
+parser.workspace = true
 pretty.workspace = true
 reducir.workspace = true
 rustc-hash.workspace = true

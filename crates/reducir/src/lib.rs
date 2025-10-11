@@ -18,6 +18,8 @@ use self::{
   ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyApp, Subst},
 };
 
+use salsa::Database as Db;
+
 mod pretty;
 pub mod ty;
 
@@ -37,20 +39,17 @@ mod subst {
   };
 
   pub(crate) struct SubstTy<'a> {
-    pub(crate) db: &'a dyn crate::Db,
+    pub(crate) db: &'a dyn salsa::Database,
     pub(crate) subst: Subst,
   }
 
   impl<'a> SubstTy<'a> {
-    pub fn new<DB: ?Sized + crate::Db>(db: &'a DB, subst: Subst) -> Self {
-      Self {
-        db: db.as_reducir_db(),
-        subst,
-      }
+    pub fn new(db: &'a dyn salsa::Database, subst: Subst) -> Self {
+      Self { db, subst }
     }
 
     fn subst(&self, ty: ReducIrTy) -> ReducIrTy {
-      ty.subst(self.db.as_reducir_db(), self.subst.clone())
+      ty.subst(self.db, self.subst.clone())
     }
   }
 
@@ -125,6 +124,7 @@ mod subst {
   }
 }
 
+/*
 #[salsa::jar(db = Db)]
 pub struct Jar(
   ty::ReducIrTy,
@@ -143,42 +143,40 @@ pub trait Db: salsa::DbWithJar<Jar> + base::Db + ::ty::Db {
     <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db + ::ty::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db + ::ty::Db {}*/
 
-#[salsa::interned]
+#[salsa::interned(debug, no_lifetime)]
+#[derive(PartialOrd, Ord)]
 pub struct GeneratedReducIrName {
   pub name: Ident,
   pub module: Module,
 }
 
-#[salsa::tracked]
-pub struct ReducIrModule {
-  #[id]
+#[salsa::tracked(debug)]
+pub struct ReducIrModule<'db> {
   pub module: Module,
-  #[return_ref]
-  pub items: Vec<ReducIrItem>,
+  #[returns(ref)]
+  pub items: Vec<ReducIrItem<'db>>,
 }
 
-#[salsa::tracked]
-pub struct ReducIrGenItem {
-  #[id]
+#[salsa::tracked(debug)]
+pub struct ReducIrGenItem<'db> {
   pub name: GeneratedReducIrName,
-  #[return_ref]
+  #[returns(ref)]
   pub item: DelimReducIr,
 }
 
-#[salsa::tracked]
-pub struct ReducIrItem {
-  #[id]
+#[salsa::tracked(debug)]
+pub struct ReducIrItem<'db> {
   pub name: TermName,
-  #[return_ref]
+  #[returns(ref)]
   pub item: DelimReducIr,
   // List of row evidence items that this item references
-  #[return_ref]
-  pub row_evs: Vec<ReducIrGenItem>,
-  #[return_ref]
+  #[returns(ref)]
+  pub row_evs: Vec<ReducIrGenItem<'db>>,
+  #[returns(ref)]
   pub var_supply: IdSupply<ReducIrVarId>,
-  #[return_ref]
+  #[returns(ref)]
   pub tyvar_supply: IdSupply<ReducIrTyVarId>,
 }
 
@@ -189,34 +187,34 @@ pub enum ReducIrTermName {
   // A generated term that only exists at the ReducIr level
   Gen(GeneratedReducIrName),
 }
-impl ReducIrTermName {
-  pub fn term<DB: ?Sized + base::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
-    ReducIrTermName::Term(TermName::new(
-      db.as_core_db(),
-      db.ident(name.to_string()),
-      module,
-    ))
+impl<'db> ReducIrTermName {
+  pub fn term<DB: ?Sized + salsa::Database>(db: &DB, name: impl ToString, module: Module) -> Self {
+    ReducIrTermName::Term(TermName::new(db, Ident::new(db, name.to_string()), module))
   }
 
-  pub fn generated<DB: ?Sized + crate::Db>(db: &DB, name: impl ToString, module: Module) -> Self {
+  pub fn generated<DB: ?Sized + salsa::Database>(
+    db: &DB,
+    name: impl ToString,
+    module: Module,
+  ) -> Self {
     ReducIrTermName::Gen(GeneratedReducIrName::new(
-      db.as_reducir_db(),
-      db.ident(name.to_string()),
+      db,
+      Ident::new(db, name.to_string()),
       module,
     ))
   }
 
-  pub fn name<DB: ?Sized + crate::Db>(&self, db: &DB) -> Ident {
+  pub fn name<DB: ?Sized + salsa::Database>(&self, db: &DB) -> Ident {
     match self {
-      ReducIrTermName::Term(term) => term.name(db.as_core_db()),
-      ReducIrTermName::Gen(generator) => generator.name(db.as_reducir_db()),
+      ReducIrTermName::Term(term) => term.name(db),
+      ReducIrTermName::Gen(generator) => generator.name(db),
     }
   }
 
-  pub fn module<DB: ?Sized + crate::Db>(&self, db: &DB) -> Module {
+  pub fn module<DB: ?Sized + salsa::Database>(&self, db: &'db DB) -> Module {
     match self {
-      ReducIrTermName::Term(term) => term.module(db.as_core_db()),
-      ReducIrTermName::Gen(generator) => generator.module(db.as_reducir_db()),
+      ReducIrTermName::Term(term) => term.module(db),
+      ReducIrTermName::Gen(generator) => generator.module(db),
     }
   }
 }
@@ -267,7 +265,7 @@ impl ReducIrVar {
 }
 
 /// An owned T that is frozen and exposes a reduced Box API.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct P<T: ?Sized> {
   ptr: Box<T>,
 }
@@ -299,11 +297,11 @@ impl<T> P<T> {
   }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum DelimCont {
   // Delimited control
   // Generate a new prompt marker
-  NewPrompt(ReducIrVar, P<ReducIr<DelimCont>>),
+  NewPrompt(ReducIrVar, P<ReducIr<Self>>),
   // Install a prompt for a marker
   Prompt {
     marker: P<ReducIr<DelimCont>>,
@@ -317,10 +315,10 @@ pub enum DelimCont {
     marker: P<ReducIr<DelimCont>>,
     body: P<ReducIr<DelimCont>>,
   },
-  AbsE(ReducIrVar, ReducIrTy, P<ReducIr<DelimCont>>),
+  AbsE(ReducIrVar, ReducIrTy, P<ReducIr<Self>>),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 /// A local binding
 pub struct Bind<Ext> {
   pub var: ReducIrVar,
@@ -339,7 +337,7 @@ impl<Ext> Bind<Ext> {
   }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub struct ReducIrItemOccurence {
   pub name: ReducIrTermName,
   pub ty: ReducIrTy,
@@ -368,7 +366,7 @@ impl ReducIrItemOccurence {
   }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum ReducIrKind<Ext = Infallible> {
   // Values
   Int(usize),
@@ -410,14 +408,14 @@ impl<Ext> ReducIrKind<Ext> {
 /// Effect typing is also made explicit and transformed to a lower level reprsentation in `ReducIr`.
 /// `Handler`s become `Prompt`s, and `Operation`s become `Yield`s. Prompt and yield together form
 /// the primitives to express delimited control which is how we implement effects under the hood.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub struct ReducIr<Ext = Infallible> {
   pub kind: ReducIrKind<Ext>,
 }
 
 pub type DelimReducIr = ReducIr<DelimCont>;
 
-impl<Ext> fmt::Debug for ReducIr<Ext>
+impl<'db, Ext> fmt::Debug for ReducIr<Ext>
 where
   Ext: fmt::Debug,
 {
@@ -426,7 +424,7 @@ where
   }
 }
 
-impl<Ext> ReducIr<Ext> {
+impl<'db, Ext> ReducIr<Ext> {
   pub fn new(kind: ReducIrKind<Ext>) -> Self {
     Self { kind }
   }
@@ -475,7 +473,7 @@ impl<Ext> ReducIr<Ext> {
     // This just exists because we might call app recursively if head is an Abs.
     // If we actually call `app` recursively we evoke a recursive IntoIterator check that fails.
     // So instead we call this inner function and don't recurse.
-    fn app_inner<Ext>(
+    fn app_inner<'db, Ext>(
       mut head: ReducIr<Ext>,
       spine: impl IntoIterator<Item = ReducIr<Ext>>,
     ) -> ReducIr<Ext> {
@@ -628,7 +626,7 @@ pub struct TopLevelDef<'a, Ext> {
 
 impl ReducIr<Infallible> {
   /// Apply a subst to all types within self
-  pub fn subst<DB: ?Sized + crate::Db>(&self, db: &DB, subst: Subst) -> Self {
+  pub fn subst(&self, db: &dyn salsa::Database, subst: Subst) -> Self {
     self.fold(&mut SubstTy::new(db, subst))
   }
 }
@@ -681,7 +679,7 @@ pub trait ReducIrInPlaceFold {
   }
 }
 
-pub fn default_endotraverse_ir<F: ReducIrEndoFold>(
+pub fn default_endotraverse_ir<'db, F: ReducIrEndoFold>(
   fold: &mut F,
   ir: &ReducIr<F::Ext>,
 ) -> ReducIr<F::Ext> {
@@ -843,7 +841,7 @@ pub trait ReducIrFold: Sized {
   }
 }
 
-impl<Ext> ReducIr<Ext> {
+impl<'db, Ext> ReducIr<Ext> {
   pub fn fold<F: ReducIrFold<InExt = Ext>>(&self, fold: &mut F) -> ReducIr<F::OutExt> {
     fold.traverse_ir(self)
   }
@@ -853,7 +851,7 @@ impl<Ext> ReducIr<Ext> {
   }
 }
 
-impl<Ext: std::fmt::Debug> ReducIr<Ext> {
+impl<'db, Ext: std::fmt::Debug> ReducIr<Ext> {
   // Unwrap top level item nodes (TyAbs and Abs) before applying fold in place.
   pub fn fold_in_place_inside_item<F: ?Sized + ReducIrInPlaceFold<Ext = Ext>>(
     &mut self,
@@ -870,7 +868,7 @@ impl<Ext: std::fmt::Debug> ReducIr<Ext> {
   }
 }
 
-impl<Ext> ReducIr<Ext> {
+impl<'db, Ext> ReducIr<Ext> {
   /// Allows "casting" to another Ext type by assuming `ReducIrKind::X` is not used anywhere in
   /// `self`.
   /// Panics if `ReducIrKind::X` is present in `self`.
@@ -910,7 +908,7 @@ impl<'a, DB: ?Sized> FreeVarAux<'a, DB> {
     }
   }
 }
-impl<DB: ?Sized + crate::Db> FreeVarAux<'_, DB> {
+impl FreeVarAux<'_, dyn salsa::Database> {
   fn visit(&mut self, ir: &ReducIr) {
     match ir.kind() {
       Int(_) | Item(_) => {}
@@ -971,8 +969,8 @@ impl<DB: ?Sized + crate::Db> FreeVarAux<'_, DB> {
   }
 }
 
-impl ReducIr {
-  pub fn free_var_set<DB: ?Sized + crate::Db>(&self, db: &DB) -> FxHashSet<ReducIrVar> {
+impl<'db> ReducIr {
+  pub fn free_var_set(&self, db: &'db dyn salsa::Database) -> FxHashSet<ReducIrVar> {
     let mut aux = FreeVarAux::new(db);
     aux.visit(self);
     aux.bound
@@ -981,23 +979,20 @@ impl ReducIr {
 
 pub trait TypeCheck {
   type Ext: Clone;
-  fn type_check<'a, DB: ?Sized + crate::Db>(
+  fn type_check<'a, 'db>(
     &'a self,
-    ctx: &DB,
+    ctx: &'db dyn salsa::Database,
   ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>>
   where
-    Self::Ext: PrettyWithCtx<DB>;
+    Self::Ext: PrettyWithCtx<dyn salsa::Database>;
 }
-impl TypeCheck for DelimCont {
+impl<'db> TypeCheck for DelimCont {
   type Ext = Self;
-  fn type_check<DB: ?Sized + crate::Db>(
-    &self,
-    ctx: &DB,
-  ) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+  fn type_check(&self, ctx: &dyn salsa::Database) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
     use ty::ReducIrTyKind::*;
     match self {
       DelimCont::NewPrompt(prompt, body) => {
-        if let MarkerTy(_) = prompt.ty.kind(ctx.as_reducir_db()) {
+        if let MarkerTy(_) = prompt.ty.kind(ctx) {
           body.type_check(ctx)
         } else {
           Err(ReducIrTyErr::ExpectedMarkerTy(prompt.ty))
@@ -1006,7 +1001,7 @@ impl TypeCheck for DelimCont {
       DelimCont::Prompt {
         marker, body, ret, ..
       } => {
-        let ir_db = ctx.as_reducir_db();
+        let ir_db = ctx;
         let marker_ty = marker.type_check(ctx)?;
         let MarkerTy(_) = marker_ty.kind(ir_db) else {
           return Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty));
@@ -1037,7 +1032,7 @@ impl TypeCheck for DelimCont {
         body,
       } => {
         let marker_ty = marker.type_check(ctx)?;
-        let MarkerTy(_) = marker_ty.kind(ctx.as_reducir_db()) else {
+        let MarkerTy(_) = marker_ty.kind(ctx) else {
           return Err(ReducIrTyErr::ExpectedMarkerTy(marker_ty));
         };
         // We want to make sure body type checks but we don't actually use the result
@@ -1053,19 +1048,16 @@ impl TypeCheck for DelimCont {
 }
 impl TypeCheck for Infallible {
   type Ext = Self;
-  fn type_check<DB: ?Sized + crate::Db>(
-    &self,
-    _: &DB,
-  ) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+  fn type_check(&self, _: &dyn salsa::Database) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
     unreachable!()
   }
 }
-impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
+impl<'db, Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
   type Ext = Ext;
 
-  fn type_check<DB: ?Sized + crate::Db>(&self, ctx: &DB) -> Result<ReducIrTy, ReducIrTyErr<Ext>>
+  fn type_check(&self, ctx: &dyn salsa::Database) -> Result<ReducIrTy, ReducIrTyErr<'_, Ext>>
   where
-    Ext: PrettyWithCtx<DB>,
+    Ext: PrettyWithCtx<dyn salsa::Database>,
   {
     use ty::ReducIrTyKind::*;
     match &self.kind {
@@ -1075,7 +1067,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         let ret_ty = body.type_check(ctx)?;
         Ok(ctx.mk_fun_ty(args.iter().map(|arg| arg.ty), ret_ty))
       }
-      App(func, args) if matches!(func.kind(), Item(occ) if occ.name.name(ctx) == ctx.ident_str("__mon_eqm")) =>
+      App(func, args) if matches!(func.kind(), Item(occ) if occ.name.name(ctx).text(ctx) == "__mon_eqm") =>
       {
         if args.len() > 2 {
           return Err(ReducIrTyErr::ExpectedFunTy {
@@ -1089,7 +1081,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
 
         for arg in args {
           let ty = arg.type_check(ctx)?;
-          match ty.kind(ctx.as_reducir_db()) {
+          match ty.kind(ctx) {
             MarkerTy(_) => {}
             _ => {
               return Err(ReducIrTyErr::ExpectedMarkerTy(ty));
@@ -1103,8 +1095,8 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
       App(func, args) => {
         let func_ty = func.type_check(ctx)?;
         let args_iter = args.iter();
-        fn collect_args(
-          db: &dyn crate::Db,
+        fn collect_args<'db>(
+          db: &'db dyn salsa::Database,
           ty: ReducIrTy,
           out_args: &mut Vec<(ReducIrTy, Option<ReducIrTy>)>,
         ) -> ReducIrTy {
@@ -1127,8 +1119,8 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
           }
         }
 
-        fn back_to_fun_ty(
-          db: &dyn crate::Db,
+        fn back_to_fun_ty<'db>(
+          db: &'db dyn salsa::Database,
           mut args: impl Iterator<Item = (ReducIrTy, Option<ReducIrTy>)>,
           ret: ReducIrTy,
         ) -> ReducIrTy {
@@ -1142,7 +1134,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
         }
 
         let mut fun_arg_tys = vec![];
-        let ret_ty = collect_args(ctx.as_reducir_db(), func_ty, &mut fun_arg_tys);
+        let ret_ty = collect_args(ctx, func_ty, &mut fun_arg_tys);
         if fun_arg_tys.is_empty() {
           return Err(ReducIrTyErr::ExpectedFunTy {
             ty: func_ty,
@@ -1167,7 +1159,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
           }
         }
 
-        let fun_ty = back_to_fun_ty(ctx.as_reducir_db(), fun_args.copied().rev(), ret_ty);
+        let fun_ty = back_to_fun_ty(ctx, fun_args.copied().rev(), ret_ty);
         Ok(fun_ty)
       }
       Locals(binds, body) => {
@@ -1190,15 +1182,14 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
       }
       TyApp(forall, ty_apps) => {
         let forall_ty = forall.type_check(ctx)?;
-        ty_apps.iter().try_fold(forall_ty, |forall_ty, ty_app| {
-          match forall_ty.kind(ctx.as_reducir_db()) {
+        ty_apps
+          .iter()
+          .try_fold(forall_ty, |forall_ty, ty_app| match forall_ty.kind(ctx) {
             ForallTy(kind, ret_ty) => match (kind, ty_app) {
-              (Kind::Type, ReducIrTyApp::Ty(ty)) => {
-                Ok(ret_ty.subst_single(ctx.as_reducir_db(), *ty))
-              }
+              (Kind::Type, ReducIrTyApp::Ty(ty)) => Ok(ret_ty.subst_single(ctx, *ty)),
               (Kind::SimpleRow, ReducIrTyApp::DataRow(row))
               | (Kind::ScopedRow, ReducIrTyApp::EffRow(row)) => {
-                Ok(ret_ty.subst_single(ctx.as_reducir_db(), row.clone()))
+                Ok(ret_ty.subst_single(ctx, row.clone()))
               }
               (k, ReducIrTyApp::Ty(_)) => Err(ReducIrTyErr::KindMistmatch(k, Kind::Type)),
               (k, ReducIrTyApp::DataRow(_)) => Err(ReducIrTyErr::KindMistmatch(k, Kind::SimpleRow)),
@@ -1209,8 +1200,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
               forall_ty,
               ty_apps: ty_apps.as_slice(),
             }),
-          }
-        })
+          })
       }
       Struct(elems) => {
         let elems = elems
@@ -1221,7 +1211,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
       }
       FieldProj(indx, strukt) => {
         let strukt_ty = strukt.type_check(ctx)?;
-        match strukt_ty.kind(ctx.as_reducir_db()) {
+        match strukt_ty.kind(ctx) {
           ProductTy(tys) => Ok(tys[*indx]),
           _ => Err(ReducIrTyErr::ExpectedProdTy(
             strukt_ty,
@@ -1231,7 +1221,7 @@ impl<Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
       }
       Case(case_ty, discr, branches) => {
         let coprod = discr.type_check(ctx)?;
-        let tys = match coprod.kind(ctx.as_reducir_db()) {
+        let tys = match coprod.kind(ctx) {
           CoproductTy(tys) => tys,
           // We have to coerce control to an enum type here
           // This is the toil we pay for special casing control

@@ -94,7 +94,7 @@ impl<'ctx> From<(InferTy<'ctx>, InferTy<'ctx>)> for TypeCheckError<'ctx> {
 }
 
 pub(crate) fn into_diag(
-  db: &dyn crate::Db,
+  db: &dyn salsa::Database,
   err: TypeCheckError<'_>,
   span: Span,
 ) -> TypeCheckDiagnostic {
@@ -110,11 +110,11 @@ pub(crate) fn into_diag(
         .append(
           docs![
             d,
-            left.pretty_with(&(db.as_ty_db(), ())).pprint(),
+            left.pretty_with(&(db, ())).pprint(),
             d.softline(),
             "!=",
             d.softline(),
-            right.pretty_with(&(db.as_ty_db(), ())).pprint()
+            right.pretty_with(&(db, ())).pprint()
           ]
           .nest(2),
         )
@@ -133,7 +133,7 @@ pub(crate) fn into_diag(
             d.text("cycle detected for type variable"),
             pretty::Pretty::pretty(var, d),
             d.text("with inferred type"),
-            ty.pretty_with(&(db.as_ty_db(), ())).pprint(),
+            ty.pretty_with(&(db, ())).pprint(),
           ],
           d.space(),
         )
@@ -152,7 +152,7 @@ pub(crate) fn into_diag(
             d.text("cycle detected for row variable"),
             pretty::Pretty::pretty(var, d),
             d.text("with inferred row"),
-            row.pretty_with(&(db.as_ty_db(), ())).pprint(),
+            row.pretty_with(&(db, ())).pprint(),
           ],
           d.space(),
         )
@@ -171,7 +171,7 @@ pub(crate) fn into_diag(
             d.text("cycle detected for row variable"),
             pretty::Pretty::pretty(var, d),
             d.text("with inferred row"),
-            row.pretty_with(&(db.as_ty_db(), ())).pprint(),
+            row.pretty_with(&(db, ())).pprint(),
           ],
           d.space(),
         )
@@ -190,9 +190,9 @@ pub(crate) fn into_diag(
         .append(lbl.pretty_with(db).pprint())
         .append(
           d.hardline()
-            .append(left.pretty_with(&(db.as_ty_db(), ())).pprint())
+            .append(left.pretty_with(&(db, ())).pprint())
             .append(d.hardline())
-            .append(right.pretty_with(&(db.as_ty_db(), ())).pprint())
+            .append(right.pretty_with(&(db, ())).pprint())
             .nest(2),
         );
       let mut message = String::new();
@@ -208,10 +208,10 @@ pub(crate) fn into_diag(
         .append(d.hardline())
         .append(
           left
-            .pretty_with(&(db.as_ty_db(), ()))
+            .pretty_with(&(db, ()))
             .pprint()
             .append(d.hardline())
-            .append(right.pretty_with(&(db.as_ty_db(), ())).pprint())
+            .append(right.pretty_with(&(db, ())).pprint())
             .nest(2),
         )
         .pretty(width)
@@ -227,10 +227,10 @@ pub(crate) fn into_diag(
         .append(d.hardline())
         .append(
           left
-            .pretty_with(&(db.as_ty_db(), ()))
+            .pretty_with(&(db, ()))
             .pprint()
             .append(d.hardline())
-            .append(right.pretty_with(&(db.as_ty_db(), ())).pprint())
+            .append(right.pretty_with(&(db, ())).pprint())
             .nest(2),
         )
         .pretty(width)
@@ -244,7 +244,7 @@ pub(crate) fn into_diag(
       let doc = d
         .text("could not find an effect signature matching handler:")
         .append(d.softline())
-        .append(signature.pretty_with(&(db.as_ty_db(), ())).pprint());
+        .append(signature.pretty_with(&(db, ())).pprint());
       let mut message = String::new();
       doc.render_fmt(width, &mut message).unwrap();
       TypeCheckDiagnostic {
@@ -258,7 +258,7 @@ pub(crate) fn into_diag(
         span,
         message: format!(
           "could not find an effect defintion for: {}",
-          eff_name.text(db.as_core_db())
+          eff_name.text(db)
         ),
       },
     },

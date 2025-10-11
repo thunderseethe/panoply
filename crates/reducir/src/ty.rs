@@ -2,7 +2,6 @@ use base::id::ReducIrTyVarId;
 use ty::row::{RowSema, Scoped, Simple};
 
 mod subst;
-use salsa::DebugWithDb;
 
 use subst::SubstFold;
 pub use subst::{IntoPayload, Subst};
@@ -56,8 +55,8 @@ pub enum ReducIrTyKind {
   FunETy(ReducIrTy, ReducIrTy, ReducIrTy),
 }
 
-#[salsa::interned]
-#[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[salsa::interned(debug, no_lifetime)]
+#[derive(PartialOrd, Ord)]
 pub struct ReducIrTy {
   pub kind: ReducIrTyKind,
 }
@@ -68,10 +67,10 @@ pub struct UnwrapMonTy {
 }
 impl ReducIrTy {
   /// Unwrap a monadic type into it's evv type and value type.
-  pub fn try_unwrap_monadic<Db: ?Sized + crate::Db>(self, db: &Db) -> Result<UnwrapMonTy, Self> {
+  pub fn try_unwrap_monadic(self, db: &dyn salsa::Database) -> Result<UnwrapMonTy, Self> {
     // Monadic type is evv -> Control evv a
     // Unwrap and return (evv, a) from Control type
-    let reducir_db = db.as_reducir_db();
+    let reducir_db = db;
     match self.kind(reducir_db) {
       ReducIrTyKind::FunTy(args, ret) if args.len() == 1 => match ret.kind(reducir_db) {
         ReducIrTyKind::ControlTy(evv_ty, a_ty) if args[0] == evv_ty => {
@@ -83,15 +82,18 @@ impl ReducIrTy {
     }
   }
 
-  pub fn unwrap_foralls<Db: ?Sized + crate::Db>(self, db: &Db) -> Self {
-    match self.kind(db.as_reducir_db()) {
+  pub fn unwrap_foralls(self, db: &dyn salsa::Database) -> Self {
+    match self.kind(db) {
       ReducIrTyKind::ForallTy(_, ty) => ty.unwrap_foralls(db),
       _ => self,
     }
   }
 
   /// Checks if a function type returns a monadic type
-  pub fn try_fun_returns_monadic(self, db: &dyn crate::Db) -> Result<(usize, UnwrapMonTy), Self> {
+  pub fn try_fun_returns_monadic(
+    self,
+    db: &dyn salsa::Database,
+  ) -> Result<(usize, UnwrapMonTy), Self> {
     match self.kind(db) {
       ReducIrTyKind::FunTy(args, ret) => match ret.kind(db) {
         ReducIrTyKind::ControlTy(evv_ty, a_ty) if args.last() == Some(&evv_ty) => {
@@ -116,12 +118,12 @@ impl ReducIrTy {
     }
   }
 
-  pub fn split_args<DB: ?Sized + crate::Db>(
+  pub fn split_args(
     self,
-    db: &DB,
+    db: &dyn salsa::Database,
     n_args: usize,
   ) -> Result<(Vec<Self>, Self), Self> {
-    match self.kind(db.as_reducir_db()) {
+    match self.kind(db) {
       ReducIrTyKind::FunTy(args, ret) => {
         let (args, ret_args) = args.split_at(n_args);
         Ok((args.to_vec(), db.mk_fun_ty(ret_args.iter().copied(), ret)))
@@ -133,7 +135,7 @@ impl ReducIrTy {
   /// Arity of this type for use in medir.
   /// If the type isn't a function this arity is 0
   pub fn medir_arity<DB: ?Sized + crate::Db>(&self, db: &DB) -> Option<u32> {
-    match self.kind(db.as_reducir_db()) {
+    match self.kind(db) {
       ReducIrTyKind::FunTy(params, _) => Some(params.len().try_into().unwrap()),
       ReducIrTyKind::ForallTy(_, ty) => ty.medir_arity(db),
       _ => None,
@@ -142,7 +144,7 @@ impl ReducIrTy {
 }
 
 pub fn default_fold_tykind<'db>(
-  fold: &mut (impl FoldReducIrTy<'db> + ?Sized),
+  fold: &mut (impl FoldReducIrTy + ?Sized),
   kind: ReducIrTyKind,
 ) -> ReducIrTy {
   let kind = match kind {
@@ -195,8 +197,8 @@ pub fn default_fold_tykind<'db>(
   fold.mk_ty(kind)
 }
 
-pub trait FoldReducIrTy<'db> {
-  fn db(&self) -> &'db dyn crate::Db;
+pub trait FoldReducIrTy {
+  fn db(&self) -> &dyn salsa::Database;
 
   fn mk_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
     self.db().mk_reducir_ty(kind)
@@ -224,13 +226,13 @@ pub trait FoldReducIrTy<'db> {
 }
 
 impl ReducIrTy {
-  fn fold<'db>(self, f: &mut impl FoldReducIrTy<'db>) -> Self {
+  fn fold(self, f: &mut impl FoldReducIrTy) -> Self {
     f.fold_ty(self)
   }
   /// Assume `self` is a forall and reduce it by applying `ty` as it's argument.
   /// This applies type substitution without having to create a TyApp ReducIr node.
-  pub fn reduce_forall<DB: ?Sized + crate::Db>(self, db: &DB, ty_app: ReducIrTyApp) -> ReducIrTy {
-    match (self.kind(db.as_reducir_db()), ty_app) {
+  pub fn reduce_forall(self, db: &dyn salsa::Database, ty_app: ReducIrTyApp) -> ReducIrTy {
+    match (self.kind(db), ty_app) {
       (ReducIrTyKind::ForallTy(Kind::Type, ret_ty), ReducIrTyApp::Ty(ty)) => {
         ret_ty.subst_single(db, ty)
       }
@@ -244,30 +246,27 @@ impl ReducIrTy {
     }
   }
 
-  pub fn subst<DB: ?Sized + crate::Db>(self, db: &DB, subst: Subst) -> Self {
-    self.fold(&mut SubstFold {
-      db: db.as_reducir_db(),
-      subst,
-    })
+  pub fn subst(self, db: &dyn salsa::Database, subst: Subst) -> Self {
+    self.fold(&mut SubstFold { db, subst })
   }
 
-  pub fn subst_single<DB: ?Sized + crate::Db>(self, db: &DB, payload: impl IntoPayload) -> Self {
+  pub fn subst_single(self, db: &dyn salsa::Database, payload: impl IntoPayload) -> Self {
     self.subst(db, Subst::single(payload.into_payload(db)))
   }
 
   /// Shift all the variables in a term by delta.
-  pub fn shift<DB: ?Sized + crate::Db>(self, db: &DB, delta: i32) -> Self {
-    self.subst(db.as_reducir_db(), Subst::Inc(delta))
+  pub fn shift(self, db: &dyn salsa::Database, delta: i32) -> Self {
+    self.subst(db, Subst::Inc(delta))
   }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub enum ReducIrRow {
   Open(i32),
   Closed(Vec<ReducIrTy>),
 }
 
-impl DebugWithDb<dyn crate::Db> for ReducIrRow {
+/*impl DebugWithDb<dyn crate::Db> for ReducIrRow {
   fn fmt(
     &self,
     f: &mut std::fmt::Formatter<'_>,
@@ -282,7 +281,7 @@ impl DebugWithDb<dyn crate::Db> for ReducIrRow {
         .finish(),
     }
   }
-}
+}*/
 
 impl ReducIrRow {
   pub fn shift(self, db: &dyn crate::Db, delta: i32) -> Self {
@@ -294,14 +293,14 @@ impl ReducIrRow {
     }
   }
 
-  fn into_prod_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> ReducIrTy {
+  fn into_prod_ty(self, db: &dyn salsa::Database) -> ReducIrTy {
     match self {
       ReducIrRow::Open(var) => db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(var)),
       ReducIrRow::Closed(tys) => db.mk_prod_ty(tys),
     }
   }
 
-  fn into_coprod_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> ReducIrTy {
+  fn into_coprod_ty(self, db: &dyn salsa::Database) -> ReducIrTy {
     match self {
       ReducIrRow::Open(var) => db.mk_reducir_ty(ReducIrTyKind::CoprodVarTy(var)),
       ReducIrRow::Closed(tys) => db.mk_coprod_ty(tys),
@@ -312,7 +311,7 @@ impl ReducIrRow {
 // We allow Rows in type applications because they might show up in constraints.
 // But we want to ensure they don't appear in our ReducIr types outside of that so we make a specific type
 // for it
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Hash)]
 pub enum ReducIrTyApp {
   Ty(ReducIrTy),
   DataRow(ReducIrRow),
@@ -321,6 +320,7 @@ pub enum ReducIrTyApp {
 
 pub trait MkReducIrTy {
   fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy;
+
   fn mk_fun_ty(
     &self,
     args: impl IntoIterator<Item = impl IntoReducIrTy>,
@@ -388,12 +388,9 @@ impl IntoReducIrTy for ReducIrTyKind {
   }
 }
 
-impl<DB> MkReducIrTy for DB
-where
-  DB: ?Sized + crate::Db,
-{
+impl MkReducIrTy for dyn salsa::Database {
   fn mk_reducir_ty(&self, kind: ReducIrTyKind) -> ReducIrTy {
-    ReducIrTy::new(self.as_reducir_db(), kind)
+    ReducIrTy::new(self, kind)
   }
 
   fn mk_fun_ty(
@@ -410,7 +407,7 @@ where
     if args.peek().is_none() {
       ret
     } else {
-      match ret.kind(self.as_reducir_db()) {
+      match ret.kind(self) {
         ReducIrTyKind::FunTy(iargs, ret) => self.mk_reducir_ty(ReducIrTyKind::FunTy(
           args.chain(iargs.iter().copied()).collect(),
           ret,
@@ -425,9 +422,7 @@ where
     let exists_m = self.mk_reducir_ty(ReducIrTyKind::VarTy(1));
     let exists_r = self.mk_reducir_ty(ReducIrTyKind::VarTy(0));
     let exists_mon_m_r = self.mk_mon_ty(exists_m, exists_r);
-    let exists_body_fun_ty = self
-      .mk_mon_ty(evv_ty, a_ty)
-      .subst(self.as_reducir_db(), Subst::Inc(3));
+    let exists_body_fun_ty = self.mk_mon_ty(evv_ty, a_ty).subst(self, Subst::Inc(3));
     self.mk_forall_ty(
       [Kind::Type, Kind::Type, Kind::Type],
       self.mk_prod_ty(vec![

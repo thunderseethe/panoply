@@ -249,7 +249,7 @@ impl<I, T> DerefMut for IdGen<I, T> {
   }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct IdSupply<I> {
   next: u32,
   _marker: PhantomData<I>,
@@ -286,7 +286,8 @@ impl<I: Id> IdSupply<I> {
 }
 
 /// An identifier for a name resolved term definition
-#[salsa::interned]
+#[salsa::interned(debug, no_lifetime)]
+#[derive(PartialOrd, Ord)]
 pub struct TermName {
   pub name: Ident,
   pub module: Module,
@@ -294,26 +295,25 @@ pub struct TermName {
 
 impl TermName {
   pub fn name_text<Db: ?Sized + crate::Db>(self, db: &Db) -> &str {
-    let core_db = db.as_core_db();
-    self.name(core_db).text(core_db)
+    self.name(db).text(db)
   }
 }
 
 /// An identifier for a name resolved effect definition
-#[salsa::interned]
+#[salsa::interned(debug, no_lifetime)]
 pub struct EffectName {
   pub name: Ident,
   pub module: Module,
 }
 
-#[salsa::interned]
+#[salsa::interned(debug, no_lifetime)]
 pub struct TypeName {
   pub name: Ident,
   pub module: Module,
 }
 
 /// An identifier for a name resolved effect operator definition
-#[salsa::interned]
+#[salsa::interned(debug, no_lifetime)]
 pub struct EffectOpName {
   pub name: Ident,
   pub effect: EffectName,

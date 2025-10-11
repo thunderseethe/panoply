@@ -1,4 +1,7 @@
-use std::ops::{Not, Range};
+use std::{
+  collections::BTreeMap,
+  ops::{Not, Range},
+};
 
 use ast::{
   Ast, AstModule, Direction,
@@ -6,8 +9,8 @@ use ast::{
 };
 use ast::{AstEffect, AstTerm};
 use base::{
-  file::FileId,
   id::{EffectName, EffectOpName, IdGen, TermName, TyVarId, VarId},
+  ident::Ident,
   loc::Loc,
   modules::Module,
   span::{Span, Spanned},
@@ -17,14 +20,18 @@ use cst::{
   TermPostfix, TermPrefix, Type,
 };
 use la_arena::{Arena, Idx};
-use nameres::{Handle, InScopeName, NameResEffect, NameResTerm};
+use nameres::{
+  Handle, InScopeName, NameResEffect, NameResTerm, nameres_module_of, nameres_term_of,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::AsId;
 use ty::{
   Evidence, InDb, MkTy, Ty, TyScheme, TypeKind,
   row::{Row, ScopedRow, Simple},
 };
 
+use salsa::Database as Db;
+
+/*
 #[salsa::jar(db = Db)]
 pub struct Jar(
   desugar_module,
@@ -55,15 +62,15 @@ pub trait Db: salsa::DbWithJar<Jar> + nameres::Db + ast::Db + ty::Db {
     desugar_effect(self.as_desugar_db(), module, nameres_eff)
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + nameres::Db + ast::Db + ty::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + nameres::Db + ast::Db + ty::Db {}*/
 
 /// Desugar an NST Module into an AST module.
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
-pub fn desugar_module(db: &dyn crate::Db, module: Module) -> AstModule {
-  let nameres_db = db.as_nameres_db();
+pub fn desugar_module<'db>(db: &'db dyn salsa::Database, module: Module) -> AstModule<'db> {
+  let nameres_db = db;
 
-  let nameres_module = db.nameres_module_of(module);
+  let nameres_module = nameres_module_of(db, module);
   /*let items = Items::new(cst.data(db));
   let mut terms = vec![];
   let mut effects = vec![];
@@ -79,7 +86,7 @@ pub fn desugar_module(db: &dyn crate::Db, module: Module) -> AstModule {
   }*/
 
   AstModule::new(
-    db.as_ast_db(),
+    db,
     module,
     nameres_module
       .terms(nameres_db)
@@ -95,36 +102,45 @@ pub fn desugar_module(db: &dyn crate::Db, module: Module) -> AstModule {
 }
 
 #[salsa::tracked]
-fn desugar_effect(db: &dyn crate::Db, module: Module, effect: NameResEffect) -> AstEffect {
+fn desugar_effect<'db>(
+  db: &'db dyn crate::Db,
+  module: Module,
+  effect: NameResEffect<'db>,
+) -> AstEffect<'db> {
   // TODO: Handle separation of name based Ids and desugar generated Ids better.
   //let locals = effect.locals(db.as_nameres_db());
   //let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
   //let mut ty_vars = locals.ty_vars.to_gen().into_iter().map(|_| true).collect();
 
-  let nameres_module = db.nameres_module_of(module);
+  let nameres_module = nameres_module_of(db, module);
 
-  let mut vars = effect
-    .vars(db.as_nameres_db())
-    .to_gen()
-    .into_iter()
-    .map(|_| true)
-    .collect();
+  let mut vars = effect.vars(db).to_gen().into_iter().map(|_| true).collect();
   let mut ty_vars = effect
-    .ty_vars(db.as_nameres_db())
+    .ty_vars(db)
     .to_gen()
     .into_iter()
     .map(|_| true)
     .collect();
   let names = nameres_module.names(db);
 
-  let handle = effect.data(db.as_nameres_db()).clone();
+  let handle = effect.data(db).clone();
   let eff_defn = desugar_effect_defn(db, &mut vars, &mut ty_vars, names, handle.into_node());
 
-  AstEffect::new(db.as_ast_db(), effect.name(db.as_nameres_db()), eff_defn)
+  AstEffect::new(db, effect.name(db), eff_defn)
+}
+
+pub fn desugar_term_of<'db>(db: &'db dyn salsa::Database, term: TermName) -> AstTerm<'db> {
+  let module = term.module(db);
+  let nameres_term = nameres_term_of(db, term);
+  desugar_term(db, module, nameres_term)
 }
 
 #[salsa::tracked]
-fn desugar_term(db: &dyn crate::Db, module: Module, term: NameResTerm) -> AstTerm {
+fn desugar_term<'db>(
+  db: &'db dyn salsa::Database,
+  module: Module,
+  term: NameResTerm<'db>,
+) -> AstTerm<'db> {
   // TODO: Handle separation of name based Ids and desugar generated Ids better.
   /*let locals = term.locals(db.as_nameres_db());
   let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
@@ -138,23 +154,18 @@ fn desugar_term(db: &dyn crate::Db, module: Module, term: NameResTerm) -> AstTer
     term.data(db.as_nameres_db()),
   );*/
 
-  let nameres_module = db.nameres_module_of(module);
+  let nameres_module = nameres_module_of(db, module);
 
-  let mut vars = term
-    .vars(db.as_nameres_db())
-    .to_gen()
-    .into_iter()
-    .map(|_| true)
-    .collect();
+  let mut vars = term.vars(db).to_gen().into_iter().map(|_| true).collect();
   let mut ty_vars = term
-    .ty_vars(db.as_nameres_db())
+    .ty_vars(db)
     .to_gen()
     .into_iter()
     .map(|_| true)
     .collect();
   let names = nameres_module.names(db);
 
-  let handle = term.data(db.as_nameres_db()).clone();
+  let handle = term.data(db).clone();
   let term_defn_res = desugar_term_defn(db, &mut vars, &mut ty_vars, names, handle.into_node());
 
   let term_defn = match term_defn_res {
@@ -164,45 +175,45 @@ fn desugar_term(db: &dyn crate::Db, module: Module, term: NameResTerm) -> AstTer
     }
   };
 
-  AstTerm::new(db.as_ast_db(), term.name(db.as_nameres_db()), term_defn)
+  AstTerm::new(db, term.name(db), term_defn)
 }
 
 #[salsa::tracked]
-pub fn desugar_item_of_id(db: &dyn crate::Db, term_name: TermName) -> AstTerm {
-  let module = term_name.module(db.as_core_db());
+pub fn desugar_item_of_id<'db>(db: &'db dyn crate::Db, term_name: TermName) -> AstTerm<'db> {
+  let module = term_name.module(db);
   let ast_module = desugar_module(db, module);
   ast_module
-    .terms(db.as_ast_db())
+    .terms(db)
     .iter()
-    .find(|term| term.name(db.as_ast_db()) == term_name)
+    .find(|term| term.name(db) == term_name)
     .cloned()
     .unwrap_or_else(|| {
       panic!(
         "ICE: Created TermName {:?} without corresponding Term",
-        term_name.name(db.as_core_db()).text(db.as_core_db())
+        term_name.name(db).text(db)
       )
     })
 }
 
 #[salsa::tracked]
-pub fn effect_of(db: &dyn crate::Db, effect_name: EffectName) -> AstEffect {
-  let module = effect_name.module(db.as_core_db());
-  let ast_mod = db.desugar_module_of(module);
+pub fn effect_of<'db>(db: &'db dyn crate::Db, effect_name: EffectName) -> AstEffect<'db> {
+  let module = effect_name.module(db);
+  let ast_mod = desugar_module(db, module);
   *ast_mod
-    .effects(db.as_ast_db())
+    .effects(db)
     .iter()
-    .find(|effect| effect.name(db.as_ast_db()) == effect_name)
+    .find(|effect| effect.name(db) == effect_name)
     .unwrap_or_else(|| {
       panic!(
         "ICE: Constructed EffectName {:?} without an Effect definition",
-        effect_name.name(db.as_core_db()).text(db.as_core_db())
+        effect_name.name(db).text(db)
       )
     })
 }
 
 #[salsa::tracked]
 pub fn effect_op_tyscheme_of(db: &dyn crate::Db, effect_op: EffectOpName) -> TyScheme {
-  let effect = effect_op.effect(db.as_core_db());
+  let effect = effect_op.effect(db);
   let eff = effect_of(db, effect);
   println!(
     "{}.{}",
@@ -210,7 +221,7 @@ pub fn effect_op_tyscheme_of(db: &dyn crate::Db, effect_op: EffectOpName) -> TyS
     effect_op.name(db).text(db)
   );
   eff
-    .data(db.as_ast_db())
+    .data(db)
     .ops
     .iter()
     .find_map(|opt_op| {
@@ -222,7 +233,7 @@ pub fn effect_op_tyscheme_of(db: &dyn crate::Db, effect_op: EffectOpName) -> TyS
     .unwrap_or_else(|| {
       panic!(
         "ICE: Constructed EffectOpName {:?} without an Effect Operation definition",
-        effect_op.name(db.as_core_db()).text(db.as_core_db())
+        effect_op.name(db).text(db)
       )
     })
 }
@@ -231,7 +242,7 @@ pub(crate) fn desugar_effect_defn(
   db: &dyn crate::Db,
   vars: &mut IdGen<VarId, bool>,
   ty_vars: &mut IdGen<TyVarId, bool>,
-  names: &FxHashMap<Handle<Name>, InScopeName>,
+  names: &BTreeMap<Handle<Name>, InScopeName>,
   eff: cst::EffectDefn,
 ) -> ast::EffectDefn {
   let terms = la_arena::Arena::default();
@@ -282,7 +293,7 @@ pub(crate) fn desugar_term_defn(
   db: &dyn crate::Db,
   vars: &mut IdGen<VarId, bool>,
   ty_vars: &mut IdGen<TyVarId, bool>,
-  names: &FxHashMap<Handle<Name>, InScopeName>,
+  names: &BTreeMap<Handle<Name>, InScopeName>,
   term: TermDefn,
 ) -> Result<ast::Ast<VarId>, PatternMatchError> {
   let terms = la_arena::Arena::default();
@@ -304,25 +315,15 @@ pub(crate) fn desugar_term_defn(
 
 fn fix_up(range: Range<usize>) -> Span {
   Span {
-    start: Loc {
-      file: FileId::from_id(salsa::Id::from_u32(0)),
-      byte: range.start,
-      line: 0,
-      col: 0,
-    },
-    end: Loc {
-      file: FileId::from_id(salsa::Id::from_u32(0)),
-      byte: range.end,
-      line: 0,
-      col: 0,
-    },
+    start: Loc { byte: range.start },
+    end: Loc { byte: range.end },
   }
 }
 
 struct DesugarCtx<'a> {
   db: &'a dyn crate::Db,
   //arenas: &'a NstIndxAlloc,
-  names: &'a FxHashMap<Handle<Name>, InScopeName>,
+  names: &'a BTreeMap<Handle<Name>, InScopeName>,
   root: GreenNode,
   terms: Arena<Term<VarId>>,
   pub(crate) vars: &'a mut IdGen<VarId, bool>,
@@ -334,7 +335,7 @@ impl<'a> DesugarCtx<'a> {
   fn new(
     db: &'a dyn crate::Db,
     root: GreenNode,
-    names: &'a FxHashMap<Handle<Name>, InScopeName>,
+    names: &'a BTreeMap<Handle<Name>, InScopeName>,
     terms: Arena<Term<VarId>>,
     vars: &'a mut IdGen<VarId, bool>,
     ty_vars: &'a mut IdGen<TyVarId, bool>,
@@ -368,7 +369,7 @@ impl<'a> DesugarCtx<'a> {
       TermPostfix::Field(field_postfix) => {
         let term = self.ds_term_postfix(field_postfix.base().expect("Failure"))?;
         let name = field_postfix.name().expect("Failure");
-        let label = self.db.ident(name.text());
+        let label = Ident::new(self.db, name.text());
         let term = self.mk_term(
           span,
           ast::Term::Project {
@@ -403,14 +404,14 @@ impl<'a> DesugarCtx<'a> {
           Ok(match fields.next() {
             None => self.mk_term(span, ast::Term::Unit),
             Some(field) => {
-              let label = self.db.ident(field.name().expect("Failure").text());
+              let label = Ident::new(self.db, field.name().expect("Failure").text());
               let term = self.ds_term(field.term().expect("Failure"))?;
 
               let mut span = fix_up(field.syntax().text_range().into());
               let mut row = self.mk_term(span, ast::Term::Label { label, term });
 
               for field in fields {
-                let label = self.db.ident(field.name().expect("Failure").text());
+                let label = Ident::new(self.db, field.name().expect("Failure").text());
                 let term = self.ds_term(field.term().expect("Failure"))?;
 
                 let field_span = fix_up(field.syntax().text_range().into());
@@ -424,7 +425,7 @@ impl<'a> DesugarCtx<'a> {
           })
         }
         TermAtom::Sum(sum) => {
-          let label = self.db.ident(sum.name().expect("Failure").text());
+          let label = Ident::new(self.db, sum.name().expect("Failure").text());
           let term = self.ds_term(sum.term().expect("Failure"))?;
           let term = self.mk_term(span, ast::Term::Label { label, term });
           Ok(self.mk_term(
@@ -693,11 +694,11 @@ impl<'a> DesugarCtx<'a> {
   fn ds_row(&mut self, row: cst::Row) -> Row<Simple> {
     match row {
       cst::Row::Concrete(closed) => Row::Closed(
-        self.db.as_ty_db().construct_simple_row(
+        self.db.construct_simple_row(
           closed
             .fields()
             .map(|field| {
-              let label = self.db.ident(field.name().expect("Failure").text());
+              let label = Ident::new(self.db, field.name().expect("Failure").text());
               let value = self.ds_type(field.ty().expect("Failure"));
               (label, value)
             })
@@ -727,29 +728,28 @@ impl<'a> DesugarCtx<'a> {
         let handle = Handle::new(self.root.clone(), name_type.name().expect("Failure"));
         self
           .db
-          .as_ty_db()
           .mk_ty(TypeKind::VarTy(match self.names.get(&handle) {
             Some(InScopeName::TermTyVar(_, id)) => *id,
             Some(InScopeName::EffectTyVar(_, id)) => *id,
             Some(InScopeName::Type(type_name))
-              if type_name.name(self.db) == self.db.ident_str("Int") =>
+              if type_name.name(self.db) == Ident::new(self.db, "Int") =>
             {
-              return self.db.as_ty_db().mk_ty(TypeKind::IntTy);
+              return self.db.mk_ty(TypeKind::IntTy);
             }
             _ => unreachable!(),
           }))
       }
-      Type::Sum(sum_type) => self.db.as_ty_db().mk_ty(TypeKind::SumTy(
+      Type::Sum(sum_type) => self.db.mk_ty(TypeKind::SumTy(
         sum_type
           .row()
           .map(|row| self.ds_row(row))
-          .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
+          .unwrap_or(Row::Closed(self.db.empty_row())),
       )),
-      Type::Product(product_type) => self.db.as_ty_db().mk_ty(TypeKind::ProdTy(
+      Type::Product(product_type) => self.db.mk_ty(TypeKind::ProdTy(
         product_type
           .row()
           .map(|row| self.ds_row(row))
-          .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
+          .unwrap_or(Row::Closed(self.db.empty_row())),
       )),
       Type::Function(function_type) => {
         let tys = function_type
@@ -759,7 +759,7 @@ impl<'a> DesugarCtx<'a> {
         tys
           .into_iter()
           .rev()
-          .reduce(|r, l| self.db.as_ty_db().mk_ty(TypeKind::FunTy(l, eff, r)))
+          .reduce(|r, l| self.db.mk_ty(TypeKind::FunTy(l, eff, r)))
           .expect("Unexpected empty function type")
       }
       Type::Paren(paren_type) => self.ds_type_with_eff(paren_type.ty().expect("Failure"), eff),
@@ -794,20 +794,20 @@ impl<'a> DesugarCtx<'a> {
         let id = match self.names.get(&handle) {
           Some(InScopeName::EffectTyVar(_, id)) => id,
           Some(InScopeName::TermTyVar(_, id)) => id,
-          Some(InScopeName::Type(ty)) if ty.name(self.db) == self.db.ident_str("Int") => {
-            return self.db.as_ty_db().mk_ty(TypeKind::IntTy);
+          Some(InScopeName::Type(ty)) if ty.name(self.db) == Ident::new(self.db, "Int") => {
+            return self.db.mk_ty(TypeKind::IntTy);
           }
           _ => unreachable!(),
         };
-        self.db.as_ty_db().mk_ty(TypeKind::VarTy(*id))
+        self.db.mk_ty(TypeKind::VarTy(*id))
       }
       cst::Type::Sum(sum_type) => {
         let row = self.ds_row(sum_type.row().expect("Failure"));
-        self.db.as_ty_db().mk_ty(TypeKind::SumTy(row))
+        self.db.mk_ty(TypeKind::SumTy(row))
       }
       cst::Type::Product(product_type) => {
         let row = self.ds_row(product_type.row().expect("Failure"));
-        self.db.as_ty_db().mk_ty(TypeKind::ProdTy(row))
+        self.db.mk_ty(TypeKind::ProdTy(row))
       }
       cst::Type::Function(function_type) => {
         let tys = function_type
@@ -818,12 +818,7 @@ impl<'a> DesugarCtx<'a> {
         tys
           .into_iter()
           .rev()
-          .reduce(|r, l| {
-            self
-              .db
-              .as_ty_db()
-              .mk_ty(TypeKind::FunTy(l, Row::Open(eff), r))
-          })
+          .reduce(|r, l| self.db.mk_ty(TypeKind::FunTy(l, Row::Open(eff), r)))
           .expect("Unexpected empty function type")
       }
       cst::Type::Paren(paren_type) => self.ds_type(paren_type.ty().expect("Failure")),
@@ -858,13 +853,13 @@ impl<'a> DesugarCtx<'a> {
   fn ds_row_atom(&mut self, row_atom: cst::RowAtom) -> Row<Simple> {
     match row_atom {
       RowAtom::Concrete(concrete) => Row::Closed(
-        self.db.as_ty_db().construct_simple_row(
+        self.db.construct_simple_row(
           concrete
             .fields()
             .map(|field| {
               let name = field.name().expect("Failure");
               let ty = field.ty().expect("Failure");
-              (self.db.ident(name.text()), self.ds_type(ty))
+              (Ident::new(self.db, name.text()), self.ds_type(ty))
             })
             .collect(),
         ),
@@ -930,7 +925,7 @@ impl<'a> DesugarCtx<'a> {
       .collect::<Vec<_>>();
 
     let ty = self.ds_type_with_eff(scheme.ty().expect("Failure"), eff);
-    data_row_bound.extend(ty.row_vars(self.db.as_ty_db()));
+    data_row_bound.extend(ty.row_vars(self.db));
 
     TyScheme {
       bound_ty: bound.difference(&data_row_bound).copied().collect(),
@@ -1002,7 +997,7 @@ impl<'a> DesugarCtx<'a> {
     }*/
 
     let ty = self.ds_type(scheme.ty().expect("Failure"));
-    data_row_bound.extend(ty.row_vars(self.db.as_ty_db()));
+    data_row_bound.extend(ty.row_vars(self.db));
 
     let eff = self.ty_vars.push(true);
 
@@ -1079,7 +1074,7 @@ impl<'a> DesugarCtx<'a> {
             let destructure = self.mk_term(
               span,
               Unlabel {
-                label: self.db.ident(label),
+                label: Ident::new(self.db, label),
                 term,
               },
             );
@@ -1109,7 +1104,7 @@ impl<'a> DesugarCtx<'a> {
           let arg = self.mk_term(
             span,
             Unlabel {
-              label: self.db.ident_str(label),
+              label: Ident::new(self.db, label),
               term,
             },
           );
@@ -1291,33 +1286,35 @@ impl From<&Pattern> for Constructor {
 mod tests {
   use std::path::PathBuf;
 
-  use crate::Db as DesugarDb;
-
   use super::*;
-  use base::Db as BaseDb;
   use base::file::{FileId, SourceFile, SourceFileSet};
   use expect_test::expect;
-  use nameres::Db as NameResDb;
-  use parser::Db as ParseDb;
+  use nameres::nameres_term_of;
+  use parser::root_module_for_file;
 
-  #[derive(Default)]
-  #[salsa::db(crate::Jar, ast::Jar, base::Jar, nameres::Jar, parser::Jar, ty::Jar)]
+  #[derive(Default, Clone)]
+  #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,
   }
+  #[salsa::db]
   impl salsa::Database for TestDatabase {}
 
   const WIDTH: usize = 100;
 
-  fn ds_snippet(db: &TestDatabase, input: &str) -> (nameres::NameResTerm, ast::AstTerm) {
+  fn ds_snippet<'db>(
+    db: &'db dyn salsa::Database,
+    input: &str,
+  ) -> (nameres::NameResTerm<'db>, ast::AstTerm<'db>) {
     let mut content = "defn item = ".to_string();
     content.push_str(input);
     let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test")), content);
     SourceFileSet::new(db, vec![file]);
-    let module = db.root_module_for_file(file);
-    let name = db.ident_str("item");
+    //let module = db.root_module_for_file(file);
+    let module = root_module_for_file(db, file);
+    let name = Ident::new(db, "item");
     let name = TermName::new(db, name, module);
-    (db.nameres_term_of(name), db.desugar_term_of(name))
+    (nameres_term_of(db, name), desugar_term_of(db, name))
   }
 
   #[test]

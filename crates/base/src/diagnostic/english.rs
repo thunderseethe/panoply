@@ -19,7 +19,7 @@ impl<'a> ListAccumulator<'a> {
       ListAccumulator::Empty => ListAccumulator::One(item),
       ListAccumulator::One(first) => ListAccumulator::Two(first, item),
       ListAccumulator::Two(first, second) => ListAccumulator::ThreeOrMore {
-        firsts: format!("{}, {}", first, second),
+        firsts: format!("{first}, {second}"),
         last: item,
       },
       ListAccumulator::ThreeOrMore { firsts, last } => {

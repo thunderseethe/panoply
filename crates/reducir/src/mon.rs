@@ -6,31 +6,28 @@ use base::{
 use crate::{GeneratedReducIrName, ReducIr};
 
 #[salsa::tracked]
-pub struct MonReducIrModule {
-  #[id]
+pub struct MonReducIrModule<'db> {
   pub module: Module,
-  #[return_ref]
-  pub items: Vec<MonReducIrItem>,
+  #[returns(ref)]
+  pub items: Vec<MonReducIrItem<'db>>,
 }
 
 #[salsa::tracked]
-pub struct MonReducIrItem {
-  #[id]
+pub struct MonReducIrItem<'db> {
   pub name: TermName,
-  #[return_ref]
+  #[returns(ref)]
   pub item: ReducIr,
-  #[return_ref]
-  pub row_evs: Vec<MonReducIrGenItem>,
-  #[return_ref]
+  #[returns(ref)]
+  pub row_evs: Vec<MonReducIrGenItem<'db>>,
+  #[returns(ref)]
   pub var_supply: IdSupply<ReducIrVarId>,
 }
 
 #[salsa::tracked]
-pub struct MonReducIrGenItem {
-  #[id]
+pub struct MonReducIrGenItem<'db> {
   pub name: GeneratedReducIrName,
-  #[return_ref]
+  #[returns(ref)]
   pub item: ReducIr,
-  #[return_ref]
+  #[returns(ref)]
   pub var_supply: IdSupply<ReducIrVarId>,
 }

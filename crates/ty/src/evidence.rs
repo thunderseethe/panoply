@@ -3,7 +3,6 @@ use std::cmp::Ordering;
 use crate::row::{Scoped, Simple};
 
 use super::{FallibleTypeFold, InDb, TypeAlloc, TypeFoldable, row::Row};
-use salsa::DebugWithDb;
 
 /// Evidence proving a piece of type level information.
 /// This allows type schemes to express constraints on it's type variables that type checking must
@@ -157,6 +156,7 @@ where
   }
 }
 
+/*
 impl<Db> DebugWithDb<Db> for Evidence<InDb>
 where
   Db: ?Sized + crate::Db,
@@ -182,7 +182,7 @@ where
         .finish(),
     }
   }
-}
+}*/
 
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for Evidence<A> {
   type Alloc = A;

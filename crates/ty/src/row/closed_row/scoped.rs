@@ -1,7 +1,7 @@
 use crate::{RowFields, RowValues};
 
 use super::*;
-pub struct ScopedClosedRow<A: TypeAlloc = InDb>(pub(crate) ClosedRow<A>);
+pub struct ScopedClosedRow<A: TypeAlloc>(pub(crate) ClosedRow<A>);
 
 impl<A: TypeAlloc> Debug for ScopedClosedRow<A>
 where
@@ -79,6 +79,7 @@ impl<A: TypeAlloc> RowOps<A> for ScopedClosedRow<A> {
   }
 }
 
+/*
 impl<Db> DebugWithDb<Db> for ScopedClosedRow<InDb>
 where
   Db: ?Sized + crate::Db,
@@ -87,6 +88,7 @@ where
     DebugWithDb::fmt(&self.0, f, db, include_all_fields)
   }
 }
+*/
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for ScopedClosedRow<A> {
   type Alloc = A;
   type Out<B: TypeAlloc> = ScopedClosedRow<B>;

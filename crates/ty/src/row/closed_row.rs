@@ -22,7 +22,7 @@ pub use scoped::ScopedClosedRow;
 ///     * fields and values have the same length.
 ///     * each valid index into field will be a valid index into values
 ///     * fields is sorted
-pub(crate) struct ClosedRow<A: TypeAlloc = InDb> {
+pub(crate) struct ClosedRow<A: TypeAlloc> {
   pub fields: A::RowFields,
   pub values: A::RowValues,
 }
@@ -222,6 +222,7 @@ where
   ControlFlow::Continue((fields.into_boxed_slice(), values.into_boxed_slice()))
 }
 
+/*
 impl<Db> DebugWithDb<Db> for ClosedRow<InDb>
 where
   Db: ?Sized + crate::Db,
@@ -245,6 +246,7 @@ where
       .finish()
   }
 }
+*/
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for ClosedRow<A> {
   type Alloc = A;
   type Out<B: TypeAlloc> = RowInternals<B>;

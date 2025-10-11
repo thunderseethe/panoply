@@ -78,4 +78,4 @@ impl From<TypeCheckDiagnostic> for PanoplyError {
 }*/
 
 #[salsa::accumulator]
-pub struct PanoplyErrors(PanoplyError);
+pub struct PanoplyErrors(pub PanoplyError);

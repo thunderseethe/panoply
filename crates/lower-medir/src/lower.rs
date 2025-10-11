@@ -1,7 +1,9 @@
 use base::pretty::{PrettyPrint, PrettyWithCtx};
 use base::{id::MedIrVarId, id_converter::IdConverter, pretty::PrettyErrorWithDb};
-use medir::MedIrItemName;
-use medir::{Atom, Locals, MedIr, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar};
+use medir::{
+  Atom, Locals, MedIr, MedIrItemName, MedIrKind, MedIrTy, MedIrTyKind, MedIrTypedItem, MedIrVar,
+  mk_medir_ty,
+};
 use reducir::ty::{ReducIrTy, ReducIrTyKind};
 use reducir::{ReducIr, ReducIrKind, ReducIrLocal, ReducIrTermName, ReducIrVar, TypeCheck};
 
@@ -12,40 +14,45 @@ pub(crate) struct LowerCtx<'a> {
   pub(crate) lifts: Vec<medir::Defn>,
 }
 
-fn from_reducir_ty<DB: ?Sized + crate::Db>(db: &DB, ty: ReducIrTy) -> MedIrTy {
-  match ty.kind(db.as_reducir_db()) {
-    ReducIrTyKind::IntTy | ReducIrTyKind::MarkerTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
-    ReducIrTyKind::FunTy(args, ret) => db.mk_medir_ty(MedIrTyKind::FunTy(
-      args.iter().map(|arg| from_reducir_ty(db, *arg)).collect(),
-      from_reducir_ty(db, ret),
-    )),
-    ReducIrTyKind::ProductTy(tys) => db.mk_medir_ty(MedIrTyKind::BlockTy(
-      tys.iter().map(|ty| from_reducir_ty(db, *ty)).collect(),
-    )),
+fn from_reducir_ty(db: &dyn salsa::Database, ty: ReducIrTy) -> MedIrTy {
+  match ty.kind(db) {
+    ReducIrTyKind::IntTy | ReducIrTyKind::MarkerTy(_) => mk_medir_ty(db, MedIrTyKind::IntTy),
+    ReducIrTyKind::FunTy(args, ret) => mk_medir_ty(
+      db,
+      MedIrTyKind::FunTy(
+        args.iter().map(|arg| from_reducir_ty(db, *arg)).collect(),
+        from_reducir_ty(db, ret),
+      ),
+    ),
+    ReducIrTyKind::ProductTy(tys) => mk_medir_ty(
+      db,
+      MedIrTyKind::BlockTy(tys.iter().map(|ty| from_reducir_ty(db, *ty)).collect()),
+    ),
     ReducIrTyKind::CoproductTy(tys) => {
-      let int = db.mk_medir_ty(MedIrTyKind::IntTy);
+      let int = mk_medir_ty(db, MedIrTyKind::IntTy);
       tys
         .iter()
         .map(|ty| from_reducir_ty(db, *ty))
         .max_by(|a, b| a.block_size(db).cmp(&b.block_size(db)))
         .map(|ty| {
-          db.mk_medir_ty(MedIrTyKind::BlockTy(
-            (0..(ty.block_size(db) + 1)).map(|_| int).collect(),
-          ))
+          mk_medir_ty(
+            db,
+            MedIrTyKind::BlockTy((0..(ty.block_size(db) + 1)).map(|_| int).collect()),
+          )
         })
-        .unwrap_or_else(|| db.mk_medir_ty(MedIrTyKind::BlockTy(vec![])))
+        .unwrap_or_else(|| mk_medir_ty(db, MedIrTyKind::BlockTy(vec![])))
     }
     ReducIrTyKind::ControlTy(_, _) => {
-      let int = db.mk_medir_ty(MedIrTyKind::IntTy);
-      db.mk_medir_ty(MedIrTyKind::BlockTy(vec![int, int, int, int]))
+      let int = mk_medir_ty(db, MedIrTyKind::IntTy);
+      mk_medir_ty(db, MedIrTyKind::BlockTy(vec![int, int, int, int]))
     }
     ReducIrTyKind::ForallTy(_, ty) => from_reducir_ty(db, ty),
     // TODO: Remove this once we monomorphize
-    ReducIrTyKind::VarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
-    ReducIrTyKind::ProdVarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
-    ReducIrTyKind::CoprodVarTy(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
+    ReducIrTyKind::VarTy(_) => mk_medir_ty(db, MedIrTyKind::IntTy),
+    ReducIrTyKind::ProdVarTy(_) => mk_medir_ty(db, MedIrTyKind::IntTy),
+    ReducIrTyKind::CoprodVarTy(_) => mk_medir_ty(db, MedIrTyKind::IntTy),
     ReducIrTyKind::FunETy(_, _, _) => {
-      unreachable!("{}", ty.pretty_with(db.as_reducir_db()).pprint().pretty(80))
+      unreachable!("{}", ty.pretty_with(db).pprint().pretty(80))
     }
   }
 }
@@ -159,7 +166,7 @@ impl<'a> LowerCtx<'a> {
                     Atom::Int(i) => {
                       let v = MedIrVar::new(
                         self.var_converter.generate(),
-                        self.db.mk_medir_ty(MedIrTyKind::IntTy),
+                        mk_medir_ty(self.db, MedIrTyKind::IntTy),
                       );
                       binds.push((v, MedIr::new(MedIrKind::Atom(Atom::Int(i)))));
                       v
@@ -247,7 +254,7 @@ impl<'a> LowerCtx<'a> {
         };
         let discr_var = MedIrVar::new(
           self.var_converter.generate(),
-          self.db.mk_medir_ty(MedIrTyKind::IntTy),
+          mk_medir_ty(self.db, MedIrTyKind::IntTy),
         );
         binds.push((
           discr_var,
@@ -306,9 +313,10 @@ impl<'a> LowerCtx<'a> {
       .collect::<Vec<_>>();
     free_vars.sort();
 
-    let env_ty = self.db.mk_medir_ty(MedIrTyKind::BlockTy(
-      free_vars.iter().map(|var| var.ty).collect(),
-    ));
+    let env_ty = mk_medir_ty(
+      self.db,
+      MedIrTyKind::BlockTy(free_vars.iter().map(|var| var.ty).collect()),
+    );
     let env_var = MedIrVar::new(self.var_converter.generate(), env_ty);
 
     let mut params = vars
@@ -330,13 +338,13 @@ impl<'a> LowerCtx<'a> {
       .collect();
 
     let ty = body
-      .type_check(self.db.as_reducir_db())
+      .type_check(self.db)
       .map_err_pretty_with(self.db)
       .expect("ReducIR type_check should succeed in lower-medir");
     let body = self.lower_binds(body, &mut binds);
 
     let num = self.lifts.len();
-    let current_name = self.current.name(self.db).text(self.db.as_core_db());
+    let current_name = self.current.name(self.db).text(self.db);
     let module = self.current.module(self.db);
     let lift_name =
       ReducIrTermName::generated(self.db, format!("{}_lam_{}", current_name, num), module);
@@ -346,9 +354,10 @@ impl<'a> LowerCtx<'a> {
       params,
       body: Locals { binds, body },
     });
-    let item_ty = self
-      .db
-      .mk_medir_ty(MedIrTyKind::FunTy(param_tys, from_reducir_ty(self.db, ty)));
+    let item_ty = mk_medir_ty(
+      self.db,
+      MedIrTyKind::FunTy(param_tys, from_reducir_ty(self.db, ty)),
+    );
     (MedIrTypedItem::new(name, item_ty), free_vars)
   }
 }

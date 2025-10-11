@@ -1,16 +1,15 @@
 use crate::modules::Module;
 
-#[salsa::interned]
+#[salsa::interned(debug, no_lifetime)]
 pub struct FileId {
-  #[return_ref]
+  #[returns(ref)]
   pub path: std::path::PathBuf,
 }
 
 #[salsa::input]
 pub struct SourceFile {
-  #[id]
   pub path: FileId,
-  #[return_ref]
+  #[returns(ref)]
   pub contents: String,
 }
 
@@ -20,7 +19,7 @@ pub struct SourceFileSet {
 }
 
 #[salsa::tracked]
-pub fn file_for_id(db: &dyn crate::Db, file_id: FileId) -> SourceFile {
+pub fn file_for_id<'db>(db: &'db dyn crate::Db, file_id: FileId) -> SourceFile {
   let source_file_set = SourceFileSet::get(db);
   *source_file_set
     .files(db)

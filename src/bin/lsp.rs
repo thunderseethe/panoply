@@ -2,12 +2,11 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use base::{Db as CoreDb, file::FileId, loc::Loc, span::Span};
-use nameres::Db as NameResDb;
+use base::file::file_for_id;
+use base::{file::FileId, loc::Loc, span::Span};
+use nameres::name_at_position;
 use panoply::{PanoplyDatabase, canonicalize_path_set, create_source_file_set};
-use parser::Db;
-use salsa::{Durability, ParallelDatabase};
-use tc::Db as TcDb;
+use salsa::{Durability, Setter};
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
   DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,
@@ -24,8 +23,8 @@ struct Backend {
 
 fn from_loc(loc: Loc) -> Position {
   Position {
-    line: loc.line.try_into().unwrap(),
-    character: loc.col.try_into().unwrap(),
+    line: todo!(),
+    character: todo!(),
   }
 }
 
@@ -105,8 +104,8 @@ impl LanguageServer for Backend {
     let path_buf = params.text_document.uri.to_file_path().unwrap();
     log::debug!("did_open {}", path_buf.display());
     let mut db = self.db.lock().unwrap();
-    let file_id = FileId::new(db.as_core_db(), path_buf);
-    let source_file = db.file_for_id(file_id);
+    let file_id = FileId::new(db.deref(), path_buf);
+    let source_file = file_for_id(db.deref(), file_id);
     // File is open in editor so we expect frequent edits.
     source_file
       .set_contents(db.deref_mut())
@@ -119,10 +118,10 @@ impl LanguageServer for Backend {
     log::debug!("did_change {}", path_buf.display());
     // Scoped mutable database access
     // We do this so we drop our lock on the database before our await point.
-    let file_id = {
+    /*let file_id = {
       let mut db = self.db.lock().unwrap();
-      let file_id = FileId::new(db.as_core_db(), path_buf);
-      let source_file = db.file_for_id(file_id);
+      let file_id = FileId::new(db.deref(), path_buf);
+      let source_file = file_for_id(db.deref(), file_id);
 
       source_file
         .set_contents(db.deref_mut())
@@ -130,31 +129,28 @@ impl LanguageServer for Backend {
         .to(params.content_changes[0].text.clone());
 
       file_id
-    };
+    };*/
 
     // Immutable database access
-    let db = {
-      let lock = self.db.lock().unwrap();
-      lock.snapshot()
-    };
+    // let db = self.db.lock().unwrap();
 
-    let diags = db
-      .parse_errors(file_id)
-      .into_iter()
-      .chain(db.nameres_errors(file_id))
-      .chain(db.type_check_errors(file_id))
-      .map(|_err| {
-        //let citation = err.principal(db.deref());
-        //Diagnostic::new_simple(from_span(citation.span), citation.message)
-        todo!()
-      })
-      .collect();
+    /*let diags =
+    all_parse_errors(db.deref(), file_id)
+    .into_iter()
+    .chain(nameres_errors(db.deref(), file_id))
+    .chain(type_check_errors(db.deref(), file_id))
+    .map(|_err| {
+      //let citation = err.principal(db.deref());
+      //Diagnostic::new_simple(from_span(citation.span), citation.message)
+      todo!()
+    })
+    .collect();*/
 
     self
       .client
       .publish_diagnostics(
         params.text_document.uri,
-        diags,
+        vec![],
         Some(params.text_document.version),
       )
       .await;
@@ -171,22 +167,19 @@ impl LanguageServer for Backend {
       .to_file_path()
       .expect("Expected uri to be valid file path");
     let db = self.db.lock().unwrap();
-    let core_db = db.as_core_db();
-    let file_id = FileId::new(db.as_core_db(), path_buf);
+    let file_id = FileId::new(db.deref(), path_buf);
     // TODO: Figure out how character works
     let Position { line, character } = params.text_document_position_params.position;
     log::debug!(
       "GoToDefinition: {}:{}:{}",
-      file_id.path(core_db).display(),
+      file_id.path(db.deref()).display(),
       line,
       character
     );
-    let resp = db
-      .name_at_position(file_id, line, character)
+    let resp = name_at_position(db.deref(), file_id, line, character)
       .map(|name| {
-        let core_db = db.as_core_db();
         (
-          name.module(core_db).uri(core_db).path(core_db),
+          name.module(db.deref()).uri(db.deref()).path(db.deref()),
           name.span(db.deref()),
         )
       })

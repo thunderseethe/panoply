@@ -19,7 +19,7 @@ impl<'a, DB: ?Sized> Inline<'a, DB> {
     }
   }
 }
-impl<DB: ?Sized + crate::Db> ReducIrEndoFold for Inline<'_, DB> {
+impl ReducIrEndoFold for Inline<'_, dyn salsa::Database> {
   type Ext = Infallible;
 
   fn endofold_ir(&mut self, kind: ReducIrKind<Self::Ext>) -> ReducIr<Self::Ext> {

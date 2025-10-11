@@ -7,7 +7,7 @@ use rowan::{
     support::{child, children},
   },
 };
-use std::fmt::Debug;
+use std::{cmp::Ordering, fmt::Debug, ops::Range};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Panoply;
@@ -154,7 +154,7 @@ pub enum Syntax {
 }
 impl Syntax {
   pub fn name(&self) -> String {
-    format!("{:?}", self)
+    format!("{self:?}")
   }
 
   pub fn raw(&self) -> u16 {
@@ -174,7 +174,7 @@ macro_rules! ast_node {
       $first_case:tt($first_ty:ty),
       $($case:tt($ty:ty),)*
   }) => {
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub enum $name {
       $first_case($first_ty),
       $($case($ty)),*
@@ -213,7 +213,7 @@ macro_rules! ast_node {
   };
   (struct $name:ident($kind:expr)) => { ast_node!{struct $name($kind) {}} };
   (struct $name:ident($kind:expr) { $($field_name:ident: $field_ty:ty),* }) => {
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct $name(SyntaxNode<Panoply>);
     impl HasAstPtr for $name {}
     impl AstNode for $name {
@@ -240,6 +240,16 @@ macro_rules! ast_node {
       fn syntax(&self) -> &SyntaxNode<Self::Language> {
         &self.0
       }
+    }
+    impl PartialOrd for $name {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+          let self_range: Range<usize> = self.0.text_range().into();
+          let other_range: Range<usize> = other.0.text_range().into();
+          self_range.partial_cmp(other_range)
+              .and_then(|ord|
+                  self.0.kind().partial_cmp(&other.0.kind())
+                               .map(|kind_ord| ord.then(kind_ord)))
+        }
     }
     impl $name {
       $(pub fn $field_name(&self) -> Option<$field_ty> {

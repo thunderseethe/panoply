@@ -6,10 +6,10 @@ use crate::{
   MedIrVar,
 };
 
-impl<DB: ?Sized + reducir::Db> PrettyWithCtx<DB> for MedIrItemName {
+impl PrettyWithCtx<dyn salsa::Database> for MedIrItemName {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     alloc: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     self.0.pretty(ctx, alloc)
@@ -34,10 +34,10 @@ impl MedIrVar {
 
 struct PrettyWithType(MedIrVar);
 
-impl<Db: ?Sized + crate::Db> PrettyWithCtx<Db> for PrettyWithType {
+impl PrettyWithCtx<dyn salsa::Database> for PrettyWithType {
   fn pretty<'a>(
     &self,
-    db: &Db,
+    db: &dyn salsa::Database,
     a: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     a.text("V")
@@ -59,10 +59,10 @@ where
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Call {
+impl PrettyWithCtx<dyn salsa::Database> for Call {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     alloc: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     match self {
@@ -74,10 +74,10 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Call {
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrKind {
+impl PrettyWithCtx<dyn salsa::Database> for MedIrKind {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     a: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     match self {
@@ -139,20 +139,20 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrKind {
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIr {
+impl PrettyWithCtx<dyn salsa::Database> for MedIr {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     alloc: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     self.kind.pretty(ctx, alloc)
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Locals {
+impl PrettyWithCtx<dyn salsa::Database> for Locals {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     a: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     a.line()
@@ -174,10 +174,10 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Locals {
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Defn {
+impl PrettyWithCtx<dyn salsa::Database> for Defn {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     a: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     a.text("defn")
@@ -195,26 +195,26 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Defn {
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrModule {
+impl<'db> PrettyWithCtx<dyn salsa::Database> for MedIrModule<'db> {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     a: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     a.intersperse(
       self
-        .items(ctx.as_medir_db())
+        .items(ctx)
         .iter()
-        .map(|item| item.item(ctx.as_medir_db()).pretty(ctx, a)),
+        .map(|item| item.item(ctx).pretty(ctx, a)),
       a.line(),
     )
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrTyKind {
+impl PrettyWithCtx<dyn salsa::Database> for MedIrTyKind {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     alloc: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     match self {
@@ -233,10 +233,10 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrTyKind {
   }
 }
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for MedIrTy {
+impl PrettyWithCtx<dyn salsa::Database> for MedIrTy {
   fn pretty<'a>(
     &self,
-    ctx: &DB,
+    ctx: &dyn salsa::Database,
     alloc: &'a pretty::RcAllocator,
   ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
     self.kind(ctx).pretty(ctx, alloc)

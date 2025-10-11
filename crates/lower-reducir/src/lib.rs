@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use ast::{AstModule, AstTerm, Term};
 use base::{
   id::{EffectName, Id, IdSupply, ReducIrVarId, TermName, TyVarId, VarId},
@@ -5,8 +7,11 @@ use base::{
   ident::Ident,
   modules::Module,
 };
+use desugar::{desugar_item_of_id, desugar_module, desugar_term_of};
 use la_arena::Idx;
 use lower::{LowerCtx, TermTys, VarTys};
+use nameres::id_for_name;
+use parser::root_module_for_path;
 use reducir::{
   Bind, GeneratedReducIrName, P, ReducIr, ReducIrGenItem, ReducIrItem,
   ReducIrKind::*,
@@ -14,7 +19,7 @@ use reducir::{
   mon::{MonReducIrGenItem, MonReducIrItem, MonReducIrModule},
   ty::{Kind, MkReducIrTy, ReducIrTy, ReducIrTyKind, ReducIrVarTy},
 };
-use tc::EffectInfo;
+use tc::{EffectInfo, type_scheme_of};
 use ty::{
   InDb, MkTy, RowFields, Ty, Wrapper,
   row::{Scoped, Simple},
@@ -37,9 +42,10 @@ mod lower_mon;
 /// Slightly lower level of information than required by EffectInfo.
 /// However this is all calculatable off of the effect definition
 pub trait ReducIrEffectInfo: EffectInfo {
-  fn effect_handler_ir_ty(&self, effect: EffectName) -> ReducIrTy;
+  fn effect_handler_ir_ty(self, effect: EffectName) -> ReducIrTy;
 }
 
+/*
 #[salsa::jar(db = Db)]
 pub struct Jar(
   lower_module,
@@ -131,70 +137,114 @@ pub trait Db: salsa::DbWithJar<Jar> + tc::Db + reducir::Db {
     Some(self.lower_reducir_mon_item_of(term_name))
   }
 }
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + tc::Db + reducir::Db {}
+impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + tc::Db + reducir::Db {}*/
+use salsa::Database as Db;
+
+fn lower_reducir_item_for_file_name(
+  db: &dyn salsa::Database,
+  path: std::path::PathBuf,
+  item: Ident,
+) -> Option<ReducIrItem> {
+  let module = root_module_for_path(db, path);
+  let term_name = id_for_name(db, module, item)?;
+  Some(lower_reducir_item_of(db, term_name))
+}
+
+fn lower_mon_item_for_file_name(
+  db: &dyn salsa::Database,
+  path: std::path::PathBuf,
+  item: Ident,
+) -> Option<MonReducIrItem> {
+  let module = root_module_for_path(db, path);
+  let term_name = id_for_name(db, module, item)?;
+  Some(lower_mon_item_of(db, term_name))
+}
 
 #[salsa::tracked]
-fn lower_module(db: &dyn crate::Db, module: AstModule) -> ReducIrModule {
-  let ast_db = db.as_ast_db();
+fn lower_reducir_item_of<'db>(
+  db: &'db dyn salsa::Database,
+  term_name: TermName,
+) -> ReducIrItem<'db> {
+  let ast_term = desugar_term_of(db, term_name);
+  lower_item(db, ast_term)
+}
+
+#[salsa::tracked]
+fn lower_reducir_mon_item_of<'db>(
+  db: &'db dyn salsa::Database,
+  name: TermName,
+) -> MonReducIrItem<'db> {
+  let item = lower_reducir_item_of(db, name);
+  lower_mon_item(db, item)
+}
+
+fn lower_module_of<'db>(db: &'db dyn crate::Db, module: Module) -> ReducIrModule<'db> {
+  let ast_module = desugar_module(db, module);
+  lower_module(db, ast_module)
+}
+
+#[salsa::tracked]
+fn lower_module<'db>(db: &'db dyn crate::Db, module: AstModule<'db>) -> ReducIrModule<'db> {
+  let ast_db = db;
   let items = module
     .terms(ast_db)
     .iter()
     .map(|term| lower_item(db, *term))
     .collect();
-  ReducIrModule::new(db.as_reducir_db(), module.module(ast_db), items)
+  ReducIrModule::new(db, module.module(ast_db), items)
 }
 
 #[salsa::tracked]
-fn lower_row_ev_simple(
-  db: &dyn crate::Db,
+fn lower_row_ev_simple<'db>(
+  db: &'db dyn crate::Db,
   module: Module,
   left: RowFields,
   right: RowFields,
   goal: RowFields,
-) -> ReducIrGenItem {
+) -> ReducIrGenItem<'db> {
   lower_row_ev_item::<Simple>(db, module, "simple", left, right, goal)
 }
 
 #[salsa::tracked]
-fn lower_row_ev_scoped(
-  db: &dyn crate::Db,
+fn lower_row_ev_scoped<'db>(
+  db: &'db dyn crate::Db,
   module: Module,
   left: RowFields,
   right: RowFields,
   goal: RowFields,
-) -> ReducIrGenItem {
+) -> ReducIrGenItem<'db> {
   lower_row_ev_item::<Scoped>(db, module, "scoped", left, right, goal)
 }
 
-fn lower_row_ev_item<Sema: RowReducrIrEvidence>(
-  db: &dyn crate::Db,
+fn lower_row_ev_item<'db, Sema: RowReducrIrEvidence>(
+  db: &'db dyn crate::Db,
   module: Module,
   mark: &str,
   left: RowFields,
   right: RowFields,
   goal: RowFields,
-) -> ReducIrGenItem
+) -> ReducIrGenItem<'db>
 where
   for<'a, 'b> LowerTyCtx<'a, 'b>: RowVarConvert<Sema>,
   Sema::Closed<InDb>: Copy,
   Sema::Open<InDb>: Copy,
 {
-  let ty_db = db.as_ty_db();
+  let ty_db = db;
   let left_fields = left.fields(ty_db);
   let left_field_str: String = left_fields
     .iter()
-    .map(|ident| ident.text(db.as_core_db()).as_str())
+    .map(|ident| ident.text(db).as_str())
     .collect();
   let right_fields = right.fields(ty_db);
   let right_field_str: String = right_fields
     .iter()
-    .map(|ident| ident.text(db.as_core_db()).as_str())
+    .map(|ident| ident.text(db).as_str())
     .collect();
-  let row_ev_ident = db.ident(format!(
-    "_row_{}_{}_{}",
-    mark, left_field_str, right_field_str
-  ));
-  let row_ev_name = GeneratedReducIrName::new(db.as_reducir_db(), row_ev_ident, module);
+  let row_ev_ident = Ident::new(
+    db,
+    format!("_row_{mark}_{left_field_str}_{right_field_str}"),
+  );
+  let row_ev_name = GeneratedReducIrName::new(db, row_ev_ident, module);
 
   let mut id_count: i32 = -1;
   let mut left_values = left_fields
@@ -249,7 +299,7 @@ where
 
   let mut var_conv = IdConverter::new();
   let mut tyvar_conv = IdConverter::new();
-  let op_sel = FxHashMap::default();
+  let op_sel = BTreeMap::default();
   let mut lower_ctx = LowerCtx::new(
     db,
     &mut var_conv,
@@ -274,24 +324,29 @@ where
     ReducIr::abss([unit_param], ir),
   );
 
-  ReducIrGenItem::new(db.as_reducir_db(), row_ev_name, ir)
+  ReducIrGenItem::new(db, row_ev_name, ir)
+}
+
+fn lower_item_of<'db>(db: &'db dyn crate::Db, name: TermName) -> ReducIrItem<'db> {
+  let ast = desugar_item_of_id(db, name);
+  lower_item(db, ast)
 }
 
 /// Lower an `Ast` into an `ReducIr`.
 /// TODO: Real documentation.
 #[salsa::tracked]
-fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
-  let ast_db = db.as_ast_db();
+fn lower_item<'db>(db: &'db dyn crate::Db, term: AstTerm<'db>) -> ReducIrItem<'db> {
+  let ast_db = db;
   let name = term.name(ast_db);
   let ast = term.data(ast_db);
-  let typed_item = db.type_scheme_of(name);
-  let tc_db = db.as_tc_db();
+  let typed_item = type_scheme_of(db, name);
+  let tc_db = db;
   let mut var_conv = IdConverter::new();
   let mut tyvar_conv = IdConverter::new();
-  let scheme = typed_item.ty_scheme(db.as_tc_db());
+  let scheme = typed_item.ty_scheme(db);
 
   let (_, ty_ctx) =
-    LowerTySchemeCtx::new(db, &mut tyvar_conv).lower_scheme(name.module(db.as_core_db()), &scheme);
+    LowerTySchemeCtx::new(db, &mut tyvar_conv).lower_scheme(name.module(db), &scheme);
 
   let required_evidence = typed_item.required_evidence(tc_db);
   let op_sel = typed_item.operation_selectors(tc_db);
@@ -317,7 +372,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
     )
   });
   // Wrap our term in any unsolved row evidence params we need
-  let is_entry_point = name.name(db.as_core_db()) == db.ident_str("main");
+  let is_entry_point = name.name(db).text(db) == "main";
   let evv_param = if is_entry_point {
     vec![]
   } else {
@@ -362,7 +417,7 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
   });
 
   ReducIrItem::new(
-    db.as_reducir_db(),
+    db,
     name,
     ir,
     ev_row_items,
@@ -371,20 +426,33 @@ fn lower_item(db: &dyn crate::Db, term: AstTerm) -> ReducIrItem {
   )
 }
 
+pub fn lower_mon_module_of<'db>(db: &'db dyn crate::Db, module: Module) -> MonReducIrModule<'db> {
+  let ir_mod = lower_module_of(db, module);
+  lower_mon_module(db, ir_mod)
+}
+
 #[salsa::tracked]
-fn lower_mon_module(db: &dyn crate::Db, module: ReducIrModule) -> MonReducIrModule {
-  let reducir_db = db.as_reducir_db();
+fn lower_mon_module<'db>(
+  db: &'db dyn crate::Db,
+  module: ReducIrModule<'db>,
+) -> MonReducIrModule<'db> {
+  let reducir_db = db;
   let items = module
     .items(reducir_db)
     .iter()
-    .map(|item| db.lower_reducir_mon_item(*item))
+    .map(|item| lower_mon_item(db, *item))
     .collect();
   MonReducIrModule::new(reducir_db, module.module(reducir_db), items)
 }
 
+pub fn lower_mon_item_of<'db>(db: &'db dyn crate::Db, name: TermName) -> MonReducIrItem<'db> {
+  let item = lower_item_of(db, name);
+  lower_mon_item(db, item)
+}
+
 #[salsa::tracked]
-fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
-  let reducir_db = db.as_reducir_db();
+fn lower_mon_item<'db>(db: &'db dyn crate::Db, item: ReducIrItem<'db>) -> MonReducIrItem<'db> {
+  let reducir_db = db;
   let name = item.name(reducir_db);
   let mut supply = IdSupply::start_from(item.var_supply(reducir_db));
   // TODO: Figure out a better way to do evv_id
@@ -394,7 +462,7 @@ fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
     ReducIrTermName::Term(name),
     ReducIrVarId(0),
   );
-  let is_entry_point = name.name(db.as_core_db()) == db.ident_str("main");
+  let is_entry_point = name.name(db).text(db) == "main";
   let ir = item.item(reducir_db);
   let mon_ir = if is_entry_point {
     ctx.lower_monadic_entry_point(ReducIrTermName::Term(name), ir)
@@ -418,7 +486,7 @@ fn lower_mon_item(db: &dyn crate::Db, item: ReducIrItem) -> MonReducIrItem {
 }
 
 #[salsa::tracked]
-fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
+fn effect_handler_ir_ty<'db>(db: &'db dyn crate::Db, effect: EffectName) -> ReducIrTy {
   let mut tyvar_conv = IdConverter::new();
 
   let varp_ty = db.mk_reducir_ty(ReducIrTyKind::VarTy(0));
@@ -428,11 +496,11 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
     .effect_members(effect)
     .iter()
     .map(|op| {
-      let lower_ty_ctx = LowerTySchemeCtx::new(db.as_lower_reducir_db(), &mut tyvar_conv);
+      let lower_ty_ctx = LowerTySchemeCtx::new(db, &mut tyvar_conv);
       let scheme = db.effect_member_sig(*op);
-      let (ir_ty_scheme, _) = lower_ty_ctx.lower_scheme(effect.module(db.as_core_db()), &scheme);
-      let ir_ty_scheme = match ir_ty_scheme.kind(db.as_reducir_db()) {
-        ReducIrTyKind::ForallTy(Kind::ScopedRow, ty) => match ty.kind(db.as_reducir_db()) {
+      let (ir_ty_scheme, _) = lower_ty_ctx.lower_scheme(effect.module(db), &scheme);
+      let ir_ty_scheme = match ir_ty_scheme.kind(db) {
+        ReducIrTyKind::ForallTy(Kind::ScopedRow, ty) => match ty.kind(db) {
           ReducIrTyKind::FunETy(arg, _, ret) => {
             // We're cheating like crazy here
             // These types are gonna be wrapped in a forall at the end, so
@@ -459,48 +527,30 @@ fn effect_handler_ir_ty(db: &dyn crate::Db, effect: EffectName) -> ReducIrTy {
   )
 }
 
-impl<DB> ReducIrEffectInfo for DB
-where
-  DB: ?Sized + crate::Db,
-{
-  fn effect_handler_ir_ty(&self, effect: EffectName) -> ReducIrTy {
-    effect_handler_ir_ty(self.as_lower_reducir_db(), effect)
+impl ReducIrEffectInfo for &dyn salsa::Database {
+  fn effect_handler_ir_ty(self, effect: EffectName) -> ReducIrTy {
+    effect_handler_ir_ty(self, effect)
   }
 }
-impl<DB> ItemWrappers for DB
-where
-  DB: ?Sized + crate::Db,
-{
-  fn lookup_wrapper(&self, term_name: TermName, term: Idx<Term<VarId>>) -> &Wrapper {
-    let typed_item = self.type_scheme_of(term_name);
-    let wrappers = typed_item.item_to_wrappers(self.as_tc_db());
+impl<'a> ItemWrappers<'a> for &'a dyn salsa::Database {
+  fn lookup_wrapper(&'a self, term_name: TermName, term: Idx<Term<VarId>>) -> &'a Wrapper {
+    let typed_item = type_scheme_of(*self, term_name);
+    let wrappers = typed_item.item_to_wrappers(*self);
     &wrappers[&term]
   }
 }
 
-impl<DB> VarTys for DB
-where
-  DB: ?Sized + crate::Db,
-{
+impl VarTys for &dyn salsa::Database {
   fn lookup_var(&self, term: TermName, var_id: VarId) -> Ty {
-    let typed_item = self.type_scheme_of(term);
-    println!(
-      "{} {:?}",
-      term.name(self.as_core_db()).text(self.as_core_db()),
-      var_id
-    );
-    let var_to_tys = typed_item.var_to_tys(self.as_tc_db());
-    println!("{:?}", var_to_tys);
+    let typed_item = type_scheme_of(*self, term);
+    let var_to_tys = typed_item.var_to_tys(*self);
     var_to_tys[&var_id]
   }
 }
-impl<DB> TermTys for DB
-where
-  DB: ?Sized + crate::Db,
-{
+impl TermTys for &dyn salsa::Database {
   fn lookup_term(&self, name: TermName, term: Idx<Term<VarId>>) -> tc::TyChkRes<InDb> {
-    let typed_item = self.type_scheme_of(name);
-    typed_item.term_to_tys(self.as_tc_db())[&term]
+    let typed_item = type_scheme_of(*self, name);
+    typed_item.term_to_tys(*self)[&term]
   }
 }
 
@@ -509,21 +559,24 @@ mod tests {
 
   use std::path::PathBuf;
 
-  use crate::Db as LowerIrDb;
-
   use base::{
-    Db,
     file::{FileId, SourceFile, SourceFileSet},
+    ident::Ident,
     pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
   };
   use expect_test::expect;
-  use parser::Db as ParserDb;
+  use parser::root_module_for_file;
   use pretty::RcAllocator;
   use reducir::{
     DelimReducIr, ReducIr, ReducIrTyErr, TypeCheck, mon::MonReducIrModule, ty::ReducIrTy,
   };
 
-  #[derive(Default)]
+  use crate::{
+    lower_mon_item_for_file_name, lower_mon_module_of, lower_reducir_item_for_file_name,
+  };
+
+  #[derive(Default, Clone)]
+  /*
   #[salsa::db(
     crate::Jar,
     ast::Jar,
@@ -534,17 +587,19 @@ mod tests {
     parser::Jar,
     tc::Jar,
     ty::Jar
-  )]
+  )]*/
+  #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,
   }
+  #[salsa::db]
   impl salsa::Database for TestDatabase {}
 
-  fn lower_function<R>(
-    db: &TestDatabase,
+  fn lower_function<'db, R>(
+    db: &'db TestDatabase,
     input: &str,
     fn_name: &str,
-    op: impl FnOnce(&TestDatabase, PathBuf, &str) -> Option<R>,
+    op: impl FnOnce(&'db TestDatabase, PathBuf, &str) -> Option<R>,
   ) -> R {
     let path = std::path::PathBuf::from("test");
     let mut contents = r#"
@@ -566,7 +621,6 @@ effect Reader {
     match op(db, path, fn_name) {
       Some(term) => term,
       None => {
-        dbg!(db.all_parse_errors());
         panic!("Errors occurred")
       }
     }
@@ -576,12 +630,12 @@ effect Reader {
   fn lower_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db DelimReducIr {
     let main = format!("defn f = {}", input);
     lower_function(db, &main, "f", |db, path, fn_name| {
-      db.lower_reducir_item_for_file_name(path, db.ident_str(fn_name))
+      lower_reducir_item_for_file_name(db, path, Ident::new(db, fn_name))
     })
     .item(db)
   }
 
-  fn lower_mon_module(db: &TestDatabase, input: &str) -> MonReducIrModule {
+  fn lower_mon_module<'db>(db: &'db TestDatabase, input: &str) -> MonReducIrModule<'db> {
     let path = std::path::PathBuf::from("test");
     let mut contents = r#"
 effect State {
@@ -599,13 +653,13 @@ effect Reader {
     let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
     SourceFileSet::new(db, vec![file]);
 
-    db.lower_reducir_mon_module_of(db.root_module_for_file(file))
+    lower_mon_module_of(db, root_module_for_file(db, file))
   }
 
   fn lower_mon_snippet<'db>(db: &'db TestDatabase, input: &str) -> &'db ReducIr {
     let main = format!("defn f = {}", input);
     lower_function(db, &main, "f", |db, path, fn_name| {
-      db.lower_reducir_mon_item_for_file_name(path, db.ident_str(fn_name))
+      lower_mon_item_for_file_name(db, path, Ident::new(db, fn_name))
     })
     .item(db)
   }
@@ -1315,8 +1369,8 @@ defn main = with {
     let module = lower_mon_module(
       &db,
       r#"
-            wand = |m| |n| (m ,, n).x
-            main = w = wand({ x = 5 })({ y = {} }); w
+            defn wand = |m| |n| (m ,, n).x
+            defn main = let w = wand({ x = 5 })({ y = {} }); w
             "#,
     );
 
@@ -1383,11 +1437,11 @@ defn main = with {
     let module = lower_mon_module(
       &db,
       r#"
-main = (with {
+defn main = (with {
     get = |x| |k| |s| k(s)(s),
     put = |x| |k| |s| k({})(x),
     return = |x| |s| {state = s, value = x},
-} do State.get({}))(825).value"#,
+} do get({}))(825).value"#,
     );
 
     let items = vec![
@@ -1464,16 +1518,16 @@ main = (with {
     let module = lower_mon_module(
       &db,
       r#"
-foo = |env| with {
+defn foo = |env| with {
   get = |x| |k| |s| k(s)(s),
   put = |x| |k| |s| k({})(x),
   return = |x| |s| { value = x, state = s },
 } do (with {
   ask = |x| |k| k(env),
   return = |x| x,
-} do w = State.put(Reader.ask({})); State.get({}))
+} do let w = put(ask({})); get({}))
 
-main = foo(16777215)(14).state"#,
+defn main = foo(16777215)(14).state"#,
     );
 
     let items = vec![

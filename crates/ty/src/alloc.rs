@@ -20,7 +20,7 @@ use std::hash::Hash;
 ///
 /// We aim to achieve this by parameterizing our structs by this allocation trait, and then we can
 /// implement unification only against these structs instantiated with our unification allocator.
-pub trait TypeAlloc<TK = TypeKind<Self>> {
+pub trait TypeAlloc {
   type TypeData: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
   type RowFields: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
   type RowValues: Clone + PartialEq + Eq + PartialOrd + Ord + Hash + Debug;
@@ -35,15 +35,15 @@ pub type SimpleRowVarOf<A> = <A as TypeAlloc>::SimpleRowVar;
 pub type ScopedRowVarOf<A> = <A as TypeAlloc>::ScopedRowVar;
 
 /// A trait for allocators that can make types and related data types.
-pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
+pub trait MkTy<A: TypeAlloc> {
   fn mk_ty(&self, kind: TypeKind<A>) -> Ty<A>;
   fn mk_label(&self, label: &str) -> RowLabel;
 
   fn mk_row<R: NewRow<A>>(&self, fields: &[RowLabel], values: &[Ty<A>]) -> R;
   fn mk_row_vec<R: NewRow<A>>(&self, fields: Vec<RowLabel>, values: Vec<Ty<A>>) -> R;
 
-  fn mk_row_iter<R: NewRow<A>>(
-    &self,
+  fn mk_row_iter<'a, R: NewRow<A>>(
+    &'a self,
     fields: impl Iterator<Item = RowLabel>,
     values: impl Iterator<Item = Ty<A>>,
   ) -> R {
@@ -77,7 +77,7 @@ pub trait MkTy<A: TypeAlloc<TypeKind<A>>> {
   }
 }
 
-pub trait AccessTy<'a, A: TypeAlloc<TypeKind<A>>> {
+pub trait AccessTy<'a, A: TypeAlloc> {
   fn kind(&self, ty: &Ty<A>) -> &'a TypeKind<A>;
   fn row_fields(&self, row: &A::RowFields) -> &'a [RowLabel];
   fn row_values(&self, row: &A::RowValues) -> &'a [Ty<A>];
@@ -128,23 +128,24 @@ pub mod db {
 
   use super::{AccessTy, TypeAlloc};
 
-  #[salsa::interned]
-  #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+  #[salsa::interned(debug, no_lifetime)]
+  #[derive(PartialOrd, Ord)]
   pub struct TyData {
-    #[return_ref]
+    #[returns(ref)]
     pub kind: TypeKind<InDb>,
   }
 
-  #[salsa::interned]
-  #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+  #[salsa::interned(debug, no_lifetime)]
+  #[derive(PartialOrd, Ord)]
   pub struct RowFields {
-    #[return_ref]
+    #[returns(ref)]
     pub fields: Vec<Ident>,
   }
-  #[salsa::interned]
+  #[salsa::interned(debug, no_lifetime)]
+  #[derive(PartialOrd, Ord)]
   pub struct RowValues {
-    #[return_ref]
-    pub values: Vec<Ty<InDb>>,
+    #[returns(ref)]
+    pub values: Vec<Ty>,
   }
 
   /// Allocate our types in salsa database.
@@ -172,16 +173,16 @@ pub mod db {
   {
   }
 
-  impl<DB> MkTy<InDb> for DB
+  impl<'db, DB> MkTy<InDb> for DB
   where
     DB: ?Sized + crate::Db,
   {
     fn mk_ty(&self, kind: TypeKind<InDb>) -> Ty<InDb> {
-      Ty(TyData::new(self.as_ty_db(), kind))
+      Ty(TyData::new(self, kind))
     }
 
     fn mk_label(&self, label: &str) -> RowLabel {
-      self.ident_str(label)
+      Ident::new(self, label)
     }
 
     fn mk_row_vec<R: crate::row::NewRow<InDb>>(
@@ -192,10 +193,7 @@ pub mod db {
       debug_assert_eq!(fields.len(), values.len());
       debug_assert!(fields.iter().considered_sorted());
 
-      R::new(
-        RowFields::new(self.as_ty_db(), fields),
-        RowValues::new(self.as_ty_db(), values),
-      )
+      R::new(RowFields::new(self, fields), RowValues::new(self, values))
     }
 
     fn mk_row<R: crate::row::NewRow<InDb>>(&self, fields: &[RowLabel], values: &[Ty<InDb>]) -> R {
@@ -208,15 +206,15 @@ pub mod db {
     DB: ?Sized + crate::Db,
   {
     fn kind(&self, ty: &Ty<InDb>) -> &'db TypeKind<InDb> {
-      ty.0.kind(self.as_ty_db())
+      ty.0.kind(*self)
     }
 
     fn row_fields(&self, row: &<InDb as TypeAlloc>::RowFields) -> &'db [RowLabel] {
-      row.fields(self.as_ty_db()).as_slice()
+      row.fields(*self).as_slice()
     }
 
     fn row_values(&self, row: &<InDb as TypeAlloc>::RowValues) -> &'db [Ty<InDb>] {
-      row.values(self.as_ty_db()).as_slice()
+      row.values(*self).as_slice()
     }
   }
 }

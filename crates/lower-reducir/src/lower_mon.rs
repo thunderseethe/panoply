@@ -19,6 +19,8 @@ use reducir::{
 use ReducIrKind::*;
 use ReducIrTyKind::*;
 
+use crate::{lower_mon_item, lower_mon_item_of};
+
 pub(crate) struct LowerMonCtx<'a> {
   db: &'a dyn crate::Db,
   var_conv: &'a mut IdSupply<ReducIrVarId>,
@@ -71,7 +73,7 @@ impl LowerMonCtx<'_> {
     ir: &DelimReducIr,
   ) -> ReducIr {
     let evv_ty = self.db.mk_prod_ty(vec![]);
-    let reducir_db = self.db.as_reducir_db();
+    let reducir_db = self.db;
     let mon_ir = self.lower_monadic(evv_ty, ir);
     match mon_ir
       .type_check(reducir_db)
@@ -125,7 +127,7 @@ impl LowerMonCtx<'_> {
       ReducIrKind::Abs(vars, body) => {
         match vars.iter().find(|var| var.var.id == self.evv_var_id) {
           Some(evv_var) => {
-            let reducir_db = self.db.as_reducir_db();
+            let reducir_db = self.db;
             let body = self.lower_monadic(self.lower_monadic_ty(evv_var.ty), body);
             ReducIr::abss(
               vars
@@ -270,7 +272,7 @@ impl LowerMonCtx<'_> {
     derive_out_ty: impl FnOnce(ReducIrTy) -> ReducIrTy,
     body: impl FnOnce(&mut Self, ReducIrVar) -> ReducIr,
   ) -> ReducIr {
-    let ir_db = self.db.as_reducir_db();
+    let ir_db = self.db;
     let ty = ir.type_check(ir_db).map_err_pretty_with(ir_db).unwrap();
     let mon_ty = ty
       .try_unwrap_monadic(ir_db)
@@ -295,9 +297,9 @@ impl LowerMonCtx<'_> {
     struct LowerMon<'db> {
       db: &'db dyn crate::Db,
     }
-    impl<'db> FoldReducIrTy<'db> for LowerMon<'db> {
-      fn db(&self) -> &'db dyn reducir::Db {
-        self.db.as_reducir_db()
+    impl<'db> FoldReducIrTy for LowerMon<'db> {
+      fn db(&self) -> &'db dyn salsa::Database {
+        self.db
       }
 
       fn fold_ty_kind(&mut self, kind: ReducIrTyKind) -> ReducIrTy {
@@ -373,7 +375,7 @@ impl LowerMonCtx<'_> {
   }
 
   fn lower_monadic(&mut self, evv_ty: ReducIrTy, ir: &ReducIr<DelimCont>) -> ReducIr {
-    let reducir_db = self.db.as_reducir_db();
+    let reducir_db = self.db;
     let pure = |this: &mut Self, ir: ReducIr| {
       let ty = ir
         .type_check(reducir_db)
@@ -406,7 +408,7 @@ impl LowerMonCtx<'_> {
         )
       }
       App(func, args) => {
-        let ir_db = self.db.as_reducir_db();
+        let ir_db = self.db;
         let func_mon = self.lower_monadic(evv_ty, func);
         let func_ty = func_mon
           .type_check(reducir_db)
@@ -624,10 +626,10 @@ impl LowerMonCtx<'_> {
       // already returns a monad when we call it here
       Item(occ) => match occ.name {
         ReducIrTermName::Term(term) => {
-          let mi = self.db.lower_reducir_mon_item_of(term);
-          let mon_item = mi.item(self.db.as_reducir_db());
+          let mi = lower_mon_item_of(self.db, term);
+          let mon_item = mi.item(self.db);
           let mon_ty = mon_item
-            .type_check(self.db.as_reducir_db())
+            .type_check(self.db)
             .expect("Type checking must succeed for item to exist");
           ReducIr::new(ReducIrKind::Item(occ.map_ty(|_| mon_ty)))
         }
@@ -688,11 +690,7 @@ impl LowerMonCtx<'_> {
           .map_err_pretty_with(reducir_db)
           .unwrap();
         let mon_ret = self.lower_monadic(evv_ty, ret);
-        let ret_ty = match ret
-          .type_check(self.db)
-          .unwrap()
-          .kind(self.db.as_reducir_db())
-        {
+        let ret_ty = match ret.type_check(self.db).unwrap().kind(self.db) {
           FunETy(_, _, ret) => self.lower_monadic_ty(ret),
           _ => unreachable!("return clause of handler must be a function"),
         };

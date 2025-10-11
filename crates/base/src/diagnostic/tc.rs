@@ -11,11 +11,11 @@ impl Diagnostic for TypeCheckDiagnostic {
     self.name
   }
 
-  fn principal<M>(&self, _: &M) -> Citation {
+  fn principal(&self) -> Citation {
     self.principal.clone()
   }
 
-  fn additional<M>(&self, _: &M) -> Vec<Citation> {
+  fn additional(&self) -> Vec<Citation> {
     // TODO: allow for additional citations
     vec![]
   }

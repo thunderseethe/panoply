@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use base::{
-  Db,
   displayer::Displayer,
   file::{FileId, SourceFile, SourceFileSet},
   ident::Ident,
@@ -9,49 +8,26 @@ use base::{
 };
 use clap::Parser;
 
-#[salsa::db(
-  ast::Jar,
-  base::Jar,
-  desugar::Jar,
-  emit_wasm::Jar,
-  reducir::Jar,
-  lower_reducir::Jar,
-  lower_medir::Jar,
-  medir::Jar,
-  nameres::Jar,
-  optimize_reducir::Jar,
-  parser::Jar,
-  tc::Jar,
-  ty::Jar
-)]
-#[derive(Default)]
+#[salsa::db]
+#[derive(Default, Clone)]
 pub struct PanoplyDatabase {
   storage: salsa::Storage<Self>,
 }
+#[salsa::db]
 impl salsa::Database for PanoplyDatabase {}
-impl salsa::ParallelDatabase for PanoplyDatabase {
-  fn snapshot(&self) -> salsa::Snapshot<Self> {
-    salsa::Snapshot::new(Self {
-      storage: self.storage.snapshot(),
-    })
-  }
-}
 
 impl Displayer<Module> for PanoplyDatabase {
   type Output<'a> = String;
 
   fn show<'a>(&self, value: &'a Module) -> Self::Output<'a> {
-    value
-      .name(self.as_core_db())
-      .text(self.as_core_db())
-      .clone()
+    value.name(self).text(self).clone()
   }
 }
 impl Displayer<Ident> for PanoplyDatabase {
   type Output<'a> = String;
 
   fn show<'a>(&self, value: &'a Ident) -> Self::Output<'a> {
-    value.text(self.as_core_db()).clone()
+    value.text(self).clone()
   }
 }
 

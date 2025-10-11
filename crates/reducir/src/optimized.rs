@@ -3,17 +3,15 @@ use base::modules::Module;
 use crate::{ReducIr, ReducIrTermName};
 
 #[salsa::tracked]
-pub struct OptimizedReducIrItem {
-  #[id]
+pub struct OptimizedReducIrItem<'db> {
   pub name: ReducIrTermName,
-  #[return_ref]
+  #[returns(ref)]
   pub item: ReducIr,
 }
 
 #[salsa::tracked]
-pub struct OptimizedReducIrModule {
-  #[id]
+pub struct OptimizedReducIrModule<'db> {
   pub module: Module,
-  #[return_ref]
-  pub items: Vec<OptimizedReducIrItem>,
+  #[returns(ref)]
+  pub items: Vec<OptimizedReducIrItem<'db>>,
 }

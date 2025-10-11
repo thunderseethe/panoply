@@ -7,6 +7,7 @@ use reducir::ReducIrTermName;
 
 mod pretty;
 
+/*
 #[salsa::jar(db = Db)]
 pub struct Jar(MedIrItem, MedIrModule, MedIrTy);
 pub trait Db: salsa::DbWithJar<Jar> + reducir::Db {
@@ -14,11 +15,12 @@ pub trait Db: salsa::DbWithJar<Jar> + reducir::Db {
     <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
   }
 
-  fn mk_medir_ty(&self, kind: MedIrTyKind) -> MedIrTy {
-    MedIrTy::new(self.as_medir_db(), kind)
-  }
+
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + reducir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + reducir::Db {}*/
+pub fn mk_medir_ty(db: &dyn salsa::Database, kind: MedIrTyKind) -> MedIrTy {
+  MedIrTy::new(db, kind)
+}
 
 pub trait MedIrFoldInPlace {
   fn fold_atom(&mut self, _atom: &mut Atom) {}
@@ -72,21 +74,19 @@ impl MedIrVisit for CallAritys {
 }
 
 #[salsa::tracked]
-pub struct MedIrItem {
-  #[id]
+pub struct MedIrItem<'db> {
   pub name: MedIrItemName,
-  #[return_ref]
+  #[returns(ref)]
   pub item: Defn,
-  #[return_ref]
+  #[returns(ref)]
   pub var_supply: IdSupply<MedIrVarId>,
 }
 
 #[salsa::tracked]
-pub struct MedIrModule {
-  #[id]
+pub struct MedIrModule<'db> {
   pub module: Module,
-  #[return_ref]
-  pub items: Vec<MedIrItem>,
+  #[returns(ref)]
+  pub items: Vec<MedIrItem<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -95,13 +95,13 @@ pub struct MedIrVar {
   pub ty: MedIrTy,
 }
 
-impl From<(MedIrVarId, MedIrTy)> for MedIrVar {
+impl<'db> From<(MedIrVarId, MedIrTy)> for MedIrVar {
   fn from(value: (MedIrVarId, MedIrTy)) -> Self {
     Self::new(value.0, value.1)
   }
 }
 
-impl MedIrVar {
+impl<'db> MedIrVar {
   pub fn new(id: MedIrVarId, ty: MedIrTy) -> Self {
     Self { id, ty }
   }
@@ -110,13 +110,13 @@ impl MedIrVar {
 #[derive(PartialEq, Eq, Debug, Clone, Copy, PartialOrd, Ord, Hash)]
 pub struct MedIrItemName(pub ReducIrTermName);
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub struct MedIrTypedItem {
   pub name: MedIrItemName,
   pub ty: MedIrTy,
 }
 
-impl MedIrTypedItem {
+impl<'db> MedIrTypedItem {
   pub fn new(name: MedIrItemName, ty: MedIrTy) -> Self {
     Self { name, ty }
   }
@@ -133,17 +133,17 @@ pub enum Atom {
   Var(MedIrVar),
   Int(usize),
 }
-impl Atom {
-  pub fn type_of<DB: ?Sized + crate::Db>(&self, db: &DB) -> MedIrTy {
+impl<'db> Atom {
+  pub fn type_of(&self, db: &dyn salsa::Database) -> MedIrTy {
     match self {
       Atom::Var(v) => v.ty,
-      Atom::Int(_) => db.mk_medir_ty(MedIrTyKind::IntTy),
+      Atom::Int(_) => mk_medir_ty(db, MedIrTyKind::IntTy),
     }
   }
 }
 
 /// TODO: Document how this differs from ReducIr
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum MedIrKind {
   Atom(Atom),
   /// A flat sequence of values
@@ -168,20 +168,21 @@ pub enum MedIrTyKind {
   FunTy(Vec<MedIrTy>, MedIrTy),
 }
 
-#[salsa::interned]
+#[salsa::interned(debug, no_lifetime)]
+#[derive(PartialOrd, Ord)]
 pub struct MedIrTy {
-  #[return_ref]
+  #[returns(ref)]
   kind_: MedIrTyKind,
 }
 
 impl MedIrTy {
   // Convenience wrapper to cast DB for us
-  pub fn kind<DB: ?Sized + crate::Db>(self, db: &DB) -> &MedIrTyKind {
-    self.kind_(db.as_medir_db())
+  pub fn kind(self, db: &dyn salsa::Database) -> &MedIrTyKind {
+    self.kind_(db)
   }
 
-  pub fn try_as_fun_ty<DB: ?Sized + crate::Db>(self, db: &DB) -> Option<(&[MedIrTy], MedIrTy)> {
-    match self.kind_(db.as_medir_db()) {
+  pub fn try_as_fun_ty(self, db: &dyn salsa::Database) -> Option<(&[MedIrTy], MedIrTy)> {
+    match self.kind_(db) {
       MedIrTyKind::IntTy | MedIrTyKind::BlockTy(_) => None,
       MedIrTyKind::FunTy(args, ret) => Some((args, *ret)),
     }
@@ -189,8 +190,8 @@ impl MedIrTy {
 }
 
 impl MedIrTy {
-  pub fn block_size<DB: ?Sized + crate::Db>(&self, db: &DB) -> usize {
-    match self.kind(db.as_medir_db()) {
+  pub fn block_size(&self, db: &dyn salsa::Database) -> usize {
+    match self.kind(db) {
       MedIrTyKind::IntTy => 1,
       // Represented as a function reference so fits in one block
       MedIrTyKind::FunTy(_, _) => 1,
@@ -199,18 +200,19 @@ impl MedIrTy {
   }
 }
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Hash)]
 pub struct MedIr {
   pub kind: MedIrKind,
 }
 impl MedIr {
-  pub fn type_of<DB: ?Sized + crate::Db>(&self, db: &DB) -> MedIrTy {
+  pub fn type_of(&self, db: &dyn salsa::Database) -> MedIrTy {
     match &self.kind {
       MedIrKind::Atom(atom) => atom.type_of(db),
-      MedIrKind::Blocks(elems) => db.mk_medir_ty(MedIrTyKind::BlockTy(
-        elems.iter().map(|atom| atom.type_of(db)).collect(),
-      )),
-      MedIrKind::BlockAccess(v, indx) => match v.ty.kind(db.as_medir_db()) {
+      MedIrKind::Blocks(elems) => mk_medir_ty(
+        db,
+        MedIrTyKind::BlockTy(elems.iter().map(|atom| atom.type_of(db)).collect()),
+      ),
+      MedIrKind::BlockAccess(v, indx) => match v.ty.kind(db) {
         MedIrTyKind::BlockTy(blocks) => blocks[*indx],
         _ => todo!(),
       },
@@ -230,13 +232,13 @@ impl MedIr {
             }
           }
         })
-        .unwrap_or_else(|| db.mk_medir_ty(MedIrTyKind::BlockTy(vec![]))),
+        .unwrap_or_else(|| mk_medir_ty(db, MedIrTyKind::BlockTy(vec![]))),
       MedIrKind::Call(fun, _) => match fun {
-        Call::Known(item) => match item.ty.kind(db.as_medir_db()) {
+        Call::Known(item) => match item.ty.kind(db) {
           MedIrTyKind::FunTy(_, ret_ty) => *ret_ty,
           _ => todo!(),
         },
-        Call::Unknown(var) => match var.ty.kind(db.as_medir_db()) {
+        Call::Unknown(var) => match var.ty.kind(db) {
           MedIrTyKind::FunTy(_, ret_ty) => *ret_ty,
           kind => {
             todo!("{}", kind.pretty_with(db).pprint().pretty(80))
@@ -255,10 +257,10 @@ impl MedIr {
         if args_ty.len() == args.len() {
           *ret
         } else {
-          db.mk_medir_ty(MedIrTyKind::FunTy(
-            args_ty.iter().skip(args.len()).copied().collect(),
-            *ret,
-          ))
+          mk_medir_ty(
+            db,
+            MedIrTyKind::FunTy(args_ty.iter().skip(args.len()).copied().collect(), *ret),
+          )
         }
       }
       MedIrKind::Typecast(ty, _) => *ty,
@@ -366,7 +368,7 @@ impl MedIrTraversal for Locals {
   }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub enum Call {
   /// A known function call we can dispatch statically
   Known(MedIrTypedItem),
@@ -375,20 +377,20 @@ pub enum Call {
 }
 
 /// A series of binding that are scoped locally to body.
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone, Hash)]
 pub struct Locals {
   pub binds: Vec<(MedIrVar, MedIr)>,
   pub body: MedIr,
 }
 
 impl Locals {
-  pub fn type_of<DB: ?Sized + crate::Db>(&self, db: &DB) -> MedIrTy {
+  pub fn type_of(&self, db: &dyn salsa::Database) -> MedIrTy {
     self.body.type_of(db)
   }
 }
 
 /// A top level definition is composed of a name, its parameters, and a Locals acting as the body
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Defn {
   pub name: MedIrItemName,
   pub params: Vec<MedIrVar>,
@@ -396,10 +398,13 @@ pub struct Defn {
 }
 
 impl Defn {
-  pub fn type_of<DB: ?Sized + crate::Db>(&self, db: &DB) -> MedIrTy {
-    db.mk_medir_ty(MedIrTyKind::FunTy(
-      self.params.iter().map(|var| var.ty).collect(),
-      self.body.type_of(db),
-    ))
+  pub fn type_of(&self, db: &dyn salsa::Database) -> MedIrTy {
+    mk_medir_ty(
+      db,
+      MedIrTyKind::FunTy(
+        self.params.iter().map(|var| var.ty).collect(),
+        self.body.type_of(db),
+      ),
+    )
   }
 }

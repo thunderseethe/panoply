@@ -3,7 +3,7 @@ use std::str::CharIndices;
 use base::{file::FileId, loc::Loc};
 
 // A line of source text.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct Line {
   // The byte in the source text at which this line starts.
   start_byte: usize,
@@ -68,9 +68,8 @@ impl Line {
 }
 
 /// Converts byte indices in a particular source text to `Loc`s.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, salsa::Update, Clone)]
 pub struct Locator {
-  file: FileId,
   // The lines of source text. Always holds at least one value.
   lines: Vec<Line>,
   // The total length of the source text in bytes.
@@ -79,7 +78,7 @@ pub struct Locator {
 
 impl Locator {
   /// Returns a new `Locator` for the given source text.
-  pub fn new(file: FileId, text: &str) -> Locator {
+  pub fn new(text: &str) -> Locator {
     let mut ci = text.char_indices();
     let mut lines = Vec::new();
     let mut length = 0;
@@ -89,47 +88,28 @@ impl Locator {
       lines.push(line);
       more
     } {}
-    Locator {
-      file,
-      lines,
-      length,
-    }
+    Locator { lines, length }
   }
 
   /// Converts a byte offset in the original source text to a `Loc`.
   ///
   /// Returns `None` if the byte offset falls within a character or outside the range of the
   /// original source text.
-  pub fn locate(&self, byte: usize) -> Option<Loc> {
+  pub fn locate(&self, byte: usize) -> Option<(usize, usize)> {
     Some(
       match self
         .lines
         .binary_search_by_key(&byte, |line| line.start_byte)
       {
-        Ok(i) => Loc {
-          file: self.file,
-          byte,
-          line: i,
-          col: 0,
-        },
-        Err(i) => Loc {
-          file: self.file,
-          byte,
-          line: i - 1,
-          col: self.lines[i - 1].column(byte)?,
-        },
+        Ok(i) => (i, 0),
+        Err(i) => (i - 1, self.lines[i - 1].column(byte)?),
       },
     )
   }
 
   /// The "one past the end" location in the source text.
   pub fn eoi(&self) -> Loc {
-    Loc {
-      file: self.file,
-      byte: self.length,
-      line: self.lines.len() - 1,
-      col: self.lines.last().unwrap().eol(),
-    }
+    Loc { byte: self.length }
   }
 
   /// Converts line and column numbers to a byte offset in the original source text.
@@ -145,38 +125,31 @@ impl Locator {
 #[cfg(test)]
 mod tests {
   use base::file::FileId;
-  use salsa::AsId;
 
   use super::Locator;
 
   #[test]
   fn test_locator_unicode() {
-    let locator = Locator::new(FileId::from_id(salsa::Id::from_u32(0)), "y̆es");
+    let locator = Locator::new("y̆es");
 
-    let l0 = locator.locate(0).unwrap();
-    assert_eq!(l0.byte, 0);
-    assert_eq!(l0.line, 0);
-    assert_eq!(l0.col, 0);
+    let (line0, col0) = locator.locate(0).unwrap();
+    assert_eq!(line0, 0);
+    assert_eq!(col0, 0);
 
-    let l1 = locator.locate(1).unwrap();
-    assert_eq!(l1.byte, 1);
-    assert_eq!(l1.line, 0);
-    assert_eq!(l1.col, 1);
+    let (line1, col1) = locator.locate(1).unwrap();
+    assert_eq!(line1, 0);
+    assert_eq!(col1, 1);
 
-    let l3 = locator.locate(3).unwrap();
-    assert_eq!(l3.byte, 3);
-    assert_eq!(l3.line, 0);
-    assert_eq!(l3.col, 2);
+    let (line3, col3) = locator.locate(3).unwrap();
+    assert_eq!(line3, 0);
+    assert_eq!(col3, 2);
 
     let l4 = locator.locate(4).unwrap();
-    assert_eq!(l4.byte, 4);
-    assert_eq!(l4.line, 0);
-    assert_eq!(l4.col, 3);
+    assert_eq!(l4.0, 0);
+    assert_eq!(l4.1, 3);
 
     let eoi = locator.eoi();
     assert_eq!(eoi.byte, 5);
-    assert_eq!(eoi.line, 0);
-    assert_eq!(eoi.col, 4);
 
     assert_eq!(locator.unlocate(0, 0), Some(0));
     assert_eq!(locator.unlocate(0, 1), Some(1));
@@ -190,32 +163,26 @@ mod tests {
 
   #[test]
   fn test_multiline() {
-    let locator = Locator::new(FileId::from_id(salsa::Id::from_u32(0)), "a\nbc\nd");
+    let locator = Locator::new("a\nbc\nd");
 
     let l2 = locator.locate(2).unwrap();
-    assert_eq!(l2.byte, 2);
-    assert_eq!(l2.line, 1);
-    assert_eq!(l2.col, 0);
+    assert_eq!(l2.0, 1);
+    assert_eq!(l2.1, 0);
 
     let l3 = locator.locate(3).unwrap();
-    assert_eq!(l3.byte, 3);
-    assert_eq!(l3.line, 1);
-    assert_eq!(l3.col, 1);
+    assert_eq!(l3.0, 1);
+    assert_eq!(l3.1, 1);
 
     let l4 = locator.locate(4).unwrap();
-    assert_eq!(l4.byte, 4);
-    assert_eq!(l4.line, 1);
-    assert_eq!(l4.col, 2);
+    assert_eq!(l4.0, 1);
+    assert_eq!(l4.1, 2);
 
     let l5 = locator.locate(5).unwrap();
-    assert_eq!(l5.byte, 5);
-    assert_eq!(l5.line, 2);
-    assert_eq!(l5.col, 0);
+    assert_eq!(l5.0, 2);
+    assert_eq!(l5.1, 0);
 
     let eoi = locator.eoi();
     assert_eq!(eoi.byte, 6);
-    assert_eq!(eoi.line, 2);
-    assert_eq!(eoi.col, 1);
 
     assert_eq!(locator.unlocate(0, 2), Some(2)); // EOL
     assert_eq!(locator.unlocate(1, 0), Some(2));
@@ -439,16 +406,16 @@ Box drawing alignment tests:                                          █
 
 "#;
 
-    let locator = Locator::new(FileId::from_id(salsa::Id::from_u32(0)), W3_DEMO_TEXT);
+    let locator = Locator::new(W3_DEMO_TEXT);
     assert_eq!(locator.eoi().byte, W3_DEMO_TEXT.len());
     for (i, _) in W3_DEMO_TEXT.char_indices() {
       let loc = locator
         .locate(i)
         .unwrap_or_else(|| panic!("Expected location at byte {}", i));
-      let j = locator.unlocate(loc.line, loc.col).unwrap_or_else(|| {
+      let j = locator.unlocate(loc.0, loc.1).unwrap_or_else(|| {
         panic!(
           "Expected roundtrip for byte {} (line {}, col {})",
-          i, loc.line, loc.col
+          i, loc.0, loc.1
         )
       });
       assert_eq!(i, j);

@@ -1,12 +1,11 @@
 use ast::{Ast, Direction, Term, Term::*};
 use base::{
-  diagnostic::tc::TypeCheckDiagnostic, id::VarId, memory::handle, modules::Module,
+  diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, memory::handle, modules::Module,
   pretty::PrettyWithCtx, span::Span,
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
 use rustc_hash::FxHashMap;
-use salsa::DebugWithDb;
 use std::{collections::BTreeSet, convert::Infallible, ops::Deref};
 use ty::{
   TypeKind::*,
@@ -18,8 +17,9 @@ use ty::{
 };
 
 use crate::{
-  Db, EffectInfo, Evidence, TyScheme,
+  EffectInfo, Evidence, TyScheme,
   diagnostic::{TypeCheckError, into_diag},
+  effect_handler_scheme,
   folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},
   type_scheme_of,
   unsolved_row::{ClosedGoal, OpenGoal, Operatives, UnsolvedRowEquation},
@@ -130,7 +130,7 @@ pub(crate) trait InferState {
   type Storage<'infer>;
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct OpSelector<A: TypeAlloc = InDb> {
   pub op_row: SimpleRow<A>,
   pub handler_row: SimpleRow<A>,
@@ -174,7 +174,7 @@ impl InferState for Solution {
   type Storage<'infer> = SolutionStorage<'infer>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TyChkRes<A: TypeAlloc> {
   pub ty: Ty<A>,
   pub eff: ScopedRow<A>,
@@ -185,22 +185,6 @@ where
   Ty<A>: Copy,
   ScopedRow<A>: Copy,
 {
-}
-impl<Db> DebugWithDb<Db> for TyChkRes<InDb>
-where
-  Db: ?Sized + ty::Db,
-{
-  fn fmt(
-    &self,
-    f: &mut std::fmt::Formatter<'_>,
-    db: &Db,
-    _include_all_fields: bool,
-  ) -> std::fmt::Result {
-    f.debug_struct("TyChkRes")
-      .field("ty", &self.ty.debug(db))
-      .field("eff", &self.eff.debug(db))
-      .finish()
-  }
 }
 
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for TyChkRes<A> {
@@ -265,7 +249,7 @@ pub(crate) struct InferCtx<'a, 'infer, I, State: InferState = Generation> {
   errors: Vec<TypeCheckDiagnostic>,
   /// Allocator for types created during inference
   ctx: &'a I,
-  db: &'a dyn Db,
+  db: &'a dyn salsa::Database,
   /// Id of the module we're currently performing type checking within.
   module: Module,
   ast: &'a Ast<VarId>,
@@ -335,7 +319,7 @@ where
   I: MkTy<InArena<'infer>> + AccessTy<'infer, InArena<'infer>>,
 {
   pub(crate) fn new(
-    db: &'a dyn crate::Db,
+    db: &'a dyn salsa::Database,
     ctx: &'a I,
     module: Module,
     ast: &'a Ast<VarId>,
@@ -574,7 +558,7 @@ where
         };
       }
       (Item(term_name), _) => {
-        let scheme = type_scheme_of(self.db.as_tc_db(), *term_name).ty_scheme(self.db.as_tc_db());
+        let scheme = type_scheme_of(self.db, *term_name).ty_scheme(self.db);
         let span = current_span();
         let (wrapper, ty_chk) = self.instantiate(scheme, span);
         self.state.item_wrappers.insert(term, wrapper);
@@ -797,14 +781,14 @@ where
 
         let outer_eff = self.fresh_scoped_row();
 
-        let core_db = self.db.as_core_db();
+        let core_db = self.db;
         let eff_name = op_name.effect(core_db);
         let ret_ty = self.fresh_var();
         let int = self.mk_ty(IntTy);
         let eff = Row::Closed(self.single_row(
           eff_name.name(core_db),
           self.mk_ty(ProdTy(Row::Closed(self.mk_row(
-            &[self.db.ident_str("eff"), self.db.ident_str("ret")],
+            &[Ident::new(self.db, "eff"), Ident::new(self.db, "ret")],
             &[self.mk_ty(FunTy(int, outer_eff, int)), ret_ty],
           )))),
         ));
@@ -814,7 +798,7 @@ where
         let unused = self.fresh_scoped_row();
         self.add_effect_row_combine(unused, eff, goal, current_span());
 
-        let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+        let handler_scheme = effect_handler_scheme(self.db, eff_name).scheme(self.db);
         let (handler_wrap, handler_res) = self.instantiate(handler_scheme.clone(), current_span());
 
         // We know the first type variable of the scheme is the return type
@@ -915,7 +899,7 @@ where
         res
       }
       Item(term_name) => {
-        let scheme = type_scheme_of(self.db.as_tc_db(), *term_name).ty_scheme(self.db.as_tc_db());
+        let scheme = type_scheme_of(self.db, *term_name).ty_scheme(self.db);
         let (wrapper, res) = self.instantiate(scheme, current_span());
         self.state.item_wrappers.insert(term, wrapper);
         res
@@ -1151,7 +1135,7 @@ where
     Self: RowEquationSolver<'infer, Sema>,
     Sema: Ord + Clone + RowTheory,
     Sema::Open<InArena<'infer>>: Copy,
-    Sema::Closed<InArena<'infer>>: Copy + PrettyWithCtx<(&'a dyn crate::Db, ())>,
+    Sema::Closed<InArena<'infer>>: Copy + PrettyWithCtx<(&'a dyn salsa::Database, ())>,
   {
     let mut combos: Vec<RowCombination<Row<Sema, InArena<'infer>>>> = vec![];
     let eqns = std::mem::take(self.equations_mut());
@@ -1264,7 +1248,7 @@ where
   where
     Self: RowEquationSolver<'infer, Sema>,
     Sema: RowTheory + Ord + Clone,
-    Sema::Closed<InArena<'infer>>: PrettyWithCtx<(&'a dyn crate::Db, ())>,
+    Sema::Closed<InArena<'infer>>: PrettyWithCtx<(&'a dyn salsa::Database, ())>,
   {
     let left = self.normalize_row(unnorm_left.clone());
     let right = self.normalize_row(unnorm_right.clone());
@@ -1376,7 +1360,7 @@ where
 
     let int = self.mk_ty(IntTy);
     let normal_eff_val = self.mk_ty(ProdTy(Row::Closed(self.mk_row(
-      &[self.db.ident_str("eff"), self.db.ident_str("ret")],
+      &[Ident::new(self.db, "eff"), Ident::new(self.db, "ret")],
       &[self.mk_ty(FunTy(int, normal_out_eff, int)), normal_ret],
     ))));
 
@@ -1393,7 +1377,7 @@ where
         let eff_row: ScopedClosedRow<InArena<'infer>> = self.mk_row(&[name], &[normal_eff_val]);
         self.unify(eff_var, eff_row)?;
 
-        let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+        let handler_scheme = effect_handler_scheme(self.db, eff_name).scheme(self.db);
         (handler_scheme, Row::Closed(handler))
       }
       (Row::Closed(handler), Row::Closed(eff)) => {
@@ -1407,7 +1391,7 @@ where
           .lookup_effect_by_name(self.module, eff_ident)
           .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
 
-        let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+        let handler_scheme = effect_handler_scheme(self.db, eff_name).scheme(self.db);
         (handler_scheme, Row::Closed(handler))
       }
       (Row::Open(handler_var), Row::Closed(eff)) => {
@@ -1421,7 +1405,7 @@ where
           .lookup_effect_by_name(self.module, eff_ident)
           .ok_or(TypeCheckError::UndefinedEffect(eff_ident))?;
 
-        let handler_scheme = self.db.effect_handler_scheme(eff_name).scheme(self.db);
+        let handler_scheme = effect_handler_scheme(self.db, eff_name).scheme(self.db);
         (handler_scheme, Row::Open(handler_var))
       }
       // We didn't learn enough info to solve our handle term, this is an error

@@ -9,7 +9,7 @@ use crate::{
   TypeCheck,
 };
 
-impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
+impl<DB: salsa::Database + ?Sized> PrettyWithCtx<DB> for DelimCont {
   fn pretty<'a>(&self, db: &DB, arena: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
     match self {
       DelimCont::NewPrompt(p_var, body) => docs![
@@ -76,15 +76,16 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for DelimCont {
   }
 }
 
-impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
-  PrettyWithCtx<DB> for ReducIr<Ext>
+impl<DB, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone> PrettyWithCtx<DB> for ReducIr<Ext>
+where
+  DB: salsa::Database + ?Sized,
 {
   fn pretty<'a>(&self, db: &DB, allocator: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
     self.kind.pretty(db, allocator)
   }
 }
 
-impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
+impl<DB: salsa::Database + ?Sized, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
   PrettyWithCtx<DB> for ReducIrKind<Ext>
 {
   fn pretty<'a>(&self, db: &DB, arena: &'a RcAllocator) -> pretty::DocBuilder<'a, RcAllocator> {
@@ -312,11 +313,11 @@ impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clo
       ]
       .parens(),
       X(xt) => xt.pretty(db, arena),
-      Item(occ) => arena.text(occ.name.name(db).text(db.as_core_db()).clone()),
+      Item(occ) => arena.text(occ.name.name(db).text(db).to_string()).clone(),
     }
   }
 }
-impl<DB: ?Sized + crate::Db, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
+impl<DB: salsa::Database + ?Sized, Ext: PrettyWithCtx<DB> + TypeCheck<Ext = Ext> + Clone>
   PrettyWithCtx<DB> for ReducIrTyErr<'_, Ext>
 {
   fn pretty<'a>(&self, db: &DB, a: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
@@ -501,6 +502,6 @@ impl ReducIrVar {
 
 impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTermName {
   fn pretty<'a>(&self, ctx: &DB, alloc: &'a RcAllocator) -> DocBuilder<'a, RcAllocator> {
-    alloc.as_string(self.name(ctx).text(ctx.as_core_db()))
+    alloc.as_string(self.name(ctx).text(ctx))
   }
 }

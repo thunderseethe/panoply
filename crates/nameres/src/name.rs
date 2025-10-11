@@ -14,15 +14,16 @@ pub trait NameKinded {
   fn kind(&self) -> NameKind;
 }
 
+/*
 /// A name that may appear as a top-level definition within a module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ModuleName {
-  Effect(EffectName),
-  Item(TermName),
+pub enum ModuleName<'db> {
+  Effect(EffectName<'db>),
+  Item(TermName<'db>),
 }
 
-impl From<ModuleName> for BaseName {
-  fn from(value: ModuleName) -> Self {
+impl From<ModuleName<'db>> for BaseName {
+  fn from(value: ModuleName<'db>) -> Self {
     match value {
       ModuleName::Effect(e) => BaseName::Effect(e),
       ModuleName::Item(t) => BaseName::Item(t),
@@ -53,15 +54,15 @@ impl NameKinded for ModuleName {
 
 /// A name visible at any scope in a module.
 #[derive(Clone, Copy, Debug)]
-pub enum BaseName {
-  Module(Module),
-  Effect(EffectName),
-  EffectOp(EffectOpName),
-  Item(TermName),
+pub enum BaseName<'db> {
+  Module(Module<'db>),
+  Effect(EffectName<'db>),
+  EffectOp(EffectOpName<'db>),
+  Item(TermName<'db>),
 }
 
-impl From<Module> for BaseName {
-  fn from(m: Module) -> Self {
+impl<'db> From<Module<'db>> for BaseName<'db> {
+  fn from(m: Module<'db>) -> Self {
     BaseName::Module(m)
   }
 }
@@ -94,7 +95,9 @@ impl NameKinded for BaseName {
     }
   }
 }
+*/
 
+/*
 /// A name only visible in a local scope.
 #[derive(Clone, Copy, Debug)]
 pub enum LocalName {
@@ -122,14 +125,16 @@ impl NameKinded for LocalName {
     }
   }
 }
+*/
 
+/*
 /// Every kind of name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Name {
-  Module(Module),
-  Effect(EffectName),
-  EffectOp(EffectOpName),
-  Item(TermName),
+  Module(Module<'db>),
+  Effect(EffectName<'db>),
+  EffectOp(EffectOpName<'db>),
+  Item(TermName<'db>),
   TyVar(TyVarId),
   Var(VarId),
 }
@@ -192,4 +197,4 @@ impl NameKinded for Name {
       Name::Var(_) => NameKind::Var,
     }
   }
-}
+}*/

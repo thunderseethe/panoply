@@ -4,6 +4,9 @@ use base::{
   modules::Module,
   pretty::PrettyErrorWithDb,
 };
+use lower_reducir::{lower_mon_item_of, lower_mon_module_of};
+use nameres::id_for_name;
+use parser::root_module_for_path;
 use reducir::{
   ReducIrTermName, TypeCheck,
   mon::{MonReducIrItem, MonReducIrModule},
@@ -17,10 +20,10 @@ use simplify::{bind_term, prompt_term};
 
 use crate::simplify::EtaExpand;
 
-#[salsa::jar(db = Db)]
-pub struct Jar(simple_reducir_item, simple_reducir_module);
+//#[salsa::jar(db = Db)]
+//pub struct Jar(simple_reducir_item, simple_reducir_module);
 
-pub trait Db: salsa::DbWithJar<Jar> + lower_reducir::Db {
+/*pub trait Db: salsa::DbWithJar<Jar> + lower_reducir::Db {
   fn as_opt_reducir_db(&self) -> &dyn crate::Db {
     <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
   }
@@ -49,11 +52,34 @@ pub trait Db: salsa::DbWithJar<Jar> + lower_reducir::Db {
     Some(self.simple_reducir_item_of(term_name))
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + lower_reducir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + lower_reducir::Db {}*/
+
+use salsa::Database as Db;
+
+fn simple_reducir_item_for_file_name<'db>(
+  db: &'db dyn crate::Db,
+  path: std::path::PathBuf,
+  item: Ident,
+) -> Option<OptimizedReducIrItem<'db>> {
+  let module = root_module_for_path(db, path);
+  let term_name = id_for_name(db, module, item)?;
+  Some(simple_reducir_item_of(db, term_name))
+}
+
+fn simple_reducir_item_of<'db>(
+  db: &'db dyn crate::Db,
+  name: TermName,
+) -> OptimizedReducIrItem<'db> {
+  let reducir_item = lower_mon_item_of(db, name);
+  simple_reducir_item(db, reducir_item)
+}
 
 #[salsa::tracked]
-fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedReducIrItem {
-  let ir_db = db.as_reducir_db();
+fn simple_reducir_item<'db>(
+  db: &'db dyn crate::Db,
+  item: MonReducIrItem<'db>,
+) -> OptimizedReducIrItem<'db> {
+  let ir_db = db;
   let name = item.name(ir_db);
   let row_evs = item.row_evs(ir_db);
   let var_supply = item.var_supply(ir_db);
@@ -62,20 +88,24 @@ fn simple_reducir_item(db: &dyn crate::Db, item: MonReducIrItem) -> OptimizedRed
 
   let ir = simplify::simplify(db, name, row_evs, item.item(ir_db), &mut var_supply);
 
-  let term_name = item.name(db.as_reducir_db());
-  OptimizedReducIrItem::new(
-    db.as_reducir_db(),
-    ReducIrTermName::Term(term_name),
-    ir.clone(),
-  )
+  let term_name = item.name(db);
+  OptimizedReducIrItem::new(db, ReducIrTermName::Term(term_name), ir.clone())
+}
+
+pub fn simple_reducir_module_of<'db>(
+  db: &'db dyn crate::Db,
+  module: Module,
+) -> OptimizedReducIrModule<'db> {
+  let reducir_module = lower_mon_module_of(db, module);
+  simple_reducir_module(db, reducir_module)
 }
 
 #[salsa::tracked]
-fn simple_reducir_module(
-  db: &dyn crate::Db,
-  ir_module: MonReducIrModule,
-) -> OptimizedReducIrModule {
-  let reducir_db = db.as_reducir_db();
+pub fn simple_reducir_module<'db>(
+  db: &'db dyn crate::Db,
+  ir_module: MonReducIrModule<'db>,
+) -> OptimizedReducIrModule<'db> {
+  let reducir_db = db;
   let module = ir_module.module(reducir_db);
 
   // TODO: Instead of incluing these in the module we should create a separate method
@@ -101,12 +131,12 @@ fn simple_reducir_module(
   debug_assert!(prompt.type_check(db).map_err_pretty_with(db).is_ok());
 
   OptimizedReducIrModule::new(
-    db.as_reducir_db(),
+    db,
     module,
     ir_module
       .items(reducir_db)
       .iter()
-      .map(|item| db.simple_reducir_item(*item))
+      .map(|item| simple_reducir_item(db, *item))
       .chain([
         OptimizedReducIrItem::new(reducir_db, bind_name, bind),
         OptimizedReducIrItem::new(reducir_db, prompt_name, prompt),
@@ -118,35 +148,28 @@ fn simple_reducir_module(
 #[cfg(test)]
 mod tests {
   use base::{
-    Db as BaseDb,
     file::{FileId, SourceFile, SourceFileSet},
+    ident::Ident,
     pretty::{PrettyErrorWithDb, PrettyPrint, PrettyWithCtx},
   };
   use expect_test::expect;
-  use parser::Db as ParseDb;
   use reducir::{TypeCheck, optimized::OptimizedReducIrItem};
 
-  use crate::Db;
+  use crate::simple_reducir_item_for_file_name;
 
-  #[derive(Default)]
-  #[salsa::db(
-    crate::Jar,
-    ast::Jar,
-    base::Jar,
-    desugar::Jar,
-    lower_reducir::Jar,
-    nameres::Jar,
-    parser::Jar,
-    reducir::Jar,
-    tc::Jar,
-    ty::Jar
-  )]
+  #[derive(Default, Clone)]
+  #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,
   }
+  #[salsa::db]
   impl salsa::Database for TestDatabase {}
 
-  fn simple_function(db: &TestDatabase, fn_name: &str, input: &str) -> OptimizedReducIrItem {
+  fn simple_function<'db>(
+    db: &'db TestDatabase,
+    fn_name: &str,
+    input: &str,
+  ) -> OptimizedReducIrItem<'db> {
     let path = std::path::PathBuf::from("test");
     let mut contents = r#"
 effect State {
@@ -164,16 +187,15 @@ effect Reader {
     let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
     SourceFileSet::new(db, vec![file]);
 
-    match db.simple_reducir_item_for_file_name(path, db.ident_str(fn_name)) {
+    match simple_reducir_item_for_file_name(db, path, Ident::new(db, fn_name)) {
       Some(term) => term,
       None => {
-        dbg!(db.all_parse_errors());
         panic!("Errors occurred")
       }
     }
   }
 
-  fn simple_snippet(db: &TestDatabase, input: &str) -> OptimizedReducIrItem {
+  fn simple_snippet<'db>(db: &'db TestDatabase, input: &str) -> OptimizedReducIrItem<'db> {
     let main = format!("defn f = {}", input);
     simple_function(db, "f", &main)
   }

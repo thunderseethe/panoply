@@ -1,4 +1,4 @@
-use self::file::{FileId, SourceFile, file_for_id};
+use salsa::Database as Db;
 
 pub mod diagnostic;
 pub mod displayer;
@@ -21,25 +21,25 @@ pub mod ident {
   use crate::pretty::PrettyWithCtx;
 
   /// An interned identifier.
-  #[salsa::interned]
-  #[derive(PartialEq)]
+  #[salsa::interned(debug, no_lifetime)]
+  #[derive(PartialOrd, Ord)]
   pub struct Ident {
-    #[return_ref]
+    #[returns(ref)]
     pub text: String,
   }
 
-  impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for Ident {
+  impl<DB: ?Sized + salsa::Database> PrettyWithCtx<DB> for Ident {
     fn pretty<'a>(
       &self,
       db: &DB,
       alloc: &'a pretty::RcAllocator,
     ) -> pretty::DocBuilder<'a, pretty::RcAllocator> {
-      alloc.text(self.text(db.as_core_db()).to_string())
+      alloc.text(self.text(db).to_string())
     }
   }
 }
 
-#[salsa::jar(db = Db)]
+/*#[salsa::jar(db = Db)]
 pub struct Jar(
   diagnostic::error::PanoplyErrors,
   file::FileId,
@@ -52,8 +52,8 @@ pub struct Jar(
   id::TypeName,
   ident::Ident,
   modules::Module,
-);
-pub trait Db: salsa::DbWithJar<Jar> {
+);*/
+/*pub trait Db: salsa::DbWithJar<Jar> {
   fn as_core_db(&self) -> &dyn crate::Db {
     <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
   }
@@ -72,4 +72,4 @@ pub trait Db: salsa::DbWithJar<Jar> {
     file_for_id(self.as_core_db(), file_id)
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> {}*/

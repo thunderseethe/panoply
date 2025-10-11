@@ -1,5 +1,5 @@
 use base::id::TyVarId;
-use salsa::DebugWithDb;
+use salsa::{Database as Db, Update};
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 use std::ops::Deref;
@@ -24,14 +24,14 @@ use row::{Row, SimpleClosedRow};
 #[cfg(feature = "type_infer")]
 pub mod infer;
 
-#[salsa::jar(db = Db)]
+/*#[salsa::jar(db = Db)]
 pub struct Jar(TyData, RowFields, RowValues);
 pub trait Db: salsa::DbWithJar<Jar> + base::Db {
   fn as_ty_db(&self) -> &dyn crate::Db {
     <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db {}*/
 
 mod pretty;
 
@@ -54,6 +54,8 @@ impl<A: TypeAlloc> Debug for Ty<A> {
     self.0.fmt(f)
   }
 }
+
+/*
 impl<Db> DebugWithDb<Db> for Ty<InDb>
 where
   Db: ?Sized + crate::Db,
@@ -65,12 +67,12 @@ where
       .debug_with(db, include_all_fields)
       .fmt(f)
   }
-}
+}*/
 
-impl Ty<InDb> {
-  pub fn try_as_prod_row<'a>(
+impl<'db> Ty<InDb> {
+  pub fn try_as_prod_row(
     self,
-    db: &(impl ?Sized + AccessTy<'a, InDb>),
+    db: &(impl ?Sized + AccessTy<'db, InDb>),
   ) -> Result<SimpleRow<InDb>, Self> {
     match db.kind(&self) {
       TypeKind::ProdTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
@@ -79,9 +81,9 @@ impl Ty<InDb> {
     }
   }
 
-  pub fn try_as_sum_row<'a>(
+  pub fn try_as_sum_row(
     self,
-    db: &(impl ?Sized + AccessTy<'a, InDb>),
+    db: &(impl ?Sized + AccessTy<'db, InDb>),
   ) -> Result<SimpleRow<InDb>, Self> {
     match db.kind(&self) {
       TypeKind::SumTy(Row::Closed(row)) | TypeKind::RowTy(row) => Ok(Row::Closed(*row)),
@@ -90,9 +92,9 @@ impl Ty<InDb> {
     }
   }
 
-  pub fn try_as_fn_ty<'a>(
+  pub fn try_as_fn_ty(
     self,
-    db: &(impl ?Sized + AccessTy<'a, InDb>),
+    db: &(impl ?Sized + AccessTy<'db, InDb>),
   ) -> Result<(Self, ScopedRow<InDb>, Self), Self> {
     match db.kind(&self) {
       TypeKind::FunTy(arg, eff, ret) => Ok((*arg, *eff, *ret)),
@@ -101,7 +103,7 @@ impl Ty<InDb> {
   }
 
   /// Iterate over all the type variables that are used in a row position
-  pub fn row_vars<'db>(&self, db: &'db dyn crate::Db) -> impl Iterator<Item = TyVarId> + 'db {
+  pub fn row_vars(&self, db: &'db dyn crate::Db) -> impl Iterator<Item = TyVarId> + 'db {
     TyInDbDfs::new(db, *self).filter_map(|ty| match ty.0.kind(db) {
       TypeKind::ProdTy(Row::Open(row_var)) | TypeKind::SumTy(Row::Open(row_var)) => Some(*row_var),
       _ => None,
@@ -111,8 +113,8 @@ impl Ty<InDb> {
   pub fn try_as_eff_row_val<DB: ?Sized + crate::Db>(
     self,
     db: &DB,
-  ) -> Result<(ScopedRow, Ty), Self> {
-    let ty_db = db.as_ty_db();
+  ) -> Result<(ScopedRow<InDb>, Ty<InDb>), Self> {
+    let ty_db = db;
     match ty_db.kind(&self) {
       TypeKind::ProdTy(Row::Closed(row)) => {
         let [eff, ret] = row.values(ty_db) else {
@@ -185,7 +187,7 @@ impl<'a, Db: ?Sized> TyInDbDfs<'a, Db> {
     }
   }
 }
-impl<DB> Iterator for TyInDbDfs<'_, DB>
+impl<'a, DB> Iterator for TyInDbDfs<'a, DB>
 where
   DB: ?Sized + crate::Db,
 {
@@ -193,7 +195,7 @@ where
 
   fn next(&mut self) -> Option<Self::Item> {
     self.stack.pop().inspect(|ty| {
-      match ty.0.kind(self.db.as_ty_db()) {
+      match ty.0.kind(self.db) {
         TypeKind::ErrorTy => {}
         TypeKind::IntTy => {}
         TypeKind::VarTy(_) => {}
@@ -212,7 +214,7 @@ where
         TypeKind::SumTy(row) => match row {
           Row::Open(_) => {}
           Row::Closed(row) => {
-            self.stack.extend_from_slice(row.values(self.db.as_ty_db()));
+            self.stack.extend_from_slice(row.values(self.db));
           }
         },
       };
@@ -252,7 +254,7 @@ pub enum TypeKind<A: TypeAlloc = InDb> {
   /// A sum type. This is purely a wrapper type to coerce a row type to be a sum.
   SumTy(Row<Simple, A>),
 }
-impl<A: TypeAlloc> Copy for TypeKind<A>
+impl<'db, A: TypeAlloc> Copy for TypeKind<A>
 where
   A: Clone,
   A::TypeVar: Copy,
@@ -262,11 +264,13 @@ where
   Ty<A>: Copy,
 {
 }
-impl Debug for TypeKind<InDb> {
+impl<'db> Debug for TypeKind<InDb> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.write_str("Use DebugWithDb for TypeKind<InDb>")
   }
 }
+
+/*
 impl<Db> DebugWithDb<Db> for TypeKind<InDb>
 where
   Db: ?Sized + crate::Db,
@@ -288,6 +292,7 @@ where
     }
   }
 }
+*/
 
 impl<'ctx, A: TypeAlloc + 'ctx> fold::DefaultFold<'ctx> for TypeKind<A>
 where
@@ -354,6 +359,8 @@ pub struct TyScheme<A: TypeAlloc = InDb> {
   pub eff: ScopedRow<A>,
   pub ty: Ty<A>,
 }
+
+/*
 impl<Db> DebugWithDb<Db> for TyScheme
 where
   Db: ?Sized + crate::Db,
@@ -369,8 +376,9 @@ where
       .finish()
   }
 }
+*/
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Eq, PartialEq, Debug, Hash, Clone)]
 pub struct Wrapper<A: TypeAlloc = InDb> {
   pub tys: Vec<Ty<A>>,
   pub data_rows: Vec<SimpleRow<A>>,

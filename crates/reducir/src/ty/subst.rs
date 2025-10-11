@@ -36,7 +36,7 @@ pub trait IntoPayload {
 }
 impl IntoPayload for ReducIrTy {
   fn into_payload<DB: ?Sized + crate::Db>(self, db: &DB) -> SubstPayload {
-    match self.kind(db.as_reducir_db()) {
+    match self.kind(db) {
       ReducIrTyKind::VarTy(var) => SubstPayload::Var(var),
       _ => SubstPayload::Ty(self),
     }
@@ -181,8 +181,8 @@ impl SubstFold<'_> {
   }
 }
 
-impl<'db> FoldReducIrTy<'db> for SubstFold<'db> {
-  fn db(&self) -> &'db dyn crate::Db {
+impl<'db> FoldReducIrTy for SubstFold<'db> {
+  fn db(&self) -> &dyn salsa::Database {
     self.db
   }
 
@@ -218,23 +218,25 @@ mod test {
 
   use super::{IntoPayload, Subst};
 
-  #[derive(Default)]
-  #[salsa::db(crate::Jar, base::Jar, ty::Jar)]
+  #[derive(Default, Clone)]
+  #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,
   }
+  #[salsa::db]
   impl salsa::Database for TestDatabase {}
 
   #[test]
   fn test_payload_prodvars_are_adjusted() {
     let db = TestDatabase::default();
+    let db: &dyn salsa::Database = &db;
     let haystack = db.mk_reducir_ty(ReducIrTyKind::ForallTy(
       Kind::Type,
       db.mk_reducir_ty(ReducIrTyKind::VarTy(1)),
     ));
     let needle = db.mk_reducir_ty(ReducIrTyKind::ProdVarTy(0));
 
-    let res = haystack.subst(&db, Subst::single(needle.into_payload(&db)));
+    let res = haystack.subst(db, Subst::single(needle.into_payload(db)));
 
     assert_eq!(
       res,

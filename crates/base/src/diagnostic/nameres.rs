@@ -1,7 +1,6 @@
 //! This module defines errors from the name resolution pass.
 
 use bitflags::bitflags;
-use salsa::AsId;
 use std::{array, iter::Flatten, ops::Range, option};
 
 use crate::{
@@ -118,10 +117,10 @@ impl RejectionReason {
 }
 
 /// A suggestion for what name the user might have intended to refer to.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Suggestion {
   /// The suggested name.
-  pub name: SpanOf<Ident>,
+  pub name: SpanOf<String>,
   /// Why the name wasn't matched.
   pub why_not: RejectionReason,
 }
@@ -132,7 +131,7 @@ pub enum NameResolutionError {
   /// A duplicate name in the same layer, where the new name is not allowed to shadow the old one.
   Duplicate {
     /// The duplicated name.
-    name: Ident,
+    name: String,
     /// The kind of both names.
     kind: NameKind,
     /// The original definition site.
@@ -143,11 +142,11 @@ pub enum NameResolutionError {
   /// A reference to a name that isn't defined.
   NotFound {
     /// The name that isn't defined.
-    name: Ident,
+    name: String,
     /// The span of the occureence of the name.
     span: Range<u32>,
     /// The module that was expected to contain the given name as a member.
-    context_module: Option<Module>,
+    context_module: Option<String>,
     /// Possible names that the user could have intended.
     suggestions: Vec<Suggestion>,
   },
@@ -163,19 +162,12 @@ pub enum NameResolutionError {
 }
 
 fn fix_up(range: &Range<u32>) -> Span {
-  let file = FileId::from_id(salsa::Id::from_u32(0));
   Span {
     start: Loc {
-      file,
       byte: range.start as usize,
-      line: 0,
-      col: 0,
     },
     end: Loc {
-      file,
       byte: range.end as usize,
-      line: 0,
-      col: 0,
     },
   }
 }
@@ -189,13 +181,13 @@ impl Diagnostic for NameResolutionError {
     }
   }
 
-  fn principal<M: Displayer<Module> + Displayer<Ident>>(&self, modules: &M) -> Citation {
+  fn principal(&self) -> Citation {
     match self {
       NameResolutionError::Duplicate {
         name, duplicate, ..
       } => Citation {
         span: fix_up(duplicate),
-        message: format!("Duplicate definition of symbol '{}'", modules.show(name)),
+        message: format!("Duplicate definition of symbol '{}'", name),
       },
       NameResolutionError::NotFound {
         name,
@@ -205,12 +197,8 @@ impl Diagnostic for NameResolutionError {
       } => Citation {
         span: fix_up(span),
         message: match context_module {
-          Some(m) => format!(
-            "Symbol '{}' not found in module {}",
-            modules.show(name),
-            modules.show(m)
-          ),
-          None => format!("Symbol '{}' not found", modules.show(name)),
+          Some(m) => format!("Symbol '{}' not found in module {}", name, m),
+          None => format!("Symbol '{}' not found", name),
         },
       },
       NameResolutionError::WrongKind {
@@ -231,7 +219,7 @@ impl Diagnostic for NameResolutionError {
     }
   }
 
-  fn additional<M: Displayer<Module> + Displayer<Ident>>(&self, modules: &M) -> Vec<Citation> {
+  fn additional(&self) -> Vec<Citation> {
     match self {
       NameResolutionError::Duplicate { original, .. } => vec![Citation {
         span: fix_up(original),
@@ -243,7 +231,7 @@ impl Diagnostic for NameResolutionError {
           span: sugg.name.span(),
           message: format!(
             "Did you mean '{}'? (rejected because {})",
-            modules.show(&sugg.name.value),
+            &sugg.name.value,
             sugg.why_not.dependent_clause()
           ),
         })

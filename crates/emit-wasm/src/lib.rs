@@ -2,8 +2,10 @@ use base::modules::Module;
 
 mod emitter;
 use emitter::emit_wasm_module;
+use lower_medir::lower_medir_module_of;
+use parser::root_module_for_path;
 
-#[salsa::jar(db = Db)]
+/*#[salsa::jar(db = Db)]
 pub struct Jar();
 
 pub trait Db: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {
@@ -21,7 +23,20 @@ pub trait Db: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {
     self.emit_module(module)
   }
 }
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {}
+impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {}*/
+
+fn emit_module<'db>(db: &'db dyn salsa::Database, module: Module) -> wasm_encoder::Module {
+  let medir_module = lower_medir_module_of(db, module);
+  emit_wasm_module(db, medir_module)
+}
+
+pub fn emit_module_for_path<'db>(
+  db: &'db dyn salsa::Database,
+  path: std::path::PathBuf,
+) -> wasm_encoder::Module {
+  let module = root_module_for_path(db, path);
+  emit_module(db, module)
+}
 
 #[cfg(test)]
 mod tests {
@@ -29,27 +44,14 @@ mod tests {
   use expect_test::expect;
   use wasmparser::Validator;
 
-  use crate::Db;
+  use crate::emit_module_for_path;
 
-  #[derive(Default)]
-  #[salsa::db(
-    crate::Jar,
-    ast::Jar,
-    base::Jar,
-    desugar::Jar,
-    lower_medir::Jar,
-    lower_reducir::Jar,
-    medir::Jar,
-    nameres::Jar,
-    optimize_reducir::Jar,
-    parser::Jar,
-    reducir::Jar,
-    tc::Jar,
-    ty::Jar
-  )]
+  #[derive(Default, Clone)]
+  #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,
   }
+  #[salsa::db]
   impl salsa::Database for TestDatabase {}
 
   fn emit_module(db: &TestDatabase, input: &str) -> wasm_encoder::Module {
@@ -70,7 +72,7 @@ effect Reader {
     let file = SourceFile::new(db, FileId::new(db, path.clone()), contents);
     SourceFileSet::new(db, vec![file]);
 
-    db.emit_module_for_path(path)
+    emit_module_for_path(db, path)
   }
 
   #[test]

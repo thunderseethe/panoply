@@ -1,4 +1,5 @@
 use ast::{Ast, Direction, Term, Term::*};
+use base::ident::Ident;
 use base::span::Span;
 use la_arena::{Arena, Idx};
 use rustc_hash::FxHashMap;
@@ -34,7 +35,7 @@ pub trait MkTerm<'a, Var> {
 /// It will arena allocate all nodes in the AST and create random spans for them in the final
 /// AST.
 pub struct AstBuilder<'a, Var> {
-  db: &'a dyn base::Db,
+  db: &'a dyn salsa::Database,
   // TODO: This is bad but it's annoying to fix because rust won't let you take a mutable borrow
   // and then a second mutable borrow passed as a parameter to the original. Even though that'll
   // work if you store the value in a temporary.
@@ -43,7 +44,7 @@ pub struct AstBuilder<'a, Var> {
 }
 
 impl<'a, Var> AstBuilder<'a, Var> {
-  pub fn new(db: &'a dyn base::Db) -> Self {
+  pub fn new(db: &'a dyn salsa::Database) -> Self {
     Self {
       db,
       terms: RefCell::new(Arena::default()),
@@ -51,7 +52,7 @@ impl<'a, Var> AstBuilder<'a, Var> {
     }
   }
 
-  pub fn with_name(db: &'a dyn base::Db) -> Self {
+  pub fn with_name(db: &'a dyn salsa::Database) -> Self {
     Self {
       db,
       terms: RefCell::new(Arena::default()),
@@ -71,7 +72,10 @@ impl<'a, Var: Eq + Hash> AstBuilder<'a, Var> {
     Ast::with_untyped(self.spans.into_inner(), self.terms.into_inner(), root)
   }
 
-  pub fn with_builder(db: &'a dyn base::Db, op: impl FnOnce(&Self) -> Term<Var>) -> Ast<Var> {
+  pub fn with_builder(
+    db: &'a dyn salsa::Database,
+    op: impl FnOnce(&Self) -> Term<Var>,
+  ) -> Ast<Var> {
     let builder = Self::new(db);
     let root = op(&builder);
     builder.build(root)
@@ -94,14 +98,14 @@ impl<'a, Var: Eq + Hash> MkTerm<'a, Var> for AstBuilder<'a, Var> {
 
   fn mk_label(&self, label: &str, term: Term<Var>) -> Term<Var> {
     Label {
-      label: self.db.ident(label.to_string()),
+      label: Ident::new(self.db, label.to_string()),
       term: self.mk_term(term),
     }
   }
 
   fn mk_unlabel(&self, label: &str, term: Term<Var>) -> Term<Var> {
     Unlabel {
-      label: self.db.ident(label.to_string()),
+      label: Ident::new(self.db, label.to_string()),
       term: self.mk_term(term),
     }
   }

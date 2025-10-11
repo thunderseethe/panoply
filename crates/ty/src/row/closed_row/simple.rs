@@ -79,14 +79,14 @@ impl<A: TypeAlloc> RowOps<A> for SimpleClosedRow<A> {
 }
 
 impl<A: TypeAlloc + Copy> Copy for SimpleClosedRow<A> where ClosedRow<A>: Copy {}
-impl<Db> DebugWithDb<Db> for SimpleClosedRow<InDb>
+/*impl<Db> DebugWithDb<Db> for SimpleClosedRow<InDb>
 where
   Db: ?Sized + crate::Db,
 {
   fn fmt(&self, f: &mut fmt::Formatter<'_>, db: &Db, include_all_fields: bool) -> fmt::Result {
     DebugWithDb::fmt(&self.0, f, db, include_all_fields)
   }
-}
+}*/
 impl<'ctx, A: TypeAlloc + Clone + 'ctx> TypeFoldable<'ctx> for SimpleClosedRow<A> {
   type Alloc = A;
   type Out<B: TypeAlloc> = SimpleClosedRow<B>;
@@ -119,7 +119,7 @@ impl<A: TypeAlloc> SimpleClosedRow<A> {
     }
   }
 
-  pub fn difference_rowlikes<V: Copy>(
+  pub fn difference_rowlikes<'db, V: Copy>(
     (goal_fields, goal_values): (&[RowLabel], &[V]),
     sub_fields: &[RowLabel],
   ) -> (Box<[RowLabel]>, Box<[V]>) {
