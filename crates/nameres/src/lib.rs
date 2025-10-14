@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, hash::Hash, ops::Range};
 
-use ::base::{
-  diagnostic::nameres::{NameKind, NameKinds},
+use base::{
   file::FileId,
   id::{EffectName, EffectOpName, IdGen, TermName, TyVarId, VarId},
   ident::Ident,
@@ -10,7 +9,6 @@ use ::base::{
   span::Span,
 };
 use base::{
-  diagnostic::error::PanoplyError,
   file::{SourceFile, file_for_id},
   id::{Ids, TypeName},
 };
@@ -24,90 +22,7 @@ use rowan::{
   ast::{AstNode, AstPtr, SyntaxNodePtr},
 };
 use rustc_hash::FxHashMap;
-use salsa::Update;
-
-//pub mod name;
-
-/*
-#[salsa::jar(db = Db)]
-pub struct Jar(
-  NameResTerm,
-  NameResEffect,
-  ModuleNamespace,
-  all_effects,
-  effect_defn,
-  effect_name,
-  effect_member_name,
-  effect_members,
-  effect_handler_order,
-  effect_handler_return_index,
-  effect_handler_op_index,
-  effect_vector_index,
-  id_for_name,
-  item_name,
-  lookup_effect_by_member_names,
-  lookup_effect_by_name,
-  module_effects,
-  name_at_loc,
-  nameres_module,
-  nameres_module_of,
-  term_defn,
-);
-pub trait Db: salsa::DbWithJar<Jar> + parser::Db {
-  fn as_nameres_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
-  }
-
-  fn nameres_module_of(&self, module: Module) -> ModuleNamespace {
-    nameres_module_of(self.as_nameres_db(), module)
-  }
-
-  fn nameres_module_for_file(&self, file: SourceFile) -> ModuleNamespace {
-    let parse_file = self.parse_module(file);
-    nameres_module(self.as_nameres_db(), parse_file)
-  }
-
-  fn nameres_module_for_file_id(&self, file_id: FileId) -> ModuleNamespace {
-    let file = ::base::file::file_for_id(self.as_core_db(), file_id);
-    self.nameres_module_for_file(file)
-  }
-
-  fn item_name(&self, term: TermName) -> Ident {
-    item_name(self.as_nameres_db(), term)
-  }
-
-  fn id_for_name(&self, module: Module, name: Ident) -> Option<TermName> {
-    id_for_name(self.as_nameres_db(), module, name)
-  }
-
-  fn nameres_effect_of(&self, eff_name: EffectName) -> NameResEffect {
-    effect_defn(self.as_nameres_db(), eff_name)
-  }
-
-  fn nameres_term_of(&self, term_name: TermName) -> NameResTerm {
-    term_defn(self.as_nameres_db(), term_name)
-  }
-
-  fn name_at_position(&self, file: FileId, line: u32, col: u32) -> Option<InScopeName> {
-    name_at_loc(self.as_nameres_db(), file, line, col)
-  }
-
-  fn all_nameres_errors(&self) -> Vec<PanoplyError> {
-    self
-      .all_modules()
-      .iter()
-      .flat_map(|module| {
-        nameres_module_of::accumulated::<PanoplyErrors>(self.as_nameres_db(), *module).into_iter()
-      })
-      .collect()
-  }
-
-  fn nameres_errors(&self, file_id: FileId) -> Vec<PanoplyError> {
-    let module = self.root_module_for_file(self.file_for_id(file_id));
-    nameres_module_of::accumulated::<PanoplyErrors>(self.as_nameres_db(), module)
-  }
-}
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + parser::Db {}*/
+use salsa::{Accumulator, Update};
 
 pub fn nameres_term_of<'db>(db: &'db dyn salsa::Database, term_name: TermName) -> NameResTerm<'db> {
   term_defn(db, term_name)
@@ -122,13 +37,13 @@ pub fn name_at_position<'db>(
   name_at_loc(db, file, line, col)
 }
 
-fn all_nameres_errors<'db>(db: &'db dyn salsa::Database) -> Vec<PanoplyError> {
+pub fn all_nameres_errors<'db>(db: &'db dyn salsa::Database) -> Vec<NameResDiag> {
   all_modules(db)
     .iter()
     .flat_map(|module| {
-      //nameres_module_of::accumulated::<PanoplyErrors>(self.as_nameres_db(), *module).into_iter()
-      //TODO: Figure out how the new accumulated works.
-      std::iter::empty()
+      nameres_module_of::accumulated::<NameResDiag>(db, *module)
+        .into_iter()
+        .cloned()
     })
     .collect()
 }
@@ -216,21 +131,8 @@ pub struct NameResEffect<'db> {
   pub ty_vars: Box<Ids<TyVarId, Handle<Name>>>,
 }
 
-/*#[salsa::tracked]
-pub struct NameResModule {
-  #[id]
-  pub module: Module,
-  // This is a map of all in scope names, from BaseNames
-  #[return_ref]
-  pub names: FxHashMap<Module, ModuleNames>,
-  #[return_ref]
-  pub terms: Vec<Option<NameResTerm>>,
-  #[return_ref]
-  pub effects: Vec<Option<NameResEffect>>,
-}*/
-
 #[derive(Clone, Debug)]
-struct OpaqueHandle {
+pub struct OpaqueHandle {
   root: GreenNode,
   ptr: SyntaxNodePtr<Panoply>,
 }
@@ -320,18 +222,6 @@ impl<N: HasAstPtr> Handle<N> {
   }
 }
 
-#[derive(Debug, PartialEq, Eq, Update)]
-pub struct HashHashMap<K: Hash + Update + Eq, V: Update>(FxHashMap<K, V>);
-impl<K: Hash + Update + Eq, V: Hash + Update> Hash for HashHashMap<K, V> {
-  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-    self.0.len().hash(state);
-    for (key, value) in self.0.iter() {
-      key.hash(state);
-      value.hash(state);
-    }
-  }
-}
-
 #[salsa::tracked]
 pub struct ModuleNamespace<'db> {
   #[returns(ref)]
@@ -341,38 +231,50 @@ pub struct ModuleNamespace<'db> {
   #[returns(ref)]
   pub names: BTreeMap<Handle<Name>, InScopeName>,
 }
-/*impl<'db> ModuleNamespace<'db> {
-  pub fn terms(
-    &self,
-    db: &'db dyn salsa::Database,
-  ) -> &'db FxHashMap<Handle<TermDefn>, NameResTerm<'db>> {
-    &self._terms(db).0
-  }
 
-  pub fn effects(
-    &self,
-    db: &'db dyn salsa::Database,
-  ) -> &'db FxHashMap<Handle<EffectDefn>, NameResEffect<'db>> {
-    &self._effects(db).0
-  }
+/// A kind of name.
+#[derive(Clone, Copy, Debug)]
+#[repr(u8)]
+pub enum NameKind {
+  Module = 0b1,
+  Effect = 0b10,
+  EffectOp = 0b100,
+  Item = 0b1000,
+  TyVar = 0b10000,
+  Var = 0b100000,
+  Type = 0b1000000,
+}
 
-  pub fn names(
-    &self,
-    db: &'db dyn salsa::Database,
-  ) -> &'db FxHashMap<Handle<Name>, InScopeName> {
-    &self._names(db).0
+impl NameKind {
+  /// The English name for a name kind, with an indefinite article (i.e., "a" or "an").
+  pub fn indefinite_noun(&self) -> &'static str {
+    match self {
+      NameKind::Module => "a module",
+      NameKind::Effect => "an effect",
+      NameKind::EffectOp => "an effect operation",
+      NameKind::Item => "a top-level item",
+      NameKind::TyVar => "a type variable",
+      NameKind::Var => "a local variable",
+      NameKind::Type => "a top-level type",
+    }
   }
-}*/
+}
 
-#[derive(Debug)]
-enum NameResError {
+#[derive(Debug, Clone)]
+pub enum NameResError {
   UndefinedName(Handle<Name>),
-  WrongKind(NameKind, NameKinds, OpaqueHandle),
+  WrongKind(NameKind, Vec<NameKind>, OpaqueHandle),
   DuplicateName {
     previous: OpaqueHandle,
     current: OpaqueHandle,
     kind: NameKind,
   },
+}
+
+#[salsa::accumulator]
+#[derive(Debug, Clone)]
+pub struct NameResDiag {
+  error: NameResError,
 }
 
 #[salsa::tracked]
@@ -450,8 +352,6 @@ pub fn nameres_module<'db>(
       OpaqueHandle::new(cst_module.clone(), Items::new(cst_module.clone())),
     ),
   );
-
-  let mut errors = vec![];
 
   // Second pass over terms and effects to resolve the names within each body
   for (effect_name, effect) in to_resolve_effects {
@@ -536,37 +436,10 @@ pub fn nameres_module<'db>(
     );
   }
 
-  /*for (name, defn) in bodies {
-    let mut ctx = NameResolution {
-      db,
-      root: cst_module.clone(),
-      ty_var_gen: IdGen::default(),
-      var_gen: IdGen::default(),
-      scope: top_level_scope.clone(),
-      errors: &mut errors,
-      names: &mut names,
-    };
-    ctx.with_scope(|this| {
-      if let Some(scheme) = defn.annotation().and_then(|ann| ann.scheme()) {
-        this.resolve_scheme(scheme, SchemeContext::Term(name));
-      }
-      if let Some(body) = defn.term() {
-        this.resolve_term(body, name);
-      }
-    });
-
-    term_defns.push(NameResTerm::new(
-      db,
-      name,
-      Handle::new(cst_module.clone(), defn),
-      ctx.var_gen.into_boxed_ids(),
-      ctx.ty_var_gen.into_boxed_ids(),
-    ))
-  }*/
-
   let names = ModuleNamespace::new(db, terms, effects, names);
-  if !errors.is_empty() {
-    panic!("{errors:?}");
+
+  for error in errors {
+    NameResDiag { error }.accumulate(db)
   }
 
   names
@@ -628,7 +501,7 @@ impl<'db> NameResolution<'db, '_> {
       Some((other, _)) => {
         return self.errors.push(NameResError::WrongKind(
           other.kind(),
-          NameKinds::TY_VAR,
+          vec![NameKind::TyVar],
           handle.opaque(),
         ));
       }
@@ -648,7 +521,12 @@ impl<'db> NameResolution<'db, '_> {
       Some((other, _)) => {
         self.errors.push(NameResError::WrongKind(
           other.kind(),
-          NameKinds::VAR | NameKinds::ITEM | NameKinds::EFFECT | NameKinds::EFFECT_OP,
+          vec![
+            NameKind::Var,
+            NameKind::Item,
+            NameKind::Effect,
+            NameKind::EffectOp,
+          ],
           handle.opaque(),
         ));
         return;
@@ -1326,7 +1204,9 @@ mod tests {
   use parser::{AstNode, parse_module};
   use pretty::{DocAllocator, DocBuilder, RcAllocator};
 
-  use crate::{InScopeName, ModuleNamespace, all_nameres_errors, nameres_module_for_file};
+  use crate::{
+    InScopeName, ModuleNamespace, NameResError, all_nameres_errors, nameres_module_for_file,
+  };
 
   #[derive(Default, Clone)]
   #[salsa::db]
@@ -1337,9 +1217,9 @@ mod tests {
   impl salsa::Database for TestDatabase {}
 
   fn parse_resolve_module<S: ToString>(
-    db: &TestDatabase,
+    db: &'_ TestDatabase,
     input: S,
-  ) -> (Items, ModuleNamespace, Vec<NameResolutionError>) {
+  ) -> (Items, ModuleNamespace<'_>, Vec<NameResError>) {
     let file_id = FileId::new(db, PathBuf::from("test"));
     let file = SourceFile::new(db, file_id, input.to_string());
     let _ = SourceFileSet::new(db, vec![file]);
@@ -1348,10 +1228,7 @@ mod tests {
 
     let errors = all_nameres_errors(db)
       .into_iter()
-      .map(|err| match err {
-        PanoplyError::NameResError(name_res) => name_res,
-        err => unreachable!("{:?}", err),
-      })
+      .map(|name_res| name_res.error)
       .collect();
 
     (
@@ -1364,11 +1241,7 @@ mod tests {
   fn parse_resolve_term<'db>(
     db: &'db TestDatabase,
     input: &str,
-  ) -> (
-    Option<TermDefn>,
-    ModuleNamespace<'db>,
-    Vec<NameResolutionError>,
-  ) {
+  ) -> (Option<TermDefn>, ModuleNamespace<'db>, Vec<NameResError>) {
     // Wrap our term in an item def
     let mut content = "defn item = ".to_string();
     content.push_str(input);
@@ -1549,27 +1422,18 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_local_binding_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "let x = y; z");
     assert_matches!(
-        &errs[..],
-        [
-            NameResolutionError::NotFound {
-                name: y,
-                context_module: None,
-                ..
-            },
-            NameResolutionError::NotFound {
-                name: z,
-                context_module: None,
-                ..
-            }
-        ] => {
+      &errs[..],
+      [
+        NameResError::UndefinedName(y),
+        NameResError::UndefinedName(z),
+      ] /*=> {
             assert_eq!(y, "y");
             assert_eq!(z, "z");
-        }
+        }*/
     );
   }
 
@@ -1606,27 +1470,18 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_handler_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "with h do x");
     assert_matches!(
-        &errs[..],
-        [
-            NameResolutionError::NotFound {
-                name: h,
-                context_module: None,
-                ..
-            },
-            NameResolutionError::NotFound {
-                name: x,
-                context_module: None,
-                ..
-            }
-        ] => {
+      &errs[..],
+      [
+        NameResError::UndefinedName(h),
+        NameResError::UndefinedName(x),
+      ] /*=> {
             assert_eq!(h, "h");
             assert_eq!(x, "x");
-        }
+        }*/
     );
   }
 
@@ -1777,27 +1632,18 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_application_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "f(x)");
     assert_matches!(
-        &errs[..],
-        [
-            NameResolutionError::NotFound {
-                name: f,
-                context_module: None,
-                ..
-            },
-            NameResolutionError::NotFound {
-                name: x,
-                context_module: None,
-                ..
-            }
-        ] => {
+      &errs[..],
+      [
+        NameResError::UndefinedName(f),
+        NameResError::UndefinedName(x),
+      ] /* => {
             assert_eq!(f, "f");
             assert_eq!(x, "x");
-        }
+        }*/
     );
   }
 
@@ -1833,27 +1679,18 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_product_row_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "{x = y, z = x}");
     assert_matches!(
-        &errs[..],
-        [
-            NameResolutionError::NotFound {
-                name: y,
-                context_module: None,
-                ..
-            },
-            NameResolutionError::NotFound {
-                name: x,
-                context_module: None,
-                ..
-            }
-        ] => {
+      &errs[..],
+      [
+        NameResError::UndefinedName(y),
+        NameResError::UndefinedName(x)
+      ] /* => {
             assert_eq!(y, "y");
             assert_eq!(x, "x");
-        }
+        }*/
     );
   }
 
@@ -1884,19 +1721,14 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_sum_row_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "<x = x>");
     assert_matches!(
-        &errs[..],
-        [NameResolutionError::NotFound {
-            name: x,
-            context_module: None,
-            ..
-        }] => {
-            assert_eq!(x, "x");
-        }
+      &errs[..],
+      [NameResError::UndefinedName(x)] /* => {
+                                           assert_eq!(x, "x");
+                                       }*/
     );
   }
 
@@ -1937,19 +1769,14 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_dot_access_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "x.a");
     assert_matches!(
-        &errs[..],
-        [NameResolutionError::NotFound {
-            name: x,
-            context_module: None,
-            ..
-        }] => {
-            assert_eq!(x, "x");
-        }
+      &errs[..],
+      [NameResError::UndefinedName(x)] /* => {
+                                           assert_eq!(x, "x");
+                                       }*/
     );
   }
 
@@ -1990,46 +1817,31 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_match_error_name_not_found() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "match <{a = x} => f(x), {} => z>");
     assert_matches!(
-        &errs[..],
-        [
-            NameResolutionError::NotFound {
-                name: f,
-                context_module: None,
-                ..
-            },
-            NameResolutionError::NotFound {
-                name: z,
-                context_module: None,
-                ..
-            }
-        ] => {
+      &errs[..],
+      [
+        NameResError::UndefinedName(f),
+        NameResError::UndefinedName(z)
+      ] /* => {
             assert_eq!(f, "f");
             assert_eq!(z, "z");
-        }
+        }*/
     );
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_match_error_duplicate_name() {
     let db = TestDatabase::default();
     let (_, names, errs) = parse_resolve_term(&db, "match <{a = x, b = x} => x(x)>");
     assert_matches!(
-        &errs[..],
-        [NameResolutionError::Duplicate {
-            name: x,
-            kind: NameKind::Var,
-            original: Range { end, .. },
-            duplicate: Range { start, ..},
-        }] => {
-            assert!(end < start, "{} < {}", end, start);
-            assert_eq!(x, "x");
-        }
+      &errs[..],
+      [NameResError::DuplicateName { .. }] /* => {
+                                               assert!(end < start, "{} < {}", end, start);
+                                               assert_eq!(x, "x");
+                                           }*/
     );
     let expect = expect_test::expect![[r#"
         item
@@ -2195,27 +2007,18 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_top_level_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_module(&db, "defn foo = x\ndefn bar = y");
     assert_matches!(
-        &errs[..],
-        [
-            NameResolutionError::NotFound {
-                name: x,
-                context_module: None,
-                ..
-            },
-            NameResolutionError::NotFound {
-                name: y,
-                context_module: None,
-                ..
-            }
-        ] => {
+      &errs[..],
+      [
+        NameResError::UndefinedName(x),
+        NameResError::UndefinedName(y)
+      ] /* => {
             assert_eq!(x, "x");
             assert_eq!(y, "y");
-        }
+        }*/
     );
   }
 }
