@@ -39,6 +39,7 @@ fn bitset(syntax: impl IntoIterator<Item = Syntax>) -> BitSet {
   bit_set
 }
 
+#[expect(unused)]
 fn unioning(bitset: &BitSet, syntax: impl IntoIterator<Item = Syntax>) -> BitSet {
   let mut bs = bitset.clone();
   bs.extend(syntax.into_iter().map(|s| s.raw().into()));

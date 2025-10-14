@@ -594,7 +594,7 @@ impl<'db, Ext> ReducIr<Ext> {
     }
   }
 
-  pub fn try_top_level_def(&self) -> Result<TopLevelDef<Ext>, &Self> {
+  pub fn try_top_level_def<'a>(&'a self) -> Result<TopLevelDef<'a, Ext>, &'a Self> {
     let mut ir = self;
     let mut ty_vars = vec![];
     while let TyAbs(ty_var, body) = ir.kind() {
@@ -988,7 +988,10 @@ pub trait TypeCheck {
 }
 impl<'db> TypeCheck for DelimCont {
   type Ext = Self;
-  fn type_check(&self, ctx: &dyn salsa::Database) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+  fn type_check<'a>(
+    &'a self,
+    ctx: &dyn salsa::Database,
+  ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>> {
     use ty::ReducIrTyKind::*;
     match self {
       DelimCont::NewPrompt(prompt, body) => {
@@ -1048,7 +1051,10 @@ impl<'db> TypeCheck for DelimCont {
 }
 impl TypeCheck for Infallible {
   type Ext = Self;
-  fn type_check(&self, _: &dyn salsa::Database) -> Result<ReducIrTy, ReducIrTyErr<Self::Ext>> {
+  fn type_check<'a>(
+    &'a self,
+    _: &dyn salsa::Database,
+  ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>> {
     unreachable!()
   }
 }

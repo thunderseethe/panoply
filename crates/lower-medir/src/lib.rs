@@ -1,53 +1,18 @@
 use base::{id::IdSupply, id_converter::IdConverter, modules::Module};
 use medir::{MedIrItem, MedIrModule};
 use optimize_reducir::simple_reducir_module_of;
-use parser::root_module_for_path;
 use reducir::optimized::{OptimizedReducIrItem, OptimizedReducIrModule};
 
 mod lower;
 
-/*#[salsa::jar(db = Db)]
-pub struct Jar(lower_item, lower_module);
-pub trait Db: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {
-  fn as_lower_medir_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
-  }
-
-  fn lower_medir_item_for_file_name(
-    &self,
-    path: std::path::PathBuf,
-    item: Ident,
-  ) -> Option<Vec<MedIrItem>> {
-    let module = self.root_module_for_path(path);
-    let term_name = self.id_for_name(module, item)?;
-    // First index of lowering is always the item itself, the rest of the vector is our closure
-    // conversions for that item
-    Some(self.lower_medir_item_of(term_name))
-  }
-
-  fn lower_medir_module_for_file_name(&self, path: std::path::PathBuf) -> MedIrModule {
-    let module = self.root_module_for_path(path);
-    self.lower_medir_module_of(module)
-  }
-
-  fn lower_medir_item_of(&self, name: TermName) -> Vec<MedIrItem> {
-    let opt_item = self.simple_reducir_item_of(name);
-    lower_item(self.as_lower_medir_db(), opt_item)
-  }
-
-  fn lower_medir_module_of(&self, module: Module) -> MedIrModule {
-    let opt_module = self.simple_reducir_module(module);
-    lower_module(self.as_lower_medir_db(), opt_module)
-  }
-}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + optimize_reducir::Db + medir::Db {}*/
-
 use salsa::Database as Db;
 
+#[cfg(test)]
 fn lower_medir_module_for_file_name<'db>(
   db: &'db dyn crate::Db,
   path: std::path::PathBuf,
 ) -> MedIrModule<'db> {
+  use parser::root_module_for_path;
   let module = root_module_for_path(db, path);
   lower_medir_module_of(db, module)
 }

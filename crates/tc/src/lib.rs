@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ast::{self, Ast, Term};
 use base::{
-  diagnostic::{error::PanoplyError, tc::TypeCheckDiagnostic},
+  diagnostic::{
+    error::{PanoplyError, PanoplyErrors},
+    tc::TypeCheckDiagnostic,
+  },
   file::FileId,
   id::{EffectName, EffectOpName, IdSupply, TermName, TyVarId, VarId},
   ident::Ident,
@@ -83,8 +86,7 @@ fn type_check_errors(db: &dyn salsa::Database, file_id: FileId) -> Vec<PanoplyEr
     .terms(db)
     .iter()
     .flat_map(|(_, term)| {
-      //type_scheme_of::accumulated::<PanoplyErrors>(self.as_tc_db(), term.name(self.as_nameres_db()))
-      todo!("TODO: Figure this out");
+      //type_scheme_of::acumulated::<PanoplyErrors>(db, term.name(db))
       std::iter::empty()
     })
     .collect()
@@ -154,7 +156,7 @@ pub fn type_scheme_of<'db>(db: &'db dyn salsa::Database, term_name: TermName) ->
 
   let ty_chk_out = type_check(db, module, term.data(db), is_entry_point);
 
-  for _diag in ty_chk_out.diags {
+  for diag in ty_chk_out.diags {
     //PanoplyErrors::push(db, diag.into())
     // TODO: Figure out error checking.
   }

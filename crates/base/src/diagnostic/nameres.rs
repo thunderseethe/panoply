@@ -4,7 +4,6 @@ use bitflags::bitflags;
 use std::{array, iter::Flatten, ops::Range, option};
 
 use crate::{
-  displayer::Displayer,
   loc::Loc,
   span::{Span, SpanOf, Spanned},
 };

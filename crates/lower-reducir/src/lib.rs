@@ -10,8 +10,6 @@ use base::{
 use desugar::{desugar_item_of_id, desugar_module, desugar_term_of};
 use la_arena::Idx;
 use lower::{LowerCtx, TermTys, VarTys};
-use nameres::id_for_name;
-use parser::root_module_for_path;
 use reducir::{
   Bind, GeneratedReducIrName, P, ReducIr, ReducIrGenItem, ReducIrItem,
   ReducIrKind::*,
@@ -45,116 +43,29 @@ pub trait ReducIrEffectInfo: EffectInfo {
   fn effect_handler_ir_ty(self, effect: EffectName) -> ReducIrTy;
 }
 
-/*
-#[salsa::jar(db = Db)]
-pub struct Jar(
-  lower_module,
-  lower_item,
-  lower_row_ev_simple,
-  lower_row_ev_scoped,
-  lower_mon_item,
-  lower_mon_module,
-  effect_handler_ir_ty,
-);
-pub trait Db: salsa::DbWithJar<Jar> + tc::Db + reducir::Db {
-  fn as_lower_reducir_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
-  }
-
-  /*
-   * AST -> ReducIr Lowering Methods
-   */
-
-  fn lower_reducir_module(&self, module: AstModule) -> ReducIrModule {
-    lower_module(self.as_lower_reducir_db(), module)
-  }
-
-  fn lower_reducir_item(&self, ast_term: AstTerm) -> ReducIrItem {
-    lower_item(self.as_lower_reducir_db(), ast_term)
-  }
-
-  fn reducir_var_supply(&self, term_name: TermName) -> &IdSupply<ReducIrVarId> {
-    self
-      .lower_reducir_item_of(term_name)
-      .var_supply(self.as_reducir_db())
-  }
-
-  fn lower_reducir_item_of(&self, term_name: TermName) -> ReducIrItem {
-    let ast_term = self.desugar_term_of(term_name);
-    self.lower_reducir_item(ast_term)
-  }
-
-  fn lower_reducir_module_of(&self, module: Module) -> ReducIrModule {
-    let ast_module = self.desugar_module_of(module);
-    self.lower_reducir_module(ast_module)
-  }
-
-  fn lower_reducir_module_for_path(&self, path: std::path::PathBuf) -> ReducIrModule {
-    let module = self.root_module_for_path(path);
-    let ast_module = self.desugar_module_of(module);
-    self.lower_reducir_module(ast_module)
-  }
-
-  fn lower_reducir_item_for_file_name(
-    &self,
-    path: std::path::PathBuf,
-    item: Ident,
-  ) -> Option<ReducIrItem> {
-    let module = self.root_module_for_path(path);
-    let term_name = self.id_for_name(module, item)?;
-    Some(self.lower_reducir_item_of(term_name))
-  }
-
-  /*
-   * ReducIr -> Monadic ReducIr Lowering Methods
-   */
-
-  fn lower_reducir_mon_module(&self, module: ReducIrModule) -> MonReducIrModule {
-    lower_mon_module(self.as_lower_reducir_db(), module)
-  }
-
-  fn lower_reducir_mon_module_of(&self, module: Module) -> MonReducIrModule {
-    let reducir_module = self.lower_reducir_module_of(module);
-    self.lower_reducir_mon_module(reducir_module)
-  }
-
-  fn lower_reducir_mon_item(&self, item: ReducIrItem) -> MonReducIrItem {
-    lower_mon_item(self.as_lower_reducir_db(), item)
-  }
-
-  fn lower_reducir_mon_item_of(&self, name: TermName) -> MonReducIrItem {
-    let item = self.lower_reducir_item_of(name);
-    self.lower_reducir_mon_item(item)
-  }
-
-  fn lower_reducir_mon_item_for_file_name(
-    &self,
-    path: std::path::PathBuf,
-    item: Ident,
-  ) -> Option<MonReducIrItem> {
-    let module = self.root_module_for_path(path);
-    let term_name = self.id_for_name(module, item)?;
-    Some(self.lower_reducir_mon_item_of(term_name))
-  }
-}
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + tc::Db + reducir::Db {}*/
 use salsa::Database as Db;
 
-fn lower_reducir_item_for_file_name(
-  db: &dyn salsa::Database,
+#[cfg(test)]
+fn lower_reducir_item_for_file_name<'db>(
+  db: &'db dyn salsa::Database,
   path: std::path::PathBuf,
   item: Ident,
-) -> Option<ReducIrItem> {
+) -> Option<ReducIrItem<'db>> {
+  use nameres::id_for_name;
+  use parser::root_module_for_path;
   let module = root_module_for_path(db, path);
   let term_name = id_for_name(db, module, item)?;
   Some(lower_reducir_item_of(db, term_name))
 }
 
-fn lower_mon_item_for_file_name(
-  db: &dyn salsa::Database,
+#[cfg(test)]
+fn lower_mon_item_for_file_name<'db>(
+  db: &'db dyn salsa::Database,
   path: std::path::PathBuf,
   item: Ident,
-) -> Option<MonReducIrItem> {
+) -> Option<MonReducIrItem<'db>> {
+  use nameres::id_for_name;
+  use parser::root_module_for_path;
   let module = root_module_for_path(db, path);
   let term_name = id_for_name(db, module, item)?;
   Some(lower_mon_item_of(db, term_name))

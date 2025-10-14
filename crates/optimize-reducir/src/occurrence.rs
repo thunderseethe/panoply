@@ -204,7 +204,7 @@ mod tests {
   use base::id::{IdSupply, TermName};
   use reducir::ty::ReducIrTy;
   use reducir::{ReducIr, ReducIrLocal, ReducIrVar};
-  use salsa::plumbing::{AsId, FromId};
+  use salsa::plumbing::FromId;
 
   use crate::occurrence::Occurrence;
 
