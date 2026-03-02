@@ -5,16 +5,12 @@ use base::{
   loc::Loc,
   modules::Module,
 };
-/*use rowan::{
-  ast::{support::{child, children}, AstChildren, AstPtr}, GreenNode, Language, SyntaxNode, TextRange, TextSize
-};*/
 pub use rowan::ast::AstNode;
 
 use self::locator::Locator;
 use cst::{Panoply, Syntax};
 use rowan::{SyntaxNode, TextRange, TextSize};
 
-//pub mod lexer;
 pub mod parser;
 
 pub(crate) mod locator;

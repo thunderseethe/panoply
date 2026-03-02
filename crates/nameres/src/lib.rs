@@ -228,10 +228,13 @@ impl<N: HasAstPtr> Handle<N> {
 
 #[salsa::tracked]
 pub struct ModuleNamespace<'db> {
+  #[tracked]
   #[returns(ref)]
   pub terms: BTreeMap<Handle<TermDefn>, NameResTerm<'db>>,
+  #[tracked]
   #[returns(ref)]
   pub effects: BTreeMap<Handle<EffectDefn>, NameResEffect<'db>>,
+  #[tracked]
   #[returns(ref)]
   pub names: BTreeMap<Handle<Name>, InScopeName>,
 }
