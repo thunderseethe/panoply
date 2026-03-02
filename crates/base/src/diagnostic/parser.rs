@@ -15,3 +15,9 @@ pub enum ParseError {
     want_any: Vec<String>,
   },
 }
+
+#[salsa::accumulator]
+#[derive(Debug, Clone)]
+pub struct ParseDiagnostic {
+  pub error: ParseError,
+}

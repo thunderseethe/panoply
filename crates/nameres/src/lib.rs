@@ -37,6 +37,10 @@ pub fn name_at_position<'db>(
   name_at_loc(db, file, line, col)
 }
 
+pub fn nameres_errors(_db: &dyn salsa::Database, _file_id: FileId) -> Vec<NameResDiag> {
+  vec![]
+}
+
 pub fn all_nameres_errors<'db>(db: &'db dyn salsa::Database) -> Vec<NameResDiag> {
   all_modules(db)
     .iter()
@@ -1428,12 +1432,9 @@ mod tests {
     assert_matches!(
       &errs[..],
       [
-        NameResError::UndefinedName(y),
-        NameResError::UndefinedName(z),
-      ] /*=> {
-            assert_eq!(y, "y");
-            assert_eq!(z, "z");
-        }*/
+        NameResError::UndefinedName(_),
+        NameResError::UndefinedName(_),
+      ]
     );
   }
 

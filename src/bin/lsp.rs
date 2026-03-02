@@ -4,12 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use base::file::file_for_id;
 use base::{file::FileId, loc::Loc, span::Span};
-use nameres::name_at_position;
+use nameres::{name_at_position, nameres_errors};
 use panoply::{PanoplyDatabase, canonicalize_path_set, create_source_file_set};
+use parser::parse_errors;
 use salsa::{Durability, Setter};
+use tc::type_check_errors;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::{
-  DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,
+  Diagnostic, DidChangeTextDocumentParams, DidOpenTextDocumentParams, GotoDefinitionParams,
   GotoDefinitionResponse, InitializeParams, InitializeResult, Location, OneOf, Position,
   PositionEncodingKind, Range, ServerCapabilities, TextDocumentSyncCapability,
   TextDocumentSyncKind, Url,
@@ -21,7 +23,7 @@ struct Backend {
   db: Arc<Mutex<PanoplyDatabase>>,
 }
 
-fn from_loc(loc: Loc) -> Position {
+fn from_loc(_loc: Loc) -> Position {
   Position {
     line: todo!(),
     character: todo!(),
@@ -118,7 +120,7 @@ impl LanguageServer for Backend {
     log::debug!("did_change {}", path_buf.display());
     // Scoped mutable database access
     // We do this so we drop our lock on the database before our await point.
-    /*let file_id = {
+    let file_id = {
       let mut db = self.db.lock().unwrap();
       let file_id = FileId::new(db.deref(), path_buf);
       let source_file = file_for_id(db.deref(), file_id);
@@ -129,28 +131,45 @@ impl LanguageServer for Backend {
         .to(params.content_changes[0].text.clone());
 
       file_id
-    };*/
+    };
 
     // Immutable database access
-    // let db = self.db.lock().unwrap();
+    let diags = {
+      let db = self.db.lock().unwrap();
 
-    /*let diags =
-    all_parse_errors(db.deref(), file_id)
-    .into_iter()
-    .chain(nameres_errors(db.deref(), file_id))
-    .chain(type_check_errors(db.deref(), file_id))
-    .map(|_err| {
-      //let citation = err.principal(db.deref());
-      //Diagnostic::new_simple(from_span(citation.span), citation.message)
-      todo!()
-    })
-    .collect();*/
+      parse_errors(db.deref(), file_id)
+        .into_iter()
+        .map(|err| match err.error {
+          base::diagnostic::parser::ParseError::WrongToken {
+            span,
+            got,
+            want_any,
+          } => Diagnostic::new_simple(
+            from_span(Span {
+              start: Loc { byte: span.start },
+              end: Loc { byte: span.end },
+            }),
+            format!("Received {} but wanted {:?}", got, want_any),
+          ),
+        })
+        .chain(
+          nameres_errors(db.deref(), file_id)
+            .into_iter()
+            .map(|_err| todo!()),
+        )
+        .chain(
+          type_check_errors(db.deref(), file_id)
+            .into_iter()
+            .map(|_err| todo!()),
+        )
+        .collect()
+    };
 
     self
       .client
       .publish_diagnostics(
         params.text_document.uri,
-        vec![],
+        diags,
         Some(params.text_document.version),
       )
       .await;

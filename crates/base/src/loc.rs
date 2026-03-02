@@ -4,9 +4,6 @@ use std::hash::Hash;
 ///
 /// All source texts have a "one past the end" location which corresponds to a cursor after the last
 /// character.
-///
-/// `Loc` implements `Eq`, `Hash`, `PartialEq`, and `PartialOrd`, but those comparisons only use the
-/// `module` and `byte` fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Loc {
   /// A 0-indexed byte offset into the source text. Must point to the start of a valid unicode

@@ -1,7 +1,6 @@
 use ast::{Ast, Direction, Term, Term::*};
 use base::{
-  diagnostic::tc::TypeCheckDiagnostic, id::VarId, ident::Ident, memory::handle, modules::Module,
-  pretty::PrettyWithCtx, span::Span,
+  id::VarId, ident::Ident, memory::handle, modules::Module, pretty::PrettyWithCtx, span::Span,
 };
 use ena::unify::InPlaceUnificationTable;
 use la_arena::Idx;
@@ -17,7 +16,7 @@ use ty::{
 };
 
 use crate::{
-  EffectInfo, Evidence, TyScheme,
+  EffectInfo, Evidence, TyScheme, TypeCheckDiagnostic,
   diagnostic::{TypeCheckError, into_diag},
   effect_handler_scheme,
   folds::{instantiate::Instantiate, normalize::Normalize, occurs_check::OccursCheck},

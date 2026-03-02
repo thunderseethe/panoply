@@ -1,12 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ast::{self, Ast, Term};
+use base::file::FileId;
 use base::{
-  diagnostic::{
-    error::{PanoplyError, PanoplyErrors},
-    tc::TypeCheckDiagnostic,
-  },
-  file::FileId,
+  diagnostic::Citation,
   id::{EffectName, EffectOpName, IdSupply, TermName, TyVarId, VarId},
   ident::Ident,
   modules::Module,
@@ -14,9 +11,9 @@ use base::{
 use bumpalo::Bump;
 use desugar::desugar_module;
 use la_arena::Idx;
-use nameres::nameres_module_for_file_id;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use salsa::Accumulator;
 use ty::{infer::TyCtx, row::Row, *};
 
 mod unsolved_row;
@@ -51,43 +48,17 @@ pub trait EffectInfo {
   fn effect_member_name(&self, op_name: EffectOpName) -> Ident;
 }
 
-/*
-pub trait Db: salsa::DbWithJar<Jar> + desugar::Db {
-  fn as_tc_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
-  }
+pub fn type_check_errors(db: &dyn salsa::Database, file_id: FileId) -> Vec<TypeCheckDiagnostic> {
+  use nameres::nameres_module_for_file_id;
 
-  fn type_scheme_of(&self, term_name: TermName) -> TypedItem {
-    type_scheme_of(self.as_tc_db(), term_name)
-  }
-
-  fn effect_handler_scheme(&self, eff_name: EffectName) -> SalsaTypeScheme {
-    effect_handler_scheme(self.as_tc_db(), eff_name)
-  }
-
-  fn type_check_errors(&self, file_id: FileId) -> Vec<PanoplyError> {
-    let nameres_module = self.nameres_module_for_file_id(file_id);
-    nameres_module
-      .terms(self.as_nameres_db())
-      .iter()
-      .flat_map(|(_, term)| {
-        type_scheme_of::accumulated::<PanoplyErrors>(
-          self.as_tc_db(),
-          term.name(self.as_nameres_db()),
-        )
-      })
-      .collect()
-  }
-}
-impl<DB> Db for DB where DB: ?Sized + salsa::DbWithJar<Jar> + desugar::Db {}*/
-fn type_check_errors(db: &dyn salsa::Database, file_id: FileId) -> Vec<PanoplyError> {
   let nameres_module = nameres_module_for_file_id(db, file_id);
   nameres_module
     .terms(db)
     .iter()
     .flat_map(|(_, term)| {
-      //type_scheme_of::acumulated::<PanoplyErrors>(db, term.name(db))
-      std::iter::empty()
+      type_scheme_of::accumulated::<TypeCheckDiagnostic>(db, term.name(db))
+        .into_iter()
+        .cloned()
     })
     .collect()
 }
@@ -157,8 +128,7 @@ pub fn type_scheme_of<'db>(db: &'db dyn salsa::Database, term_name: TermName) ->
   let ty_chk_out = type_check(db, module, term.data(db), is_entry_point);
 
   for diag in ty_chk_out.diags {
-    //PanoplyErrors::push(db, diag.into())
-    // TODO: Figure out error checking.
+    diag.accumulate(db);
   }
   TypedItem::new(
     db,
@@ -262,6 +232,13 @@ pub(crate) struct TypeCheckOutput {
   diags: Vec<TypeCheckDiagnostic>,
 }
 
+#[salsa::accumulator]
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeCheckDiagnostic {
+  pub name: &'static str,
+  pub principal: Citation,
+}
+
 pub(crate) fn type_check(
   db: &dyn salsa::Database,
   module: Module,
@@ -354,7 +331,6 @@ pub(crate) fn type_check(
 mod tests {
   use assert_matches::assert_matches;
   use base::{
-    diagnostic::{error::PanoplyError, tc::TypeCheckDiagnostic},
     file::{FileId, SourceFile, SourceFileSet},
     id::{TermName, TyVarId},
     ident::Ident,
@@ -367,7 +343,7 @@ mod tests {
     row::{Row, RowOps},
   };
 
-  use crate::{Evidence, type_scheme_of};
+  use crate::{Evidence, TypeCheckDiagnostic, type_check_errors, type_scheme_of};
 
   macro_rules! assert_matches_unit_ty {
         ($db:expr, $term:expr) => {
@@ -401,14 +377,7 @@ mod tests {
   fn type_errors(db: &TestDatabase) -> Vec<TypeCheckDiagnostic> {
     let path = std::path::PathBuf::from("test");
     let file_id = FileId::new(db, path.clone());
-    /*type_check_errors(db, file_id)
-    .into_iter()
-    .map(|err| match err {
-      PanoplyError::TypeCheckError(err) => err,
-      _ => unreachable!(),
-    })
-    .collect()*/
-    vec![]
+    type_check_errors(db, file_id).into_iter().collect()
   }
 
   fn type_check_file(db: &TestDatabase, name: &str, contents: impl ToString) -> TyScheme {
@@ -444,7 +413,6 @@ mod tests {
   }
 
   #[test]
-  #[ignore = "fix accumulators"]
   fn test_tc_unlabel_fails_on_wrong_label() {
     let db = TestDatabase::default();
 

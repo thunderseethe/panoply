@@ -13,15 +13,6 @@ use base::{
 };
 use ty::{Ty, TyScheme};
 
-//#[salsa::jar(db = Db)]
-//pub struct Jar(AstModule, AstTerm, AstEffect);
-/*pub trait Db: salsa::DbWithJar<Jar> + base::Db {
-  fn as_ast_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
-  }
-}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db {}*/
-
 /// A Term of the AST
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Term<Var> {

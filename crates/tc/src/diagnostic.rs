@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 
 use base::{
-  diagnostic::{Citation, tc::TypeCheckDiagnostic},
+  diagnostic::Citation,
   id::VarId,
   ident::Ident,
   pretty::{PrettyPrint, PrettyWithCtx},
@@ -14,6 +14,8 @@ use ty::{
 };
 
 use pretty::{DocAllocator, RcAllocator, docs};
+
+use crate::TypeCheckDiagnostic;
 
 /// Errors that may be produced during type checking
 #[derive(Debug, PartialEq, Eq)]

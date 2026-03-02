@@ -1,4 +1,5 @@
 use base::{
+  diagnostic::parser::ParseDiagnostic,
   file::{FileId, SourceFile, SourceFileSet, file_for_id},
   ident::Ident,
   loc::Loc,
@@ -51,6 +52,12 @@ pub fn locate(db: &dyn salsa::Database, file: FileId, line: u32, col: u32) -> Op
   Some(Loc { byte })
 }
 
+pub fn unlocate(db: &dyn salsa::Database, file: FileId, byte: Loc) -> Option<(u32, u32)> {
+  let locator = locator_of_file(db, file_for_id(db, file));
+  let (line, col) = locator.locate(byte.byte)?;
+  Some((line as u32, col as u32))
+}
+
 #[salsa::tracked(returns(ref))]
 pub fn all_modules<'db>(db: &'db dyn salsa::Database) -> Vec<Module> {
   let source_file_set = SourceFileSet::get(db);
@@ -62,6 +69,12 @@ pub fn all_modules<'db>(db: &'db dyn salsa::Database) -> Vec<Module> {
       parse_file.module(db)
     })
     .collect::<Vec<_>>()
+}
+
+pub fn parse_errors(db: &dyn salsa::Database, file_id: FileId) -> Vec<ParseDiagnostic> {
+  let file = file_for_id(db, file_id);
+  let diag = parse_module::accumulated::<ParseDiagnostic>(db, file);
+  diag.into_iter().cloned().collect()
 }
 
 #[salsa::tracked]
@@ -91,8 +104,9 @@ pub fn parse_module<'db>(db: &'db dyn salsa::Database, file: SourceFile) -> Pars
   parser.items();
   let (cst, errors) = parser.finish();
 
-  if !errors.is_empty() {
-    panic!("{errors:?}")
+  use salsa::Accumulator;
+  for error in errors {
+    ParseDiagnostic { error }.accumulate(db)
   }
 
   ParseFile::new(db, file_id, module, cst)
