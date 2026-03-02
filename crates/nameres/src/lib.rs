@@ -149,7 +149,7 @@ impl OpaqueHandle {
     }
   }
 
-  fn syntax(self) -> SyntaxNode<Panoply> {
+  pub fn syntax(self) -> SyntaxNode<Panoply> {
     self
       .ptr
       .to_node(&SyntaxNode::<Panoply>::new_root(self.root))
@@ -281,7 +281,7 @@ pub enum NameResError {
 #[salsa::accumulator]
 #[derive(Debug, Clone)]
 pub struct NameResDiag {
-  error: NameResError,
+  pub error: NameResError,
 }
 
 #[salsa::tracked]
@@ -1062,151 +1062,14 @@ fn name_at_loc<'db>(
 
   let name = Name::cast(node)?;
   namespace.names(db).get(&Handle::new(cst, name)).cloned()
-  /*
-  // TODO: We could be more efficient here by ordering our defs by span and then binary searching
-  // so we more quickly locate the item we want to dfs into.
-  for effect in nst_module.effects(db).iter().flat_map(|eff| eff.iter()) {
-    let eff_defn = effect.data(db);
-    if !eff_defn.span().contains(loc) {
-      continue;
-    }
-    if eff_defn.name.span().contains(loc) {
-      return Some(InScopeName::Effect(eff_defn.name.value));
-    }
-    let ops = eff_defn.ops.iter().flat_map(|op| op.iter());
-    for op in ops {
-      if op.name.span().contains(loc) {
-        return Some(InScopeName::EffectOp(op.name.value));
-      }
-      let dfs = FindSpanName {
-        defn_name: op.name.value,
-        indices: effect.alloc(db),
-        needle: loc,
-      };
-      if let ControlFlow::Break(found) = dfs.traverse_type(op.type_) {
-        return Some(found);
-      }
-    }
-  }
-  for term in nst_module.terms(db).iter().flat_map(|term| term.iter()) {
-    let term_defn = term.data(db);
-    if term_defn.name.span().contains(loc) {
-      return Some(InScopeName::Term(term_defn.name.value));
-    }
-    let dfs = FindSpanName {
-      defn_name: term_defn.name.value,
-      indices: term.alloc(db),
-      needle: loc,
-    };
-    if let ControlFlow::Break(found) = dfs.traverse_term(term_defn.value) {
-      return Some(found);
-    }
-  }
-  None*/
 }
-
-/*
-struct FindSpanName<'a, Name> {
-  defn_name: Name,
-  indices: &'a NstIndxAlloc,
-  needle: Loc,
-}
-impl<T, Name> IdxView<T> for FindSpanName<'_, Name>
-where
-  NstIndxAlloc: IdxView<T>,
-{
-  fn view(&self, idx: Idx<T>) -> &T {
-    self.indices.view(idx)
-  }
-}
-
-impl DfsTraverseNst for FindSpanName<'_, EffectOpName> {
-  type Out = InScopeName;
-
-  fn traverse_ty_var(&self, name: &SpanOf<TyVarId>) -> ControlFlow<Self::Out> {
-    if name.span().contains(self.needle) {
-      ControlFlow::Break(InScopeName::EffectTyVar(self.defn_name, name.value))
-    } else {
-      ControlFlow::Continue(())
-    }
-  }
-
-  fn should_traverse_term(&self, _: &TermDefn) -> bool {
-    false
-  }
-  fn should_traverse_pat(&self, _: &Pattern) -> bool {
-    false
-  }
-
-  fn should_traverse_type(&self, ty: &Type<TyVarId>) -> bool {
-    ty.spanned(self.indices).span().contains(self.needle)
-  }
-  fn should_traverse_row(&self, row: &Row<TyVarId, IdField<Idx<Type<TyVarId>>>>) -> bool {
-    row.spanned(self.indices).span().contains(self.needle)
-  }
-}
-impl DfsTraverseNst for FindSpanName<'_, TermName> {
-  type Out = InScopeName;
-
-  fn traverse_var(&self, name: &SpanOf<VarId>) -> std::ops::ControlFlow<Self::Out> {
-    if name.span().contains(self.needle) {
-      ControlFlow::Break(InScopeName::TermVar(self.defn_name, name.value))
-    } else {
-      ControlFlow::Continue(())
-    }
-  }
-
-  fn traverse_ty_var(&self, name: &SpanOf<TyVarId>) -> ControlFlow<Self::Out> {
-    if name.span().contains(self.needle) {
-      ControlFlow::Break(InScopeName::TermTyVar(self.defn_name, name.value))
-    } else {
-      ControlFlow::Continue(())
-    }
-  }
-
-  fn traverse_effect_op(&self, name: &SpanOf<EffectOpName>) -> ControlFlow<Self::Out> {
-    if name.span().contains(self.needle) {
-      ControlFlow::Break(InScopeName::EffectOp(name.value))
-    } else {
-      ControlFlow::Continue(())
-    }
-  }
-
-  fn traverse_term_name(&self, name: &SpanOf<TermName>) -> ControlFlow<Self::Out> {
-    if name.span().contains(self.needle) {
-      ControlFlow::Break(InScopeName::Term(name.value))
-    } else {
-      ControlFlow::Continue(())
-    }
-  }
-
-  fn should_traverse_term(&self, term: &TermDefn) -> bool {
-    term.spanned(self.indices).span().contains(self.needle)
-  }
-  fn should_traverse_type(&self, ty: &Type<TyVarId>) -> bool {
-    ty.spanned(self.indices).span().contains(self.needle)
-  }
-  fn should_traverse_pat(&self, pat: &Pattern) -> bool {
-    pat.span().contains(self.needle)
-  }
-  fn should_traverse_row(&self, row: &Row<TyVarId, IdField<Idx<Type<TyVarId>>>>) -> bool {
-    row.spanned(self.indices).span().contains(self.needle)
-  }
-}
-*/
 
 #[cfg(test)]
 mod tests {
   use std::{ops::Range, path::PathBuf};
 
   use assert_matches::assert_matches;
-  use base::{
-    diagnostic::{
-      error::PanoplyError,
-      nameres::{NameKind, NameResolutionError},
-    },
-    file::{FileId, SourceFile, SourceFileSet},
-  };
+  use base::file::{FileId, SourceFile, SourceFileSet};
   use cst::{Item, Items, TermDefn};
   use parser::{AstNode, parse_module};
   use pretty::{DocAllocator, DocBuilder, RcAllocator};
@@ -1480,12 +1343,9 @@ mod tests {
     assert_matches!(
       &errs[..],
       [
-        NameResError::UndefinedName(h),
-        NameResError::UndefinedName(x),
-      ] /*=> {
-            assert_eq!(h, "h");
-            assert_eq!(x, "x");
-        }*/
+        NameResError::UndefinedName(_),
+        NameResError::UndefinedName(_),
+      ]
     );
   }
 
@@ -1642,12 +1502,9 @@ mod tests {
     assert_matches!(
       &errs[..],
       [
-        NameResError::UndefinedName(f),
-        NameResError::UndefinedName(x),
-      ] /* => {
-            assert_eq!(f, "f");
-            assert_eq!(x, "x");
-        }*/
+        NameResError::UndefinedName(_),
+        NameResError::UndefinedName(_),
+      ]
     );
   }
 
@@ -1689,12 +1546,9 @@ mod tests {
     assert_matches!(
       &errs[..],
       [
-        NameResError::UndefinedName(y),
-        NameResError::UndefinedName(x)
-      ] /* => {
-            assert_eq!(y, "y");
-            assert_eq!(x, "x");
-        }*/
+        NameResError::UndefinedName(_),
+        NameResError::UndefinedName(_)
+      ]
     );
   }
 
@@ -1728,12 +1582,7 @@ mod tests {
   fn test_sum_row_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "<x = x>");
-    assert_matches!(
-      &errs[..],
-      [NameResError::UndefinedName(x)] /* => {
-                                           assert_eq!(x, "x");
-                                       }*/
-    );
+    assert_matches!(&errs[..], [NameResError::UndefinedName(_)]);
   }
 
   #[test]
@@ -1776,12 +1625,7 @@ mod tests {
   fn test_dot_access_errors() {
     let db = TestDatabase::default();
     let (_, _, errs) = parse_resolve_term(&db, "x.a");
-    assert_matches!(
-      &errs[..],
-      [NameResError::UndefinedName(x)] /* => {
-                                           assert_eq!(x, "x");
-                                       }*/
-    );
+    assert_matches!(&errs[..], [NameResError::UndefinedName(_)]);
   }
 
   #[test]
@@ -1827,12 +1671,9 @@ mod tests {
     assert_matches!(
       &errs[..],
       [
-        NameResError::UndefinedName(f),
-        NameResError::UndefinedName(z)
-      ] /* => {
-            assert_eq!(f, "f");
-            assert_eq!(z, "z");
-        }*/
+        NameResError::UndefinedName(_),
+        NameResError::UndefinedName(_)
+      ]
     );
   }
 
@@ -1840,13 +1681,7 @@ mod tests {
   fn test_match_error_duplicate_name() {
     let db = TestDatabase::default();
     let (_, names, errs) = parse_resolve_term(&db, "match <{a = x, b = x} => x(x)>");
-    assert_matches!(
-      &errs[..],
-      [NameResError::DuplicateName { .. }] /* => {
-                                               assert!(end < start, "{} < {}", end, start);
-                                               assert_eq!(x, "x");
-                                           }*/
-    );
+    assert_matches!(&errs[..], [NameResError::DuplicateName { .. }]);
     let expect = expect_test::expect![[r#"
         item
         =>
@@ -2017,12 +1852,9 @@ mod tests {
     assert_matches!(
       &errs[..],
       [
-        NameResError::UndefinedName(x),
-        NameResError::UndefinedName(y)
-      ] /* => {
-            assert_eq!(x, "x");
-            assert_eq!(y, "y");
-        }*/
+        NameResError::UndefinedName(_),
+        NameResError::UndefinedName(_)
+      ]
     );
   }
 }
