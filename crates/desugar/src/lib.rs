@@ -31,39 +31,6 @@ use ty::{
 
 use salsa::Database as Db;
 
-/*
-#[salsa::jar(db = Db)]
-pub struct Jar(
-  desugar_module,
-  desugar_item_of_id,
-  desugar_effect,
-  desugar_term,
-  effect_of,
-  effect_op_tyscheme_of,
-);
-pub trait Db: salsa::DbWithJar<Jar> + nameres::Db + ast::Db + ty::Db {
-  fn as_desugar_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<crate::Jar>>::as_jar_db(self)
-  }
-
-  fn desugar_module_of(&self, module: Module) -> AstModule {
-    desugar_module(self.as_desugar_db(), module)
-  }
-
-  fn desugar_term_of(&self, term: TermName) -> AstTerm {
-    let module = term.module(self.as_core_db());
-    let nameres_term = self.nameres_term_of(term);
-    desugar_term(self.as_desugar_db(), module, nameres_term)
-  }
-
-  fn desugar_effect_of(&self, eff: EffectName) -> AstEffect {
-    let module = eff.module(self.as_core_db());
-    let nameres_eff = self.nameres_effect_of(eff);
-    desugar_effect(self.as_desugar_db(), module, nameres_eff)
-  }
-}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + nameres::Db + ast::Db + ty::Db {}*/
-
 /// Desugar an NST Module into an AST module.
 /// This will desugar all items in NST moduels into their corresponding AST items.
 #[salsa::tracked]
@@ -71,19 +38,6 @@ pub fn desugar_module<'db>(db: &'db dyn salsa::Database, module: Module) -> AstM
   let nameres_db = db;
 
   let nameres_module = nameres_module_of(db, module);
-  /*let items = Items::new(cst.data(db));
-  let mut terms = vec![];
-  let mut effects = vec![];
-  for item in items.items() {
-    match item {
-      parser::Item::Term(term_defn) => {
-        terms.push(desugar_term(db, module, term));
-      },
-      parser::Item::Effect(effect_defn) => {
-        effects.push(desugar_effect(db, module, effect));
-      },
-    }
-  }*/
 
   AstModule::new(
     db,
@@ -108,9 +62,6 @@ fn desugar_effect<'db>(
   effect: NameResEffect<'db>,
 ) -> AstEffect<'db> {
   // TODO: Handle separation of name based Ids and desugar generated Ids better.
-  //let locals = effect.locals(db.as_nameres_db());
-  //let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
-  //let mut ty_vars = locals.ty_vars.to_gen().into_iter().map(|_| true).collect();
 
   let nameres_module = nameres_module_of(db, module);
 
@@ -142,18 +93,6 @@ fn desugar_term<'db>(
   term: NameResTerm<'db>,
 ) -> AstTerm<'db> {
   // TODO: Handle separation of name based Ids and desugar generated Ids better.
-  /*let locals = term.locals(db.as_nameres_db());
-  let mut vars = locals.vars.to_gen().into_iter().map(|_| true).collect();
-  let mut ty_vars = locals.ty_vars.to_gen().into_iter().map(|_| true).collect();
-
-  let term_defn_res = desugar_term_defn(
-    db,
-    &mut vars,
-    &mut ty_vars,
-    term.alloc(db.as_nameres_db()),
-    term.data(db.as_nameres_db()),
-  );*/
-
   let nameres_module = nameres_module_of(db, module);
 
   let mut vars = term.vars(db).to_gen().into_iter().map(|_| true).collect();
@@ -322,7 +261,6 @@ fn fix_up(range: Range<usize>) -> Span {
 
 struct DesugarCtx<'a> {
   db: &'a dyn crate::Db,
-  //arenas: &'a NstIndxAlloc,
   names: &'a BTreeMap<Handle<Name>, InScopeName>,
   root: GreenNode,
   terms: Arena<Term<VarId>>,
@@ -437,18 +375,6 @@ impl<'a> DesugarCtx<'a> {
           ))
         }
         TermAtom::Match(match_expr) => {
-          /*
-          let matrix = cases
-            .elements()
-            .map(|field| {
-              Ok((
-                vec![self.arenas[field.label].clone()],
-                self.ds_term(field.target)?,
-              ))
-            })
-            .collect::<Result<_, _>>()?;
-          self.desugar_pattern_matrix(&mut [], matrix)?
-            */
           let matrix = match_expr
             .arms()
             .map(|arm| {
@@ -529,162 +455,6 @@ impl<'a> DesugarCtx<'a> {
         }
       }
     }
-    /*let nst = &self.arenas[nst];
-    let ast = match nst {
-      nst::Term::VariableRef(var) => self.terms.alloc(Term::Variable(var.value)),
-      nst::Term::ItemRef(item) => self.terms.alloc(Term::Item(item.value)),
-      nst::Term::EffectOpRef(SpanOf { value, .. }) => self.terms.alloc(Term::Operation(*value)),
-      nst::Term::Binding {
-        var,
-        annotation,
-        value,
-        expr,
-        ..
-      } => {
-        let mut value = self.ds_term(*value)?;
-        // If our binding is annotated wrap our value in it's annotated type
-        if let Some(ann) = annotation {
-          let ty = self.ds_type(ann.type_);
-          value = self.mk_term(nst.spanned(self.arenas), Annotated { ty, term: value })
-        }
-        let expr = self.ds_term(*expr)?;
-        let func = self.mk_term(
-          nst.spanned(self.arenas),
-          Abstraction {
-            arg: var.value,
-            body: expr,
-          },
-        );
-        self.terms.alloc(Application { func, arg: value })
-      }
-      nst::Term::Abstraction {
-        arg,
-        annotation,
-        body,
-        ..
-      } => {
-        let body = self.ds_term(*body)?;
-        // If there's no annotation, we double insert spans which is fine as our map is
-        // idempotent
-        let mut term = self.mk_term(
-          nst.spanned(self.arenas),
-          Abstraction {
-            arg: arg.value,
-            body,
-          },
-        );
-        // Our annotation here is for the argument, so we want to annotate our whole
-        // abstraction as, abs : ann -> tv<0> where return type is a fresh type var.
-        if let Some(ann) = annotation {
-          let arg_ty = self.ds_type(ann.type_);
-          let ret_ty = self
-            .db
-            .as_ty_db()
-            .mk_ty(TypeKind::VarTy(self.ty_vars.push(true)));
-          let eff = self.ty_vars.push(true);
-          let ty = self
-            .db
-            .as_ty_db()
-            .mk_ty(TypeKind::FunTy(arg_ty, Row::Open(eff), ret_ty));
-          term = self.terms.alloc(Annotated { ty, term });
-        }
-        term
-      }
-      nst::Term::Application { func, arg, .. } => {
-        let func = self.ds_term(*func)?;
-        let arg = self.ds_term(*arg)?;
-        self.terms.alloc(Application { func, arg })
-      }
-      nst::Term::Parenthesized { term, .. } => {
-        // We replace the span of this node with the parenthesized span
-        self.ds_term(*term)?
-      }
-      nst::Term::ProductRow(product) => match &product.fields {
-        None => self.terms.alloc(Unit),
-        Some(fields) => {
-          let term = self.ds_term(fields.first.target)?;
-          let head = self.terms.alloc(Label {
-            label: fields.first.label.value,
-            term,
-          });
-          let span = fields
-            .first
-            .label
-            .join_spans(&self.arenas[fields.first.target].spanned(self.arenas));
-          self.spans.insert(head, span);
-          fields.elems.iter().try_fold(head, |concat, (_, field)| {
-            let term = self.ds_term(field.target)?;
-            let right = self.terms.alloc(Label {
-              label: field.label.value,
-              term,
-            });
-            let span = field
-              .label
-              .join_spans(&self.arenas[field.target].spanned(self.arenas));
-            self.spans.insert(right, span);
-            let span = self.spans[&concat].join_spans(&span);
-            Ok(self.mk_term(
-              span,
-              Concat {
-                left: concat,
-                right,
-              },
-            ))
-          })?
-        }
-      },
-      nst::Term::FieldAccess { base, field, .. } => {
-        let term = self.ds_term(*base)?;
-        let unlabel = Unlabel {
-          label: field.value,
-          term: self.mk_term(
-            nst.spanned(self.arenas),
-            Project {
-              direction: Direction::Right,
-              term,
-            },
-          ),
-        };
-        self.terms.alloc(unlabel)
-      }
-      nst::Term::SumRow(sum) => {
-        let term = self.ds_term(sum.field.target)?;
-        let inj = Inject {
-          direction: Direction::Right,
-          term: self.mk_term(
-            nst.spanned(self.arenas),
-            Label {
-              label: sum.field.label.value,
-              term,
-            },
-          ),
-        };
-        self.terms.alloc(inj)
-      }
-      nst::Term::Match { cases, .. } => {
-        let matrix = cases
-          .elements()
-          .map(|field| {
-            Ok((
-              vec![self.arenas[field.label].clone()],
-              self.ds_term(field.target)?,
-            ))
-          })
-          .collect::<Result<_, _>>()?;
-        self.desugar_pattern_matrix(&mut [], matrix)?
-      }
-      nst::Term::Handle { handler, expr, .. } => {
-        let handler = self.ds_term(*handler)?;
-        let body = self.ds_term(*expr)?;
-        self.terms.alloc(ast::Term::Handle { handler, body })
-      }
-      nst::Term::Concat { left, right, .. } => {
-        let left = self.ds_term(*left)?;
-        let right = self.ds_term(*right)?;
-        self.terms.alloc(ast::Term::Concat { left, right })
-      }
-      nst::Term::Int(span_of_int) => self.terms.alloc(ast::Term::Int(span_of_int.value)),
-    };*/
 
     let span = fix_up(nst.syntax().text_range().into());
     self.spans.insert(term, span);
@@ -764,26 +534,6 @@ impl<'a> DesugarCtx<'a> {
       }
       Type::Paren(paren_type) => self.ds_type_with_eff(paren_type.ty().expect("Failure"), eff),
     }
-    /*cst::Type::Int(_) => self.db.as_ty_db().mk_ty(TypeKind::IntTy),
-    cst::Type::Named(ty_var) => self.db.as_ty_db().mk_ty(TypeKind::VarTy(ty_var.value)),
-    cst::Type::Sum { variants, .. } => self
-      .db
-      .as_ty_db()
-      .mk_ty(TypeKind::SumTy(self.ds_row(variants))),
-    cst::Type::Product { fields, .. } => self.db.as_ty_db().mk_ty(TypeKind::ProdTy(
-      fields
-        .as_ref()
-        .map(|row| self.ds_row(row))
-        .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
-    )),
-    cst::Type::Function {
-      domain, codomain, ..
-    } => self.db.as_ty_db().mk_ty(TypeKind::FunTy(
-      self.ds_type(*domain),
-      eff,
-      self.ds_type(*codomain),
-    )),
-    cst::Type::Parenthesized { type_, .. } => self.ds_type(*type_),*/
   }
 
   fn ds_type(&mut self, ty: cst::Type) -> Ty {
@@ -823,31 +573,6 @@ impl<'a> DesugarCtx<'a> {
       }
       cst::Type::Paren(paren_type) => self.ds_type(paren_type.ty().expect("Failure")),
     }
-    /*match &self.arenas[nst] {
-      cst::Type::Int(_) => self.db.as_ty_db().mk_ty(TypeKind::IntTy),
-      cst::Type::Named(ty_var) => self.db.as_ty_db().mk_ty(TypeKind::VarTy(ty_var.value)),
-      cst::Type::Sum { variants, .. } => self
-        .db
-        .as_ty_db()
-        .mk_ty(TypeKind::SumTy(self.ds_row(variants))),
-      cst::Type::Product { fields, .. } => self.db.as_ty_db().mk_ty(TypeKind::ProdTy(
-        fields
-          .as_ref()
-          .map(|row| self.ds_row(row))
-          .unwrap_or(Row::Closed(self.db.as_ty_db().empty_row())),
-      )),
-      cst::Type::Function {
-        domain, codomain, ..
-      } => {
-        let eff = self.ty_vars.push(true);
-        self.db.as_ty_db().mk_ty(TypeKind::FunTy(
-          self.ds_type(*domain),
-          Row::Open(eff),
-          self.ds_type(*codomain),
-        ))
-      }
-      cst::Type::Parenthesized { type_, .. } => self.ds_type(*type_),
-    }*/
   }
 
   fn ds_row_atom(&mut self, row_atom: cst::RowAtom) -> Row<Simple> {
@@ -874,15 +599,6 @@ impl<'a> DesugarCtx<'a> {
         })
       }
     }
-    /*cst::RowAtom::Concrete { fields, .. } => Row::Closed(
-      self.db.as_ty_db().construct_simple_row(
-        fields
-          .elements()
-          .map(|field| (field.label.value, self.ds_type(field.target)))
-          .collect(),
-      ),
-    ),
-    cst::RowAtom::Variable(ty_var) => Row::Open(ty_var.value),*/
   }
 
   fn ds_scheme_with_eff(&mut self, scheme: cst::TypeScheme, eff: ScopedRow<InDb>) -> TyScheme {
@@ -1310,7 +1026,6 @@ mod tests {
     content.push_str(input);
     let file = SourceFile::new(db, FileId::new(db, PathBuf::from("test")), content);
     SourceFileSet::new(db, vec![file]);
-    //let module = db.root_module_for_file(file);
     let module = root_module_for_file(db, file);
     let name = Ident::new(db, "item");
     let name = TermName::new(db, name, module);

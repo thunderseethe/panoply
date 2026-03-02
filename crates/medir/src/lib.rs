@@ -7,17 +7,6 @@ use reducir::ReducIrTermName;
 
 mod pretty;
 
-/*
-#[salsa::jar(db = Db)]
-pub struct Jar(MedIrItem, MedIrModule, MedIrTy);
-pub trait Db: salsa::DbWithJar<Jar> + reducir::Db {
-  fn as_medir_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
-  }
-
-
-}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + reducir::Db {}*/
 pub fn mk_medir_ty(db: &dyn salsa::Database, kind: MedIrTyKind) -> MedIrTy {
   MedIrTy::new(db, kind)
 }

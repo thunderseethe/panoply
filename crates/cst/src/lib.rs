@@ -518,20 +518,10 @@ impl HasName for NameType {}
 ast_node!(struct SumType(Syntax::SumType) {
   row: Row
 });
-/*impl SumType {
-  pub fn row_fields(&self) -> AstChildren<RowField> {
-    children(self.syntax())
-  }
-}*/
 
 ast_node!(struct ProductType(Syntax::ProductType) {
   row: Row
 });
-/*impl ProductType {
-  pub fn row_fields(&self) -> AstChildren<RowField> {
-    children(self.syntax())
-  }
-}*/
 
 ast_node!(
   enum Row {

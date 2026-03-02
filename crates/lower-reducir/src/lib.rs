@@ -487,18 +487,6 @@ mod tests {
   };
 
   #[derive(Default, Clone)]
-  /*
-  #[salsa::db(
-    crate::Jar,
-    ast::Jar,
-    base::Jar,
-    desugar::Jar,
-    reducir::Jar,
-    nameres::Jar,
-    parser::Jar,
-    tc::Jar,
-    ty::Jar
-  )]*/
   #[salsa::db]
   struct TestDatabase {
     storage: salsa::Storage<Self>,

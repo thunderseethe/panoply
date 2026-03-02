@@ -5,26 +5,6 @@ use emitter::emit_wasm_module;
 use lower_medir::lower_medir_module_of;
 use parser::root_module_for_path;
 
-/*#[salsa::jar(db = Db)]
-pub struct Jar();
-
-pub trait Db: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {
-  fn as_emit_wasm_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
-  }
-
-  fn emit_module(&self, module: Module) -> wasm_encoder::Module {
-    let medir_module = self.lower_medir_module_of(module);
-    emit_wasm_module(self.as_emit_wasm_db(), medir_module)
-  }
-
-  fn emit_module_for_path(&self, path: std::path::PathBuf) -> wasm_encoder::Module {
-    let module = self.root_module_for_path(path);
-    self.emit_module(module)
-  }
-}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + medir::Db + lower_medir::Db {}*/
-
 fn emit_module<'db>(db: &'db dyn salsa::Database, module: Module) -> wasm_encoder::Module {
   let medir_module = lower_medir_module_of(db, module);
   emit_wasm_module(db, medir_module)

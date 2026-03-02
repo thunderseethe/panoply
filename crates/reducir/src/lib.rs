@@ -124,27 +124,6 @@ mod subst {
   }
 }
 
-/*
-#[salsa::jar(db = Db)]
-pub struct Jar(
-  ty::ReducIrTy,
-  GeneratedReducIrName,
-  ReducIrModule,
-  ReducIrItem,
-  ReducIrGenItem,
-  mon::MonReducIrModule,
-  mon::MonReducIrItem,
-  mon::MonReducIrGenItem,
-  optimized::OptimizedReducIrItem,
-  optimized::OptimizedReducIrModule,
-);
-pub trait Db: salsa::DbWithJar<Jar> + base::Db + ::ty::Db {
-  fn as_reducir_db(&self) -> &dyn crate::Db {
-    <Self as salsa::DbWithJar<Jar>>::as_jar_db(self)
-  }
-}
-impl<DB> Db for DB where DB: salsa::DbWithJar<Jar> + base::Db + ::ty::Db {}*/
-
 #[salsa::interned(debug, no_lifetime)]
 #[derive(PartialOrd, Ord)]
 pub struct GeneratedReducIrName {
