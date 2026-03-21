@@ -159,9 +159,9 @@ pub fn effect_op_tyscheme_of(db: &dyn crate::Db, effect_op: EffectOpName) -> TyS
     .ops
     .iter()
     .find_map(|opt_op| {
-      opt_op.as_ref().and_then(|op| {
-        (op.0 == effect_op).then_some(op.1.clone())
-      })
+      opt_op
+        .as_ref()
+        .and_then(|op| (op.0 == effect_op).then_some(op.1.clone()))
     })
     .unwrap_or_else(|| {
       panic!(
