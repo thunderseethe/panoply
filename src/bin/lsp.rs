@@ -25,10 +25,7 @@ struct Backend {
 
 fn from_loc(db: &dyn salsa::Database, file_id: FileId, loc: Loc) -> Option<Position> {
   let (line, character) = unlocate(db, file_id, loc)?;
-  Some(Position {
-    line,
-    character,
-  })
+  Some(Position { line, character })
 }
 
 fn from_span(db: &dyn salsa::Database, file_id: FileId, span: Span) -> Option<Range> {
@@ -146,10 +143,15 @@ impl LanguageServer for Backend {
             got,
             want_any,
           } => Diagnostic::new_simple(
-            from_span(db.deref(), file_id, Span {
-              start: Loc { byte: span.start },
-              end: Loc { byte: span.end },
-            }).expect("Invalid range in file"),
+            from_span(
+              db.deref(),
+              file_id,
+              Span {
+                start: Loc { byte: span.start },
+                end: Loc { byte: span.end },
+              },
+            )
+            .expect("Invalid range in file"),
             format!("Received {} but wanted {:?}", got, want_any),
           ),
         })
