@@ -6,7 +6,7 @@ use base::file::file_for_id;
 use base::{file::FileId, loc::Loc, span::Span};
 use nameres::{name_at_position, nameres_errors};
 use panoply::{PanoplyDatabase, canonicalize_path_set, create_source_file_set};
-use parser::parse_errors;
+use parser::{parse_errors, unlocate};
 use salsa::{Durability, Setter};
 use tc::type_check_errors;
 use tower_lsp::jsonrpc::{Error, Result};
@@ -23,18 +23,19 @@ struct Backend {
   db: Arc<Mutex<PanoplyDatabase>>,
 }
 
-fn from_loc(_loc: Loc) -> Position {
-  Position {
-    line: todo!(),
-    character: todo!(),
-  }
+fn from_loc(db: &dyn salsa::Database, file_id: FileId, loc: Loc) -> Option<Position> {
+  let (line, character) = unlocate(db, file_id, loc)?;
+  Some(Position {
+    line,
+    character,
+  })
 }
 
-fn from_span(span: Span) -> Range {
-  Range {
-    start: from_loc(span.start),
-    end: from_loc(span.end),
-  }
+fn from_span(db: &dyn salsa::Database, file_id: FileId, span: Span) -> Option<Range> {
+  Some(Range {
+    start: from_loc(db, file_id, span.start)?,
+    end: from_loc(db, file_id, span.end)?,
+  })
 }
 
 fn init_lsp(
@@ -145,10 +146,10 @@ impl LanguageServer for Backend {
             got,
             want_any,
           } => Diagnostic::new_simple(
-            from_span(Span {
+            from_span(db.deref(), file_id, Span {
               start: Loc { byte: span.start },
               end: Loc { byte: span.end },
-            }),
+            }).expect("Invalid range in file"),
             format!("Received {} but wanted {:?}", got, want_any),
           ),
         })
@@ -207,7 +208,7 @@ impl LanguageServer for Backend {
           Url::from_file_path(path).expect("ICE: All interned file paths must be valid LSP Urls");
         GotoDefinitionResponse::Scalar(Location {
           uri,
-          range: from_span(span),
+          range: from_span(db.deref(), file_id, span).expect("Invalid span"),
         })
       });
     Ok(resp)
