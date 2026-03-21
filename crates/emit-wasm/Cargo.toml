@@ -26,4 +26,4 @@ parser.workspace = true
 reducir.workspace = true
 rustc-hash.workspace = true
 salsa.workspace = true
-wasm-encoder = "0.32.0"
+wasm-encoder.workspace = true

@@ -48,17 +48,17 @@ impl<DB: ?Sized + crate::Db> PrettyWithCtx<DB> for ReducIrTyKind {
       ReducIrTyKind::FunTy(args, ret) => {
         let mut arg_slice = &args[..];
         let mut ret_doc = ret.pretty(db, a);
-        if let ReducIrTyKind::ControlTy(evv_ty, a_ty) = ret.kind(db) {
-          if args.last() == Some(&evv_ty) {
-            ret_doc = a
-              .text("Mon")
-              .append(a.space())
-              .append(evv_ty.pretty(db, a))
-              .append(a.space())
-              .append(a_ty.pretty(db, a))
-              .parens();
-            arg_slice = &args[..args.len() - 1];
-          }
+        if let ReducIrTyKind::ControlTy(evv_ty, a_ty) = ret.kind(db)
+          && args.last() == Some(&evv_ty)
+        {
+          ret_doc = a
+            .text("Mon")
+            .append(a.space())
+            .append(evv_ty.pretty(db, a))
+            .append(a.space())
+            .append(a_ty.pretty(db, a))
+            .parens();
+          arg_slice = &args[..args.len() - 1];
         }
         let docs = arg_slice.iter().map(|arg| {
           let mut arg_doc = arg.pretty_with(db).pretty(a);

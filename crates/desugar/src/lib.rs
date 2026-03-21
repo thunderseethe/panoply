@@ -154,18 +154,12 @@ pub fn effect_of<'db>(db: &'db dyn crate::Db, effect_name: EffectName) -> AstEff
 pub fn effect_op_tyscheme_of(db: &dyn crate::Db, effect_op: EffectOpName) -> TyScheme {
   let effect = effect_op.effect(db);
   let eff = effect_of(db, effect);
-  println!(
-    "{}.{}",
-    effect_op.effect(db).name(db).text(db),
-    effect_op.name(db).text(db)
-  );
   eff
     .data(db)
     .ops
     .iter()
     .find_map(|opt_op| {
       opt_op.as_ref().and_then(|op| {
-        println!("{}", op.0.name(db).text(db));
         (op.0 == effect_op).then_some(op.1.clone())
       })
     })

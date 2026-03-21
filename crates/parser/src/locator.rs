@@ -1,7 +1,5 @@
 use std::str::CharIndices;
 
-use base::loc::Loc;
-
 // A line of source text.
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct Line {
@@ -107,11 +105,6 @@ impl Locator {
     )
   }
 
-  /// The "one past the end" location in the source text.
-  pub fn eoi(&self) -> Loc {
-    Loc { byte: self.length }
-  }
-
   /// Converts line and column numbers to a byte offset in the original source text.
   ///
   /// Allows for column numbers which are "one past the end" in their line, which are interpreted
@@ -124,8 +117,6 @@ impl Locator {
 
 #[cfg(test)]
 mod tests {
-  use base::file::FileId;
-
   use super::Locator;
 
   #[test]
@@ -147,9 +138,6 @@ mod tests {
     let l4 = locator.locate(4).unwrap();
     assert_eq!(l4.0, 0);
     assert_eq!(l4.1, 3);
-
-    let eoi = locator.eoi();
-    assert_eq!(eoi.byte, 5);
 
     assert_eq!(locator.unlocate(0, 0), Some(0));
     assert_eq!(locator.unlocate(0, 1), Some(1));
@@ -180,9 +168,6 @@ mod tests {
     let l5 = locator.locate(5).unwrap();
     assert_eq!(l5.0, 2);
     assert_eq!(l5.1, 0);
-
-    let eoi = locator.eoi();
-    assert_eq!(eoi.byte, 6);
 
     assert_eq!(locator.unlocate(0, 2), Some(2)); // EOL
     assert_eq!(locator.unlocate(1, 0), Some(2));
@@ -407,7 +392,6 @@ Box drawing alignment tests:                                          █
 "#;
 
     let locator = Locator::new(W3_DEMO_TEXT);
-    assert_eq!(locator.eoi().byte, W3_DEMO_TEXT.len());
     for (i, _) in W3_DEMO_TEXT.char_indices() {
       let loc = locator
         .locate(i)

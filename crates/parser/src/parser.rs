@@ -175,12 +175,12 @@ impl Parser<'_> {
   }
 
   fn whitespace(&mut self) {
-    if self.at(Syntax::Whitespace) {
-      if let Some(span) = self.advance() {
-        self
-          .tree
-          .token(Syntax::Whitespace.into(), &self.input[span]);
-      }
+    if self.at(Syntax::Whitespace)
+      && let Some(span) = self.advance()
+    {
+      self
+        .tree
+        .token(Syntax::Whitespace.into(), &self.input[span]);
     }
   }
 

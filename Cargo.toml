@@ -99,3 +99,4 @@ tokio = { version = "1.27", features = ["full"] }
 wasmtime = { version = "15.0.1", features = ["coredump"] }
 wasmprinter = "0.2.64"
 wasmparser = "0.112.0"
+wasm-encoder = "0.245"

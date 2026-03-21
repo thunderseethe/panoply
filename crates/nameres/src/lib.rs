@@ -1556,7 +1556,6 @@ mod tests {
   fn test_sum_row() {
     let db = TestDatabase::default();
     let (term, names, errs) = parse_resolve_term(&db, "|x| <a = x>");
-    println!("{:#?}", term);
     assert_matches!(errs[..], []);
     let expect = expect_test::expect![[r#"
         item

@@ -527,12 +527,12 @@ impl<'db, Ext> ReducIr<Ext> {
   }
 
   pub fn map_within_lets(mut self, op: impl FnOnce(Self) -> Self) -> Self {
-    if let App(head, _) = &mut self.kind {
-      if let Abs(_, inner) = &mut head.as_mut().kind {
-        let body = std::mem::replace(inner.as_mut(), ReducIr::new(ReducIrKind::Int(0)));
-        *inner.as_mut() = op(body);
-        return self;
-      }
+    if let App(head, _) = &mut self.kind
+      && let Abs(_, inner) = &mut head.as_mut().kind
+    {
+      let body = std::mem::replace(inner.as_mut(), ReducIr::new(ReducIrKind::Int(0)));
+      *inner.as_mut() = op(body);
+      return self;
     }
     op(self)
   }
@@ -958,9 +958,9 @@ impl<'db> ReducIr {
 
 pub trait TypeCheck {
   type Ext: Clone;
-  fn type_check<'a, 'db>(
+  fn type_check<'a>(
     &'a self,
-    ctx: &'db dyn salsa::Database,
+    ctx: &dyn salsa::Database,
   ) -> Result<ReducIrTy, ReducIrTyErr<'a, Self::Ext>>
   where
     Self::Ext: PrettyWithCtx<dyn salsa::Database>;
@@ -1080,8 +1080,8 @@ impl<'db, Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
       App(func, args) => {
         let func_ty = func.type_check(ctx)?;
         let args_iter = args.iter();
-        fn collect_args<'db>(
-          db: &'db dyn salsa::Database,
+        fn collect_args(
+          db: &dyn salsa::Database,
           ty: ReducIrTy,
           out_args: &mut Vec<(ReducIrTy, Option<ReducIrTy>)>,
         ) -> ReducIrTy {
@@ -1104,8 +1104,8 @@ impl<'db, Ext: TypeCheck<Ext = Ext> + Clone> TypeCheck for ReducIr<Ext> {
           }
         }
 
-        fn back_to_fun_ty<'db>(
-          db: &'db dyn salsa::Database,
+        fn back_to_fun_ty(
+          db: &dyn salsa::Database,
           mut args: impl Iterator<Item = (ReducIrTy, Option<ReducIrTy>)>,
           ret: ReducIrTy,
         ) -> ReducIrTy {

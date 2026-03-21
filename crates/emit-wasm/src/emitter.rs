@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use base::pretty::{PrettyPrint, PrettyWithCtx};
 use base::{id::MedIrVarId, modules::Module};
 use medir::{
@@ -42,6 +44,7 @@ impl TypeSect {
       );
       self
         .section
+        .ty()
         .function(ty.params().iter().copied(), ty.results().iter().copied());
       indx
     });
@@ -93,7 +96,7 @@ pub(crate) fn emit_wasm_module(
 
   for (indx, import) in import_items.into_iter().enumerate() {
     let indx = indx as u32;
-    types.function(import.params, import.returns);
+    types.ty().function(import.params, import.returns);
     imports.import(import.module, import.func, EntityType::Function(indx));
     name_map.append(indx, import.func);
     item_indices.insert(import.name, indx);
@@ -259,8 +262,8 @@ pub(crate) fn emit_wasm_module(
       f.instruction(&Instruction::LocalGet(0))
         .instruction(&Instruction::I32Load(default_memarg(2)))
         .instruction(&Instruction::CallIndirect {
-          ty: fun_ty,
-          table: 0,
+          type_index: fun_ty,
+          table_index: 0,
         });
       // Dispatch to call based on remaining args
       let rest = call - i;
@@ -283,7 +286,6 @@ pub(crate) fn emit_wasm_module(
 
   for item in medir_module.items(medir_db).iter() {
     let defn = item.item(medir_db);
-    println!("{}", defn.pretty_string(medir_db, 80));
     let ty_indx = type_sect.emit_fun_ty(db, defn.type_of(db));
     let indx = funcs.len();
     funcs.function(ty_indx);
@@ -313,6 +315,7 @@ pub(crate) fn emit_wasm_module(
     GlobalType {
       val_type: ValType::I32,
       mutable: true,
+      shared: false,
     },
     &ConstExpr::i32_const(0),
   );
@@ -320,6 +323,7 @@ pub(crate) fn emit_wasm_module(
     GlobalType {
       val_type: ValType::I32,
       mutable: true,
+      shared: false,
     },
     &ConstExpr::i32_const(0),
   );
@@ -330,6 +334,7 @@ pub(crate) fn emit_wasm_module(
     maximum: None,
     memory64: false,
     shared: false,
+    page_size_log2: None,
   });
   exports.export("mem", wasm_encoder::ExportKind::Memory, 0);
 
@@ -342,13 +347,15 @@ pub(crate) fn emit_wasm_module(
     element_type: wasm_encoder::RefType::FUNCREF,
     minimum: func_len.len().try_into().unwrap(),
     maximum: Some(func_len.len().try_into().unwrap()),
+    shared: false,
+    table64: false,
   });
 
   let mut elems = ElementSection::new();
   elems.active(
     Some(0),
     &ConstExpr::i32_const(0),
-    Elements::Functions(&func_len),
+    Elements::Functions(Cow::Owned(func_len)),
   );
 
   let mut module = wasm_encoder::Module::new();
