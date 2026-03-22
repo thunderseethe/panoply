@@ -19,20 +19,15 @@ fn main() -> eyre::Result<()> {
   let _ = create_source_file_set(&db, uniq_paths)?;
 
   let wasm_module = emit_module_for_path(&db, main_file);
-  /*for err in db.all_parse_errors() {
-    println!("{:?}", err);
-  }
-  for err in db.all_nameres_errors() {
-    println!("{:?}", err);
-  }*/
-
   let bytes = wasm_module.finish();
 
   let mut validator = wasmparser::Validator::new_with_features(WasmFeatures::default());
   let tys = validator.validate_all(&bytes);
-  let mut printer = wasmprinter::Printer::default();
+  let mut printer = wasmprinter::Config::default();
   printer.print_offsets(true);
-  let wat = printer.print(&bytes).unwrap();
+  let mut wat = wasmprinter::PrintFmtWrite(String::new());
+  printer.print(&bytes, &mut wat).unwrap();
+  let wat = wat.0;
   println!("{}", wat);
 
   match tys {
@@ -55,13 +50,6 @@ fn main() -> eyre::Result<()> {
     .open("./testbed/wand.wasm")
     .unwrap();
   file.write_all(&bytes).unwrap();
-  /*let mut file = std::fs::OpenOptions::new()
-    .read(true)
-    .open("./testbed/wand.wat")
-    .unwrap();
-  use std::io::Read;
-  let mut wat = String::new();
-  file.read_to_string(&mut wat).unwrap();*/
 
   let mut config = Config::new();
   config

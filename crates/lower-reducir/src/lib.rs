@@ -730,22 +730,22 @@ defn main = with {
     let expect = expect![[r#"
         (forall [(1: ScopedRow) (0: ScopedRow)] (fun [V1, V0]
             (let
-              [ (V2 ((_row_simple_put_get @ [..]) {}))
-              , (V3 ((_row_simple_get_put @ [..]) {}))
+              [ (V2 ((_row_simple_get_put @ [..]) {}))
+              , (V3 ((_row_simple_put_get @ [..]) {}))
               , (V4 ((_row_simple_state_value @ [..]) {}))
               , (V5 ((_row_simple_putget_return @ [..]) {}))
               , (V6 ((_row_simple_return_putget @ [..]) {}))
               ]
               ((let
                 (V7 (V5[0]
-                  (V3[0]
+                  (V2[0]
                     (fun<{1}> [V8] (fun<{1}> [V9] (fun<{1}> [V10] (V9 V10 V10))))
                     (fun<{1}> [V11] (fun<{1}> [V12] (fun<{1}> [V13] (V12 {} V11)))))
                   (fun<{1}> [V14] (fun<{1}> [V15] (V4[0] V15 V14)))))
                 (new_prompt [V20] (prompt V20 (fun [V21]
                     (V1[0] V21 {V20, (V6[3][0] V7)})) (V6[2][0] V7) (fun [V16]
                     (let [ (V17 {}) , (V18 (V1[3][0] V16)) ]
-                      (yield<Int> V18[0] (fun [V19] (V3[2][0] V18[1] V17 V19))))))))
+                      (yield<Int> V18[0] (fun [V19] (V3[3][0] V18[1] V17 V19))))))))
                 5))))"#]];
     expect.assert_eq(&pretty_ir);
 
@@ -963,8 +963,8 @@ defn main = with {
     let expect = expect![[r#"
         (forall [(1: ScopedRow) (0: ScopedRow)] (fun [V1, V0]
             ((let
-              [ (V2 ((_row_simple_put_get @ [..]) {}))
-              , (V3 ((_row_simple_get_put @ [..]) {}))
+              [ (V2 ((_row_simple_get_put @ [..]) {}))
+              , (V3 ((_row_simple_put_get @ [..]) {}))
               , (V4 ((_row_simple_state_value @ [..]) {}))
               , (V5 ((_row_simple_putget_return @ [..]) {}))
               , (V6 ((_row_simple_return_putget @ [..]) {}))
@@ -972,7 +972,7 @@ defn main = with {
               ((__mon_bind @ [..])
                 (let
                   (V7 (V5[0]
-                    (V3[0]
+                    (V2[0]
                       (fun [V8, V24]
                         <0: (fun [V9, V23]
                             <0: (fun [V10]
@@ -998,7 +998,7 @@ defn main = with {
                               <1: (forall [(0: Type) (1: Type) (2: Type)] {V18[0], (fun
                                     [V19]
                                     ((__mon_bind @ [..])
-                                      (V3[2][0] V18[1] V17)
+                                      (V3[3][0] V18[1] V17)
                                       (fun [V32] (V32 V19)))), (fun [V31, V33] <0: V31>)
                                   })>)) V16))))))
                 (fun [V34] (V34 5)))) V0)))"#]];
@@ -1348,8 +1348,8 @@ defn main = (with {
       expect![[r#"
           (case ((let
               [ (V1 ((_row_scoped__State @ [..]) {}))
-              , (V2 ((_row_simple_put_get @ [..]) {}))
-              , (V3 ((_row_simple_get_put @ [..]) {}))
+              , (V2 ((_row_simple_get_put @ [..]) {}))
+              , (V3 ((_row_simple_put_get @ [..]) {}))
               , (V4 ((_row_simple_state_value @ [..]) {}))
               , (V5 ((_row_simple_putget_return @ [..]) {}))
               , (V6 ((_row_simple_return_putget @ [..]) {}))
@@ -1358,7 +1358,7 @@ defn main = (with {
                 ((__mon_bind @ [..])
                   (let
                     (V7 (V5[0]
-                      (V3[0]
+                      (V2[0]
                         (fun [V8, V24]
                           <0: (fun [V9, V23]
                               <0: (fun [V10]
@@ -1384,7 +1384,7 @@ defn main = (with {
                                 <1: (forall [(0: Type) (1: Type) (2: Type)] {V18[0], (fun
                                       [V19]
                                       ((__mon_bind @ [..])
-                                        (V3[2][0] V18[1] V17)
+                                        (V3[3][0] V18[1] V17)
                                         (fun [V32] (V32 V19)))), (fun [V31, V33] <0: V31>)
                                     })>)) V16))))))
                   (fun [V34] (V34 825)))
@@ -1438,18 +1438,18 @@ defn main = foo(16777215)(14).state"#,
               ((let
                 [ (V4 ((_row_simple__ask @ [..]) {}))
                 , (V5 ((_row_simple_get_put @ [..]) {}))
-                , (V6 ((_row_simple_put_get @ [..]) {}))
-                , (V7 ((_row_simple_get_put @ [..]) {}))
+                , (V6 ((_row_simple_get_put @ [..]) {}))
+                , (V7 ((_row_simple_put_get @ [..]) {}))
                 , (V8 ((_row_simple_value_state @ [..]) {}))
-                , (V9 ((_row_simple_ask_return @ [..]) {}))
-                , (V10 ((_row_simple_return_ask @ [..]) {}))
-                , (V11 ((_row_simple_putget_return @ [..]) {}))
-                , (V12 ((_row_simple_return_putget @ [..]) {}))
+                , (V9 ((_row_simple_putget_return @ [..]) {}))
+                , (V10 ((_row_simple_return_putget @ [..]) {}))
+                , (V11 ((_row_simple_ask_return @ [..]) {}))
+                , (V12 ((_row_simple_return_ask @ [..]) {}))
                 ]
                 (fun [V67]
                   <0: (fun [V13]
                       (let
-                        (V14 (V11[0]
+                        (V14 (V9[0]
                           (V5[0]
                             (fun [V15, V45]
                               <0: (fun [V16, V44]
@@ -1468,19 +1468,19 @@ defn main = foo(16777215)(14).state"#,
                           (fun [V41]
                             ((__mon_prompt @ [..])
                               V41
-                              (fun [V42] (V1[0] V42 {V41, (V12[3][0] V14)}))
-                              (V12[2][0] V14)
+                              (fun [V42] (V1[0] V42 {V41, (V10[3][0] V14)}))
+                              (V10[2][0] V14)
                               (fun [V23]
                                 ((let
-                                  (V24 (V9[0]
+                                  (V24 (V11[0]
                                     (fun [V25, V51] <0: (fun [V26] (V26 V13))>)
                                     (fun [V27, V52] <0: V27>)))
                                   ((__mon_freshm @ [..])
                                     (fun [V39]
                                       ((__mon_prompt @ [..])
                                         V39
-                                        (fun [V40] (V2[0] V40 {V39, (V10[3][0] V24)}))
-                                        (V10[2][0] V24)
+                                        (fun [V40] (V2[0] V40 {V39, (V12[3][0] V24)}))
+                                        (V12[2][0] V24)
                                         (fun [V28]
                                           ((__mon_bind @ [..])
                                             (let (V33 (V3[3][0] V28))
@@ -1500,7 +1500,7 @@ defn main = foo(16777215)(14).state"#,
                                                       [(0: Type) (1: Type) (2: Type)] {
                                                       V33[0], (fun [V34]
                                                         ((__mon_bind @ [..])
-                                                          (V7[3][0] V33[1] V32)
+                                                          (V7[2][0] V33[1] V32)
                                                           (fun [V63] (V63 V34)))), (fun
                                                         [V62
                                                         ,V64] <0: V62>)})>)))
@@ -1515,26 +1515,26 @@ defn main = foo(16777215)(14).state"#,
                                                       [(0: Type) (1: Type) (2: Type)] {
                                                       V37[0], (fun [V38]
                                                         ((__mon_bind @ [..])
-                                                          (V7[2][0] V37[1] V36)
+                                                          (V7[3][0] V37[1] V36)
                                                           (fun [V55] (V55 V38)))), (fun
                                                         [V54
                                                         ,V56] <0: V54>)})>)))
                                             V28)))))) V23)))))))>)) V0)))"#]],
       // main
       expect![[r#"
-            (case ((let
-                [ (V1 ((_row_scoped__State @ [..]) {}))
-                , (V2 ((_row_scoped_Reader_State @ [..]) {}))
-                , (V3 ((_row_scoped_State_Reader @ [..]) {}))
-                , (V4 ((_row_simple_value_state @ [..]) {}))
-                ]
+          (case ((let
+              [ (V1 ((_row_scoped__State @ [..]) {}))
+              , (V2 ((_row_scoped_State_Reader @ [..]) {}))
+              , (V3 ((_row_scoped_Reader_State @ [..]) {}))
+              , (V4 ((_row_simple_value_state @ [..]) {}))
+              ]
+              ((__mon_bind @ [..])
                 ((__mon_bind @ [..])
-                  ((__mon_bind @ [..])
-                    ((__mon_bind @ [..]) ((foo @ [..]) V1 V3 V2) (fun [V5] (V5 16777215)))
-                    (fun [V6] (V6 14)))
-                  (fun [V7, V8] <0: (V4[3][0] V7)>))) {})
-              (fun [V0] V0)
-              (fun [V0] 5467))"#]],
+                  ((__mon_bind @ [..]) ((foo @ [..]) V1 V2 V3) (fun [V5] (V5 16777215)))
+                  (fun [V6] (V6 14)))
+                (fun [V7, V8] <0: (V4[3][0] V7)>))) {})
+            (fun [V0] V0)
+            (fun [V0] 5467))"#]],
     ];
     let tys = vec![
       // foo

@@ -1,6 +1,4 @@
-use std::hash::BuildHasherDefault;
-
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::{
   alloc::{ScopedRowVarOf, SimpleRowVarOf},
@@ -50,7 +48,7 @@ impl<'ctx, K: std::hash::Hash + Eq, V: TypeFoldable<'ctx>> TypeFoldable<'ctx> fo
     self,
     fold: &mut F,
   ) -> Result<Self::Out<F::Out>, F::Error> {
-    let mut out = FxHashMap::with_capacity_and_hasher(self.len(), BuildHasherDefault::default());
+    let mut out = FxHashMap::with_capacity_and_hasher(self.len(), FxBuildHasher::default());
     for (k, v) in self {
       out.insert(k, v.try_fold_with(fold)?);
     }

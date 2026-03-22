@@ -62,10 +62,7 @@ effect Reader {
     let wasm_module = emit_module(&db, "defn f = { x = 5678, y = 1234 }.x");
 
     let bytes = wasm_module.finish();
-    let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
-      function_references: true,
-      ..Default::default()
-    });
+    let mut validator = Validator::new_with_features(wasmparser::WasmFeatures::FUNCTION_REFERENCES);
     let validate_res = validator.validate_all(&bytes);
     let string = wasmprinter::print_bytes(bytes).unwrap();
     let expect = expect![[r#"
@@ -75,6 +72,12 @@ effect Reader {
           (type $fun_2_1 (;2;) (func (param i32 i32) (result i32)))
           (type $fun_3_1 (;3;) (func (param i32 i32 i32) (result i32)))
           (type $fun_5_1 (;4;) (func (param i32 i32 i32 i32 i32) (result i32)))
+          (table (;0;) 14 14 funcref)
+          (memory (;0;) 1)
+          (global (;0;) (mut i32) i32.const 0)
+          (global (;1;) (mut i32) i32.const 0)
+          (export "mem" (memory 0))
+          (elem (;0;) (table 0) (i32.const 0) func $__mon_generate_marker $alloc $__mon_eqm $__call_1 $__call_2 $f $__mon_bind $__mon_bind_lam_0 $__mon_bind_lam_1 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1 $__mon_prompt_lam_2 $__mon_prompt_lam_3)
           (func $__mon_generate_marker (;0;) (type $fun_0_1) (result i32)
             (local i32)
             global.get 1
@@ -607,13 +610,8 @@ effect Reader {
             call $__mon_prompt
             return
           )
-          (table (;0;) 14 14 funcref)
-          (memory (;0;) 1)
-          (global (;0;) (mut i32) i32.const 0)
-          (global (;1;) (mut i32) i32.const 0)
-          (export "mem" (memory 0))
-          (elem (;0;) (i32.const 0) func $__mon_generate_marker $alloc $__mon_eqm $__call_1 $__call_2 $f $__mon_bind $__mon_bind_lam_0 $__mon_bind_lam_1 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1 $__mon_prompt_lam_2 $__mon_prompt_lam_3)
-        )"#]];
+        )
+    "#]];
     expect.assert_eq(&string);
 
     validate_res.expect("Validation Failed");
@@ -632,10 +630,7 @@ defn g = f({ x = {} })({ y = {} })
     );
 
     let bytes = wasm_module.finish();
-    let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
-      function_references: true,
-      ..Default::default()
-    });
+    let mut validator = Validator::new_with_features(wasmparser::WasmFeatures::FUNCTION_REFERENCES);
     let validate_res = validator.validate_all(&bytes);
     let string = wasmprinter::print_bytes(bytes).unwrap();
     let expect = expect![[r#"
@@ -646,6 +641,12 @@ defn g = f({ x = {} })({ y = {} })
           (type $fun_3_1 (;3;) (func (param i32 i32 i32) (result i32)))
           (type $fun_4_1 (;4;) (func (param i32 i32 i32 i32) (result i32)))
           (type $fun_5_1 (;5;) (func (param i32 i32 i32 i32 i32) (result i32)))
+          (table (;0;) 33 33 funcref)
+          (memory (;0;) 1)
+          (global (;0;) (mut i32) i32.const 0)
+          (global (;1;) (mut i32) i32.const 0)
+          (export "mem" (memory 0))
+          (elem (;0;) (table 0) (i32.const 0) func $__mon_generate_marker $alloc $__mon_eqm $__call_1 $__call_2 $f $f_lam_0 $f_lam_1 $g $g_lam_0 $g_lam_1 $g_lam_2 $g_lam_3 $g_lam_4 $g_lam_5 $g_lam_6 $g_lam_7 $g_lam_8 $g_lam_9 $g_lam_10 $g_lam_11 $g_lam_12 $g_lam_13 $g_lam_14 $g_lam_15 $__mon_bind $__mon_bind_lam_0 $__mon_bind_lam_1 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1 $__mon_prompt_lam_2 $__mon_prompt_lam_3)
           (func $__mon_generate_marker (;0;) (type $fun_0_1) (result i32)
             (local i32)
             global.get 1
@@ -1806,13 +1807,8 @@ defn g = f({ x = {} })({ y = {} })
             call $__mon_prompt
             return
           )
-          (table (;0;) 33 33 funcref)
-          (memory (;0;) 1)
-          (global (;0;) (mut i32) i32.const 0)
-          (global (;1;) (mut i32) i32.const 0)
-          (export "mem" (memory 0))
-          (elem (;0;) (i32.const 0) func $__mon_generate_marker $alloc $__mon_eqm $__call_1 $__call_2 $f $f_lam_0 $f_lam_1 $g $g_lam_0 $g_lam_1 $g_lam_2 $g_lam_3 $g_lam_4 $g_lam_5 $g_lam_6 $g_lam_7 $g_lam_8 $g_lam_9 $g_lam_10 $g_lam_11 $g_lam_12 $g_lam_13 $g_lam_14 $g_lam_15 $__mon_bind $__mon_bind_lam_0 $__mon_bind_lam_1 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1 $__mon_prompt_lam_2 $__mon_prompt_lam_3)
-        )"#]];
+        )
+    "#]];
     expect.assert_eq(&string);
 
     validate_res.expect("Validation Failed");
@@ -1833,10 +1829,7 @@ defn f = (with {
     );
 
     let bytes = wasm_module.finish();
-    let mut validator = Validator::new_with_features(wasmparser::WasmFeatures {
-      function_references: true,
-      ..Default::default()
-    });
+    let mut validator = Validator::new_with_features(wasmparser::WasmFeatures::FUNCTION_REFERENCES);
     let validate_res = validator.validate_all(&bytes);
     let string = wasmprinter::print_bytes(bytes).unwrap();
     let expect = expect![[r#"
@@ -1846,6 +1839,12 @@ defn f = (with {
           (type $fun_2_1 (;2;) (func (param i32 i32) (result i32)))
           (type $fun_3_1 (;3;) (func (param i32 i32 i32) (result i32)))
           (type $fun_5_1 (;4;) (func (param i32 i32 i32 i32 i32) (result i32)))
+          (table (;0;) 34 34 funcref)
+          (memory (;0;) 1)
+          (global (;0;) (mut i32) i32.const 0)
+          (global (;1;) (mut i32) i32.const 0)
+          (export "mem" (memory 0))
+          (elem (;0;) (table 0) (i32.const 0) func $__mon_generate_marker $alloc $__mon_eqm $__call_1 $__call_2 $f $f_lam_0 $f_lam_1 $f_lam_2 $f_lam_3 $f_lam_4 $f_lam_5 $f_lam_6 $f_lam_7 $f_lam_8 $f_lam_9 $f_lam_10 $f_lam_11 $f_lam_12 $f_lam_13 $f_lam_14 $f_lam_15 $f_lam_16 $f_lam_17 $f_lam_18 $f_lam_19 $__mon_bind $__mon_bind_lam_0 $__mon_bind_lam_1 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1 $__mon_prompt_lam_2 $__mon_prompt_lam_3)
           (func $__mon_generate_marker (;0;) (type $fun_0_1) (result i32)
             (local i32)
             global.get 1
@@ -3057,13 +3056,8 @@ defn f = (with {
             call $__mon_prompt
             return
           )
-          (table (;0;) 34 34 funcref)
-          (memory (;0;) 1)
-          (global (;0;) (mut i32) i32.const 0)
-          (global (;1;) (mut i32) i32.const 0)
-          (export "mem" (memory 0))
-          (elem (;0;) (i32.const 0) func $__mon_generate_marker $alloc $__mon_eqm $__call_1 $__call_2 $f $f_lam_0 $f_lam_1 $f_lam_2 $f_lam_3 $f_lam_4 $f_lam_5 $f_lam_6 $f_lam_7 $f_lam_8 $f_lam_9 $f_lam_10 $f_lam_11 $f_lam_12 $f_lam_13 $f_lam_14 $f_lam_15 $f_lam_16 $f_lam_17 $f_lam_18 $f_lam_19 $__mon_bind $__mon_bind_lam_0 $__mon_bind_lam_1 $__mon_prompt $__mon_prompt_lam_0 $__mon_prompt_lam_1 $__mon_prompt_lam_2 $__mon_prompt_lam_3)
-        )"#]];
+        )
+    "#]];
     expect.assert_eq(&string);
 
     match validate_res {

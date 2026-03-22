@@ -40,6 +40,7 @@ impl NameKind {
 
 bitflags! {
     /// A bitset of name kinds.
+    #[derive(Copy, Clone, Debug)]
     pub struct NameKinds: u8 {
         const MODULE = NameKind::Module as u8;
         const EFFECT = NameKind::Effect as u8;
@@ -56,7 +57,7 @@ impl NameKinds {
     self.contains(NameKinds::from(kind)).then_some(kind)
   }
 
-  pub fn iter(&self) -> Flatten<array::IntoIter<option::IntoIter<NameKind>, 4>> {
+  pub fn enum_iter(&self) -> Flatten<array::IntoIter<option::IntoIter<NameKind>, 4>> {
     [
       self.get(NameKind::Item).into_iter(),
       self.get(NameKind::Module).into_iter(),
@@ -103,7 +104,7 @@ impl RejectionReason {
           "it refers to {}, while the context above requires {}",
           actual.indefinite_noun(),
           expected
-            .iter()
+            .enum_iter()
             .map(|kind| kind.indefinite_noun())
             .english_list("or")
         )
@@ -207,7 +208,7 @@ impl Diagnostic for NameResolutionError {
           "Expression refers to {}, while it is used as if it was {}",
           actual.indefinite_noun(),
           expected
-            .iter()
+            .enum_iter()
             .map(|kind| kind.indefinite_noun())
             .english_list("or")
         ),

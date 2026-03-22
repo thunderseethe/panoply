@@ -93,11 +93,20 @@ where
   fn intern(&self, value: T) -> RefHandle<'a, T> {
     let mut shard =
       self.table.shards()[self.table.determine_map(&ByPointee(NonNull::from(&value)))].write();
-    if let Some((k, _)) = shard.get_key_value(&ByPointee(NonNull::from(&value))) {
-      Handle(unsafe { k.0.as_ref() })
+    if let Some(bucket) = unsafe {
+      shard
+        .iter()
+        .find(|bucket| bucket.as_ref().0 == ByPointee(NonNull::from(&value)))
+    } {
+      Handle(unsafe { bucket.as_ref().0.0.as_ref() })
     } else {
       let p = self.storage.alloc(value);
-      shard.insert(ByPointee(NonNull::from(p)), SharedValue::new(()));
+      let h = self.table.hash_usize(&ByPointee(NonNull::from(p)));
+      shard.insert(
+        h.try_into().unwrap(),
+        (ByPointee(NonNull::from(p)), SharedValue::new(())),
+        |(t, _)| self.table.hash_usize(t).try_into().unwrap(),
+      );
       Handle(p)
     }
   }
@@ -111,11 +120,20 @@ where
   fn intern_by_ref(&self, value: &T) -> RefHandle<'a, T> {
     let mut shard =
       self.table.shards()[self.table.determine_map(&ByPointee(NonNull::from(value)))].write();
-    if let Some((k, _)) = shard.get_key_value(&ByPointee(NonNull::from(value))) {
-      Handle(unsafe { k.0.as_ref() })
+    if let Some(bucket) = unsafe {
+      shard
+        .iter()
+        .find(|bucket| bucket.as_ref().0 == ByPointee(NonNull::from(value)))
+    } {
+      Handle(unsafe { bucket.as_ref().0.0.as_ref() })
     } else {
       let p = self.storage.alloc_by_ref(value);
-      shard.insert(ByPointee(NonNull::from(p)), SharedValue::new(()));
+      let h = self.table.hash_usize(&ByPointee(NonNull::from(p)));
+      shard.insert(
+        h.try_into().unwrap(),
+        (ByPointee(NonNull::from(p)), SharedValue::new(())),
+        |(t, _)| self.table.hash_usize(t).try_into().unwrap(),
+      );
       Handle(p)
     }
   }

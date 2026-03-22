@@ -5,7 +5,7 @@ use base::{
 
 pub fn random_loc() -> Loc {
   Loc {
-    byte: rand::random(),
+    byte: rand::random::<u32>() as usize,
   }
 }
 pub fn random_span() -> Span {
