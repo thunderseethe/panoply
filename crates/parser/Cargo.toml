@@ -15,7 +15,7 @@ logos.workspace = true
 regex.workspace = true
 rowan.workspace = true
 salsa.workspace = true
-bit-set = "0.8.0"
+bit-set.workspace = true
 
 [dev-dependencies]
 assert_matches.workspace = true

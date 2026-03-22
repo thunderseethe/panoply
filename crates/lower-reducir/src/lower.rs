@@ -948,14 +948,14 @@ impl<'a, 'b> LowerCtx<'a, 'b, Evidentfull> {
         .iter()
         .map(|row| ReducIrTyApp::DataRow(self.ty_ctx.lower_row(*row))),
     );
-    let ir = ReducIr::app(
+
+    ReducIr::app(
       ir,
       wrapper
         .constrs
         .iter()
         .map(|ev| ReducIr::var(self.ev_map[ev])),
-    );
-    ir
+    )
   }
 
   pub(crate) fn lower_term(

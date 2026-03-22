@@ -72,11 +72,12 @@ ty = { path = "crates/ty" }
 # External crates
 assert_matches = "1.5" # TODO: use `std` version when stabilized.
 bitflags = "1.3"
+bit-set = "0.8.0"
 bumpalo = "3.10"
 bumpalo-herd = "0.1.2"
-#chumsky = "0.9"
 clap = "4.2"
 dashmap = "5.5"
+difference = "2.0"
 ena = "0.14.0"
 fern = "0.6"
 expect-test = "1.4"
